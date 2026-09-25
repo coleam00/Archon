@@ -95,7 +95,7 @@ function render(entries: readonly Entry[], quarantined: readonly string[]): void
   if (entries.length === 0) lines.push('The project defines no checks, so none ran.', '');
   if (quarantined.length > 0) {
     lines.push(
-      'Moved aside while the checks ran, then restored (untracked run scaffolding):',
+      'Moved aside while the checks ran (untracked run scaffolding):',
       ...quarantined.map(path => `- \`${path}\``),
       ''
     );
@@ -151,18 +151,23 @@ function quarantinable(path: string): string {
   return normal;
 }
 
-// The paths currently moved aside, mirrored to disk on every change. An attempt that
-// dies without restoring (on Windows, or after SIGKILL, the engine stops this script
-// with no signal to catch) leaves the list for the next attempt of the run.
-const manifest = join(logDir, 'quarantine.json');
-const pending: string[] = existsSync(manifest)
-  ? (JSON.parse(readFileSync(manifest, 'utf8')) as string[])
-  : [];
-
-function savePending(): void {
-  if (pending.length === 0) rmSync(manifest, { force: true });
-  else writeFileSync(manifest, JSON.stringify(pending));
+/** A path moved out of the checkout, and where its copy lives until it goes back. */
+interface Moved {
+  path: string;
+  copy: string;
 }
+
+// Every attempt moves into its own directory, so a copy an earlier attempt kept is
+// never merged into or overwritten by a later one.
+const attemptDir = join(quarantineDir, `${String(Date.now())}-${String(process.pid)}`);
+
+// The moves not yet undone, mirrored to disk before each original is removed. An
+// attempt that dies without restoring (on Windows, or after SIGKILL, the engine stops
+// this script with no signal to catch) leaves the list for the next attempt.
+const manifest = join(logDir, 'quarantine.json');
+const pending: Moved[] = existsSync(manifest)
+  ? (JSON.parse(readFileSync(manifest, 'utf8')) as Moved[])
+  : [];
 
 /** Moved copies left in place because the checkout already had the path again. */
 const kept: string[] = [];
@@ -170,20 +175,21 @@ const kept: string[] = [];
 /**
  * Put every pending path back. A path the checkout has again is never overwritten:
  * its moved copy stays where it is and the record names it, since a stop here would
- * block every later attempt until someone intervened by hand.
+ * block every later attempt until someone intervened by hand. A copy that is already
+ * gone was put back by an attempt that died before it could record that.
  */
 function restorePending(): void {
-  while (pending.length > 0) {
-    const path = pending[0];
+  for (const { path, copy } of pending) {
+    if (!existsSync(copy)) continue;
     if (existsSync(join(cwd, path))) {
-      kept.push(join(quarantineDir, path));
-    } else {
-      cpSync(join(quarantineDir, path), join(cwd, path), { recursive: true });
-      rmSync(join(quarantineDir, path), { recursive: true, force: true });
+      kept.push(copy);
+      continue;
     }
-    pending.shift();
-    savePending();
+    cpSync(copy, join(cwd, path), { recursive: true });
+    rmSync(copy, { recursive: true, force: true });
   }
+  pending.length = 0;
+  rmSync(manifest, { force: true });
 }
 
 // An earlier attempt left paths moved aside. Put them back before anything is
@@ -274,10 +280,11 @@ function runOne(entry: Entry): Promise<void> {
 mkdirSync(logDir, { recursive: true });
 try {
   for (const path of toQuarantine) {
-    cpSync(join(cwd, path), join(quarantineDir, path), { recursive: true });
+    const copy = join(attemptDir, path);
+    cpSync(join(cwd, path), copy, { recursive: true });
     quarantined.push(path);
-    pending.push(path);
-    savePending();
+    pending.push({ path, copy });
+    writeFileSync(manifest, JSON.stringify(pending));
     rmSync(join(cwd, path), { recursive: true, force: true });
   }
   for (const entry of entries) {

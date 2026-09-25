@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -71,6 +71,12 @@ function report(artifacts: string): string {
 }
 
 const sh = (script: string): string[] => ['bash', '-c', script];
+
+/** The moved copies the latest attempt's `validation.md` says it kept. */
+function keptCopies(artifacts: string): string[] {
+  const [, kept = ''] = report(artifacts).split('The moved copy is kept at:\n');
+  return [...kept.matchAll(/^- `(.+)`$/gm)].map(match => match[1]!);
+}
 
 describe('run-checks', () => {
   it('reports green only when every declared check exits 0', () => {
@@ -194,14 +200,30 @@ describe('run-checks', () => {
       'injected\n'
     );
     expect(readFileSync(join(f.cwd, '.archon', 'second', 'x'), 'utf8')).toBe('recreated\n');
-    const keptCopy = join(f.artifacts, 'validation', 'quarantine', '.archon', 'second');
-    expect(readFileSync(join(keptCopy, 'workflow.yaml'), 'utf8')).toBe('moved\n');
-    expect(report(f.artifacts)).toContain(keptCopy);
+    const firstKept = keptCopies(f.artifacts);
+    expect(firstKept).toHaveLength(1);
+    expect(readFileSync(join(firstKept[0]!, 'workflow.yaml'), 'utf8')).toBe('moved\n');
 
     // Every restore settled, so a later attempt of the same run starts cleanly.
     expect(existsSync(join(f.artifacts, 'validation', 'quarantine.json'))).toBe(false);
-    const second = run(f, [{ name: 'gate', argv: sh('exit 0') }], ['.archon/injected']);
+
+    // The next attempt quarantines the same path, now a file, and the check recreates
+    // it again. The first kept copy must survive untouched, nothing may be merged into
+    // the checkout, and the attempt must still report.
+    rmSync(join(f.cwd, '.archon', 'second'), { recursive: true });
+    writeFileSync(join(f.cwd, '.archon', 'second'), 'now a file\n');
+    const second = run(
+      f,
+      [{ name: 'gate', argv: sh('echo again > .archon/second') }],
+      ['.archon/injected', '.archon/second']
+    );
     expect(second.output?.status).toBe('green');
+    expect(readFileSync(join(f.cwd, '.archon', 'second'), 'utf8')).toBe('again\n');
+    expect(readFileSync(join(firstKept[0]!, 'workflow.yaml'), 'utf8')).toBe('moved\n');
+    const secondKept = keptCopies(f.artifacts);
+    expect(secondKept).toHaveLength(1);
+    expect(secondKept[0]).not.toBe(firstKept[0]);
+    expect(readFileSync(secondKept[0]!, 'utf8')).toBe('now a file\n');
     expect(existsSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'))).toBe(true);
   });
 
