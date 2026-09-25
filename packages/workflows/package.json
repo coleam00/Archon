@@ -144,9 +144,6 @@
       "src/installed-packs.test.ts"
     ],
     [
-      "src/installed-packs-trusted-home.test.ts"
-    ],
-    [
       "src/workflow-source-binary.test.ts"
     ],
     [

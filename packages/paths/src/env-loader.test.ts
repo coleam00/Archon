@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
-import { loadArchonEnv } from './env-loader';
+import { getPluginsPath, loadArchonEnv } from './env-loader';
 
 /**
  * loadArchonEnv covers the read side of the three-path env model (#1302):
@@ -21,6 +21,9 @@ const repoDir = join(tmpRoot, 'repo');
 const TEST_KEYS = ['TEST_EL_HOME_ONLY', 'TEST_EL_REPO_ONLY', 'TEST_EL_OVERLAP', 'TEST_EL_OTHER'];
 
 let originalArchonHome: string | undefined;
+// The repo-scope refusal tests write these; a pre-fix loader would apply them.
+const REDIRECT_KEYS = ['PATH', 'HOME', 'USERPROFILE'] as const;
+let originalRedirects: Partial<Record<(typeof REDIRECT_KEYS)[number], string>>;
 let originalArchonVerboseBoot: string | undefined;
 let originalLogLevel: string | undefined;
 let stderrSpy: ReturnType<typeof spyOn>;
@@ -32,6 +35,8 @@ beforeEach(() => {
 
   originalArchonHome = process.env.ARCHON_HOME;
   process.env.ARCHON_HOME = archonHomeDir;
+  originalRedirects = {};
+  for (const key of REDIRECT_KEYS) originalRedirects[key] = process.env[key];
 
   // Clear verbose-boot toggles so each test starts suppressed and can opt in explicitly.
   originalArchonVerboseBoot = process.env.ARCHON_VERBOSE_BOOT;
@@ -66,6 +71,11 @@ afterEach(() => {
 
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalArchonHome;
+  for (const key of REDIRECT_KEYS) {
+    const value = originalRedirects[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 
   if (originalArchonVerboseBoot === undefined) delete process.env.ARCHON_VERBOSE_BOOT;
   else process.env.ARCHON_VERBOSE_BOOT = originalArchonVerboseBoot;
@@ -201,6 +211,47 @@ describe('loadArchonEnv', () => {
       consoleErrorSpy.mockRestore();
       exitSpy.mockRestore();
     }
+  });
+
+  for (const key of ['ARCHON_HOME', 'PATH', 'HOME', 'USERPROFILE']) {
+    it(`refuses a repo .archon/.env that sets ${key}, naming the file and the key`, () => {
+      const repoEnv = join(repoDir, '.archon', '.env');
+      writeFileSync(repoEnv, `TEST_EL_REPO_ONLY=from-repo\n${key}=${join(tmpRoot, 'elsewhere')}\n`);
+      const errors: string[] = [];
+      const errorSpy = spyOn(console, 'error').mockImplementation((msg: unknown) => {
+        errors.push(String(msg));
+      });
+      const exitSpy = spyOn(process, 'exit').mockImplementation((() => {
+        throw new Error('process.exit called');
+      }) as never);
+      try {
+        expect(() => loadArchonEnv(repoDir)).toThrow('process.exit called');
+        expect(errors.join('\n')).toContain(`${repoEnv} sets ${key}`);
+        // Refused before anything from the file is applied.
+        expect(process.env.ARCHON_HOME).toBe(archonHomeDir);
+        expect(process.env.TEST_EL_REPO_ONLY).toBeUndefined();
+      } finally {
+        errorSpy.mockRestore();
+        exitSpy.mockRestore();
+      }
+    });
+  }
+
+  it('lets the user-scope .env set the keys a repo may not', () => {
+    const userPath = join(tmpRoot, 'user-bin');
+    writeFileSync(join(archonHomeDir, '.env'), `PATH=${userPath}\n`);
+
+    loadArchonEnv(repoDir);
+
+    expect(process.env.PATH).toBe(userPath);
+  });
+
+  it('reads plugins from the ARCHON_HOME the process environment sets', () => {
+    writeFileSync(join(repoDir, '.archon', '.env'), 'TEST_EL_REPO_ONLY=from-repo\n');
+
+    loadArchonEnv(repoDir);
+
+    expect(getPluginsPath()).toBe(join(archonHomeDir, 'plugins'));
   });
 
   it('emits loaded lines when LOG_LEVEL=trace', () => {

@@ -96,7 +96,7 @@ For reads, the pack prefers a supplied required set, otherwise the full observat
 
 ## Plugin configuration
 
-Put trusted executable configuration in the user Archon config, `~/.archon/config.yaml` (or the directory selected by `ARCHON_HOME`). Repository configuration does not install or select executable plugins. The CLI captures the user-scoped config path and execution environment before loading repository `.archon/.env` overrides. Repository env may supply a credential named by trusted plugin configuration, but cannot redirect plugin discovery or execution through `ARCHON_HOME`, `PATH` or home-directory overrides.
+Put trusted executable configuration in the user Archon config, `~/.archon/config.yaml` (or the directory selected by `ARCHON_HOME`). Repository configuration does not install or select executable plugins. The CLI captures the plugin execution environment before loading repository `.archon/.env` overrides. Repository env may supply a credential named by trusted plugin configuration, but cannot redirect plugin discovery or execution: Archon refuses to start when a repository's `.archon/.env` sets `ARCHON_HOME`, `PATH`, `HOME` or `USERPROFILE`.
 
 ```yaml
 forge:
