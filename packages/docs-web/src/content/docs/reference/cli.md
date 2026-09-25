@@ -642,7 +642,10 @@ Without `--follow`, the command copies the snapshot that exists at invocation ti
 stdout and exits. With `--follow`, it announces the resolved local path on stderr, waits
 for a live run's file to appear, and streams appended bytes until the run becomes
 `completed`, `failed`, or `cancelled`. A paused run is still live: the follower stays
-attached across approval gates and resumes, reading the same file.
+attached across approval gates and resumes, reading the same file. Each resume appends one
+`workflow_resume` row (the run's first execution writes `workflow_start`), and each gate
+approval or rejection appends a `gate_decision` row with the gate's `step`, the
+`decision`, and the operator's comment or rejection reason in `content`.
 
 Stdout is the transcript's exact JSONL, with no log messages or wrapper document. Each
 line is one persisted event and fields may be added over time, so consumers should parse
@@ -704,7 +707,8 @@ After verifying that the run's work has stopped, release its persisted state wit
 
 Live-owner detection is local to the host running `workflow wait`. With a shared remote
 PostgreSQL database, `owner_lost` means no owner endpoint is reachable on this host; the
-run may still be executing on another host. Check the owning host before abandoning it.
+run may still be executing on another host. Check the owning host before abandoning it;
+`abandon` prints the host the run recorded and says when it is not this one.
 
 `--json` emits one document. On a wake it carries the attention value:
 
@@ -762,25 +766,40 @@ Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so
 
 ### `workflow cancel`
 
-Actively stop a running workflow started by the CLI with `--detach`. The command
-contacts the live process that owns that exact run, terminates its host process tree,
-confirms termination, and only then records the run as `cancelled`.
+Stop a running workflow. Every cancel surface (this command, `/workflow cancel` in
+chat, the Web UI's Cancel action, `POST /api/workflows/runs/{runId}/cancel`, the Slack
+Cancel button, and the chat agent's `manage_run` tool) does the same thing, decided by
+who owns the run:
+
+- **The process handling the cancel executes the run** (a run the server started, cancelled
+  from that server): the run is marked `cancelled` and its executor stops at its next
+  status check.
+- **Another live process owns it** (a `--detach` run or a trigger-started run): cancel
+  contacts that process, terminates its host process tree, confirms termination, and
+  only then records the run as `cancelled`.
+- **No owner answers, or the owner cannot be stopped:** cancel fails and leaves the run
+  unchanged. When no owner answers, it prints what the run recorded (host, pid, last
+  activity) and points you at `abandon`. A foreground `archon workflow run` or a run
+  executing in another Archon server answers but cannot be stopped from here; interrupt
+  the foreground command, or cancel the run on the server that executes it.
 
 ```bash
 archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
 ```
 
-If the detached owner cannot be reached or its process tree cannot be stopped, the
-command fails and leaves the run state unchanged. This is deliberate: a database
-transition cannot prove that host work stopped. After separately verifying that the
-owner process is gone, use `workflow abandon <run-id>` to clean up an orphaned row.
+Refusing is deliberate: `cancelled` releases the run's worktree lock and resource slot,
+and a database transition cannot prove that host work stopped. After verifying that the
+owner process is gone, use `workflow abandon <run-id>`.
 
-`workflow cancel` applies only to a live detached CLI owner. Foreground CLI and
-in-process server runs publish the same liveness endpoint for `workflow wait`, but do
-not expose their process PID or active-stop capability. Foreground runs remain owned
-by their terminal and should be interrupted there; server-owned lifecycle changes
-remain explicit operator actions.
+A `workflow:` sub-run normally executes inside its root run's process, and the root's row
+keeps the worktree lock and resource slot. When no owner answers for the sub-run itself
+but one answers for its root, cancel records `cancelled` and the root's executor stops the
+sub-run at its next status check. When no owner answers for the root either, cancel
+refuses and points at abandon, as for any other run. A sub-run resumed on its own (after a
+durable wait or a scheduled resume) has its own owner, and cancel stops that owner like
+any other run's. Only a `running` run can be
+cancelled; abandon a paused or failed run instead.
 
 After termination is confirmed, `cancel` records cancellation through the same run-tree
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
@@ -788,15 +807,32 @@ descendant and can report the same cascade failures or blocked parent described 
 
 ### `workflow abandon`
 
-Discard a workflow run by marking it `cancelled`. This is a state-only operation: it
-does not stop a live host process or subprocess. Use it for paused runs and for orphaned
-rows after verifying that their owner is gone. To stop a live `--detach` run, use
-`workflow cancel`.
+Discard a workflow run by marking it `cancelled`. `cancelled` releases the run's
+worktree lock and resource slot, so abandon first asks the run's live-owner endpoint on
+this host:
+
+- **An owner answers:** abandon stops it through the same path as `workflow cancel`
+  (proves the owner, terminates its process tree, waits), then records `cancelled`.
+- **No owner answers:** abandon records `cancelled` and prints what the run recorded:
+  the host and pid of the process that last executed it, and its last activity. If that
+  host is not this one, or the owner ran as another user on this host, it says so:
+  abandon can only reach owners on its own host running as its own user. Nothing
+  decides the run is dead from its age or pid.
+- **An owner answers but cannot be stopped:** abandon fails with the reason and leaves
+  the run unchanged. This includes a foreground `archon workflow run` (interrupt it in
+  its terminal) and a run executing inside a live Archon server. Cancel a server-executed run
+  from that server (its Web UI Cancel action, `POST /api/workflows/runs/{runId}/cancel`,
+  or `/workflow cancel <run-id>` in its chat): the server executes the run, so it
+  cancels it at the executor's next status check.
 
 ```bash
 archon workflow abandon <run-id>
 archon workflow abandon <run-id> --json
 ```
+
+`--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
+`{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
+"recordedUid", "lastActivityAt" }`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
@@ -960,7 +996,7 @@ archon isolation cleanup
 # Custom threshold
 archon isolation cleanup 14
 
-# Remove environments with branches merged into main (also deletes remote branches)
+# Remove environments with branches merged into the base branch (also deletes remote branches)
 archon isolation cleanup --merged
 
 # Also remove environments whose PRs were closed without merging
@@ -968,8 +1004,24 @@ archon isolation cleanup --merged --include-closed
 ```
 
 Merge detection uses three signals in order: git branch ancestry (fast-forward / merge commit),
-patch equivalence (squash-merge via `git cherry`), and GitHub PR state via the `gh` CLI.
-The `gh` CLI is optional — if absent, only git signals are used.
+patch equivalence (single-commit squash-merge via `git cherry`), and GitHub PR state via the
+`gh` CLI. A squash merge of more than one commit is invisible to git here, so PR state is what
+recognises it. A merged or closed PR counts only while neither the worktree's HEAD nor the
+local branch has anything past the PR's head commit: run branch names get reused, and new
+commits on a reused branch or a detached HEAD are not covered by the old PR, so that
+environment is kept. The same goes for a merge git detects: the worktree's HEAD must be
+merged into the base too, not just the branch. A PR head commit pushed from somewhere
+else is fetched from the remote before that comparison; if the fetch fails, the environment is
+kept and reported as a failed merge check. The `gh` CLI is optional — if absent, only git
+signals are used. If `gh` is installed but the lookup fails (auth, rate limit), the environment
+is kept and reported as `PR state lookup failed`. The scheduled
+sweep uses the same three signals, so both paths agree on what counts as merged. Each
+codebase's output names the base ref the comparison actually used — the configured
+`worktree.baseBranch`, or the git-detected default branch when that is unset.
+
+Both git signals read the local branch ref. When that ref is gone but the worktree remains,
+the PR decides, checked against the worktree's HEAD; if no PR answers for the branch either, the environment is kept and reported
+as `merge state unverifiable` rather than removed on an unverified guess.
 
 By default, branches with a **CLOSED** PR are skipped. Pass `--include-closed` to clean
 those up as well. Branches with an **OPEN** PR are always skipped.
