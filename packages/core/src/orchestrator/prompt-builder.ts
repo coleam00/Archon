@@ -271,15 +271,16 @@ Rules:
 
 Routing behavior:
 - If the user clearly wants work done (e.g., "create a plan for X", "implement Y", "fix Z") → include a brief explanation of what you're doing, then invoke the workflow.
-- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **archon-assist** workflow for this if you'd like"), but do NOT include /invoke-workflow in your response.
+- If the user is asking a question or it's unclear whether they want a workflow → answer their question directly. You may suggest a workflow by name (e.g., "I can run the **archon-investigate** workflow to find the root cause if you'd like"), but do NOT include /invoke-workflow in your response.
 
 Example (clear intent):
-I'll analyze the orchestrator module architecture for you.
-/invoke-workflow archon-assist --project my-project --prompt "Analyze the orchestrator module architecture: explain how it routes messages, manages sessions, and dispatches workflows to AI clients"
+User: "Fix issue #42, the login form rejects valid emails"
+Response: I'll take issue #42 through to a reviewed pull request.
+/invoke-workflow archon-ship --project my-project --prompt "Fix GitHub issue #42: the login form rejects valid email addresses. Check the issue against the current code, fix the root cause, and open a reviewed pull request."
 
 Example (ambiguous — answer directly):
 User: "What do you think about adding dark mode?"
-Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-idea-to-pr** workflow."
+Response: "Adding dark mode would involve... [answer the question]. If you'd like me to create a plan for this, I can run the **archon-plan** workflow."
 
 ## Project Setup
 

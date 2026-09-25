@@ -20,6 +20,7 @@ import {
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
+import { formatDeprecationNotice } from '../deprecation';
 import {
   isExecNode,
   isIncludeDirective,
@@ -124,6 +125,32 @@ describe('bundled-defaults', () => {
         expect(diskContent).toBeDefined();
         expect(content).toBe(diskContent as string);
       }
+    });
+
+    it('every flat bundled default is in the legacy deprecation window (#2781, #3525)', () => {
+      // Pack-owned workflows are the replacement; every flat default is legacy
+      // and announces its removal. No flat default is exempt.
+      const flat = Object.keys(BUNDLED_WORKFLOWS).filter(
+        name => BUNDLED_WORKFLOW_OWNERS[name] === undefined
+      );
+      expect(flat).toContain('archon-assist');
+      for (const name of flat) {
+        const parsed = parseWorkflow(BUNDLED_WORKFLOWS[name]!, `${name}.yaml`);
+        if (parsed.error) throw new Error(`${name} failed to parse: ${parsed.error.error}`);
+        expect(parsed.workflow.deprecated, `${name} is not deprecated`).toBeDefined();
+      }
+      expect(existsSync(join(LEGACY_WORKFLOWS_DIR, 'archon-assist.yaml'))).toBe(true);
+    });
+
+    it('archon-assist announces removal with the copy escape hatch (#3525)', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-assist']!, 'archon-assist.yaml');
+      if (parsed.error) throw new Error(parsed.error.error);
+      expect(formatDeprecationNotice(parsed.workflow)).toBe(
+        '⚠️ `archon-assist` is deprecated and will be removed in an upcoming release. ' +
+          'Switch to the sdlc pack instead. ' +
+          'To keep using this workflow after removal, copy the workflow file into your project ' +
+          '`.archon/workflows/` or your global `~/.archon/workflows/`.'
+      );
     });
 
     it('packaged bundle metadata is internally consistent', () => {

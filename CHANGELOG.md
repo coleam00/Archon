@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `archon-assist` is deprecated like the rest of the legacy bundled workflows. Every run announces its removal in an upcoming release, and a copy in your project or global `.archon/workflows/` keeps it. The chat router no longer uses it as its example or describes it as the fallback: its examples now name `archon-ship`, `archon-plan` and `archon-investigate`, and questions still get a direct answer. (#3525)
+
 ## [0.11.1] - 2026-09-25
 
 A patch release: copied workflow packs load cleanly, and release notes now come from this changelog.

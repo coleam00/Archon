@@ -2482,10 +2482,10 @@ async function runWorkflowWithOwnedSource(
   }
 
   // A --folder registration failure must be fatal regardless of the workflow's
-  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow (e.g.
-  // the bundled `archon-assist`, the flagship `--folder` example), wantsIsolation
-  // is false, so the later isolation fail-fast branch never fires and the run
-  // would silently proceed against the bare cwd with no registered project.
+  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow,
+  // wantsIsolation is false, so the later isolation fail-fast branch never fires
+  // and the run would silently proceed against the bare cwd with no registered
+  // project.
   if (options.folder && !codebase && codebaseRegistrationError) {
     throw buildFolderRegistrationFailureError(codebaseRegistrationError);
   }
