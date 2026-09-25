@@ -1,9 +1,12 @@
 import * as workflowDb from '@archon/core/db/workflows';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
+import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import { createLogger } from '@archon/paths';
 import { exitWithDrain } from './exit-with-drain';
 
-type TerminationSignal = 'SIGTERM' | 'SIGINT';
+// The signals this handler settles a run on are the ones it records as the stop
+// reason's `signal`, so the set is derived from that contract, never re-listed.
+type TerminationSignal = RunStopSignal;
 
 export interface OwnedRunTerminationInput {
   /** The one run this process proved it executes. Never a conversation-wide lookup. */
@@ -55,6 +58,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       // stays paused.
       await workflowDb.failWorkflowRun(runId, `Process terminated (${signal})`, {
         exitReason: 'process_terminated',
+        signal,
       });
     })()
       .catch((err: unknown) => {

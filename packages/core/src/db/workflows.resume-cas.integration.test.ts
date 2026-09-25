@@ -22,7 +22,7 @@ import {
 } from '@archon/workflows/schemas/terminal-record';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import type { TokenUsage } from '@archon/providers/types';
-import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
+import { isWorkflowWaitContext, readRunStopReason } from '@archon/workflows/schemas/workflow-run';
 import type { GateResolutionEvent } from './workflows';
 
 const workflowWarnings = mock((_context: unknown, _message: string) => {});
@@ -154,6 +154,26 @@ describe('resumeWorkflowRun — real SQLite (CAS + orphan recovery)', () => {
     expect(JSON.parse(events.rows[0]?.data ?? '{}')).toEqual({
       error: 'Process terminated (SIGTERM)',
     });
+  });
+
+  test('clears the stop reason when resuming, so a completed run stops claiming an interrupt', async () => {
+    // Left behind, the reason would outlive the stop it describes: the run resumes,
+    // completes, and still reports that the operator interrupted it — the #2329 defect
+    // that metadata.error already had, through the same key. Real SQLite matters here:
+    // json_patch is RFC 7396, so the null in the patch REMOVES the key rather than
+    // storing a JSON null, and only an actual database proves which one happened.
+    await seed('failed-interrupted', 'failed', "datetime('now')", {
+      error: 'Process terminated (SIGINT)',
+      stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
+      unrelated: 'keep me',
+    });
+
+    expect((await resumeWorkflowRun('failed-interrupted')).status).toBe('running');
+
+    const after = await getWorkflowRun('failed-interrupted');
+    expect(readRunStopReason(after?.metadata)).toBeUndefined();
+    // Merge, not replace: the clear takes the stop reason and nothing else.
+    expect(after?.metadata.unrelated).toBe('keep me');
   });
 
   test('writes no event when the resumed run carried no error', async () => {
@@ -753,6 +773,51 @@ describe('terminal workflow transitions — real SQLite', () => {
       ['terminal-fail']
     );
     expect(JSON.parse(event.rows[0]?.data ?? '{}')).toMatchObject({ error: 'node exploded' });
+  });
+
+  test('records a signal stop on the row while the event keeps its bare exit reason', async () => {
+    // Real SQLite so the json_patch merge actually runs: the row keeps `error` and gains
+    // the structured stop reason the operator surfaces read, and the terminal event's
+    // `exit_reason` stays the bare enum string the telemetry reader parses.
+    await seed('terminal-interrupted', 'running', "datetime('now')", { unrelated: 'keep me' });
+
+    await failWorkflowRun('terminal-interrupted', 'Process terminated (SIGINT)', {
+      exitReason: 'process_terminated',
+      signal: 'SIGINT',
+    });
+
+    const run = await getWorkflowRun('terminal-interrupted');
+    expect(run?.status).toBe('failed');
+    expect(run?.metadata.error).toBe('Process terminated (SIGINT)');
+    expect(run?.metadata.unrelated).toBe('keep me');
+    expect(readRunStopReason(run?.metadata)).toEqual({
+      reason: 'process_terminated',
+      signal: 'SIGINT',
+    });
+    const event = await db.query<{ data: string }>(
+      `SELECT data FROM remote_agent_workflow_events
+       WHERE workflow_run_id = $1 AND event_type = 'workflow_failed'`,
+      ['terminal-interrupted']
+    );
+    expect(JSON.parse(event.rows[0]?.data ?? '{}')).toMatchObject({
+      exit_reason: 'process_terminated',
+    });
+  });
+
+  test('a new failure replaces a prior stop reason instead of merging into it', async () => {
+    // SQLite's json_patch is RFC 7396 and RECURSES into a nested object, so merging a
+    // reason-only record over a signalled one would leave the old signal attached to the
+    // new reason — the #2673 defect through the same mechanism. A row can reach 'running'
+    // again still carrying a stop reason: recoverCancelledFanOutRun puts a 'cancelled' run
+    // back without touching metadata, and cancelWorkflowRun accepts a 'failed' run.
+    await seed('terminal-restopped', 'running', "datetime('now')", {
+      stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
+    });
+
+    await failWorkflowRun('terminal-restopped', 'Bash node failed', { exitReason: 'node_error' });
+
+    const run = await getWorkflowRun('terminal-restopped');
+    expect(readRunStopReason(run?.metadata)).toEqual({ reason: 'node_error' });
   });
 
   test('only the winning terminal transition inserts an event', async () => {

@@ -150,6 +150,9 @@
       "src/db/resource-slots.postgres.integration.test.ts"
     ],
     [
+      "src/db/workflows.metadata-merge.postgres.integration.test.ts"
+    ],
+    [
       "src/db/workflows.adoption-timestamp.integration.test.ts"
     ],
     [

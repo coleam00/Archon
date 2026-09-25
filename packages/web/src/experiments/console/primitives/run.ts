@@ -5,6 +5,7 @@ export type RunOrigin = 'web' | 'cli' | 'slack' | 'telegram' | 'discord' | 'gith
 export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
 type WorkflowRunMetadata = components['schemas']['WorkflowRunMetadata'];
 type WorkflowWait = NonNullable<WorkflowRunMetadata['wait']>;
+type WorkflowRunStopReason = NonNullable<WorkflowRunMetadata['stop_reason']>;
 type WorkflowWaitOwnerField =
   | 'owner'
   | 'nodeId'
@@ -78,6 +79,12 @@ export interface Run {
    * "resuming" hint instead of stale approve/reject buttons.
    */
   gateResolved?: 'approved' | 'rejected' | null;
+  /**
+   * Why the run stopped, as the owning process recorded it (#3479). Null when it
+   * stopped without one, or has not stopped. The run's `status` is unaffected: a
+   * run interrupted by a signal is still `failed`, and still resumable.
+   */
+  stopReason?: WorkflowRunStopReason | null;
   /**
    * Run-tree parent (#2121 Phase 2). Set when this run is a `workflow:` sub-run
    * spawned by a parent run's node; null for top-level runs. Drives the "child of"
@@ -257,6 +264,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     approval: parsedWait === null ? parsedApproval : null,
     wait: parsedWait,
     gateResolved,
+    stopReason: raw.metadata?.stop_reason ?? null,
     parentRunId: raw.parent_run_id ?? null,
   };
 }

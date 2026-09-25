@@ -131,6 +131,7 @@ import {
   isWorkflowWaitContext,
   workflowWaitStepName,
   isScheduledWorkflowResume,
+  readRunStopReason,
   skipCauseSchema,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
@@ -4279,6 +4280,27 @@ export function describeCheckoutBaseline(baseline: WorkflowRun['checkout_baselin
 }
 
 /**
+ * The `Stopped:` line for a run a signal ended, or null for every other stop reason.
+ *
+ * Only `process_terminated` gets prose here: it is the one stop reason whose whole
+ * point is that the run did not break, so an operator reading `failed` needs to be
+ * told. The rest are execution failures the `Error:` line already describes, and
+ * inventing operator wording for them is nobody's validated language.
+ *
+ * SIGINT reaching a foreground process is the terminal's interrupt character, so
+ * naming the operator there is a fact. A SIGTERM's sender is genuinely unknown —
+ * a supervisor, a shell, a `kill` — and the stop reason is never inferred, so it
+ * gets neutral wording and lets the signal do the disambiguating.
+ */
+function describeRunStopReason(metadata: Record<string, unknown>): string | null {
+  const stopReason = readRunStopReason(metadata);
+  if (stopReason?.reason !== 'process_terminated') return null;
+  const who = stopReason.signal === 'SIGINT' ? 'the operator' : 'a signal';
+  const signal = stopReason.signal === undefined ? '' : ` (${stopReason.signal})`;
+  return `interrupted by ${who}${signal}`;
+}
+
+/**
  * Show detail for a single workflow run by ID (any status).
  *
  * Unlike `status` (active runs only), this resolves one run regardless of
@@ -4429,6 +4451,13 @@ export async function workflowGetCommand(
     console.log(
       `  Resume: scheduled for ${scheduledResume.resumeAt} (attempt ${String(scheduledResume.attempt)}/${String(scheduledResume.maxAttempts)})`
     );
+  }
+  // Only a failed run's stop reason describes how it ended. A run can leave 'failed'
+  // with the key still set (cancelWorkflowRun abandons a failed run without touching
+  // metadata), and the console's runStatusLabel applies the same rule.
+  const stopped = run.status === 'failed' ? describeRunStopReason(run.metadata) : null;
+  if (stopped) {
+    console.log(`  Stopped: ${stopped}`);
   }
   const runError = typeof run.metadata.error === 'string' ? run.metadata.error : undefined;
   if (runError) {

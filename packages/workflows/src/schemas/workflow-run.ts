@@ -15,6 +15,7 @@ import {
   type NodeExecutionMetadata,
 } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
+import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
 import type { JsonValue } from '../output-ref';
@@ -491,6 +492,31 @@ export function readIdentityUnresolved(
 ): boolean | undefined {
   const raw = metadata?.[RUN_METADATA_KEYS.identityUnresolved];
   return typeof raw === 'boolean' ? raw : undefined;
+}
+
+/**
+ * Key under which a run records WHY it stopped (#3479).
+ *
+ * A stopped run's status says `failed`, which in this codebase also means
+ * "resumable" — so an operator who pressed Ctrl-C sees the same row as an
+ * operator whose workflow broke. The categorical cause is already durable in the
+ * terminal `workflow_failed` event's `exit_reason`, but no operator surface reads
+ * events for it: `workflow get` reads the run row, and the console's list endpoint
+ * returns run rows with no events at all. This key is the same fact on the row,
+ * so both read it without a second mechanism each.
+ *
+ * Written by the process that owns the run, from the signal it received. Cleared
+ * by `resumeWorkflowRun`, so a resumed-and-completed run does not go on claiming
+ * it was interrupted. Absent on runs that stopped before this key existed.
+ */
+export const RUN_STOP_REASON_METADATA_KEY = 'stop_reason';
+
+/** Typed view of the stop reason; undefined when the run carries none this build can read. */
+export function readRunStopReason(
+  metadata: Record<string, unknown> | undefined
+): RunStopReason | undefined {
+  const parsed = runStopReasonSchema.safeParse(metadata?.[RUN_STOP_REASON_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**

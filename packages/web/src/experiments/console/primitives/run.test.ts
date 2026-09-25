@@ -539,3 +539,47 @@ describe('toRun — durable wait', () => {
     });
   }
 });
+
+describe('stop reason', () => {
+  // Typed against the generated metadata contract, so a test cannot assert on a stop
+  // reason the API could never return.
+  const interrupted = (
+    stopReason: NonNullable<Raw['metadata']>['stop_reason']
+  ): ReturnType<typeof toRun> =>
+    toRun(
+      raw({
+        id: 'r1',
+        workflow_name: 'implement',
+        status: 'failed',
+        metadata: {
+          error: 'Process terminated (SIGINT)',
+          ...(stopReason === undefined ? {} : { stop_reason: stopReason }),
+        },
+      })
+    );
+
+  test('carries the persisted stop reason onto the run', () => {
+    expect(interrupted({ reason: 'process_terminated', signal: 'SIGINT' }).stopReason).toEqual({
+      reason: 'process_terminated',
+      signal: 'SIGINT',
+    });
+    expect(interrupted(undefined).stopReason).toBeNull();
+  });
+
+  // A signal stop is the one failure the operator caused on purpose, and the run is still
+  // resumable — labelling it `Failed` is what sends them looking for a bug (#3479).
+  test('labels a signal stop Interrupted, naming the signal', () => {
+    expect(runStatusLabel(interrupted({ reason: 'process_terminated', signal: 'SIGINT' }))).toBe(
+      'Interrupted (SIGINT)'
+    );
+    expect(runStatusLabel(interrupted({ reason: 'process_terminated', signal: 'SIGTERM' }))).toBe(
+      'Interrupted (SIGTERM)'
+    );
+    expect(runStatusLabel(interrupted({ reason: 'process_terminated' }))).toBe('Interrupted');
+  });
+
+  test('a genuine execution failure keeps saying Failed', () => {
+    expect(runStatusLabel(interrupted({ reason: 'node_error' }))).toBe('Failed');
+    expect(runStatusLabel(interrupted(undefined))).toBe('Failed');
+  });
+});

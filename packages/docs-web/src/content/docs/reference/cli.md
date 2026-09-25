@@ -573,6 +573,15 @@ engine could not read it. `null` means not recorded: the run predates this field
 started. Node execution records carry the same observation as `invocation.checkoutStart` and
 `attempt.checkoutStart`, so you can see which commit each node started at.
 
+Pressing Ctrl-C on a foreground run stops it without losing it. The process that owns the
+run records why it stopped, and the run stays `failed`, which is the resumable status: it is
+still found by `workflow run <name> --resume` and accepted by `workflow resume <run-id>`.
+For a `failed` run, human output adds a `Stopped:` line naming the interrupt and the
+signal, above the usual `Error:` line. JSON carries the same fact as `metadata.stop_reason`, an object with the
+categorical `reason` and the `signal` that arrived. Resuming the run clears it, so a run
+that resumed and then completed does not keep reporting an interrupt. Runs that stopped
+before this field existed carry no `stop_reason`.
+
 Each usage observation is either `{ source: "provider", value: ... }` or unavailable. Reasons
 separate unsupported reporting, a supported value not reported, unknown capability, non-provider
 work and invalid reported numbers. A reported zero stays zero. Historical nodes omit `execution`
