@@ -22,7 +22,7 @@ const TEST_KEYS = ['TEST_EL_HOME_ONLY', 'TEST_EL_REPO_ONLY', 'TEST_EL_OVERLAP', 
 
 let originalArchonHome: string | undefined;
 // The repo-scope refusal tests write these; a pre-fix loader would apply them.
-const REDIRECT_KEYS = ['PATH', 'HOME', 'USERPROFILE'] as const;
+const REDIRECT_KEYS = ['PATH', 'HOME', 'USERPROFILE', 'ARCHON_DOCKER', 'WORKSPACE_PATH'] as const;
 let originalRedirects: Partial<Record<(typeof REDIRECT_KEYS)[number], string>>;
 let originalArchonVerboseBoot: string | undefined;
 let originalLogLevel: string | undefined;
@@ -213,7 +213,14 @@ describe('loadArchonEnv', () => {
     }
   });
 
-  for (const key of ['ARCHON_HOME', 'PATH', 'HOME', 'USERPROFILE']) {
+  for (const key of [
+    'ARCHON_HOME',
+    'PATH',
+    'HOME',
+    'USERPROFILE',
+    'ARCHON_DOCKER',
+    'WORKSPACE_PATH',
+  ]) {
     it(`refuses a repo .archon/.env that sets ${key}, naming the file and the key`, () => {
       const repoEnv = join(repoDir, '.archon', '.env');
       writeFileSync(repoEnv, `TEST_EL_REPO_ONLY=from-repo\n${key}=${join(tmpRoot, 'elsewhere')}\n`);

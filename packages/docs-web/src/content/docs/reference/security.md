@@ -128,7 +128,7 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 
 **Subprocess env isolation:**
 - At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files (`.env`, `.env.local`, `.env.development`, `.env.production`), plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
-- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional. The repo scope still cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
+- Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional. The repo scope still cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
 - `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 

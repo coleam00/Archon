@@ -63,10 +63,19 @@ export function getPluginsPath(archonHome: string = getArchonHome()): string {
  * Keys a repository's `.archon/.env` may not set. Each can move the Archon home or the
  * executables Archon runs, so letting the repo scope set them would let a repository
  * choose which plugins run: ARCHON_HOME directly, HOME and USERPROFILE (Windows)
- * through the default `~/.archon`, and PATH through executable lookup. The process
- * environment and the user-scope `~/.archon/.env` may still set them.
+ * through the default `~/.archon`, ARCHON_DOCKER and WORKSPACE_PATH through the
+ * Docker home `/.archon` (see `isDocker`), and PATH through executable lookup. A
+ * deployment sets the Docker markers in its image or process environment. The process
+ * environment and the user-scope `~/.archon/.env` may still set all of them.
  */
-const REPO_SCOPE_REFUSED_KEYS = ['ARCHON_HOME', 'HOME', 'USERPROFILE', 'PATH'];
+const REPO_SCOPE_REFUSED_KEYS = [
+  'ARCHON_HOME',
+  'HOME',
+  'USERPROFILE',
+  'ARCHON_DOCKER',
+  'WORKSPACE_PATH',
+  'PATH',
+];
 
 /**
  * Load archon-owned env files. Call once, immediately after

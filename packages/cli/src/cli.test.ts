@@ -244,12 +244,7 @@ describe('workflow run config argument', () => {
         'WORKSPACE_PATH=/workspace\n' +
         'HOME=/root\n'
     );
-    writeFileSync(
-      join(repo, '.archon', '.env'),
-      `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n` +
-        'ARCHON_DOCKER=true\n' +
-        'WORKSPACE_PATH=/workspace\n'
-    );
+    writeFileSync(join(repo, '.archon', '.env'), `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n`);
 
     const savedKey = process.env.TOKEN_ENCRYPTION_KEY;
     const savedArchonHome = process.env.ARCHON_HOME;
@@ -308,10 +303,7 @@ describe('workflow run config argument', () => {
         'WORKSPACE_PATH=\n' +
         `HOME=${repo}\n`
     );
-    writeFileSync(
-      join(repo, '.archon', '.env'),
-      `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n` + 'ARCHON_DOCKER=false\n' + 'WORKSPACE_PATH=\n'
-    );
+    writeFileSync(join(repo, '.archon', '.env'), `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n`);
 
     const stripBootUrl = pathToFileURL(
       join(repoRoot, 'packages', 'paths', 'src', 'strip-cwd-env-boot.ts')
