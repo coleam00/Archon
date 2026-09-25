@@ -1245,4 +1245,56 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     expect(result.tokens?.cacheRead).toBe(9000);
     expect(result.cost).toBeCloseTo(0.053, 10);
   });
+
+  test('compaction summary calls count toward the prompt usage, each once', async () => {
+    // Pi summarizes the context with a model call. Its own auto-compaction announces
+    // the usage on compaction_end; a hook-driven compaction appends an entry instead.
+    const summaryUsage = (input: number, cost: number): Usage => ({
+      input,
+      output: 400,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: input + 400,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: cost },
+    });
+    const result = await lastResult([
+      agentEnd([
+        assistant({ input: 150, output: 4000, cacheRead: 0, cacheWrite: 0, cost: 0.15 }, 'length'),
+      ]),
+      { type: 'compaction_start', reason: 'overflow' } as AgentSessionEvent,
+      {
+        type: 'compaction_end',
+        reason: 'overflow',
+        result: {
+          summary: 's',
+          firstKeptEntryId: 'e1',
+          tokensBefore: 90000,
+          usage: summaryUsage(90000, 0.09),
+        },
+        aborted: false,
+        willRetry: true,
+      } as AgentSessionEvent,
+      {
+        type: 'entry_appended',
+        entry: {
+          type: 'compaction',
+          id: 'hook-compaction',
+          parentId: null,
+          timestamp: '2026-09-25T00:00:00.000Z',
+          summary: 's',
+          firstKeptEntryId: 'e1',
+          tokensBefore: 20000,
+          fromHook: true,
+          usage: summaryUsage(20000, 0.02),
+        },
+      },
+      agentEnd([
+        assistant({ input: 300, output: 30, cacheRead: 0, cacheWrite: 0, cost: 0.3 }, 'stop'),
+      ]),
+    ]);
+
+    expect(result.tokens?.input).toBe(150 + 90000 + 20000 + 300);
+    expect(result.tokens?.output).toBe(4000 + 400 + 400 + 30);
+    expect(result.cost).toBeCloseTo(0.15 + 0.09 + 0.02 + 0.3, 10);
+  });
 });

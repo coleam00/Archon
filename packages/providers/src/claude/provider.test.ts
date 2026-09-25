@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Options, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createMockLogger } from '../test/mocks/logger';
+import type { MessageChunk } from '../types';
 
 const mockLogger = createMockLogger();
 mock.module('@archon/paths', () => ({
@@ -383,6 +384,55 @@ describe('ClaudeProvider', () => {
           if (chunk.type === 'result') resolved = chunk.resolvedModel?.id;
         }
         expect(resolved).toBe('claude-haiku-4-5-20251001');
+      });
+
+      test('a resumed query with no new output names no model from earlier turns', async () => {
+        // A crash or startup-error result can carry the session's totals unchanged.
+        const totals = {
+          type: 'result',
+          session_id: 'spend-zero-delta',
+          total_cost_usd: 0.6,
+          modelUsage: {
+            'claude-opus-5-5': { outputTokens: 5000, costUSD: 0.5 },
+            'claude-haiku-4-5-20251001': { outputTokens: 100, costUSD: 0.1 },
+          },
+        };
+        mockQuery.mockImplementationOnce(async function* () {
+          yield totals;
+        });
+        await costOf();
+        mockQuery.mockImplementationOnce(async function* () {
+          yield totals;
+        });
+
+        const results: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-zero-delta')) {
+          if (chunk.type === 'result') results.push(chunk);
+        }
+        expect(results).toHaveLength(1);
+        expect(results[0]).toMatchObject({ cost: 0 });
+        expect(results[0]).not.toHaveProperty('resolvedModel');
+      });
+
+      test('without a baseline, a multi-model session names no model', async () => {
+        mockQuery.mockImplementationOnce(async function* () {
+          yield {
+            type: 'result',
+            session_id: 'spend-unseen-multi',
+            total_cost_usd: 0.6,
+            modelUsage: {
+              'claude-opus-5-5': { outputTokens: 5000, costUSD: 0.5 },
+              'claude-haiku-4-5-20251001': { outputTokens: 100, costUSD: 0.1 },
+            },
+          };
+        });
+
+        const results: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery('test', '/workspace', 'spend-unseen-multi')) {
+          if (chunk.type === 'result') results.push(chunk);
+        }
+        expect(results[0]).not.toHaveProperty('resolvedModel');
+        expect(results[0]).not.toHaveProperty('cost');
       });
 
       test('a total below the baseline reports cost as unknown', async () => {

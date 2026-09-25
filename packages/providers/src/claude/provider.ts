@@ -1193,12 +1193,11 @@ async function* streamClaudeMessages(
       // The SDK's cost and per-model totals are cumulative for the session; report
       // this query's share (see session-spend.ts). Record even on an error result
       // so a later resume of this session differences against current totals.
-      let spend: QuerySpend = {
-        costUsd: undefined,
-        modelUsage: resultMsg.modelUsage,
-      };
+      // Typed as required, but it crosses an IPC boundary (see selectResolvedModelId).
+      const modelUsage = (resultMsg.modelUsage as Record<string, ModelUsage> | undefined) ?? {};
+      let spend: QuerySpend = { costUsd: undefined, modelUsage };
       if (typeof resultMsg.total_cost_usd === 'number') {
-        const cumulative = { costUsd: resultMsg.total_cost_usd, modelUsage: resultMsg.modelUsage };
+        const cumulative = { costUsd: resultMsg.total_cost_usd, modelUsage };
         spend = spendSince(spendBaseline, cumulative);
         sessionSpend.record(resultMsg.session_id, cumulative);
         if (spend.costUsd === undefined) {

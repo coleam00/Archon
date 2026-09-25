@@ -152,9 +152,9 @@ function extractLastAssistantText(messages: readonly unknown[]): string | undefi
  * Pi reports usage per assistant message, and each assistant message is one model
  * call. Claude and Codex hand Archon the prompt-wide total instead, and the executor
  * treats a result chunk's usage as the whole pass, so the sum happens here (#2800).
- * Pi's prompt-cache warming also calls the model mid-prompt without producing an
- * assistant message. Pi records that spend as a session `usage` entry, which the
- * bridge passes in as `sideCalls` so the total still covers every billed call.
+ * Pi also calls the model mid-prompt without producing an assistant message, to
+ * keep the prompt cache warm or to compact the context. The bridge passes the usage
+ * of those calls in as `sideCalls` so the total still covers every billed call.
  *
  * Pi's `Usage` cannot say "not reported": a provider without streamed usage leaves
  * every field 0. A completed call always consumes input, so an all-zero completed
@@ -273,7 +273,7 @@ export { tryParseStructuredOutput };
  * Events deliberately skipped in v1:
  *  - turn_start / turn_end, message_start / message_end (redundant with deltas)
  *  - text_start / text_end / thinking_start / thinking_end (boundaries only)
- *  - compaction_start / compaction_end (auto-compaction opaque to Archon)
+ *  - compaction_start / compaction_end (bridgeSession reads compaction_end only for its usage)
  *  - queue_update (single-prompt sessions only)
  *  - auto_retry_end (retry_start communicates the retry sufficiently)
  */
@@ -419,9 +419,16 @@ export async function* bridgeSession(
         flushPendingAssistant();
         currentTurnText = '';
       }
+      // Billed model calls that add no assistant message. Pi announces each one exactly
+      // once: cache warming and hook-driven compaction as an appended entry (the SDK's
+      // `SessionEntry` type decides which entries carry `usage`), its own auto and
+      // manual compaction through `compaction_end`, whose entry is appended silently.
       if (event.type === 'entry_appended') {
-        if (event.entry.type === 'usage') promptSideCalls.push(event.entry.usage);
+        if ('usage' in event.entry && event.entry.usage) promptSideCalls.push(event.entry.usage);
         return;
+      }
+      if (event.type === 'compaction_end' && event.result?.usage) {
+        promptSideCalls.push(event.result.usage);
       }
       if (event.type === 'agent_end') {
         // Streaming tail completion: Pi occasionally fails to flush the last
