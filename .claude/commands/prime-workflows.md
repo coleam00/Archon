@@ -40,7 +40,7 @@ bundled defaults merging with repo-specific workflows.
 ### 5. Understand the Router
 
 Read `packages/workflows/src/router.ts` first 60 lines — how incoming messages are matched
-to workflows, case-insensitive matching, `archon-assist` fallback, Codex tool bypass detection.
+to workflows, case-insensitive matching, Codex tool bypass detection.
 
 ### 6. Understand Observability
 

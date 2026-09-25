@@ -352,7 +352,7 @@ archon complete <branch> --force   # skip uncommitted-changes check
 
 | Workflow | What It Does |
 |----------|-------------|
-| `archon-assist` | General Q&A, debugging, exploration, CI failures — catch-all |
+| `archon-assist` | General Q&A, debugging, exploration, CI failures (deprecated) |
 | `archon-fix-github-issue` | Investigate, root cause analysis, implement fix, validate, PR |
 | `archon-create-issue` | Classify problem, gather context, investigate, create GitHub issue |
 | `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |
@@ -374,7 +374,7 @@ archon complete <branch> --force   # skip uncommitted-changes check
 
 These bundled workflows work for most projects. To customize, copy one from `.archon/workflows/defaults/` into `.archon/workflows/` and modify it — same-named files override the defaults.
 
-> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-fix-github-issue`, while "review this PR" routes to `archon-smart-pr-review`. If nothing matches clearly, it falls back to `archon-assist`.
+> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-fix-github-issue`, while "review this PR" routes to `archon-smart-pr-review`. A question, or a request where it is unclear whether you want a workflow, gets a direct answer instead of a run.
 
 ---
 
