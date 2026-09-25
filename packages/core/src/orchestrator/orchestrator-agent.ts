@@ -2643,7 +2643,9 @@ interface ChatTurn {
   /**
    * The model's reply routed the turn to a workflow or a project registration, which
    * report as `workflow_invoked` / `codebase_registered`, not as a chat turn. A throw
-   * while dispatching it is not a failed chat turn.
+   * while dispatching it is not a failed chat turn. A dispatch that fails before its run
+   * exists sends nothing, as a workflow-not-found or invalid-YAML dispatch does; the
+   * executor's own run-creation failure is reported as `run_not_created`.
    */
   routed: boolean;
 }
