@@ -3001,6 +3001,34 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 
+  // respond shares `pausedGateBlocker` with approve/reject but passes its own advice
+  // string, so the machine-usable redirect is asserted on this route too.
+  test('returns 400 redirecting to the child when the parent is blocked on a sub-run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'parent-blocked-3',
+      metadata: {
+        approval: {
+          type: 'child_workflow',
+          nodeId: 'sub',
+          message: 'Blocked on sub-run',
+          childRunId: 'child-def',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/parent-blocked-3/respond', {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'revise' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error?: string; childRunId?: string };
+    expect(body.error).toContain('child-def');
+    expect(body.childRunId).toBe('child-def');
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
   test('returns 400 naming the actual options when the decision is not declared', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce({
       ...MOCK_PAUSED_RUN,
