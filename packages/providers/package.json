@@ -17,6 +17,7 @@
     "./mcp/config": "./src/mcp/config.ts",
     "./oauth": "./src/oauth.ts",
     "./community/pi": "./src/community/pi/index.ts",
+    "./community/pi/auth-status": "./src/community/pi/auth-status.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
@@ -106,6 +107,9 @@
     ],
     [
       "src/community/pi/request-auth.test.ts"
+    ],
+    [
+      "src/community/pi/auth-status.test.ts"
     ],
     [
       "src/community/pi/request-auth.integration.test.ts"
