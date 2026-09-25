@@ -2747,6 +2747,36 @@ describe('CommandHandler', () => {
         expectSlackSpelling(result.message);
       });
 
+      // The child-run redirect is built by core, which has no surface. #3488: it used
+      // to reach Slack as the raw chat grammar the operations wrote.
+      for (const verb of ['approve', 'reject'] as const) {
+        test(`/workflow ${verb} on a parent blocked on a sub-run`, async () => {
+          mockGetWorkflowRun.mockResolvedValueOnce(
+            makeWorkflowRun({
+              id: 'parent-stuck',
+              status: 'paused' as const,
+              user_message: 'x',
+              metadata: {
+                approval: {
+                  nodeId: 'sub',
+                  message: 'waiting on sub-run',
+                  type: 'child_workflow',
+                  childRunId: 'child-77',
+                },
+              },
+            })
+          );
+          const result = await handleCommand(
+            projectConversation,
+            `/workflow ${verb} parent-stuck`,
+            slack
+          );
+          expect(result.success).toBe(false);
+          expect(result.message).toContain(`/archon-workflow ${verb} child-77`);
+          expectSlackSpelling(result.message);
+        });
+      }
+
       test('a surface without its own spelling keeps /workflow', async () => {
         const result = await handleCommand(projectConversation, '/workflow invalid', {});
         expect(result.message).toContain('/workflow status');

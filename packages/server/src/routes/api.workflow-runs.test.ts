@@ -2496,8 +2496,10 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { error?: string; childRunId?: string };
     expect(body.error).toContain('child-xyz');
+    // The run to act on is data, not something a client has to read out of the prose.
+    expect(body.childRunId).toBe('child-xyz');
     // No gate mutation happened.
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
@@ -2835,8 +2837,9 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { error?: string; childRunId?: string };
     expect(body.error).toContain('child-abc');
+    expect(body.childRunId).toBe('child-abc');
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
   });
 

@@ -448,6 +448,23 @@ function jsonError(description: string): {
   return { content: { 'application/json': { schema: errorSchema } }, description };
 }
 
+/**
+ * A paused-gate refusal. `childRunId` is present when the answer is "act on the child run
+ * instead", so a client reads the run to act on instead of parsing it out of the message.
+ */
+const gateRefusalSchema = z
+  .object({ error: z.string(), childRunId: z.string().optional() })
+  .openapi('GateRefusal');
+type GateRefusal = z.infer<typeof gateRefusalSchema>;
+
+/** Helper to build the gate routes' 400 response entry for createRoute configs. */
+function jsonGateRefusal(description: string): {
+  content: { 'application/json': { schema: typeof gateRefusalSchema } };
+  description: string;
+} {
+  return { content: { 'application/json': { schema: gateRefusalSchema } }, description };
+}
+
 const cwdQuerySchema = z.object({ cwd: z.string().optional() });
 const workflowTargetQuerySchema = cwdQuerySchema.extend({
   source: z.enum(['project', 'global']).optional(),
@@ -1045,7 +1062,7 @@ const approveWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunActionResponseSchema } },
       description: 'Approved',
     },
-    400: jsonError('Bad request'),
+    400: jsonGateRefusal('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1065,7 +1082,7 @@ const rejectWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunActionResponseSchema } },
       description: 'Rejected',
     },
-    400: jsonError('Bad request'),
+    400: jsonGateRefusal('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -1085,7 +1102,7 @@ const respondWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunActionResponseSchema } },
       description: 'Responded',
     },
-    400: jsonError('Bad request'),
+    400: jsonGateRefusal('Bad request'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -3856,33 +3873,47 @@ export function registerApiRoutes(
     run: WorkflowRun,
     childRedirectAdvice: string,
     requireReadableGate: boolean
-  ): string | null {
+  ): GateRefusal | null {
     const attention = runAttention(run);
     const approvalRaw = run.metadata.approval;
     const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
     switch (attention?.kind) {
       case 'action_required':
-        return 'Run is paused for an outside action. Complete it, then resume the run; abandon it if it should not continue.';
+        return {
+          error:
+            'Run is paused for an outside action. Complete it, then resume the run; abandon it if it should not continue.',
+        };
       case 'blocked_on_child':
         // Not an approvable gate — the parent resumes automatically when the child
         // completes. Send the caller to the run where the decision actually lives.
-        return `Run is paused waiting on sub-run ${attention.childRunId}. ${childRedirectAdvice}`;
+        return {
+          error: `Run is paused waiting on sub-run ${attention.childRunId}. ${childRedirectAdvice}`,
+          childRunId: attention.childRunId,
+        };
       case 'unreadable':
         if (attention.reason === 'malformed_gate') {
-          return requireReadableGate ? 'Workflow run is paused but missing approval context' : null;
+          return requireReadableGate
+            ? { error: 'Workflow run is paused but missing approval context' }
+            : null;
         }
         if (attention.reason === 'unrecognized_gate_type') {
-          return `Workflow run has an unrecognized gate type '${String(approval?.type)}' — this Archon build cannot resolve it`;
+          return {
+            error: `Workflow run has an unrecognized gate type '${String(approval?.type)}' — this Archon build cannot resolve it`,
+          };
         }
-        return `Workflow run cannot be resolved: ${attention.detail}`;
+        return { error: `Workflow run cannot be resolved: ${attention.detail}` };
       case undefined:
         // Post-#2075 the run stays 'paused' after a resolution, so status alone no
         // longer distinguishes "awaiting a response" from "awaiting resume".
         if (approval && isGateResolved(approval)) {
-          return `Workflow run was already ${String(approval.resolved)} — resume in progress`;
+          return {
+            error: `Workflow run was already ${String(approval.resolved)} — resume in progress`,
+          };
         }
         // Paused with no gate at all — a durable `wait:`. There is nothing to approve.
-        return requireReadableGate ? 'Workflow run is paused but missing approval context' : null;
+        return requireReadableGate
+          ? { error: 'Workflow run is paused but missing approval context' }
+          : null;
       case 'awaiting_response':
         // The gate is open and this route may go on to resolve it.
         return null;
@@ -3917,7 +3948,7 @@ export function registerApiRoutes(
         true
       );
       if (approveBlocker) {
-        return apiError(c, 400, approveBlocker);
+        return c.json(approveBlocker, 400);
       }
       // Distinguish "no body sent" (legitimate bare approve) from "body sent but
       // unparseable" (client bug). Since #2074 a bare approve FINALIZES a
@@ -3984,7 +4015,7 @@ export function registerApiRoutes(
         false
       );
       if (rejectBlocker) {
-        return apiError(c, 400, rejectBlocker);
+        return c.json(rejectBlocker, 400);
       }
       // Mirror of the approve route's malformed-body guard: a swallowed parse
       // failure would silently drop the reviewer's reason.
@@ -4061,7 +4092,7 @@ export function registerApiRoutes(
         false
       );
       if (respondBlocker) {
-        return apiError(c, 400, respondBlocker);
+        return c.json(respondBlocker, 400);
       }
       const rawBody = await c.req.text();
       let body: { decision?: string; text?: string } = {};

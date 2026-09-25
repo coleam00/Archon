@@ -8621,7 +8621,10 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     try {
       await expect(
         workflowApproveCommand('run-123', undefined, undefined, undefined, true)
-      ).rejects.toThrow('Approve or reject the child run instead: /workflow approve c-9');
+      ).rejects.toThrow(
+        'Approve or reject the child run instead. Approve it by run id: ' +
+          '`archon workflow approve c-9`'
+      );
       expect(spawnSpy.mock.calls.length).toBe(0);
     } finally {
       spawnSpy.mockRestore();
@@ -8716,7 +8719,10 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     try {
       await expect(
         workflowRejectCommand('run-123', undefined, undefined, undefined, true)
-      ).rejects.toThrow('Reject the child run instead: /workflow reject c-9');
+      ).rejects.toThrow(
+        'Reject the child run instead, or abandon this run to discard the whole tree. ' +
+          'Reject it by run id: `archon workflow reject c-9`'
+      );
       expect(spawnSpy.mock.calls.length).toBe(0);
     } finally {
       spawnSpy.mockRestore();
@@ -9296,6 +9302,45 @@ describe('workflowApproveCommand', () => {
     await expect(workflowApproveCommand('missing-id')).rejects.toThrow(
       'Workflow run not found: missing-id'
     );
+  });
+
+  // #3488: the refusal core throws names no command, so the CLI adds its own spelling
+  // on both of its error surfaces — propagation (human) and the --json envelope.
+  it('spells the child-run redirect for the CLI on both error surfaces', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const blockedParent = {
+      id: 'run-blocked',
+      workflow_name: 'implement',
+      status: 'paused',
+      user_message: 'add auth',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-existing',
+      metadata: {
+        approval: {
+          nodeId: 'sub',
+          message: 'blocked',
+          type: 'child_workflow',
+          childRunId: 'child-42',
+        },
+      },
+    };
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(blockedParent);
+    await expect(workflowApproveCommand('run-blocked')).rejects.toThrow(
+      'Approve it by run id: `archon workflow approve child-42`'
+    );
+
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(blockedParent);
+    const stdoutSpy = spyOnJsonStdout();
+    try {
+      await workflowApproveCommand('run-blocked', undefined, true);
+      const payload = JSON.parse(firstJsonPayload(stdoutSpy)) as { ok: boolean; error: string };
+      expect(payload.ok).toBe(false);
+      expect(payload.error).toContain('archon workflow approve child-42');
+      expect(payload.error).not.toContain('/workflow ');
+    } finally {
+      stdoutSpy.mockRestore();
+    }
   });
 
   it('should pass codebase_id from run record to workflowRunCommand', async () => {

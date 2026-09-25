@@ -13,6 +13,7 @@ import {
   abandonWorkflow,
   cancelWorkflow,
   CancelRefusedError,
+  ChildRunRedirectError,
   describeAbandonOwner,
   approveWorkflow,
   rejectWorkflow,
@@ -233,7 +234,12 @@ export function buildManageRunTool(ctx: ManageRunContext): NativeTool {
             return `manage_run: unknown action '${action}'. Call action=help for the list.`;
         }
       } catch (e: unknown) {
-        const msg = e instanceof Error ? e.message : String(e);
+        const msg =
+          e instanceof ChildRunRedirectError
+            ? e.messageFor(ctx.surface ?? {})
+            : e instanceof Error
+              ? e.message
+              : String(e);
         const runId = typeof input.runId === 'string' ? input.runId : undefined;
         log.error({ err: e, action, runId, codebaseId: ctx.codebaseId }, 'manage_run.failed');
         return `manage_run error: ${msg}`;
