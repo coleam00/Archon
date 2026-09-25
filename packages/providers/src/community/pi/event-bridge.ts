@@ -2,7 +2,8 @@ import { createLogger } from '@archon/paths';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
+import { piFailureResult } from './failure';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -202,13 +203,13 @@ function sumPromptUsage(
  * Build the terminal `result` chunk from every message the prompt produced.
  * Usage and cost are summed over all assistant messages plus `sideCalls`, the usage of
  * model calls that added no message (see sumPromptUsage); stopReason, model and error
- * come from the last assistant message. When the agent ended in error, surfaces it as
- * `isError: true`.
+ * come from the last assistant message. When the agent ended in error, the chunk
+ * carries a typed `failure`.
  */
 export function buildResultChunk(
   messages: readonly unknown[],
   sideCalls: readonly Usage[] = []
-): MessageChunk {
+): ResultChunk {
   const assistants = messages.filter(isAssistantMessage);
   const last = assistants.at(-1);
   if (!last) {
@@ -217,35 +218,28 @@ export function buildResultChunk(
     // rather than a silent success so orchestrators don't treat a broken
     // session as a clean completion.
     getLog().warn('pi.event-bridge.result_missing_assistant_message');
-    return { type: 'result', isError: true, errorSubtype: 'missing_assistant_message' };
+    return piFailureResult(
+      'missing_assistant_message',
+      'Pi ended the turn without an assistant message'
+    );
   }
 
   const tokens = sumPromptUsage(assistants, sideCalls);
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
-  const chunk: MessageChunk = {
-    type: 'result',
-    ...(tokens ? { tokens } : {}),
-    ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
-    ...(last.stopReason ? { stopReason: last.stopReason } : {}),
-    ...(typeof last.responseModel === 'string' && last.responseModel.length > 0
-      ? { resolvedModel: { id: last.responseModel } }
-      : {}),
-    ...(isError
-      ? {
-          isError: true,
-          errorSubtype: last.stopReason,
-          // Surfacing errorMessage in errors[] is what makes the executor's
-          // transient-error classifier (which pattern-matches on the thrown
-          // message) able to retry Pi-side 429/overload failures.
-          ...(last.errorMessage ? { errors: [last.errorMessage] } : {}),
-        }
-      : {}),
-  };
+  // Built by assignment on a typed value so a misspelled key fails to compile.
+  const chunk: ResultChunk = isError
+    ? piFailureResult(last.stopReason, last.errorMessage)
+    : { type: 'result' };
+  if (tokens) chunk.tokens = tokens;
+  if (tokens?.cost !== undefined) chunk.cost = tokens.cost;
+  if (last.stopReason) chunk.stopReason = last.stopReason;
+  if (typeof last.responseModel === 'string' && last.responseModel.length > 0) {
+    chunk.resolvedModel = { id: last.responseModel };
+  }
   if (isError) {
-    // Intentional design: error chunks are yielded, not thrown. isError:true in the chunk
-    // is the signal — callers (bridgeSession, dag-executor) check result.isError to classify
-    // failures and still receive full token/stopReason context from the same chunk.
+    // Error chunks are yielded, not thrown: the failure and the turn's usage travel on
+    // the same chunk.
     getLog().error(
       { stopReason: last.stopReason, errorMessage: last.errorMessage },
       'pi.result_chunk_error'
@@ -546,10 +540,9 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
-        let terminal: MessageChunk = item.chunk;
-        if (session.sessionId) {
-          terminal = { ...terminal, sessionId: session.sessionId };
-        }
+        // The chunk was built for this turn by buildResultChunk; annotate it in place.
+        const terminal = item.chunk;
+        if (session.sessionId) terminal.sessionId = session.sessionId;
         // Best-effort structured output: parse the accumulated assistant
         // transcript as JSON and attach. On parse failure, leave it off —
         // the dag-executor's existing dag.structured_output_missing path
@@ -558,7 +551,7 @@ export async function* bridgeSession(
         if (wantsStructured) {
           const parsed = tryParseStructuredOutput(assistantBuffer);
           if (parsed !== undefined) {
-            terminal = { ...terminal, structuredOutput: parsed };
+            terminal.structuredOutput = parsed;
           } else {
             getLog().warn(
               { bufferLength: assistantBuffer.length },

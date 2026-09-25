@@ -322,6 +322,7 @@ import { ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT, PiProvider } from './provider'
 import { PI_CAPABILITIES } from './capabilities';
 // Same module instance the provider dynamic-imports, so clearing this cache
 // resets the loader the provider reuses across calls (issue #1877).
+import { runProviderConformance } from '@archon/provider-contract/conformance';
 import {
   getOrCreateReloadedExtensionLoader,
   resetReloadedExtensionLoaderCache,
@@ -329,15 +330,23 @@ import {
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
-async function consume(
-  generator: AsyncGenerator<unknown>
-): Promise<{ chunks: unknown[]; error?: Error }> {
+async function consume(generator: AsyncGenerator<unknown>): Promise<{
+  chunks: unknown[];
+  error?: Error;
+  /** The typed failure the turn's result reported, if it failed. */
+  failure?: { class: string; evidence: string };
+}> {
   const chunks: unknown[] = [];
+  let failure: { class: string; evidence: string } | undefined;
   try {
-    for await (const chunk of generator) chunks.push(chunk);
-    return { chunks };
+    for await (const chunk of generator) {
+      chunks.push(chunk);
+      const result = chunk as { type?: string; failure?: { class: string; evidence: string } };
+      if (result.type === 'result' && result.failure) failure = result.failure;
+    }
+    return { chunks, failure };
   } catch (err) {
-    return { chunks, error: err as Error };
+    return { chunks, failure, error: err as Error };
   }
 }
 
@@ -451,9 +460,9 @@ describe('PiProvider', () => {
     expect(stub.piConfig).toEqual({});
   });
 
-  test('throws when no model is configured', async () => {
-    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(error?.message).toContain('Pi provider requires a model');
+  test('reports a failure when no model is configured', async () => {
+    const { failure } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(failure?.evidence).toContain('Pi provider requires a model');
   });
 
   test('falls back to the operator Pi default (settings.json) when no model is configured', async () => {
@@ -478,14 +487,14 @@ describe('PiProvider', () => {
     expect(mockModelRegistryFind).toHaveBeenCalledWith('google', 'gemini-2.5-pro');
   });
 
-  test('still throws when no model and settings default is incomplete (provider without model)', async () => {
+  test('still reports a failure when no model and settings default is incomplete (provider without model)', async () => {
     // A partial default (provider set but no model, or vice versa) must NOT
     // silently resolve — fail fast with the actionable "requires a model" error.
     mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
       defaultProvider: 'google',
     }));
-    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(error?.message).toContain('Pi provider requires a model');
+    const { failure } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(failure?.evidence).toContain('Pi provider requires a model');
     expect(mockLogger.info).not.toHaveBeenCalledWith(
       expect.anything(),
       'pi.model_defaulted_from_settings'
@@ -500,19 +509,19 @@ describe('PiProvider', () => {
     mockSettingsManagerDrainErrors.mockImplementation(() => [
       { scope: 'global', error: new Error('bad settings.json') },
     ]);
-    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(error?.message).toContain('Pi provider requires a model');
+    const { failure } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(failure?.evidence).toContain('Pi provider requires a model');
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ scope: 'global' }),
       'pi.settings_default_model_read_error'
     );
   });
 
-  test('throws when model ref is malformed', async () => {
-    const { error } = await consume(
+  test('reports a failure when model ref is malformed', async () => {
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'sonnet' })
     );
-    expect(error?.message).toContain('Invalid Pi model ref');
+    expect(failure?.evidence).toContain('Invalid Pi model ref');
   });
 
   test('logs credential hint when Pi provider id is unknown AND no creds available', async () => {
@@ -781,16 +790,16 @@ describe('PiProvider', () => {
     });
 
     try {
-      const { error } = await consume(
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'mygw/demo',
           env: { MYGW_API_KEY: 'request-secret' },
           protectedEnvKeys: [],
         })
       );
-      expect(error).toBeDefined();
-      expect(error?.message).toContain('Pi auth storage init failed');
-      expect(error?.message).toContain('simulated SDK failure');
+      expect(failure?.class).toBe('unknown');
+      expect(failure?.evidence).toContain('Pi auth storage init failed');
+      expect(failure?.evidence).toContain('simulated SDK failure');
       // Capture the path from the call that DID happen (before the throw).
       const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
         | { modelsPath?: string }
@@ -856,7 +865,7 @@ describe('PiProvider', () => {
     process.env.TEMP = scratchTmp;
 
     try {
-      const { error } = await consume(
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'mygw/demo',
           env: { MYGW_API_KEY: 'request-secret' },
@@ -869,10 +878,10 @@ describe('PiProvider', () => {
       // above, so orchestrator pattern-matchers that key on this prefix see
       // the FS error too. Raw 'EEXIST: file already exists, mkdir …' must
       // NOT leak through unframed.
-      expect(error).toBeDefined();
-      expect(error?.message).toContain('Pi auth storage init failed');
-      expect(error?.message).toMatch(/EEXIST|file already exists/);
-      expect(error?.message).toContain('~/.pi/agent/auth.json');
+      expect(failure?.class).toBe('unknown');
+      expect(failure?.evidence).toContain('Pi auth storage init failed');
+      expect(failure?.evidence).toMatch(/EEXIST|file already exists/);
+      expect(failure?.evidence).toContain('~/.pi/agent/auth.json');
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ piProvider: 'mygw' }),
         'pi.auth_storage_init_failed'
@@ -995,16 +1004,16 @@ describe('PiProvider', () => {
       throw new Error('Unexpected token } in JSON at position 42');
     });
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
       })
     );
 
-    expect(error).toBeDefined();
-    expect(error?.message).toContain('Pi auth storage init failed');
-    expect(error?.message).toContain('Unexpected token');
-    expect(error?.message).toContain('~/.pi/agent/auth.json');
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('Pi auth storage init failed');
+    expect(failure?.evidence).toContain('Unexpected token');
+    expect(failure?.evidence).toContain('~/.pi/agent/auth.json');
     expect(mockLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({ piProvider: 'google' }),
       'pi.auth_storage_init_failed'
@@ -1030,14 +1039,14 @@ describe('PiProvider', () => {
     });
 
     resetScript(scriptedAgentEnd());
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'lm-studio/some-model',
       })
     );
 
-    expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('pi update --models');
+    expect(failure?.evidence).toContain('Pi model not found');
+    expect(failure?.evidence).toContain('pi update --models');
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         piProvider: 'lm-studio',
@@ -1048,16 +1057,16 @@ describe('PiProvider', () => {
     );
   });
 
-  test('throws when env var missing AND auth.json has no entry', async () => {
+  test('reports a failure when env var missing AND auth.json has no entry', async () => {
     // GEMINI_API_KEY not set (beforeEach deletes it), fileCreds empty
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(error?.message).toContain('no credentials for provider');
-    expect(error?.message).toContain('GEMINI_API_KEY');
-    expect(error?.message).toContain('/login');
+    expect(failure?.evidence).toContain('no credentials for provider');
+    expect(failure?.evidence).toContain('GEMINI_API_KEY');
+    expect(failure?.evidence).toContain('/login');
   });
 
   test('uses OAuth credential from ~/.pi/agent/auth.json when no env var set', async () => {
@@ -1101,7 +1110,7 @@ describe('PiProvider', () => {
     expect(mockGetAuth).toHaveBeenCalledWith('anthropic');
   });
 
-  test('throws when ModelRegistry.find returns undefined', async () => {
+  test('reports a failure when ModelRegistry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = '/custom/pi-agent';
@@ -1110,18 +1119,18 @@ describe('PiProvider', () => {
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     resetScript(scriptedAgentEnd());
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/unknown-model-id',
       })
     );
     // A known provider with an unknown model id is a stale catalog, not a
     // missing provider extension, so the extension remedy must not appear.
-    expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('pi update --models');
-    expect(error?.message).toContain(join('/custom/pi-agent', 'models-store.json'));
-    expect(error?.message).not.toContain('provider extension');
-    expect(error?.message).not.toContain('enableExtensions');
+    expect(failure?.evidence).toContain('Pi model not found');
+    expect(failure?.evidence).toContain('pi update --models');
+    expect(failure?.evidence).toContain(join('/custom/pi-agent', 'models-store.json'));
+    expect(failure?.evidence).not.toContain('provider extension');
+    expect(failure?.evidence).not.toContain('enableExtensions');
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   });
@@ -1132,15 +1141,15 @@ describe('PiProvider', () => {
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     resetScript(scriptedAgentEnd());
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'nonexistent/some-model',
       })
     );
-    expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('provider extension');
-    expect(error?.message).toContain('enableExtensions: true');
-    expect(error?.message).toContain('pi update --models');
+    expect(failure?.evidence).toContain('Pi model not found');
+    expect(failure?.evidence).toContain('provider extension');
+    expect(failure?.evidence).toContain('enableExtensions: true');
+    expect(failure?.evidence).toContain('pi update --models');
   });
 
   test('deferred resolution: calls session.setModel when find() resolves after bindExtensions', async () => {
@@ -2208,21 +2217,70 @@ describe('PiProvider', () => {
 
   // ─── Error + lifecycle paths (review: "zero test coverage") ─────────
 
-  test('session.prompt rejection surfaces as thrown error to consumer', async () => {
+  test('session.prompt rejection surfaces as a typed failure', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const promptError = new Error('pi backend exploded');
     mockPrompt.mockImplementationOnce(async () => {
       throw promptError;
     });
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(error?.message).toBe('pi backend exploded');
+    expect(failure).toEqual({ class: 'unknown', evidence: 'pi backend exploded' });
     // dispose still happens on error path
     expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('conforms to the provider contract’s failure-class check', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const erroredAgentEnd = (): FakeEvent[] => {
+      const events = scriptedAgentEnd();
+      const end = events[0] as { messages: Record<string, unknown>[] };
+      end.messages[0].stopReason = 'error';
+      end.messages[0].errorMessage = '429 Too Many Requests: rate limit exceeded';
+      return events;
+    };
+    const violations = await runProviderConformance({
+      failureCases: [
+        {
+          name: 'errored turn',
+          expected: 'unknown',
+          evidence: '429 Too Many Requests',
+          run: () => {
+            resetScript(erroredAgentEnd());
+            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+              model: 'google/gemini-2.5-pro',
+            });
+          },
+        },
+        {
+          name: 'rejected prompt',
+          expected: 'unknown',
+          evidence: 'pi backend exploded',
+          run: () => {
+            mockPrompt.mockImplementationOnce(async () => {
+              throw new Error('pi backend exploded');
+            });
+            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+              model: 'google/gemini-2.5-pro',
+            });
+          },
+        },
+        {
+          name: 'no model configured',
+          expected: 'unknown',
+          evidence: 'Pi provider requires a model',
+          run: () => {
+            delete process.env.GEMINI_API_KEY;
+            return new PiProvider().sendQuery('hi', '/tmp');
+          },
+        },
+      ],
+    });
+    expect(violations).toEqual([]);
   });
 
   test('pre-aborted signal triggers session.abort before any yielding', async () => {
@@ -3157,15 +3215,15 @@ describe('PiProvider', () => {
       mockModelRegistryFind.mockImplementationOnce(() => undefined);
       resetScript(scriptedAgentEnd());
 
-      const { error } = await consume(
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'cursor/removed-model',
         })
       );
 
-      expect(error?.message).toContain('comes from an installed Pi extension');
-      expect(error?.message).toContain('Check the extension configuration and model name');
-      expect(error?.message).not.toContain('pi update --models');
+      expect(failure?.evidence).toContain('comes from an installed Pi extension');
+      expect(failure?.evidence).toContain('Check the extension configuration and model name');
+      expect(failure?.evidence).not.toContain('pi update --models');
     });
 
     test('a failing re-apply warns and does not fail nodes using other providers', async () => {

@@ -786,14 +786,14 @@ DISCORD_STREAMING_MODE=batch
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when its node error proves provider quota-window exhaustion |
-| `quotaFallbackDelayMs` | unset | Explicit delay to use only when the provider error has no machine-readable reset time, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
+| `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when a node's provider reported a `quota_exhausted` failure |
+| `quotaFallbackDelayMs` | unset | Explicit delay to use only when the provider's quota failure reports no reset time, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
 | `quotaMaxAttempts` | `1` | Maximum number of scheduled continuation attempts for one run |
 | `quotaDeadlineMs` | `86400000` | Maximum window from the first quota failure in which a continuation may be scheduled, capped at 1000 years |
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
 
-Provider errors that include an unambiguous epoch or relative reset duration use it. Errors such as MiniMax plan exhaustion code `2056` often omit a reset time; those resume only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
+Only a provider's typed failure schedules a continuation; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. Codex and Pi expose no structured quota signal, so their quota errors are reported as `unknown` and never schedule a continuation. A quota failure without a reset time resumes only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
 
 ## Concurrency Settings
 

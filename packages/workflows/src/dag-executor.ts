@@ -193,8 +193,6 @@ import {
   RATE_LIMIT_MAX_RETRIES,
   providerFailureKind,
   detectCreditExhaustion,
-  isQuotaExhaustionError,
-  extractQuotaResetAt,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -2147,13 +2145,20 @@ async function executeNodeInternal(
   const failAgentNode = async (
     error: string,
     failureKind: NodeFailureKind,
-    extras: { output?: string } = {}
+    extras: { output?: string; providerFailure?: ProviderFailure } = {}
   ): Promise<NodeExecutionResult> => {
     const result = await recordNodeState(
       { store: deps.store, logDir },
       finishNodeExecution(
         execution,
-        { status: 'failed', error, failureKind },
+        {
+          status: 'failed',
+          error,
+          failureKind,
+          ...(extras.providerFailure !== undefined
+            ? { providerFailure: extras.providerFailure }
+            : {}),
+        },
         {
           output: { text: extras.output ?? '' },
           tokens: nodeTokens,
@@ -2586,17 +2591,20 @@ async function executeNodeInternal(
         nodeResolvedModel = msg.resolvedModel;
         if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
         if (msg.failure !== undefined) {
-          throw providerReportedFailure(`Node '${node.id}'`, msg.failure);
-        }
-        // Fail the node if the SDK reports a cost cap exceeded error
-        if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
-          const cap = nodeOptions?.maxBudgetUsd;
-          getLog().warn(
-            { nodeId: node.id, maxBudgetUsd: cap, durationMs: Date.now() - nodeStartTime },
-            'dag.node_budget_cap_exceeded'
-          );
-          throw new Error(
-            `Node '${node.id}' exceeded cost cap${cap !== undefined ? ` of $${cap.toFixed(2)}` : ''}.`
+          if (msg.failure.class === 'budget_exceeded') {
+            getLog().warn(
+              {
+                nodeId: node.id,
+                maxBudgetUsd: nodeOptions?.maxBudgetUsd,
+                durationMs: Date.now() - nodeStartTime,
+              },
+              'dag.node_budget_cap_exceeded'
+            );
+          }
+          throw providerReportedFailure(
+            `Node '${node.id}'`,
+            msg.failure,
+            nodeOptions?.maxBudgetUsd
           );
         }
         // Fail loudly on any other SDK error result. Previously we broke out of
@@ -3183,7 +3191,11 @@ async function executeNodeInternal(
       : err instanceof NodeFailure
         ? err.kind
         : providerFailureKind(err);
-    return failAgentNode(failureMessage, failureKind);
+    const providerFailure =
+      !cancelled && err instanceof NodeFailure ? err.providerFailure : undefined;
+    return failAgentNode(failureMessage, failureKind, {
+      ...(providerFailure !== undefined ? { providerFailure } : {}),
+    });
   }
   if (result.state === 'failed') {
     return failAgentNode(result.error, result.failureKind, { output: result.output });
@@ -3594,7 +3606,9 @@ class ExecOutputContractError extends Error {}
 class NodeFailure extends Error {
   constructor(
     readonly kind: NodeFailureKind,
-    message: string
+    message: string,
+    /** The provider's typed failure, recorded unchanged on the failed node. */
+    readonly providerFailure?: ProviderFailure
   ) {
     super(message);
   }
@@ -3604,11 +3618,16 @@ class NodeFailure extends Error {
  * A provider's typed failure on its result chunk. The kind comes from the class, so retry
  * never reads the evidence text, which stays in the message for the operator.
  */
-function providerReportedFailure(subject: string, failure: ProviderFailure): NodeFailure {
-  return new NodeFailure(
-    nodeFailureKindOf(failure),
-    `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`
-  );
+function providerReportedFailure(
+  subject: string,
+  failure: ProviderFailure,
+  maxBudgetUsd?: number
+): NodeFailure {
+  const message =
+    failure.class === 'budget_exceeded'
+      ? `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`
+      : `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
+  return new NodeFailure(nodeFailureKindOf(failure), message, failure);
 }
 
 async function recordExecTimeoutSkip(
@@ -5689,6 +5708,7 @@ async function executeLoopNode(
     error: string,
     extras: {
       failureKind: NodeFailureKind;
+      providerFailure?: ProviderFailure;
       output?: string;
       costUsd?: number;
       tokens?: TokenUsage;
@@ -5704,7 +5724,14 @@ async function executeLoopNode(
       { store: deps.store, logDir },
       finishNodeExecution(
         execution,
-        { status: 'failed', error, failureKind: extras.failureKind },
+        {
+          status: 'failed',
+          error,
+          failureKind: extras.failureKind,
+          ...(extras.providerFailure !== undefined
+            ? { providerFailure: extras.providerFailure }
+            : {}),
+        },
         {
           output: { text: extras.output ?? '' },
           tokens: extras.tokens,
@@ -6543,6 +6570,9 @@ async function executeLoopNode(
           }
           return await failLoopNode(`Loop iteration ${String(i)} failed: ${err.message}`, {
             failureKind,
+            ...(err instanceof NodeFailure && err.providerFailure !== undefined
+              ? { providerFailure: err.providerFailure }
+              : {}),
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
@@ -11790,11 +11820,14 @@ export async function executeDagWorkflow(
     const prior = isScheduledWorkflowResume(workflowRun.metadata?.scheduled_resume)
       ? workflowRun.metadata.scheduled_resume
       : undefined;
+    // Only a provider's typed class says a quota window is spent; the error text never does.
     const quotaFailure = [...runCtx.nodeOutputs.values()].find(
-      (output): output is Extract<NodeOutput, { state: 'failed' }> =>
-        output.state === 'failed' && isQuotaExhaustionError(output.error)
+      output => output.state === 'failed' && output.providerFailure?.class === 'quota_exhausted'
     );
-    if (quotaFailure === undefined) return undefined;
+    if (quotaFailure?.state !== 'failed' || quotaFailure.providerFailure === undefined) {
+      return undefined;
+    }
+    const quotaResetAt = quotaFailure.providerFailure.resetAt;
     const now = new Date();
     const maxAttempts = policy.quotaMaxAttempts;
     const attempt = (prior?.attempt ?? 0) + 1;
@@ -11809,7 +11842,7 @@ export async function executeDagWorkflow(
       return undefined;
     }
 
-    let resumeAt = extractQuotaResetAt(quotaFailure.error, now);
+    let resumeAt: Date | null = quotaResetAt !== undefined ? new Date(quotaResetAt) : null;
     if (resumeAt === null || resumeAt.getTime() <= now.getTime()) {
       const fallback = policy.quotaFallbackDelayMs;
       resumeAt = fallback !== undefined ? new Date(now.getTime() + fallback) : null;

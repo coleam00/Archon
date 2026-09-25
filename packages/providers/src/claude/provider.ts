@@ -34,6 +34,7 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
   type SDKAssistantMessageError,
+  type SDKRateLimitInfo,
   type SDKResultMessage,
   type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -41,10 +42,12 @@ import type {
   IAgentProvider,
   SendQueryOptions,
   MessageChunk,
+  ResultChunk,
   TokenUsage,
   ProviderCapabilities,
   NodeConfig,
 } from '../types';
+import type { ProviderFailure, ProviderFailureClass } from '@archon/provider-contract';
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
@@ -249,128 +252,153 @@ export function withPerRequestSystemPrompt(
   return { ...systemPrompt, snapshot: false };
 }
 
-/** Max retries for transient subprocess failures */
-const MAX_SUBPROCESS_RETRIES = 3;
-const RETRY_BASE_DELAY_MS = 2000;
-
-// Prose patterns exclude bare HTTP codes; SDK result codes are classified
-// structurally in classifyAndEnrichError.
-const RATE_LIMIT_PATTERNS = [
-  'rate limit',
-  'too many requests',
-  'overloaded',
-  // "API Error: 400 due to tool use concurrency issues" — transient server-side
-  // rejection of concurrent tool calls; retrying after backoff succeeds (#1341).
-  'tool use concurrency',
-];
+// ─── Failure classification ────────────────────────────────────────────────
+//
+// A failed turn ends in one `result` chunk whose `failure` class comes only from
+// structured SDK signals: the typed assistant-message error code, the HTTP status the
+// result carries as a field, the result subtype, the subscription window reported by
+// `rate_limit_event`, and the typed fields the SDK sets on the errors it throws. The
+// vendor's words travel as `evidence` and nothing branches on them, so a reworded
+// message keeps its class. The provider does not retry; the engine owns that policy.
 
 /**
- * Message-text fallbacks for Anthropic errors the SDK does not yet type.
- *
- * Entries are consulted ONLY when the SDK's typed error code has resolved to
- * the catch-all 'unknown' class (see the ClaudeApiResultError branch in
- * classifyAndEnrichError) — they must never override a typed classification.
- * A matching entry reclassifies the error as rate_limit so the existing
- * backoff-retry applies.
- *
- * Admission contract — each entry must:
- *   1. Name the upstream error it matches.
- *   2. Link an upstream issue/reference requesting the error be properly typed.
- *   3. Be removed once the SDK types it.
- * Do NOT add entries for errors the SDK already classifies.
- *
- * This is deliberately a separate list from RATE_LIMIT_PATTERNS above: that
- * list matches raw subprocess text (no typed code exists at all), while this
- * one is a narrow escape hatch inside the typed classification path (#1797).
+ * Errors the Claude SDK throws carry a machine-readable `errorClass` it sets beside the
+ * message (for example `process_exited_nonzero`). The field is not in the SDK's typings,
+ * so it is read defensively.
  */
-const UNTYPED_TRANSIENT_PATTERNS: readonly string[] = [
-  // Anthropic 400 "due to tool use concurrency issues" — transient server-side
-  // rejection of concurrent tool calls; retrying after backoff succeeds (#1341).
-  // TODO: link the upstream SDK issue requesting a typed code for this error,
-  // and remove this entry once the SDK classifies it.
-  'tool use concurrency',
-];
+function sdkErrorClass(error: unknown): string | undefined {
+  if (typeof error !== 'object' || error === null) return undefined;
+  const value = (error as { errorClass?: unknown }).errorClass;
+  return typeof value === 'string' ? value : undefined;
+}
 
-const AUTH_PATTERNS = ['credit balance', 'unauthorized', 'authentication', 'invalid token'];
-const SUBPROCESS_CRASH_PATTERNS = ['exited with code', 'killed', 'signal', 'operation aborted'];
-
-/**
- * Errors that mean "the subprocess never started", as opposed to "it started
- * and then failed". Both spellings name the EXECUTABLE even when the executable
- * is fine, because `posix_spawn` reports a missing working directory as ENOENT
- * against the path it was asked to run — see the cwd check in
- * classifyAndEnrichError for why that distinction matters.
- *
- * 'failed to launch' is the Claude Agent SDK's own wording (it wraps the spawn
- * error after confirming the binary exists on disk, and concludes libc
- * mismatch); 'enoent' is the raw Node/Bun spawn error when nothing wraps it.
- */
-const SPAWN_FAILURE_PATTERNS = ['failed to launch', 'enoent'];
-
-/** Classify untyped subprocess errors without treating bare HTTP codes as prose signals. */
-export function classifySubprocessError(
-  errorMessage: string,
-  stderrOutput: string
-): 'rate_limit' | 'auth' | 'crash' | 'unknown' {
-  const combined = `${errorMessage} ${stderrOutput}`.toLowerCase();
-  if (RATE_LIMIT_PATTERNS.some(p => combined.includes(p))) return 'rate_limit';
-  if (AUTH_PATTERNS.some(p => combined.includes(p))) return 'auth';
-  if (SUBPROCESS_CRASH_PATTERNS.some(p => combined.includes(p))) return 'crash';
+/** The class an HTTP status alone can justify. Anything else is `unknown`. */
+function classOfHttpStatus(status: number | null | undefined): ProviderFailureClass {
+  if (status === 429) return 'rate_limited';
+  if (status === 401 || status === 403) return 'auth';
+  if (typeof status === 'number' && status >= 500) return 'transient';
   return 'unknown';
 }
 
-/**
- * The Claude Code SDK surfaces API-level failures (auth not configured,
- * invalid key, billing, rate limit, model errors) as TEXT rather than
- * throwing: it synthesizes an assistant message (`message.model:
- * '<synthetic>'`, wrapper `error: SDKAssistantMessageError`) whose content is
- * the error prose, then emits a result with `subtype: 'success'` and
- * `is_error: true` — the same field pair as the legitimate stop-sequence
- * termination carve-out (#1425). Without structural detection the error prose
- * flows downstream as successful node output (#1797).
- *
- * This error carries the SDK's typed error code so retry classification is
- * structural — never matched against the message text.
- */
-type SdkErrorCode = SDKAssistantMessageError | 'unknown';
-
-export class ClaudeApiResultError extends Error {
-  readonly sdkErrorCode: SdkErrorCode;
-
-  constructor(sdkErrorCode: SdkErrorCode, resultText: string) {
-    super(`Claude API error (${sdkErrorCode}): ${resultText}`);
-    this.name = 'ClaudeApiResultError';
-    this.sdkErrorCode = sdkErrorCode;
-  }
+function failureOf(failureClass: ProviderFailureClass, evidence: string): ProviderFailure {
+  return { class: failureClass, evidence: evidence.trim() || failureClass };
 }
 
 /**
- * Map the SDK's typed assistant-message error code onto the existing
- * subprocess retry classes. Auth-shaped codes are non-retryable (operator
- * must fix credentials); transient API states reuse the existing
- * rate_limit/crash backoff. Everything else is 'unknown' — fail fast rather
- * than retry blindly.
+ * Classify an API failure the SDK reported as a synthetic assistant message (#1797).
+ * `rateLimit` is the last `rate_limit_event` of the turn: a `rejected` subscription window
+ * turns a `rate_limit` code into an exhausted quota that reopens at `resetsAt` (epoch
+ * seconds), where a plain `rate_limit` is load shedding the engine may wait out.
  */
-function classifySdkErrorCode(code: SdkErrorCode): 'rate_limit' | 'auth' | 'crash' | 'unknown' {
+export function classifyClaudeApiError(
+  code: SDKAssistantMessageError,
+  httpStatus: number | null | undefined,
+  rateLimit: SDKRateLimitInfo | undefined,
+  evidence: string
+): ProviderFailure {
   switch (code) {
     case 'authentication_failed':
     case 'oauth_org_not_allowed':
     case 'account_on_hold':
-    case 'billing_error':
     case 'verification_required':
     case 'cloud_credential_error':
-      // The last two block requests until the operator acts: the organization must
-      // complete verification, or the cloud provider's credentials could not be
-      // loaded and need checking or refreshing. Retrying cannot clear either.
-      return 'auth';
-    case 'rate_limit':
+      // Each blocks requests until the operator acts; a new attempt cannot clear it.
+      return failureOf('auth', evidence);
+    case 'billing_error':
+      return failureOf('quota_exhausted', evidence);
+    case 'rate_limit': {
+      if (rateLimit?.status !== 'rejected') return failureOf('rate_limited', evidence);
+      const failure = failureOf('quota_exhausted', evidence);
+      if (rateLimit.resetsAt !== undefined) {
+        const resetAt = new Date(rateLimit.resetsAt * 1000);
+        if (Number.isFinite(resetAt.getTime())) failure.resetAt = resetAt.toISOString();
+      }
+      return failure;
+    }
     case 'overloaded':
-      return 'rate_limit';
+      return failureOf('rate_limited', evidence);
     case 'server_error':
-      return 'crash';
-    default:
-      return 'unknown';
+      return failureOf('transient', evidence);
+    case 'invalid_request':
+    case 'model_not_found':
+    case 'max_output_tokens':
+    case 'unknown':
+      // No class of their own; the status field may still say more (a 429 or 529
+      // reported under a catch-all code).
+      return failureOf(classOfHttpStatus(httpStatus), evidence);
+    default: {
+      // A code newer than this mapping. Unclassified is honest; it keeps the evidence.
+      const unmapped: never = code;
+      return failureOf('unknown', `${String(unmapped)}: ${evidence}`);
+    }
   }
+}
+
+/** Classify an error result the SDK ended the turn with, when no API error preceded it. */
+function classifyClaudeErrorResult(
+  subtype: string,
+  httpStatus: number | null | undefined,
+  evidence: string
+): ProviderFailure {
+  if (subtype === 'error_max_budget_usd') return failureOf('budget_exceeded', evidence);
+  return failureOf(classOfHttpStatus(httpStatus), evidence);
+}
+
+/**
+ * A spawn that fails because the WORKING DIRECTORY is gone reports ENOENT against the
+ * executable's path, not the cwd's, and the SDK then blames a libc mismatch. When the
+ * SDK says the executable could not be launched and the cwd is missing, say so. This
+ * only rewrites the evidence; the class stays `unknown`.
+ */
+function launchFailureEvidence(error: Error, hostCwd: string | undefined): string {
+  if (hostCwd === undefined) return error.message;
+  const kind = pathKind(hostCwd);
+  if (kind === 'directory') return error.message;
+  const detail =
+    kind === 'file' ? 'is a file, not a directory' : 'does not exist (it may have been removed)';
+  return (
+    `Claude Code could not be started: its working directory "${hostCwd}" ${detail}. ` +
+    'A process cannot be spawned in a missing directory, and the failure is reported ' +
+    'against the executable rather than the directory — so the underlying SDK error ' +
+    'names the Claude Code binary and blames a libc mismatch. The binary is fine. ' +
+    'If this was an isolated worktree, recreate it or point this run at a directory ' +
+    'that exists.'
+  );
+}
+
+/**
+ * Classify an error thrown while starting or streaming the query. `hostCwd` is the
+ * directory the subprocess was spawned in when that directory is on THIS host; container
+ * runs pass undefined, because their cwd names a path inside the container.
+ */
+export function classifyClaudeThrownError(
+  error: Error,
+  stderr: string,
+  hostCwd: string | undefined
+): ProviderFailure {
+  const withStderr = stderr ? `${error.message} (stderr: ${stderr})` : error.message;
+  if (error instanceof ClaudeFirstEventTimeoutError) return failureOf('transient', error.message);
+  switch (sdkErrorClass(error)) {
+    case 'process_exited_nonzero':
+    case 'process_killed_by_signal':
+    case 'initialize_timeout':
+      // The subprocess died or never finished starting; a fresh one may not.
+      return failureOf('transient', withStderr);
+    case 'executable_launch_failed':
+    case 'executable_not_found':
+      return failureOf('unknown', launchFailureEvidence(error, hostCwd));
+    default:
+      // An unwrapped spawn error carries the errno as a field.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return failureOf('unknown', launchFailureEvidence(error, hostCwd));
+      }
+      return failureOf('unknown', withStderr);
+  }
+}
+
+/** A failed turn as the one `result` chunk the contract requires. */
+function failureResultChunk(failure: ProviderFailure): ResultChunk {
+  return { type: 'result', isError: true, failure, errors: [failure.evidence] };
 }
 
 function getFirstEventTimeoutMs(): number {
@@ -402,6 +430,9 @@ function buildFirstEventHangDiagnostics(
 
 class FirstEventTimeoutError extends Error {}
 
+/** The subprocess produced no first event in time. Classified `transient` by type, not text. */
+export class ClaudeFirstEventTimeoutError extends Error {}
+
 /**
  * Wraps an async generator so that the first call to .next() must resolve
  * within `timeoutMs`. If it doesn't, aborts the controller and throws.
@@ -427,7 +458,7 @@ export async function* withFirstMessageTimeout<T>(
     if (err instanceof FirstEventTimeoutError) {
       controller.abort();
       getLog().error({ ...diagnostics, timeoutMs }, 'claude.first_event_timeout');
-      throw new Error(
+      throw new ClaudeFirstEventTimeoutError(
         'Claude Code subprocess produced no output within ' +
           timeoutMs +
           'ms. ' +
@@ -981,8 +1012,11 @@ async function* streamClaudeMessages(
   // Synthetic error message recorded while waiting for the terminal result to
   // confirm it (#1797). Detection is two-signal: the typed wrapper `error`
   // field on a '<synthetic>' assistant message, then `is_error: true` on the
-  // result. See ClaudeApiResultError.
+  // result.
   let pendingSdkError: { code: SDKAssistantMessageError; text: string } | undefined;
+  // The last subscription-window report; a failure reads it to tell an exhausted
+  // window (`status: 'rejected'`) from load shedding.
+  let lastRateLimit: SDKRateLimitInfo | undefined;
   // Progress frames carry no visibility marker, so retain the start decision
   // for the lifetime of this query and suppress the complete hidden lifecycle.
   const hiddenTaskIds = new Set<string>();
@@ -1185,8 +1219,9 @@ async function* streamClaudeMessages(
         getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
       }
     } else if (event.type === 'rate_limit_event') {
-      const rateLimitMsg = msg as { rate_limit_info?: Record<string, unknown> };
+      const rateLimitMsg = msg as { rate_limit_info?: SDKRateLimitInfo };
       getLog().warn({ rateLimitInfo: rateLimitMsg.rate_limit_info }, 'claude.rate_limit_event');
+      lastRateLimit = rateLimitMsg.rate_limit_info;
       yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
@@ -1223,30 +1258,10 @@ async function* streamClaudeMessages(
       // Disambiguate structurally: a preceding synthetic error message
       // (primary, typed signal), or the typed terminal_reason 'api_error'
       // (secondary — catches an error result with no preceding synthetic
-      // message), marks a real failure. Throw so callers fail the node/turn
-      // instead of consuming error prose as successful output.
-      if (
+      // message), marks a real failure. The error prose never becomes output.
+      const isApiFailure =
         isSuccessWithErrorFlag &&
-        (syntheticError !== undefined || resultMsg.terminal_reason === 'api_error')
-      ) {
-        const code = syntheticError?.code ?? 'unknown';
-        const text =
-          syntheticError?.text ||
-          resultMsg.result ||
-          sdkErrors?.join('; ') ||
-          'API error result with no error text';
-        getLog().error(
-          {
-            sessionId: resultMsg.session_id,
-            errorCode: code,
-            terminalReason: resultMsg.terminal_reason,
-            apiErrorStatus: resultMsg.api_error_status,
-            text,
-          },
-          'claude.result_api_error'
-        );
-        throw new ClaudeApiResultError(code, text);
-      }
+        (syntheticError !== undefined || resultMsg.terminal_reason === 'api_error');
 
       // Fail-safe (never observed in practice): a synthetic error message
       // followed by a non-error result. Yield the withheld text late rather
@@ -1263,54 +1278,77 @@ async function* streamClaudeMessages(
       // model terminates via a configured stop sequence (stop_reason ===
       // 'stop_sequence') the SDK can set is_error: true while keeping
       // subtype: 'success' — its encoding of "non-default termination, not a
-      // failure". Treat that pair as a clean success so downstream consumers
-      // (which gate failure on isError) don't misclassify it.
+      // failure". Treat that pair as a clean success.
       const isRealError = resultMsg.is_error && !isSuccessWithErrorFlag;
-      if (isRealError) {
+      // Only the success-shaped result carries the HTTP status and result text; an API
+      // failure the SDK encoded as `success` is where they matter.
+      const apiErrorStatus =
+        'api_error_status' in resultMsg ? resultMsg.api_error_status : undefined;
+      const resultText = 'result' in resultMsg ? resultMsg.result : undefined;
+      let failure: ProviderFailure | undefined;
+      if (isApiFailure || (isRealError && syntheticError !== undefined)) {
+        const evidence =
+          syntheticError?.text ||
+          resultText ||
+          sdkErrors?.join('; ') ||
+          'API error result with no error text';
+        failure = classifyClaudeApiError(
+          syntheticError?.code ?? 'unknown',
+          apiErrorStatus,
+          lastRateLimit,
+          evidence
+        );
+      } else if (isRealError) {
+        const evidence = sdkErrors?.length
+          ? `${resultMsg.subtype}: ${sdkErrors.join('; ')}`
+          : resultMsg.subtype;
+        failure = classifyClaudeErrorResult(resultMsg.subtype, apiErrorStatus, evidence);
+      }
+
+      if (failure !== undefined) {
         getLog().error(
           {
             sessionId: resultMsg.session_id,
             errorSubtype: resultMsg.subtype,
+            errorCode: syntheticError?.code,
+            terminalReason: resultMsg.terminal_reason,
+            apiErrorStatus,
             stopReason: resultMsg.stop_reason,
-            errors: sdkErrors,
+            failureClass: failure.class,
+            evidence: failure.evidence,
           },
-          'claude.result_is_error'
+          'claude.result_failed'
         );
       } else if (isSuccessWithErrorFlag) {
         getLog().debug(
-          {
-            sessionId: resultMsg.session_id,
-            stopReason: resultMsg.stop_reason,
-          },
+          { sessionId: resultMsg.session_id, stopReason: resultMsg.stop_reason },
           'claude.result_success_validated'
         );
       }
-      yield {
-        type: 'result',
-        sessionId: resultMsg.session_id,
-        ...(tokens ? { tokens } : {}),
-        ...('structured_output' in resultMsg && resultMsg.structured_output !== undefined
-          ? { structuredOutput: resultMsg.structured_output }
-          : {}),
-        ...(isRealError ? { isError: true, errorSubtype: resultMsg.subtype } : {}),
-        ...(isRealError && sdkErrors?.length ? { errors: sdkErrors } : {}),
-        ...(spend.costUsd !== undefined ? { cost: spend.costUsd } : {}),
-        ...(resultMsg.stop_reason != null ? { stopReason: resultMsg.stop_reason } : {}),
-        ...(resultMsg.num_turns !== undefined ? { numTurns: resultMsg.num_turns } : {}),
-        ...(resolvedModelId ? { resolvedModel: { id: resolvedModelId } } : {}),
-      };
-    }
-  }
 
-  // Stream ended after a synthetic error message with no terminal result to
-  // confirm or contradict it. A dangling synthetic error is a failure — the
-  // SDK ends every turn with a result, so this is an abnormal end (#1797).
-  if (pendingSdkError !== undefined) {
-    getLog().error(
-      { errorCode: pendingSdkError.code, text: pendingSdkError.text },
-      'claude.synthetic_error_stream_ended'
-    );
-    throw new ClaudeApiResultError(pendingSdkError.code, pendingSdkError.text);
+      // Built by assignment on a typed value so a misspelled key fails to compile.
+      const result: ResultChunk = { type: 'result', sessionId: resultMsg.session_id };
+      if (tokens) result.tokens = tokens;
+      if ('structured_output' in resultMsg && resultMsg.structured_output !== undefined) {
+        result.structuredOutput = resultMsg.structured_output;
+      }
+      if (failure !== undefined) {
+        result.failure = failure;
+        result.isError = true;
+        // The SDK's own subtype stays for readers that act on it (chat clears a
+        // session on `error_during_execution`); an API failure the SDK encoded as
+        // `success` carries none.
+        if (isRealError) result.errorSubtype = resultMsg.subtype;
+        result.errors = isRealError && sdkErrors?.length ? sdkErrors : [failure.evidence];
+      }
+      if (spend.costUsd !== undefined) result.cost = spend.costUsd;
+      if (resultMsg.stop_reason != null) result.stopReason = resultMsg.stop_reason;
+      if (resultMsg.num_turns !== undefined) result.numTurns = resultMsg.num_turns;
+      if (resolvedModelId) result.resolvedModel = { id: resolvedModelId };
+      yield result;
+      // A failed turn is over: nothing after it belongs to this query.
+      if (failure !== undefined) break;
+    }
   }
 
   // Drain any remaining tool results after the stream ends
@@ -1326,113 +1364,25 @@ async function* streamClaudeMessages(
       };
     }
   }
-}
 
-// ─── Error Classification & Retry ────────────────────────────────────────
-
-/**
- * Classify a subprocess error and enrich with stderr context.
- * Returns null if the error should be retried (caller handles retry logic).
- *
- * `hostCwd` is the directory the subprocess was to be spawned in, and only when
- * that directory is on THIS host — container runs pass undefined, because their
- * cwd names a path inside the container that is not expected to exist here.
- * It is inspected only on the spawn-failure path (see the SPAWN_FAILURE_PATTERNS
- * branch), so the happy path pays no filesystem cost.
- */
-function classifyAndEnrichError(
-  error: Error,
-  stderrLines: string[],
-  controller: AbortController,
-  hostCwd: string | undefined
-): { enrichedError: Error; errorClass: string; shouldRetry: boolean } {
-  // If the controller was aborted by withFirstMessageTimeout, the original
-  // timeout error carries the diagnostic message and #1067 breadcrumb.
-  // Preserve it instead of collapsing into a generic "Query aborted".
-  if (controller.signal.aborted) {
-    if (error.message.includes('produced no output within')) {
-      return { enrichedError: error, errorClass: 'timeout', shouldRetry: false };
-    }
-    return {
-      enrichedError: new Error('Query aborted'),
-      errorClass: 'aborted',
-      shouldRetry: false,
-    };
-  }
-
-  // API failures the SDK surfaced as text (#1797) carry a typed error code —
-  // classify by that code, never by matching the (arbitrary) message text.
-  if (error instanceof ClaudeApiResultError) {
-    let errorClass = classifySdkErrorCode(error.sdkErrorCode);
-    // Exception for the SDK's catch-all codes only ('unknown'/'invalid_request'
-    // — a 400 status maps here): they conflate transient server-side rejections
-    // with true client errors, so the code alone carries no retry signal. For
-    // those, and ONLY those, fall back to UNTYPED_TRANSIENT_PATTERNS (see its
-    // admission contract) to reclassify known-transient errors as rate_limit
-    // so the existing backoff applies (#1341). Specific typed codes above
-    // remain authoritative and are never overridden by text.
-    if (errorClass === 'unknown') {
-      const message = error.message.toLowerCase();
-      if (UNTYPED_TRANSIENT_PATTERNS.some(p => message.includes(p))) {
-        errorClass = 'rate_limit';
-      }
-    }
-    return {
-      enrichedError: error,
-      errorClass,
-      shouldRetry: errorClass === 'rate_limit' || errorClass === 'crash',
-    };
-  }
-
-  const stderrContext = stderrLines.join('\n');
-  const errorClass = classifySubprocessError(error.message, stderrContext);
-
-  // A spawn that fails because the WORKING DIRECTORY is gone reports ENOENT
-  // against the executable's path, not the cwd's. The SDK sees that, confirms
-  // the executable does exist on disk, and concludes the binary must be built
-  // for the wrong libc — so the operator is told to go chase musl-vs-glibc
-  // while the actual cause is a deleted worktree. Ask the one question the SDK
-  // never asks, and report what is really wrong.
-  if (
-    hostCwd !== undefined &&
-    SPAWN_FAILURE_PATTERNS.some(p => error.message.toLowerCase().includes(p))
-  ) {
-    const kind = pathKind(hostCwd);
-    if (kind !== 'directory') {
-      const detail =
-        kind === 'file'
-          ? 'is a file, not a directory'
-          : 'does not exist (it may have been removed)';
-      const enrichedError = new Error(
-        `Claude Code could not be started: its working directory "${hostCwd}" ${detail}. ` +
-          'A process cannot be spawned in a missing directory, and the failure is reported ' +
-          'against the executable rather than the directory — so the underlying SDK error ' +
-          'names the Claude Code binary and blames a libc mismatch. The binary is fine. ' +
-          'If this was an isolated worktree, recreate it or point this run at a directory ' +
-          'that exists.'
-      );
-      enrichedError.cause = error;
-      return { enrichedError, errorClass: 'cwd_missing', shouldRetry: false };
-    }
-  }
-
-  if (errorClass === 'auth') {
-    const enrichedError = new Error(
-      `Claude Code auth error: ${error.message}${stderrContext ? ` (${stderrContext})` : ''}`
+  // Stream ended after a synthetic error message with no terminal result to
+  // confirm or contradict it. A dangling synthetic error is a failure — the
+  // SDK ends every turn with a result, so this is an abnormal end (#1797).
+  if (pendingSdkError !== undefined) {
+    getLog().error(
+      { errorCode: pendingSdkError.code, text: pendingSdkError.text },
+      'claude.synthetic_error_stream_ended'
     );
-    enrichedError.cause = error;
-    return { enrichedError, errorClass, shouldRetry: false };
+    yield failureResultChunk(
+      classifyClaudeApiError(
+        pendingSdkError.code,
+        undefined,
+        lastRateLimit,
+        pendingSdkError.text || 'API error with no error text'
+      )
+    );
   }
-
-  const enrichedMessage = stderrContext
-    ? `Claude Code ${errorClass}: ${error.message} (stderr: ${stderrContext})`
-    : `Claude Code ${errorClass}: ${error.message}`;
-  const enrichedError = new Error(enrichedMessage);
-  enrichedError.cause = error;
-  const shouldRetry = errorClass === 'rate_limit' || errorClass === 'crash';
-  return { enrichedError, errorClass, shouldRetry };
 }
-
 // ─── Claude Provider ───────────────────────────────────────────────────────
 
 /**
@@ -1443,19 +1393,16 @@ function classifyAndEnrichError(
  * - buildBaseClaudeOptions: SDK option construction
  * - applyNodeConfig: workflow nodeConfig → SDK option translation + warnings
  * - streamClaudeMessages: raw SDK event normalization into MessageChunks
- * - classifyAndEnrichError: error classification for retry decisions
+ * - classifyClaudeThrownError: typed failure for an error thrown by the SDK
  */
 export class ClaudeProvider implements IAgentProvider {
-  private readonly retryBaseDelayMs: number;
-
-  constructor(options?: { retryBaseDelayMs?: number }) {
+  constructor() {
     if (getProcessUid() === 0 && process.env.IS_SANDBOX !== '1') {
       throw new Error(
         'Claude Code SDK does not support bypassPermissions when running as root (UID 0). ' +
           'Run as a non-root user, set IS_SANDBOX=1, or use the Dockerfile which creates a non-root appuser.'
       );
     }
-    this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
   }
 
   getCapabilities(): ProviderCapabilities {
@@ -1463,8 +1410,9 @@ export class ClaudeProvider implements IAgentProvider {
   }
 
   /**
-   * Send a query to Claude and stream responses.
-   * Orchestrates option building, nodeConfig translation, streaming, and retry.
+   * Send a query to Claude and stream responses. One call is one SDK query: a failure
+   * ends in a `result` carrying a typed `failure`, and the engine decides whether to
+   * try again. Only cancellation throws.
    */
   // No security gate lives here on purpose. Env hygiene for a target repo is
   // structural (the platform strips what must not reach a subprocess before a
@@ -1476,82 +1424,43 @@ export class ClaudeProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
-    let lastError: Error | undefined;
-    const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
-
-    // Resolve Claude CLI path once before the retry loop. In binary mode this
-    // throws immediately if neither env nor config supplies a valid path, so
-    // the user gets a clean error rather than N retries of "Module not found".
-    // SKIP entirely for container runs: the SDK bypasses disk resolution when
-    // `spawnClaudeCodeProcess` is set (buildBaseClaudeOptions omits
-    // pathToClaudeCodeExecutable), and Claude is baked into the runner image — a
-    // compiled Archon binary has no host Claude, so resolving it here would throw
-    // and kill an otherwise-valid container run.
     const isContainerRun = requestOptions?.execContext?.kind === 'container';
-    const resolvedCliPath = isContainerRun
-      ? undefined
-      : await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
-
-    // Build subprocess env once (avoids re-logging auth mode per retry). A
-    // container run gets ONLY the Archon-managed bag + a minimal base — host
-    // process.env never crosses the boundary (the isolation invariant); the host
-    // path inherits the (already-cleaned) process env exactly as before.
-    const env = buildRequestSubprocessEnv(requestOptions);
-    const settingSources =
-      requestOptions?.nodeConfig?.settingSources ??
-      assistantDefaults.settingSources ??
-      (['project', 'user'] as const);
-
-    // Apply nodeConfig translation once (deterministic, not retry-dependent)
-    // We need a throwaway Options to extract warnings from applyNodeConfig,
-    // then re-apply per attempt. But nodeConfig warnings are deterministic,
-    // so we compute them once and yield them before the first attempt.
-    let nodeConfigWarnings: ProviderWarning[] = [];
-    const skillSearch = {
-      ...(env.CLAUDE_CONFIG_DIR ? { userConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
-      includeProject: settingSources.includes('project'),
-      includeUser: !isContainerRun && settingSources.includes('user'),
-      isContainer: isContainerRun,
-    };
-    if (requestOptions?.nodeConfig) {
-      const tempOptions: Options = {} as Options;
-      nodeConfigWarnings = await applyNodeConfig(
-        tempOptions,
-        requestOptions.nodeConfig,
-        cwd,
-        skillSearch
-      );
-    }
-
-    // Yield provider warnings once before retries
-    for (const warning of nodeConfigWarnings) {
-      yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
-    }
-
-    // Track the current attempt's controller so a single abort listener
-    // can forward cancellation without accumulating per-retry listeners.
-    let currentController: AbortController | undefined;
-    // Taken once: a retry resumes the same session, and whatever a failed attempt
-    // spent before it died is still this query's spend.
-    const spendBaseline = sessionSpend.baselineFor(resumeSessionId);
+    const stderrLines: string[] = [];
+    const controller = new AbortController();
     const onAbort = (): void => {
-      currentController?.abort();
+      controller.abort();
     };
     if (requestOptions?.abortSignal) {
       requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
     }
+    let resultReported = false;
 
-    for (let attempt = 0; attempt <= MAX_SUBPROCESS_RETRIES; attempt++) {
+    try {
       if (requestOptions?.abortSignal?.aborted) {
         throw new Error('Query aborted');
       }
+      const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
-      const stderrLines: string[] = [];
+      // In binary mode this throws if neither env nor config supplies a valid path.
+      // SKIP entirely for container runs: the SDK bypasses disk resolution when
+      // `spawnClaudeCodeProcess` is set (buildBaseClaudeOptions omits
+      // pathToClaudeCodeExecutable), and Claude is baked into the runner image — a
+      // compiled Archon binary has no host Claude, so resolving it here would throw
+      // and kill an otherwise-valid container run.
+      const resolvedCliPath = isContainerRun
+        ? undefined
+        : await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);
+
+      // A container run gets ONLY the Archon-managed bag + a minimal base — host
+      // process.env never crosses the boundary (the isolation invariant); the host
+      // path inherits the (already-cleaned) process env.
+      const env = buildRequestSubprocessEnv(requestOptions);
+      const settingSources =
+        requestOptions?.nodeConfig?.settingSources ??
+        assistantDefaults.settingSources ??
+        (['project', 'user'] as const);
+
       const toolResultQueue: ToolResultEntry[] = [];
-      const controller = new AbortController();
-      currentController = controller;
-
-      // 1. Build SDK options (env and cliPath pre-computed above)
       const options = buildBaseClaudeOptions(
         cwd,
         requestOptions,
@@ -1564,16 +1473,29 @@ export class ClaudeProvider implements IAgentProvider {
         [...settingSources]
       );
 
-      // 2. Apply nodeConfig translation (re-applied per attempt since options are fresh)
       if (requestOptions?.nodeConfig) {
-        await applyNodeConfig(options, requestOptions.nodeConfig, cwd, skillSearch);
+        const skillSearch = {
+          ...(env.CLAUDE_CONFIG_DIR ? { userConfigDir: env.CLAUDE_CONFIG_DIR } : {}),
+          includeProject: settingSources.includes('project'),
+          includeUser: !isContainerRun && settingSources.includes('user'),
+          isContainer: isContainerRun,
+        };
+        const nodeConfigWarnings = await applyNodeConfig(
+          options,
+          requestOptions.nodeConfig,
+          cwd,
+          skillSearch
+        );
+        for (const warning of nodeConfigWarnings) {
+          yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
+        }
       }
 
       options.systemPrompt = withPerRequestSystemPrompt(options.systemPrompt);
 
-      // 2b. Register in-process native tools (e.g. manage_run) as an archon MCP
-      //     server, mirroring the file-based mcp branch. Merge so a nodeConfig
-      //     mcp config and native tools can coexist.
+      // Register in-process native tools (e.g. manage_run) as an archon MCP server,
+      // mirroring the file-based mcp branch. Merge so a nodeConfig mcp config and
+      // native tools can coexist.
       if (requestOptions?.nativeTools && requestOptions.nativeTools.length > 0) {
         const server = buildArchonMcpServer(requestOptions.nativeTools);
         options.mcpServers = { ...(options.mcpServers ?? {}), [ARCHON_TOOL_SERVER]: server };
@@ -1584,7 +1506,6 @@ export class ClaudeProvider implements IAgentProvider {
         );
       }
 
-      // 3. Set session resume
       if (resumeSessionId) {
         options.resume = resumeSessionId;
         getLog().debug(
@@ -1592,64 +1513,54 @@ export class ClaudeProvider implements IAgentProvider {
           'resuming_session'
         );
       } else {
-        getLog().debug({ cwd, attempt }, 'starting_new_session');
+        getLog().debug({ cwd }, 'starting_new_session');
       }
 
-      try {
-        // 4. Run query with first-event timeout protection
-        const rawEvents = query({ prompt, options });
-        const timeoutMs = getFirstEventTimeoutMs();
-        const diagnostics = buildFirstEventHangDiagnostics(
-          options.env as Record<string, string>,
-          options.model
-        );
-        const events = withFirstMessageTimeout(rawEvents, controller, timeoutMs, diagnostics);
+      const rawEvents = query({ prompt, options });
+      const diagnostics = buildFirstEventHangDiagnostics(
+        options.env as Record<string, string>,
+        options.model
+      );
+      const events = withFirstMessageTimeout(
+        rawEvents,
+        controller,
+        getFirstEventTimeoutMs(),
+        diagnostics
+      );
 
-        // 5. Stream normalized events
-        // Claude resumes-or-errors: an invalid resume id throws (and is
-        // retried/surfaced), so reaching the result stream means the prior
-        // session was restored. Hence `true` whenever a resume was requested.
-        yield* withResumedOutcome(
-          streamClaudeMessages(events, toolResultQueue, spendBaseline),
-          resumedOutcome(resumeSessionId, true)
-        );
-        return;
-      } catch (error) {
-        const err = error as Error;
-        const { enrichedError, errorClass, shouldRetry } = classifyAndEnrichError(
-          err,
-          stderrLines,
-          controller,
-          isContainerRun ? undefined : cwd
-        );
-
-        getLog().error(
-          {
-            err,
-            stderrContext: stderrLines.join('\n'),
-            errorClass,
-            attempt,
-            maxRetries: MAX_SUBPROCESS_RETRIES,
-          },
-          'query_error'
-        );
-
-        if (!shouldRetry || attempt >= MAX_SUBPROCESS_RETRIES) {
-          throw enrichedError;
-        }
-
-        const delayMs = this.retryBaseDelayMs * Math.pow(2, attempt);
-        getLog().info({ attempt, delayMs, errorClass }, 'retrying_subprocess');
-        const backoff = (): Promise<void> => new Promise(resolve => setTimeout(resolve, delayMs));
-        // A capped provider's slot is not held through the backoff.
-        await (requestOptions?.admission
-          ? requestOptions.admission.releaseDuring(backoff)
-          : backoff());
-        lastError = enrichedError;
+      // Claude resumes-or-errors: an invalid resume id fails the turn, so reaching
+      // the result stream means the prior session was restored. Hence `true`
+      // whenever a resume was requested.
+      for await (const chunk of withResumedOutcome(
+        streamClaudeMessages(events, toolResultQueue, sessionSpend.baselineFor(resumeSessionId)),
+        resumedOutcome(resumeSessionId, true)
+      )) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
       }
+    } catch (error) {
+      const err = error as Error;
+      // Cancellation is not a failure: the caller asked for it and already knows.
+      // The first-event timeout aborts the same controller, so it is told apart by type.
+      if (
+        requestOptions?.abortSignal?.aborted === true ||
+        (controller.signal.aborted && !(err instanceof ClaudeFirstEventTimeoutError))
+      ) {
+        throw new Error('Query aborted');
+      }
+      const stderr = stderrLines.join('\n');
+      const failure = classifyClaudeThrownError(err, stderr, isContainerRun ? undefined : cwd);
+      getLog().error(
+        { err, stderrContext: stderr, failureClass: failure.class, resultReported },
+        'query_error'
+      );
+      // The turn already reported its one result; an error while the subprocess
+      // shut down afterwards does not change that outcome.
+      if (resultReported) return;
+      yield failureResultChunk(failure);
+    } finally {
+      requestOptions?.abortSignal?.removeEventListener('abort', onAbort);
     }
-
-    throw lastError ?? new Error('Claude Code query failed after retries');
   }
 
   getType(): string {

@@ -1,5 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import type { TokenUsage } from '@archon/providers/types';
+import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
@@ -40,6 +41,7 @@ export const serializedNodeDataSchema = z.object({
   error: z.string().optional(),
   retryable: z.literal(false).optional(),
   failure_kind: nodeFailureKindSchema.optional(),
+  provider_failure: providerFailureSchema.optional(),
   reason: z.union([nodeSkipReasonSchema, z.literal('stale_dependency')]).optional(),
   cause: skipCauseSchema.optional(),
   expr: z.string().optional(),
@@ -212,6 +214,9 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
             error: lifecycle.error,
             ...(lifecycle.retryable === false ? { retryable: false as const } : {}),
             ...(lifecycle.failureKind !== undefined ? { failure_kind: lifecycle.failureKind } : {}),
+            ...(lifecycle.providerFailure !== undefined
+              ? { provider_failure: lifecycle.providerFailure }
+              : {}),
           }
         : {}),
       ...(lifecycle.status === 'skipped'
@@ -282,6 +287,9 @@ export function serializeNodeOutput(
         error: lifecycle.error,
         ...(lifecycle.retryable === false ? { retryable: false } : {}),
         ...(lifecycle.failureKind !== undefined ? { failureKind: lifecycle.failureKind } : {}),
+        ...(lifecycle.providerFailure !== undefined
+          ? { providerFailure: lifecycle.providerFailure }
+          : {}),
       };
     case 'skipped':
       return { ...common, state: 'skipped', cause: lifecycle.cause };

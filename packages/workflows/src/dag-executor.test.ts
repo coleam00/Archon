@@ -7564,6 +7564,44 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       }
     }, 10_000);
 
+    it('records a failed iteration’s typed failure on the loop node, unchanged', async () => {
+      const failure = { class: 'auth', evidence: 'Invalid API key' } as const;
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'result', isError: true, errors: [failure.evidence], failure };
+      });
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'loop-typed-failure',
+            nodes: [
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Complete the task.',
+                  until: 'COMPLETE',
+                  max_iterations: 3,
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('loop-typed-failure-run'),
+        })
+      );
+
+      const failed = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'my-loop'
+      );
+      expect(failed?.data?.failure_kind).toBe('fatal');
+      expect(failed?.data?.provider_failure).toEqual(failure);
+    });
+
     it('correlates interleaved loop tool lifecycles by toolCallId', async () => {
       const store = createMockStore();
       const mockDeps = createMockDeps(store);
@@ -14689,16 +14727,131 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     expect(store.failWorkflowRun).toHaveBeenCalled();
   });
 
-  it('uses the bounded fallback when provider-relative reset text overflows Date', async () => {
-    const creditExhaustedQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+  /** A provider turn that ends in a typed quota failure. */
+  function quotaExhaustedQuery(
+    resetAt?: string
+  ): Mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']> {
+    return mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        sessionId: 'dag-session-credit',
+        failure: {
+          class: 'quota_exhausted',
+          evidence: "You've hit your session limit",
+          ...(resetAt !== undefined ? { resetAt } : {}),
+        },
+      };
+    });
+  }
+
+  function quotaConfig(
+    workflows: Partial<NonNullable<WorkflowConfig['workflows']>>
+  ): WorkflowConfig {
+    return {
+      ...minimalConfig,
+      workflows: {
+        autoResumeOnQuotaReset: true,
+        quotaMaxAttempts: 1,
+        quotaDeadlineMs: 3_600_000,
+        ...workflows,
+      },
+    };
+  }
+
+  it('schedules the resume at the reset instant a typed quota failure reports', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    mockGetAgentProviderDag.mockReturnValue({
+      sendQuery: quotaExhaustedQuery(resetAt),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-resume-test',
+          nodes: [
+            {
+              id: 'investigate',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Investigate the issue' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('credit-resume-run'),
+        config: quotaConfig({}),
+      })
+    );
+
+    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
+    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
+      reason: 'quota',
+      resumeAt: resetAt,
+    });
+    // The typed failure is recorded on the node, unchanged.
+    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(failed?.data?.provider_failure).toEqual({
+      class: 'quota_exhausted',
+      evidence: "You've hit your session limit",
+      resetAt,
+    });
+  });
+
+  it('never schedules a resume from error text that only reads like a quota limit', async () => {
+    // Untyped provider errors: the words say "usage limit reached" with a reset
+    // epoch inside the deadline, but no provider classified the failure, so nothing
+    // is scheduled.
+    const resetEpoch = Math.floor(Date.now() / 1000) + 600;
+    const proseOnlyQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
       async function* () {
         yield {
-          type: 'assistant',
-          content: "You're out of extra usage · resets in 2400000001h",
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          errors: [`Claude AI usage limit reached|${String(resetEpoch)}`],
+          sessionId: 'dag-session-credit',
         };
-        yield { type: 'result', sessionId: 'dag-session-credit' };
       }
     );
+    mockGetAgentProviderDag.mockReturnValue({
+      sendQuery: proseOnlyQuery,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-resume-test',
+          nodes: [
+            {
+              id: 'investigate',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Investigate the issue' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('credit-resume-run'),
+        config: quotaConfig({ quotaFallbackDelayMs: 60_000 }),
+      })
+    );
+
+    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
+    expect(failRun).toHaveBeenCalledTimes(1);
+    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toBeUndefined();
+  });
+
+  it('uses the bounded fallback when a typed quota failure reports no reset', async () => {
+    const creditExhaustedQuery = quotaExhaustedQuery();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: creditExhaustedQuery,
       getType: () => 'claude',
@@ -14748,16 +14901,8 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     ).toBe(false);
   });
 
-  it('records that quota continuation is unavailable when reset text overflows without a fallback', async () => {
-    const creditExhaustedQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
-      async function* () {
-        yield {
-          type: 'assistant',
-          content: "You're out of extra usage · resets in 2400000001h",
-        };
-        yield { type: 'result', sessionId: 'dag-session-credit' };
-      }
-    );
+  it('records that quota continuation is unavailable when no reset is reported and no fallback is set', async () => {
+    const creditExhaustedQuery = quotaExhaustedQuery();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: creditExhaustedQuery,
       getType: () => 'claude',
@@ -14804,12 +14949,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
   });
 
   it('does not promise automatic quota continuation for a container run', async () => {
-    const creditExhaustedQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
-      async function* () {
-        yield { type: 'assistant', content: "You're out of extra usage" };
-        yield { type: 'result', sessionId: 'dag-session-credit' };
-      }
-    );
+    const creditExhaustedQuery = quotaExhaustedQuery();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: creditExhaustedQuery,
       getType: () => 'claude',
@@ -16022,6 +16162,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
         type: 'result',
         isError: true,
         errorSubtype: 'error_max_budget_usd',
+        failure: { class: 'budget_exceeded', evidence: 'error_max_budget_usd' },
         sessionId: 'sid',
       };
     });
@@ -16072,6 +16213,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
           type: 'result',
           isError: true,
           errorSubtype: 'error_max_budget_usd',
+          failure: { class: 'budget_exceeded', evidence: 'error_max_budget_usd' },
           sessionId: 'sid2',
         };
       }

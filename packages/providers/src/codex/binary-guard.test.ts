@@ -7,6 +7,7 @@
  */
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
+import type { MessageChunk } from '../types';
 
 const mockLogger = createMockLogger();
 
@@ -57,6 +58,17 @@ mock.module('./binary-resolver', () => ({
 import { CodexProvider, resetCodexSingleton } from './provider';
 
 describe('CodexProvider binary mode resolution', () => {
+  /** The typed failure a turn ended in, if it failed. */
+  async function failureOf(
+    gen: AsyncIterable<MessageChunk>
+  ): Promise<{ class: string; evidence: string } | undefined> {
+    let failure: { class: string; evidence: string } | undefined;
+    for await (const chunk of gen) {
+      if (chunk.type === 'result' && chunk.failure) failure = chunk.failure;
+    }
+    return failure;
+  }
+
   beforeEach(() => {
     resetCodexSingleton();
     MockCodex.mockClear();
@@ -91,9 +103,10 @@ describe('CodexProvider binary mode resolution', () => {
     );
 
     const client = new CodexProvider();
-    const generator = client.sendQuery('test prompt', '/tmp/test');
+    const failure = await failureOf(client.sendQuery('test prompt', '/tmp/test'));
 
-    await expect(generator.next()).rejects.toThrow('Codex native binary not found');
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('Codex native binary not found');
   });
 
   test('retries initialization after first failure (rejected promise not cached)', async () => {
@@ -104,7 +117,7 @@ describe('CodexProvider binary mode resolution', () => {
     const client = new CodexProvider();
 
     // First call fails
-    await expect(client.sendQuery('test prompt', '/tmp/test').next()).rejects.toThrow(
+    expect((await failureOf(client.sendQuery('test prompt', '/tmp/test')))?.evidence).toContain(
       'Codex CLI binary not found'
     );
 

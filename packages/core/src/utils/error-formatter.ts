@@ -8,6 +8,53 @@ import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-writ
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import { TierResolutionError } from '@archon/workflows/model-validation';
 import { WorkflowAdoptionError } from '../operations/workflow-adoption';
+import type { ProviderFailure } from '@archon/provider-contract';
+
+const SHOWN_EVIDENCE_MAX_CHARS = 600;
+
+/**
+ * The vendor's words, unless they carry anything that looks like a credential, cut to a
+ * readable length. Shown only; nothing branches on it.
+ */
+function shownEvidence(evidence: string): string | undefined {
+  const text = evidence.trim();
+  if (text.length === 0) return undefined;
+  const lower = text.toLowerCase();
+  if (['password', 'token', 'secret', 'key='].some(marker => lower.includes(marker))) {
+    return undefined;
+  }
+  return text.length > SHOWN_EVIDENCE_MAX_CHARS
+    ? `${text.slice(0, SHOWN_EVIDENCE_MAX_CHARS)}…`
+    : text;
+}
+
+/**
+ * The chat message for a turn whose provider reported a typed failure. The advice
+ * follows the class the provider chose from its SDK's structured signals; the evidence
+ * is shown when it is safe to, never read to pick the advice.
+ */
+export function formatProviderFailure(failure: ProviderFailure): string {
+  const shown = shownEvidence(failure.evidence);
+  const detail = shown !== undefined ? `: ${shown}` : '';
+  switch (failure.class) {
+    case 'auth':
+      return `⚠️ The AI provider rejected its credentials${detail}. Reconnect it in Settings → Agents, or log in again with the provider's own CLI.`;
+    case 'quota_exhausted':
+      return `⚠️ AI usage limit reached${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Please wait and try again.`;
+    case 'budget_exceeded':
+      return '⚠️ The turn stopped at its spend limit.';
+    case 'rate_limited':
+      return '⚠️ The AI provider is rate limiting requests. Wait a moment and try again.';
+    case 'transient':
+      return `⚠️ The AI provider failed temporarily${detail}. Try again.`;
+    case 'unknown':
+      return `⚠️ AI error${detail}. Try /reset if issue persists.`;
+    default: {
+      const exhaustive: never = failure.class;
+      return exhaustive;
+    }
+  }
+}
 
 /**
  * Classify an error and return a user-friendly message
@@ -67,50 +114,6 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
     return `⚠️ AI usage limit reached${reset ? ` (${reset})` : ''}. Please wait and try again.`;
   }
 
-  // Codex-specific auth errors — OAuth token refresh failures and 401 retry
-  // exhaustion (GitHub #2509). The rate-limit branch above has already had a
-  // chance to match, so a `Codex rate_limit:` wrap routes to usage-cap
-  // guidance first (only when the inner text matches that branch's own
-  // substring list: "rate limit" / "hit your limit" / "usage limit" /
-  // "session limit").
-  //
-  // `Codex auth error:` means the provider's own AUTH_PATTERNS
-  // (packages/providers/src/codex/provider.ts) already classified this
-  // message as auth, so it routes unconditionally instead of being re-tested
-  // against a narrower, hand-written substring list — that mismatch is what
-  // let real auth errors like "unauthorized" and "invalid token" fall
-  // through (#2509 R1). That unconditional trust is warranted only because
-  // AUTH_PATTERNS itself requires a real auth word ("unauthorized" /
-  // "authentication" / "invalid token" / "credit balance") and deliberately
-  // excludes a bare "401"/"403" — a stray status-looking digit in unrelated
-  // text (a port, a timeout in ms) does not classify as auth there, so it
-  // never reaches this branch (#2509 R7; see the AUTH_PATTERNS comment in
-  // provider.ts). Every other Codex-side prefix was NOT classified as auth
-  // by the provider: some are a different class (`Codex crash:`), others are
-  // raw and never classified at all (`Codex query failed:`,
-  // `codex_turn_failed:`, `codex_stream_incomplete:`), so those still need a
-  // substring check below — for the same "bare digits aren't enough signal"
-  // reason, that check requires the specific word "unauthorized"
-  // (case-insensitive), not a bare "401" (#2509 R2, R8).
-  if (message.startsWith('Codex auth error:')) {
-    return '⚠️ Codex authentication error. Run `codex login` in your terminal to re-authenticate.';
-  }
-  const isCodexRawPrefixed =
-    message.startsWith('Codex query failed:') ||
-    message.startsWith('codex_turn_failed:') ||
-    message.startsWith('codex_stream_incomplete:');
-  if (
-    (message.startsWith('Codex ') || isCodexRawPrefixed) &&
-    (message.includes('refresh token') ||
-      message.includes('could not be refreshed') ||
-      message.includes('log out and sign in') ||
-      message.includes('OAuth token has expired') ||
-      message.includes('sign-in has expired') ||
-      lower.includes('unauthorized'))
-  ) {
-    return '⚠️ Codex authentication error. Run `codex login` in your terminal to re-authenticate.';
-  }
-
   // Claude-specific auth errors — OAuth token refresh failures
   // These come from Claude Code subprocess stderr or SDK result subtypes.
   // Recovery: `/login` in-session or `claude logout && claude login` in terminal.
@@ -124,11 +127,6 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
     return '⚠️ Claude authentication expired. Run `/login` inside Claude Code or `claude logout && claude login` in your terminal.';
   }
 
-  // Claude-specific auth errors — general (subprocess crash with auth classification)
-  if (message.startsWith('Claude Code auth error:')) {
-    return '⚠️ Claude authentication error. Run `/login` inside Claude Code or check your API key configuration.';
-  }
-
   // Not logged in — no credential reached the subprocess. On a multi-user
   // install this means the user hasn't connected a provider yet; on a solo
   // install it means no key / no `claude login`. Name both connect surfaces
@@ -137,9 +135,8 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
     return '⚠️ Not logged in to the AI provider. Connect a subscription or API key in Settings → Agents, or set credentials in your environment (e.g. `claude /login` or `CLAUDE_API_KEY`).';
   }
 
-  // General AI/SDK authentication errors. Deliberately excludes a bare "401":
-  // same "bare digits aren't enough signal" reasoning as the Codex checks
-  // above (#2509 R2, R7, R8) — a stray status-looking digit in unrelated
+  // General AI/SDK authentication errors. Deliberately excludes a bare "401"
+  // (#2509 R2, R7, R8) — a stray status-looking digit in unrelated
   // text (a port, a byte offset, a millisecond duration) is not a reliable
   // auth indicator on its own, and this function has more accurate branches
   // for exactly those shapes a few lines below (timeout, ECONNREFUSED). The
@@ -165,16 +162,6 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
   // Session errors
   if (message.includes('session') || message.includes('Session')) {
     return '⚠️ Session error. Use /reset to start a fresh session.';
-  }
-
-  if (message.startsWith('❌ Model "') && message.includes('not available for your account')) {
-    return message;
-  }
-
-  // Codex-specific errors (thrown as "Codex query failed: ...")
-  if (message.includes('Codex query failed:')) {
-    const innerMessage = message.replace('Codex query failed: ', '');
-    return `⚠️ AI error: ${innerMessage}. Try /reset if issue persists.`;
   }
 
   // Generic fallback with hint about what failed
