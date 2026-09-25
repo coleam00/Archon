@@ -17,7 +17,7 @@ import {
 } from './defaults/bundled-defaults';
 import { expandWorkflowIncludes } from './include-expander';
 import { parseWorkflow } from './loader';
-import { qualifyWorkflowResources } from './packaged-workflow';
+import { parsePackagedResourceReference, qualifyWorkflowResources } from './packaged-workflow';
 import type { DagNode } from './schemas/dag-node';
 import type { ResolvedWorkflow, WorkflowDefinition } from './schemas/workflow';
 import { telemetryNodeType } from './telemetry-node-type';
@@ -34,9 +34,19 @@ function flattenNodes(nodes: readonly DagNode[], prefix = ''): { path: string; n
   });
 }
 
+/**
+ * A resource name without its package owner. Discovery qualifies a pack's commands with
+ * the owner it was found under, so a project copy of a bundled pack workflow names the
+ * same command differently from its original; the owner is not part of what runs.
+ */
+function unqualified(name: string): string {
+  return parsePackagedResourceReference(name)?.name ?? name;
+}
+
 function commandOf(node: DagNode): string | undefined {
-  if (node.kind === 'agent' && node.source.kind === 'command') return node.source.name;
-  if (node.kind === 'loop') return node.loop.command;
+  if (node.kind === 'agent' && node.source.kind === 'command') return unqualified(node.source.name);
+  if (node.kind === 'loop' && node.loop.command !== undefined)
+    return unqualified(node.loop.command);
   return undefined;
 }
 
@@ -88,7 +98,9 @@ function signatureOf(workflow: Pick<ResolvedWorkflow, 'nodes'>): string[] {
       path,
       telemetryNodeType(node),
       [...(node.depends_on ?? [])].sort(),
-      commandOf(node) ?? inlinePromptOf(node) ?? (node.kind === 'exec' ? node.script : null),
+      commandOf(node) ??
+        inlinePromptOf(node) ??
+        (node.kind === 'exec' ? unqualified(node.script) : null),
     ])
   );
 }
@@ -102,10 +114,11 @@ interface BundledSignature {
 let bundledSignatures: readonly BundledSignature[] | undefined;
 
 /**
- * The bundled workflows, prepared the way discovery prepares them (parsed, pack-owned
- * resources qualified, includes expanded against the embedded command bodies) so a
- * project copy and its original compare in one form. Built once per process, in memory.
- * A bundled workflow that fails to parse or expand is left out rather than failing.
+ * The bundled workflows as shipped: parsed, pack-owned resources qualified, and includes
+ * expanded against the shipped command bodies (`BUNDLED_COMMANDS`). A copy is compared
+ * with what Archon ships, not with this install's command overrides: an override changes
+ * the prompts the copy runs, so such a copy is truthfully `modified`. Built once per
+ * process, in memory. A bundled workflow that fails to parse or expand is left out.
  */
 function getBundledSignatures(): readonly BundledSignature[] {
   if (bundledSignatures) return bundledSignatures;

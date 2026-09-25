@@ -5870,6 +5870,36 @@ describe('chat turn telemetry', () => {
     );
   });
 
+  test('a routed turn whose workflow dispatch throws is not a failed chat turn', async () => {
+    const codebase = makeNamedCodebase('my-project');
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({
+        workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+        errors: [],
+      })
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: '/invoke-workflow assist --project my-project' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+    mockUpdateConversation.mockImplementationOnce(() =>
+      Promise.reject(new Error('database is locked'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'run assist on my project');
+
+    // Positive control: dispatch reached the write that failed.
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
+      codebase_id: 'id-my-project',
+    });
+    expect(mockCaptureChatTurn).not.toHaveBeenCalled();
+  });
+
   for (const mode of ['stream', 'batch'] as const) {
     test(`captures exactly one failed chat turn when the provider throws mid-turn (${mode})`, async () => {
       mockGetOrCreateConversation.mockReturnValueOnce(

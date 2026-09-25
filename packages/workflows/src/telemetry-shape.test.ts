@@ -1,9 +1,16 @@
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { registerBuiltinProviders } from '@archon/providers';
-import { BUNDLED_WORKFLOWS } from './defaults/bundled-defaults';
+import { basename } from 'node:path';
+import {
+  BUNDLED_COMMANDS,
+  BUNDLED_WORKFLOWS,
+  BUNDLED_WORKFLOW_OWNERS,
+  BUNDLED_WORKFLOW_PATHS,
+} from './defaults/bundled-defaults';
 import { expandWorkflowIncludes } from './include-expander';
 import { parseWorkflow } from './loader';
-import type { ResolvedWorkflow } from './schemas/workflow';
+import { qualifyWorkflowResources } from './packaged-workflow';
+import type { ResolvedWorkflow, WorkflowDefinition } from './schemas/workflow';
 import { deriveBundledAncestry, describeWorkflowShape, promptCharsBucket } from './telemetry-shape';
 
 beforeAll(() => {
@@ -18,6 +25,41 @@ function resolve(yaml: string): ResolvedWorkflow {
     new Map([[parsed.workflow.name, parsed.workflow]])
   );
   const resolved = workflows.get(parsed.workflow.name);
+  if (!resolved) throw new Error(errors.map(e => e.error).join('; '));
+  return resolved;
+}
+
+/**
+ * Resolve a project copy of a bundled workflow the way discovery does: the copy sits
+ * beside the bundled workflows it may include, a pack copy is qualified with a project
+ * owner, and includes expand against the command bodies this install resolves.
+ */
+function resolveProjectCopy(
+  bundledKey: string,
+  name: string,
+  commands: ReadonlyMap<string, string> = new Map(Object.entries(BUNDLED_COMMANDS))
+): ResolvedWorkflow {
+  const rawByName = new Map<string, WorkflowDefinition>();
+  for (const [key, content] of Object.entries(BUNDLED_WORKFLOWS)) {
+    const path = BUNDLED_WORKFLOW_PATHS[key];
+    const { workflow } = parseWorkflow(content, path ? basename(path) : `${key}.yaml`);
+    if (!workflow) continue;
+    const owner = BUNDLED_WORKFLOW_OWNERS[key];
+    if (owner) qualifyWorkflowResources(workflow, { source: 'bundled', ...owner });
+    rawByName.set(workflow.name, workflow);
+  }
+  const yaml = BUNDLED_WORKFLOWS[bundledKey];
+  if (yaml === undefined) throw new Error(`${bundledKey} is not bundled`);
+  const parsed = parseWorkflow(
+    yaml.replace(new RegExp(`^name: ${bundledKey}$`, 'm'), `name: ${name}`),
+    `${name}.yaml`
+  );
+  if (!parsed.workflow) throw new Error(parsed.error.error);
+  const owner = BUNDLED_WORKFLOW_OWNERS[bundledKey];
+  if (owner) qualifyWorkflowResources(parsed.workflow, { ...owner, source: 'project' });
+  rawByName.set(name, parsed.workflow);
+  const { workflows, errors } = expandWorkflowIncludes(rawByName, commands);
+  const resolved = workflows.get(name);
   if (!resolved) throw new Error(errors.map(e => e.error).join('; '));
   return resolved;
 }
@@ -53,6 +95,31 @@ describe('deriveBundledAncestry', () => {
     expect(edited).toContain('Acme-specific instructions.');
     const ancestry = deriveBundledAncestry(resolve(edited));
     expect(ancestry).toEqual({ derivedFrom: BUNDLED, derivedSimilarity: 'modified' });
+  });
+
+  test('an unchanged copy of a workflow that includes another bundled workflow is identical', () => {
+    expect(
+      deriveBundledAncestry(resolveProjectCopy('archon-issue-review-full', 'acme-review'))
+    ).toEqual({ derivedFrom: 'archon-issue-review-full', derivedSimilarity: 'identical' });
+  });
+
+  test('an unchanged project copy of a pack workflow is identical despite its project owner', () => {
+    expect(deriveBundledAncestry(resolveProjectCopy('archon-plan', 'acme-plan'))).toEqual({
+      derivedFrom: 'archon-plan',
+      derivedSimilarity: 'identical',
+    });
+  });
+
+  test('a copy that runs an overridden command is compared with the shipped workflow', () => {
+    // The override changes the prompt an included block node runs, so the copy no longer
+    // runs what Archon ships: modified, not identical.
+    const overridden = new Map(Object.entries(BUNDLED_COMMANDS));
+    overridden.set('archon-code-review-agent', 'Acme review instructions.');
+    expect(
+      deriveBundledAncestry(
+        resolveProjectCopy('archon-issue-review-full', 'acme-review', overridden)
+      )
+    ).toEqual({ derivedFrom: 'archon-issue-review-full', derivedSimilarity: 'modified' });
   });
 
   test('an unrelated custom workflow has no ancestry', () => {

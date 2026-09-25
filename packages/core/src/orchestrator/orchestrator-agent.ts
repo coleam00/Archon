@@ -2536,7 +2536,7 @@ export async function handleMessage(
     // resolved and parked with only a generic error to show for it. The outer
     // catch cannot cover this: it does not know about the resolution.
     // continueResolvedGateRun never throws, so this cannot mask the real error.
-    const turn: ChatTurn = { startedAt: Date.now(), reported: false };
+    const turn: ChatTurn = { startedAt: Date.now(), reported: false, routed: false };
     try {
       if (mode === 'stream') {
         await handleStreamMode(
@@ -2578,7 +2578,7 @@ export async function handleMessage(
     } catch (error) {
       // A provider that throws mid-turn never reaches the handler's own report. Count
       // the turn as failed here, once, then let the outer catch tell the user.
-      if (!turn.reported) {
+      if (!turn.reported && !turn.routed) {
         reportChatTurn(turn, {
           platform: platform.getPlatformType(),
           provider: aiClient.getType(),
@@ -2640,6 +2640,12 @@ export async function handleMessage(
 interface ChatTurn {
   readonly startedAt: number;
   reported: boolean;
+  /**
+   * The model's reply routed the turn to a workflow or a project registration, which
+   * report as `workflow_invoked` / `codebase_registered`, not as a chat turn. A throw
+   * while dispatching it is not a failed chat turn.
+   */
+  routed: boolean;
 }
 
 function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
@@ -2816,6 +2822,7 @@ async function handleStreamMode(
   );
 
   if (commands.workflowInvocation) {
+    turn.routed = true;
     // Retract streamed text — workflow dispatch replaces it
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
@@ -2836,6 +2843,7 @@ async function handleStreamMode(
   }
 
   if (commands.projectRegistration) {
+    turn.routed = true;
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }
@@ -3081,6 +3089,7 @@ async function handleBatchMode(
   );
 
   if (commands.workflowInvocation) {
+    turn.routed = true;
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }
@@ -3100,6 +3109,7 @@ async function handleBatchMode(
   }
 
   if (commands.projectRegistration) {
+    turn.routed = true;
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }

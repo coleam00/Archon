@@ -80,8 +80,9 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 // registration counts were added, and to `-v4` when aggregate usage totals
 // (tokens/cost/duration/loop iterations) and approval decisions were added, and
 // to `-v5` when install channel and build commit were added, and to `-v6` when
-// runs gained an anonymous per-run reference and cancellations were reported.
-// Bumping re-shows the updated first-run notice once per install so existing
+// runs gained an anonymous per-run reference and cancellations were reported, and
+// to `-v7` when workflow shape (node-type counts, depth, fan-out, command-reference
+// count, prompt-size bucket) and bundled-workflow ancestry were added. Bumping re-shows the updated first-run notice once per install so existing
 // users re-consent rather than silently getting broader capture.
 export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v7';
 
@@ -410,9 +411,12 @@ function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry — now also an anonymous per-run\n' +
-    'reference (a hash, never the run id) and cancelled runs, alongside how\n' +
-    'Archon was installed (binary, Docker, or source), the build commit,\n' +
+    'Archon collects anonymous usage telemetry — now also the shape of each workflow\n' +
+    '(node-type counts, depth, fan-out, a prompt-size bucket) and, for a copy of a\n' +
+    "bundled workflow, which bundled one it came from — never your own workflow's\n" +
+    'name, description or text. Also sent: an anonymous per-run reference (a hash,\n' +
+    'never the run id), cancelled runs, how Archon was installed (binary, Docker,\n' +
+    'or source), the build commit,\n' +
     'chat activity (platform/provider/model, never message content), aggregate\n' +
     'usage totals (token counts, cost, durations, loop iterations), approval\n' +
     'decisions (approved/rejected only), deployment shape, a categorical failure\n' +
@@ -579,13 +583,17 @@ export interface WorkflowInvokedProperties {
 
 export type PromptCharsBucket = 'none' | 'lt_1k' | '1k_5k' | '5k_20k' | 'gte_20k';
 
-/** Categorical shape of a workflow: counts and buckets only, never ids, names or text. */
+/**
+ * Categorical shape of a workflow: counts and buckets only, never ids, names or text.
+ * Two scopes on purpose: the counts measure everything the workflow contains, loop_group
+ * bodies included; depth and fan-out measure the run-level graph the engine schedules.
+ */
 export interface WorkflowShapeProperties {
   /** Nodes of each type, loop_group bodies included; a type with no nodes is absent. */
   nodeCounts: Partial<Record<WorkflowNodeType, number>>;
-  /** Number of dependency layers in the top-level graph. */
+  /** Number of dependency layers in the top-level graph (loop_group bodies excluded). */
   graphDepth: number;
-  /** Most direct dependents of any one top-level node. */
+  /** Most direct dependents of any one top-level node (loop_group bodies excluded). */
   maxFanOut: number;
   /** Distinct command names referenced by agent and loop nodes. */
   commandRefs: number;
