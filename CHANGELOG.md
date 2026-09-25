@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-09-25
+
+A patch release: copied workflow packs load cleanly, and release notes now come from this changelog.
+
+### Fixed
+
+- A workflow pack copied into a project with `archon plugin copy` no longer reports a load error for a YAML file at the pack's root, such as an example config. A directory that holds `archon-plugin.json` is read only by the pack loader, so installed and copied packs load the same tree the same way. (#3505, #3512)
+- Release notes on GitHub are built from this changelog's section for the version, with breaking changes first, instead of being replaced by generated notes. (#3518)
+- The schema-upgrade check reads the v0.11.0 SQLite schema, so pull-request CI passes again. (#3517)
+
 ## [0.11.0] - 2026-09-25
 
 Workflow packs install straight from GitHub, workflows can start from schedules and GitHub events, forge plugins carry the delivery pack's pull-request work, and all three provider SDKs move to their latest releases.

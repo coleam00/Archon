@@ -1,6 +1,6 @@
 {
   "name": "@archon/plugin-manifest",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
