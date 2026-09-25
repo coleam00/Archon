@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi';
+import type { WorkflowErrorClass } from '@archon/paths';
 import type { TokenUsage } from '@archon/providers/types';
 import type { NodeOutput } from './schemas/workflow-run';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
@@ -13,6 +14,15 @@ import {
   type ExecutionOutput,
 } from './schemas/node-execution';
 import { executionMetadata } from './node-execution';
+import { classifyError, toWorkflowErrorClass } from './executor-shared';
+
+const workflowErrorClassSchema = z.enum(
+  Object.keys({
+    fatal: true,
+    transient: true,
+    unknown: true,
+  } satisfies Record<WorkflowErrorClass, true>) as [WorkflowErrorClass, ...WorkflowErrorClass[]]
+);
 
 /** Existing flat wire keys remain readable by older binaries. */
 export const serializedNodeDataSchema = z.object({
@@ -37,6 +47,7 @@ export const serializedNodeDataSchema = z.object({
   num_turns: z.number().optional(),
   model_usage: z.object({ requested: z.string().optional(), resolved: z.string() }).optional(),
   error: z.string().optional(),
+  error_class: workflowErrorClassSchema.optional(),
   retryable: z.literal(false).optional(),
   reason: z.union([nodeSkipReasonSchema, z.literal('stale_dependency')]).optional(),
   cause: skipCauseSchema.optional(),
@@ -207,6 +218,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(lifecycle.status === 'failed'
         ? {
             error: lifecycle.error,
+            error_class: toWorkflowErrorClass(classifyError(new Error(lifecycle.error))),
             ...(lifecycle.retryable === false ? { retryable: false as const } : {}),
           }
         : {}),

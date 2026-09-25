@@ -8,7 +8,8 @@
 #
 # Env vars:
 #   VERSION    - version string (default: from package.json)
-#   GIT_COMMIT - short git commit (default: from `git rev-parse --short HEAD`)
+#   GIT_COMMIT   - short git commit (default: from `git rev-parse --short HEAD`)
+#   GIT_REVISION - full git object id (default: from `git rev-parse HEAD`)
 #   TARGET     - bun target triple (e.g. bun-darwin-arm64); CI mode
 #   OUTFILE    - output path for the built binary; CI mode
 
@@ -16,6 +17,7 @@ set -euo pipefail
 
 VERSION="${VERSION:-$(grep '"version"' package.json | head -1 | cut -d'"' -f4)}"
 GIT_COMMIT="${GIT_COMMIT:-$(git rev-parse --short HEAD 2>/dev/null || echo 'unknown')}"
+GIT_REVISION="${GIT_REVISION:-$(git rev-parse HEAD 2>/dev/null || echo 'unknown')}"
 TARGET="${TARGET:-}"
 OUTFILE="${OUTFILE:-}"
 
@@ -82,6 +84,8 @@ cat > "$BUNDLED_BUILD_FILE" << EOF
 export const BUNDLED_IS_BINARY = true;
 export const BUNDLED_VERSION = '${VERSION}';
 export const BUNDLED_GIT_COMMIT = '${GIT_COMMIT}';
+/** Full git object id of the engine source used for the binary build. */
+export const BUNDLED_GIT_REVISION = '${GIT_REVISION}';
 /** SHA-256 of archon-web.tar.gz, embedded at build time by scripts/build-binaries.sh */
 export const BUNDLED_WEB_DIST_SHA256 = '${WEB_DIST_SHA256}';
 EOF

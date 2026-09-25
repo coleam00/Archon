@@ -170,4 +170,22 @@ describe('node record serializers', () => {
     expect(serializeNodeOutput(source)).not.toHaveProperty('tokens');
     expect(serializeNodeOutput(source)).not.toHaveProperty('costUsd');
   });
+
+  it('persists an unknown failure class without adding another error payload', () => {
+    const source = record();
+    source.lifecycle = { status: 'failed', error: 'unrecognized provider failure' };
+    const durable = serializeNodeStateRecord(source);
+
+    expect(durable).toMatchObject({
+      event_type: 'node_failed',
+      data: {
+        error: 'unrecognized provider failure',
+        error_class: 'unknown',
+      },
+    });
+    expect(
+      Object.entries(durable.data).filter(([, value]) => value === 'unrecognized provider failure')
+    ).toEqual([['error', 'unrecognized provider failure']]);
+    expect(readNodeRecordEvent(durable)?.data.error_class).toBe('unknown');
+  });
 });

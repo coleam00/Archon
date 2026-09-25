@@ -4004,6 +4004,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       .map(([event]) => event)
       .filter(event => event.event_type === 'node_failed' || event.event_type === 'node_completed');
     expect(terminals).toHaveLength(2);
+    expect(terminals[0].data?.error_class).toBe('transient');
     expect(terminals[0].data?.invocation).toEqual(terminals[1].data?.invocation);
     expect(terminals[0].data?.attempt).not.toEqual(terminals[1].data?.attempt);
   }, 5_000);
@@ -4263,6 +4264,13 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
 
     // FATAL error must not be retried — exactly 1 attempt
     expect(callCount).toBe(1);
+    expect(mockDeps.store.persistWorkflowEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event_type: 'node_failed',
+        step_name: 'my-node',
+        data: expect.objectContaining({ error_class: 'fatal' }),
+      })
+    );
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
   });
 
@@ -18421,7 +18429,10 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
       expect.objectContaining({
         event_type: 'node_failed',
         step_name: 'slow',
-        data: expect.objectContaining({ error: "Bash node 'slow' timed out after 100ms" }),
+        data: expect.objectContaining({
+          error: "Bash node 'slow' timed out after 100ms",
+          error_class: 'unknown',
+        }),
       })
     );
     expect(events.some(event => event.event_type === 'node_skipped')).toBe(false);
