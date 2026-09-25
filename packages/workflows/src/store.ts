@@ -1,7 +1,7 @@
 import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
-import type { RunCancelReason, RunExitReason } from './schemas/run-terminal-reason';
+import type { RunCancelReason, RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
@@ -397,12 +397,19 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   ): Promise<void>;
   /**
    * Atomically fail the run and persist its matching lifecycle event. `exitReason`
-   * is recorded on that event as the run's categorical failure cause. Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   * is recorded on that event as the run's categorical failure cause, and — with
+   * `signal`, when a signal arriving at the owning process is what stopped the run —
+   * on the run row as `metadata.stop_reason`, which is what the operator surfaces
+   * read (#3479). Reports terminal telemetry after a won commit (see completeWorkflowRun).
    */
   failWorkflowRun(
     id: string,
     error: string,
-    options?: { scheduledResume?: ScheduledWorkflowResume; exitReason?: RunExitReason }
+    options?: {
+      scheduledResume?: ScheduledWorkflowResume;
+      exitReason?: RunExitReason;
+      signal?: RunStopSignal;
+    }
   ): Promise<void>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional

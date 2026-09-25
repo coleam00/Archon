@@ -5351,6 +5351,95 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('  Start:  (not recorded)');
   });
 
+  it('names the interrupt and its signal above the error line', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-interrupted',
+      checkout_baseline: null,
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        error: 'Process terminated (SIGINT)',
+        stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
+      },
+    });
+
+    await workflowGetCommand('run-interrupted');
+
+    expect(consoleSpy).toHaveBeenCalledWith('  Stopped: interrupted by the operator (SIGINT)');
+    // The error stays: it is the run's persisted failure record, and every other surface
+    // shows it. The new line says what the error text cannot claim on its own.
+    expect(consoleSpy).toHaveBeenCalledWith('  Error:  Process terminated (SIGINT)');
+  });
+
+  it('does not attribute a SIGTERM to the operator', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-signalled',
+      checkout_baseline: null,
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        error: 'Process terminated (SIGTERM)',
+        stop_reason: { reason: 'process_terminated', signal: 'SIGTERM' },
+      },
+    });
+
+    await workflowGetCommand('run-signalled');
+
+    expect(consoleSpy).toHaveBeenCalledWith('  Stopped: interrupted by a signal (SIGTERM)');
+  });
+
+  it('prints no Stopped line for a run that genuinely failed', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-broken',
+      checkout_baseline: null,
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: { error: 'Bash node failed', stop_reason: { reason: 'node_error' } },
+    });
+
+    await workflowGetCommand('run-broken');
+
+    expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Stopped:'));
+    expect(consoleSpy).toHaveBeenCalledWith('  Error:  Bash node failed');
+  });
+
+  it('carries the stop reason through --json', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-interrupted-json',
+      checkout_baseline: null,
+      workflow_name: 'implement',
+      status: 'failed',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        error: 'Process terminated (SIGINT)',
+        stop_reason: { reason: 'process_terminated', signal: 'SIGINT' },
+      },
+    });
+
+    await workflowGetCommand('run-interrupted-json', true);
+
+    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+      status: string;
+      metadata: { stop_reason?: unknown };
+    };
+    expect(parsed.status).toBe('failed');
+    expect(parsed.metadata.stop_reason).toEqual({
+      reason: 'process_terminated',
+      signal: 'SIGINT',
+    });
+  });
+
   it('prints the checkout the run started from', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -11468,7 +11557,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
       'test-run-id',
       'Process terminated (SIGTERM)',
-      { exitReason: 'process_terminated' }
+      { exitReason: 'process_terminated', signal: 'SIGTERM' }
     );
     expect(shutdownOrder).toEqual(['owner-close', 'exit']);
     expect(exitSpy).toHaveBeenCalledWith(1);
@@ -11554,7 +11643,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     expect(workflowsDb.failWorkflowRun).toHaveBeenCalledWith(
       'test-run-id',
       'Process terminated (SIGTERM)',
-      { exitReason: 'process_terminated' }
+      { exitReason: 'process_terminated', signal: 'SIGTERM' }
     );
     expect(workflowsDb.getActiveWorkflowRun).not.toHaveBeenCalled();
     expect(exitSpy).toHaveBeenCalledWith(1);

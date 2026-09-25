@@ -4332,6 +4332,7 @@ export interface components {
     };
     WorkflowRunMetadata: {
       wait?: components['schemas']['WorkflowWaitContext'];
+      stop_reason?: components['schemas']['RunStopReason'];
     } & {
       [key: string]: unknown;
     };
@@ -4420,6 +4421,21 @@ export interface components {
           waitingSince: string;
           message: string;
         };
+    RunStopReason: {
+      /** @enum {string} */
+      reason:
+        | 'no_nodes_completed'
+        | 'node_error'
+        | 'unhandled_error'
+        | 'evidence_missing'
+        | 'source_unavailable'
+        | 'not_finalized'
+        | 'process_terminated'
+        | 'launch_failed'
+        | 'run_not_created';
+      /** @enum {string} */
+      signal?: 'SIGINT' | 'SIGTERM';
+    };
     CancelWorkflowRunResponse: {
       success: boolean;
       message: string;

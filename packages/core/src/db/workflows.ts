@@ -2,7 +2,7 @@
  * Database operations for workflow runs
  */
 import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
-import type { RunExitReason } from '@archon/workflows/schemas/run-terminal-reason';
+import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 
 import { pool, getDialect, getDatabaseType, getDatabase } from './connection';
@@ -33,6 +33,7 @@ import {
   workflowWaitStepName,
   workflowWaitContextSchema,
   TERMINAL_WORKFLOW_STATUSES,
+  RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   DashboardWorkflowRun,
@@ -992,11 +993,14 @@ export async function resumeWorkflowRun(
     // the same run to 'running' and double-claim the worktree. The day param is
     // bound at $2 (ORPHAN_RESUME_STALE_DAYS), matching findResumableRun's bind.
     //
-    // The CAS also clears `metadata.error` so a run that fails, is resumed, and
-    // then completes doesn't keep rendering its old failure (#2329). Because
+    // The CAS also clears `metadata.error` and `metadata.stop_reason` so a run that
+    // fails, is resumed, and then completes doesn't keep rendering its old failure
+    // (#2329) or claiming an operator interrupted it (#3479). Because
     // legacy runs may carry their only failure record in metadata (#2348), the error being
     // cleared is first preserved as a `workflow_resumed` event, in the SAME
-    // transaction as the clear, so the audit trail can never lose it. The read,
+    // transaction as the clear, so the audit trail can never lose it. The stop reason
+    // needs no such preservation: `failWorkflowRun` wrote the same category onto the
+    // terminal `workflow_failed` event, which a resume never touches. The read,
     // the CAS and the event INSERT are one transaction (mirroring
     // resolveApprovalGate, #2146): the row is pinned by rowLockClause() so the
     // value read is the value cleared, and the event is written ONLY by the
@@ -1067,6 +1071,7 @@ export async function resumeWorkflowRun(
       const triggeredAt = scheduled?.triggeredAt === undefined ? new Date().toISOString() : null;
       const metadataPatch = {
         error: null,
+        [RUN_STOP_REASON_METADATA_KEY]: null,
         continuation_retry_at: null,
         ...(scheduled !== null && triggeredAt !== null
           ? { scheduled_resume: { ...scheduled, triggeredAt } }
@@ -1369,34 +1374,56 @@ export async function completeWorkflowRun(
  * forever: no terminal state, no error recorded, and nothing to tell the operator the run
  * is dead. Both are non-terminal states owned by this process, so failing either is the
  * same decision. Terminal rows still never transition.
+ *
+ * `exitReason` is the run's categorical cause, recorded on the terminal event and — with
+ * `signal`, when a signal arriving at the owning process is what stopped the run — on the
+ * run row as `metadata.stop_reason` for the operator surfaces to read (#3479).
  */
 export async function failWorkflowRun(
   id: string,
   error: string,
-  options: { scheduledResume?: ScheduledWorkflowResume; exitReason?: RunExitReason } = {}
+  options: {
+    scheduledResume?: ScheduledWorkflowResume;
+    exitReason?: RunExitReason;
+    signal?: RunStopSignal;
+  } = {}
 ): Promise<void> {
-  const { scheduledResume, exitReason } = options;
+  const { scheduledResume, exitReason, signal } = options;
   const dialect = getDialect();
   const parsedSchedule =
     scheduledResume === undefined
       ? undefined
       : scheduledWorkflowResumeSchema.parse(scheduledResume);
-  const metadataWithoutScheduledResume =
+  // Both keys belong to ONE failure and are written wholesale below, so a previous
+  // failure's copy is removed before the merge rather than merged into. Postgres `||`
+  // replaces a nested object while SQLite's json_patch recurses into it, and a run can
+  // reach 'running' again carrying a stale stop reason (resume, or a fan-out cancel
+  // recovery) — under json_patch alone that would leave a previous signal attached to
+  // a new reason, the #2673 defect through the same mechanism.
+  const metadataWithoutPriorFailure =
     getDatabaseType() === 'postgresql'
-      ? "metadata - 'scheduled_resume'"
-      : "json_remove(metadata, '$.scheduled_resume')";
+      ? "metadata - 'scheduled_resume' - 'stop_reason'"
+      : "json_remove(metadata, '$.scheduled_resume', '$.stop_reason')";
   let result: Awaited<ReturnType<IDatabase['query']>>;
   try {
     result = await getDatabase().withTransaction(async query => {
       const update = await query(
         `UPDATE remote_agent_workflow_runs
-         SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutScheduledResume, 2)}
+         SET status = 'failed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge(metadataWithoutPriorFailure, 2)}
          WHERE id = $1 AND status IN ('running', 'pending')`,
         [
           id,
           JSON.stringify({
             error,
             ...(parsedSchedule !== undefined ? { scheduled_resume: parsedSchedule } : {}),
+            ...(exitReason !== undefined
+              ? {
+                  [RUN_STOP_REASON_METADATA_KEY]: {
+                    reason: exitReason,
+                    ...(signal !== undefined ? { signal } : {}),
+                  },
+                }
+              : {}),
           }),
         ]
       );

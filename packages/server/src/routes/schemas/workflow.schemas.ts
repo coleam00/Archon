@@ -12,6 +12,7 @@ import {
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
   workflowWaitContextSchema as engineWorkflowWaitContextSchema,
 } from '@archon/workflows/schemas/workflow-run';
+import { runStopReasonSchema as engineRunStopReasonSchema } from '@archon/workflows/schemas/run-terminal-reason';
 import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
@@ -124,9 +125,18 @@ export const workflowRunOutcomeSchema = engineWorkflowRunOutcomeSchema
 export const workflowWaitContextSchema =
   engineWorkflowWaitContextSchema.openapi('WorkflowWaitContext');
 
-/** Run metadata stays open-ended, but its durable-wait contract is engine-owned and typed. */
+/** Why a run stopped, as the engine recorded it on the run row. */
+export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');
+
+/**
+ * Run metadata stays open-ended, but its durable-wait and stop-reason contracts are
+ * engine-owned and typed.
+ */
 export const workflowRunMetadataSchema = z
-  .object({ wait: workflowWaitContextSchema.optional() })
+  .object({
+    wait: workflowWaitContextSchema.optional(),
+    stop_reason: runStopReasonSchema.optional(),
+  })
   .catchall(z.unknown())
   .openapi('WorkflowRunMetadata');
 
