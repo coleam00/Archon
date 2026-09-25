@@ -37,6 +37,7 @@ import {
   abandonWorkflow,
   cancelWorkflow,
   CancelRefusedError,
+  ChildRunRedirectError,
   describeAbandonOwner,
   abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
@@ -700,6 +701,9 @@ async function handleWorkflowCommand(
 ): Promise<CommandResult> {
   const subcommand = args[0];
   const cmd = (command: string): string => spellWorkflowCommand(surface, command);
+  /** A child-run redirect is spelled for THIS surface; anything else reports as-is. */
+  const failureText = (err: Error): string =>
+    err instanceof ChildRunRedirectError ? err.messageFor(surface) : err.message;
 
   // Workflow commands work with or without a project context
   const codebase = conversation.codebase_id
@@ -991,7 +995,7 @@ async function handleWorkflowCommand(
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_approve_failed');
-        return { success: false, message: `Failed to approve workflow run: ${err.message}` };
+        return { success: false, message: `Failed to approve workflow run: ${failureText(err)}` };
       }
     }
 
@@ -1029,7 +1033,7 @@ async function handleWorkflowCommand(
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_reject_failed');
-        return { success: false, message: `Failed to reject workflow run: ${err.message}` };
+        return { success: false, message: `Failed to reject workflow run: ${failureText(err)}` };
       }
     }
 
@@ -1085,7 +1089,10 @@ async function handleWorkflowCommand(
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId, decision }, 'cmd.workflow_respond_failed');
-        return { success: false, message: `Failed to respond to workflow run: ${err.message}` };
+        return {
+          success: false,
+          message: `Failed to respond to workflow run: ${failureText(err)}`,
+        };
       }
     }
 

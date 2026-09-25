@@ -141,6 +141,7 @@ const {
   resetWorkflowNodeSessions,
   assertApprovable,
   assertRejectable,
+  ChildRunRedirectError,
 } = await import('./workflow-operations');
 
 // ---------------------------------------------------------------------------
@@ -707,7 +708,7 @@ describe('approveWorkflow', () => {
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
     await expect(approveWorkflow('run-1')).rejects.toThrow(
-      /waiting on sub-run child-run-9.*approve child-run-9/i
+      /waiting on sub-run child-run-9.*approve or reject the child run instead/i
     );
     // Nothing resolved, nothing stamped — a fall-through here would write a bogus
     // node_completed for the workflow node and orphan the paused child.
@@ -1134,7 +1135,7 @@ describe('rejectWorkflow', () => {
     mockGetWorkflowRun.mockResolvedValueOnce(run);
 
     await expect(rejectWorkflow('run-1')).rejects.toThrow(
-      /waiting on sub-run child-run-9.*reject child-run-9/i
+      /waiting on sub-run child-run-9.*reject the child run instead/i
     );
     // A fall-through would cancel the parent and silently orphan the paused child.
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
@@ -1399,7 +1400,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
           },
         })
       )
-    ).toThrow('Approve or reject the child run instead: /workflow approve child-9');
+    ).toThrow('Approve or reject the child run instead.');
   });
 
   test('assertApprovable rejects an already-resolved gate', () => {
@@ -1424,7 +1425,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
           },
         })
       )
-    ).toThrow('Reject the child run instead: /workflow reject child-9');
+    ).toThrow('Reject the child run instead, or abandon this run to discard the whole tree.');
   });
 
   test('assertRejectable rejects an already-resolved gate', () => {
@@ -1442,13 +1443,53 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
   test('the child redirect names the child run verbatim, for both verbs', () => {
     expect(() => assertApprovable(withMeta(childGate({ childRunId: 'child-9' })))).toThrow(
       "Run run-1 is paused waiting on sub-run child-9 ('workflow:' node 'sub'). " +
-        'Approve or reject the child run instead: /workflow approve child-9'
+        'Approve or reject the child run instead.'
     );
     expect(() => assertRejectable(withMeta(childGate({ childRunId: 'child-9' })))).toThrow(
       "Run run-1 is paused waiting on sub-run child-9 ('workflow:' node 'sub'). " +
-        'Reject the child run instead: /workflow reject child-9 To discard the whole tree, ' +
-        'abandon this run.'
+        'Reject the child run instead, or abandon this run to discard the whole tree.'
     );
+  });
+
+  // The redirect names a command, and every surface spells it differently, so the
+  // error carries the decision as data and never bakes one spelling into `message`.
+  test('the child redirect is typed, command-free, and spells per surface', () => {
+    const slack = { formatWorkflowCommand: (c: string) => `/archon-workflow ${c}` };
+    const thrown = (verb: 'approve' | 'reject'): InstanceType<typeof ChildRunRedirectError> => {
+      try {
+        if (verb === 'approve') assertApprovable(withMeta(childGate({ childRunId: 'child-9' })));
+        else assertRejectable(withMeta(childGate({ childRunId: 'child-9' })));
+      } catch (error) {
+        if (error instanceof ChildRunRedirectError) return error;
+        throw error;
+      }
+      throw new Error(`assert${verb} did not refuse a blocked parent`);
+    };
+
+    for (const verb of ['approve', 'reject'] as const) {
+      const error = thrown(verb);
+      expect({
+        parentRunId: error.parentRunId,
+        childRunId: error.childRunId,
+        nodeId: error.nodeId,
+        action: error.action,
+      }).toEqual({
+        parentRunId: 'run-1',
+        childRunId: 'child-9',
+        nodeId: 'sub',
+        action: verb,
+      });
+      expect(error.message).toContain('child-9');
+      expect(error.message).not.toContain('/workflow ');
+      expect(error.message).not.toContain('archon workflow ');
+
+      const onSlack = error.messageFor(slack);
+      expect(onSlack).toContain(`/archon-workflow ${verb} child-9`);
+      expect(onSlack.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+      expect(onSlack).not.toContain('archon workflow ');
+      // A surface with no spelling of its own still goes through the one mechanism.
+      expect(error.messageFor({})).toContain(`/workflow ${verb} child-9`);
+    }
   });
 
   test('a block pointer with no child id says so instead of naming <unknown>', () => {

@@ -2496,8 +2496,10 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { error?: string; childRunId?: string };
     expect(body.error).toContain('child-xyz');
+    // The run to act on is data, not something a client has to read out of the prose.
+    expect(body.childRunId).toBe('child-xyz');
     // No gate mutation happened.
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
@@ -2835,8 +2837,9 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(400);
-    const body = (await response.json()) as { error?: string };
+    const body = (await response.json()) as { error?: string; childRunId?: string };
     expect(body.error).toContain('child-abc');
+    expect(body.childRunId).toBe('child-abc');
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
   });
 
@@ -2995,6 +2998,34 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
       headers: { 'Content-Type': 'application/json' },
     });
     expect(response.status).toBe(400);
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
+  // respond shares `pausedGateBlocker` with approve/reject but passes its own advice
+  // string, so the machine-usable redirect is asserted on this route too.
+  test('returns 400 redirecting to the child when the parent is blocked on a sub-run', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce({
+      ...MOCK_PAUSED_RUN,
+      id: 'parent-blocked-3',
+      metadata: {
+        approval: {
+          type: 'child_workflow',
+          nodeId: 'sub',
+          message: 'Blocked on sub-run',
+          childRunId: 'child-def',
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/parent-blocked-3/respond', {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'revise' }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error?: string; childRunId?: string };
+    expect(body.error).toContain('child-def');
+    expect(body.childRunId).toBe('child-def');
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
   });
 

@@ -14,6 +14,7 @@ import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-exec
  * Operations throw on errors; callers catch and format for their platform.
  */
 import { createLogger, captureApprovalResolved } from '@archon/paths';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
   isApprovalContext,
@@ -379,6 +380,37 @@ function unreadableGateMessage(
   }
 }
 
+/**
+ * A parent blocked on a `workflow:` sub-run has no gate of its own — the decision lives
+ * on the child. Typed rather than a prose string because the redirect command is spelled
+ * differently on every surface: `message` names the child run but never a command, and
+ * `messageFor` adds the command the rendering surface actually accepts.
+ */
+export class ChildRunRedirectError extends Error {
+  constructor(
+    readonly parentRunId: string,
+    readonly childRunId: string,
+    readonly nodeId: string,
+    readonly action: 'approve' | 'reject'
+  ) {
+    super(
+      `Run ${parentRunId} is paused waiting on sub-run ${childRunId} ` +
+        `('workflow:' node '${nodeId}'). ` +
+        (action === 'approve'
+          ? 'Approve or reject the child run instead.'
+          : 'Reject the child run instead, or abandon this run to discard the whole tree.')
+    );
+    this.name = 'ChildRunRedirectError';
+  }
+
+  /** The same refusal with the redirect command spelled for `surface`. */
+  messageFor(surface: WorkflowCommandSurface): string {
+    const label = this.action === 'approve' ? 'Approve' : 'Reject';
+    const command = spellWorkflowCommand(surface, `${this.action} ${this.childRunId}`);
+    return `${this.message} ${label} it by run id: \`${command}\``;
+  }
+}
+
 export function assertApprovable(run: WorkflowRun): ApprovalContext {
   if (run.status !== 'paused') {
     throw new Error(
@@ -406,11 +438,7 @@ export function assertApprovable(run: WorkflowRun): ApprovalContext {
       // parent's workflow node with empty output (the child's real output is then
       // discarded on resume) and orphan the still-paused child. Redirect the
       // operator to the child run, where the actual gate lives.
-      throw new Error(
-        `Run ${run.id} is paused waiting on sub-run ${attention.childRunId} ` +
-          `('workflow:' node '${attention.nodeId}'). Approve or reject the child run instead` +
-          `: /workflow approve ${attention.childRunId}`
-      );
+      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'approve');
     case 'action_required':
       throw new Error(
         `Run ${run.id} is paused for an outside action. Complete it, then resume the run; ` +
@@ -472,12 +500,7 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
       // gate — cancelling the parent here would silently orphan the still-paused
       // child run. Reject the child (its own gate) or abandon the parent (which
       // cascade-cancels the subtree) instead.
-      throw new Error(
-        `Run ${run.id} is paused waiting on sub-run ${attention.childRunId} ` +
-          `('workflow:' node '${attention.nodeId}'). Reject the child run instead` +
-          `: /workflow reject ${attention.childRunId}` +
-          ' To discard the whole tree, abandon this run.'
-      );
+      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'reject');
     case 'unreadable':
       // The one deliberate divergence from approve: unreadable gate METADATA is
       // still rejectable (see this function's doc comment). An unrecognized gate

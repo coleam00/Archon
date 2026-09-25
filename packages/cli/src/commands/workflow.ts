@@ -153,6 +153,7 @@ import {
   abandonWorkflow,
   cancelWorkflow,
   CancelRefusedError,
+  ChildRunRedirectError,
   type CancelWorkflowResult,
   describeAbandonOwner,
   getWorkflowStatus,
@@ -173,6 +174,8 @@ import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import * as userDb from '@archon/core/db/users';
 import * as git from '@archon/git';
 import { CLIAdapter } from '../adapters/cli-adapter';
+import { spellWorkflowCommand } from '@archon/workflows/deps';
+import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { registerOwnedRunTermination } from '../utils/owned-run-termination';
 import { DETACHED_RUN_FAILED_EXIT_CODE, WorkflowRunFailedError } from '../utils/workflow-exit-code';
@@ -3707,6 +3710,8 @@ export interface NodeSummary {
   durationMs?: number;
   outputPreview?: string;
   error?: string;
+  /** Set when the failure is "a live child run blocks this node"; abandoning it unblocks. */
+  blockedOnChildRunId?: string;
   cause?: SkipCause;
   execution?: NodeExecutionMetadata;
 }
@@ -3798,6 +3803,9 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           durationMs:
             execution?.timing.durationMs ?? (started !== undefined ? endTime - started : undefined),
           error: record.data.error ?? 'Unknown error',
+          ...(record.data.blocked_on_child_run_id === undefined
+            ? {}
+            : { blockedOnChildRunId: record.data.blocked_on_child_run_id }),
           ...(execution === undefined ? {} : { execution }),
         });
         break;
@@ -3880,6 +3888,13 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
     }
     if (node.error !== undefined) {
       console.log(`        Error:  ${node.error}`);
+    }
+    if (node.blockedOnChildRunId !== undefined) {
+      const abandon = spellWorkflowCommand(
+        CLI_WORKFLOW_SURFACE,
+        `abandon ${node.blockedOnChildRunId}`
+      );
+      console.log(`        Abandon: ${abandon}`);
     }
   }
 }
@@ -4764,12 +4779,40 @@ export async function workflowRunsCommand(
 }
 
 /**
+ * How this surface states a refusal. Core keeps a child-run redirect free of any command
+ * spelling, so the command is written here, where `archon workflow …` is what the operator
+ * can actually type.
+ */
+function cliRefusalText(error: unknown): string {
+  return error instanceof ChildRunRedirectError
+    ? error.messageFor(CLI_WORKFLOW_SURFACE)
+    : (error as Error).message;
+}
+
+/**
+ * Run a gate operation, re-throwing a child-run redirect with this surface's spelling.
+ * The human path reports an error by propagating it, so the spelling has to be attached
+ * before it leaves. Every other error passes through untouched, keeping the type the exit
+ * code is derived from.
+ */
+async function spelledForCli<T>(op: () => Promise<T>): Promise<T> {
+  try {
+    return await op();
+  } catch (error) {
+    if (error instanceof ChildRunRedirectError) {
+      throw new Error(cliRefusalText(error), { cause: error });
+    }
+    throw error;
+  }
+}
+
+/**
  * Emit the standard `{ ok: false }` error line for a `--json` write command
  * (approve/reject/abandon/resume). Centralizes the envelope so all four stay in
  * lockstep; never throws — in --json mode the JSON line IS the error surface.
  */
 function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
-  return writeJsonLine({ ok: false, runId, action, error: (error as Error).message });
+  return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
 }
 
 /**
@@ -4857,7 +4900,7 @@ async function runDetachedControlCommand(
   precheck: () => Promise<WorkflowRun>
 ): Promise<void> {
   try {
-    const run = await precheck();
+    const run = await spelledForCli(precheck);
     // The caller's --cwd, already resolved by cli.ts — NOT process.cwd(). The
     // appended --cwd is last-wins on the child's argv, so discarding it here
     // strands the child in the parent's directory (possibly outside any git
@@ -5255,7 +5298,7 @@ export async function workflowApproveCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await approveWorkflow(resolvedId, comment);
+  const result = await spelledForCli(() => approveWorkflow(resolvedId, comment));
 
   // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
   // above) is the one surface that records the decision without continuing.
@@ -5381,7 +5424,7 @@ export async function workflowRejectCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await rejectWorkflow(resolvedId, rejectText);
+  const result = await spelledForCli(() => rejectWorkflow(resolvedId, rejectText));
 
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -5521,7 +5564,7 @@ export async function workflowRespondCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await respondToWorkflow(resolvedId, decision, text);
+  const result = await spelledForCli(() => respondToWorkflow(resolvedId, decision, text));
 
   if (!result.workingPath) {
     throw new Error(

@@ -4177,6 +4177,11 @@ nodes:
   });
 
   it('a running fan-out child found on resume fails the node WITHOUT cancelling it (C1)', async () => {
+    // Mirrors the Slack adapter: its registered slash command is `/archon-workflow`.
+    const platform: IWorkflowPlatform = {
+      ...makePlatform(),
+      formatWorkflowCommand: (command: string) => `/archon-workflow ${command}`,
+    };
     await writeWorkflow('fan-child-echo2', fanChildEcho.replace('fan-child', 'fan-child-echo2'));
     await writeWorkflow(
       'fan-c1',
@@ -4226,16 +4231,9 @@ nodes:
     await store.updateWorkflowRun(child.id, { status: 'running' });
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
-    const r = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db',
-      { ...hydrated! }
-    );
+    const r = await executeWorkflow(deps, platform, 'conv-plat', cwd, parent, 'goal', 'conv-db', {
+      ...hydrated!,
+    });
 
     expect(r.success).toBe(false);
     // The ambiguous running child is NOT autonomously cancelled (CLAUDE.md lifecycle rule).
@@ -4243,8 +4241,25 @@ nodes:
     const nodeFailed = [...store.events]
       .reverse()
       .find(e => e.event_type === 'node_failed' && e.step_name === 'work');
-    expect(String(nodeFailed?.data?.error)).toContain('may still be running');
-    expect(String(nodeFailed?.data?.error)).not.toContain('gate');
+    const failureText = String(nodeFailed?.data?.error);
+    expect(failureText).toContain('may still be running');
+    expect(failureText).not.toContain('gate');
+
+    // #3488: one string used to serve both the live notice and the stored failure, so
+    // every surface got whichever command spelling was hard-coded. The stored record now
+    // names the run and carries it as data; the notice spells the command for its own
+    // platform.
+    expect(failureText).toContain(child.id);
+    expect(failureText).not.toContain('/workflow ');
+    expect(failureText).not.toContain('archon workflow ');
+    expect(nodeFailed?.data?.blocked_on_child_run_id).toBe(child.id);
+
+    const notices = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(([, message]) => String(message))
+      .join('\n');
+    expect(notices).toContain(`/archon-workflow abandon ${child.id}`);
+    expect(notices.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+    expect(notices).not.toContain('archon workflow ');
   });
 
   it('an out-of-range child_index (shrunk items) is warned + a live orphan cancelled (I2)', async () => {

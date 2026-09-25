@@ -92,7 +92,7 @@ const mockRespond = mock<
 
 // The shared cancel is proven in workflow-operations; this proves the tool routes to it.
 // Capture the real refusal class before mock.module replaces the module.
-import { CancelRefusedError } from '../operations/workflow-operations';
+import { CancelRefusedError, ChildRunRedirectError } from '../operations/workflow-operations';
 const mockCancel = mock((_id: string) =>
   Promise.resolve({
     kind: 'stopped' as const,
@@ -107,6 +107,7 @@ mock.module('../operations/workflow-operations', () => ({
   abandonWorkflow: mockAbandon,
   cancelWorkflow: mockCancel,
   CancelRefusedError,
+  ChildRunRedirectError,
   describeAbandonOwner: mockDescribeAbandonOwner,
   approveWorkflow: mockApprove,
   rejectWorkflow: mockReject,
@@ -484,6 +485,20 @@ describe('manage_run — destructive confirmation gate', () => {
     });
     expect(out).toContain('Approved');
     expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'lgtm');
+  });
+
+  test('a child-run redirect is spelled for the calling surface, not the chat default', async () => {
+    mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+    mockApprove.mockRejectedValueOnce(
+      new ChildRunRedirectError('r1abcdef-1234', 'child-77', 'sub', 'approve')
+    );
+    const tool = buildManageRunTool({
+      codebaseId: CODEBASE_ID,
+      surface: { formatWorkflowCommand: command => `/archon-workflow ${command}` },
+    });
+    const out = await tool.handler({ action: 'approve', runId: 'r1abcdef', confirm: true });
+    expect(out).toContain('/archon-workflow approve child-77');
+    expect(out.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
   });
 
   test('approve with confirm and no message on an interactive loop reports the finalize semantics (#2074)', async () => {

@@ -1943,7 +1943,7 @@ export interface paths {
             [name: string]: unknown;
           };
           content: {
-            'application/json': components['schemas']['Error'];
+            'application/json': components['schemas']['GateRefusal'];
           };
         };
         /** @description Not found */
@@ -2012,7 +2012,7 @@ export interface paths {
             [name: string]: unknown;
           };
           content: {
-            'application/json': components['schemas']['Error'];
+            'application/json': components['schemas']['GateRefusal'];
           };
         };
         /** @description Not found */
@@ -2081,7 +2081,7 @@ export interface paths {
             [name: string]: unknown;
           };
           content: {
-            'application/json': components['schemas']['Error'];
+            'application/json': components['schemas']['GateRefusal'];
           };
         };
         /** @description Not found */
@@ -4427,6 +4427,9 @@ export interface components {
     WorkflowRunActionResponse: {
       success: boolean;
       message: string;
+    };
+    GateRefusal: components['schemas']['Error'] & {
+      childRunId?: string;
     };
     ApproveWorkflowRunBody: {
       comment?: string;

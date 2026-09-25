@@ -162,7 +162,14 @@ export const executionDiagnosticsSchema = z.object({
   sessionForkRequested: z.boolean().optional(),
   sessionForked: z.boolean().optional(),
   backgroundTasksIncomplete: z.array(z.string()).optional(),
+  /** The child run this node ran, or is suspended on. */
   childRunId: z.string().optional(),
+  /**
+   * The node FAILED because this child run is still live and ownership is ambiguous;
+   * abandoning that run is what unblocks the parent. Distinct from `childRunId` so a
+   * reader never turns "the child this node ran" into advice to abandon it.
+   */
+  blockedOnChildRunId: z.string().optional(),
   fanOut: z.boolean().optional(),
   identity: z.string().optional(),
   ordinal: z.number().optional(),
