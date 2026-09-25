@@ -683,7 +683,7 @@ export type WorkflowCancelReason =
 
 /**
  * Why the first failed node failed, as recorded where the failure happened.
- * `fatal`/`transient`/`unknown` classify a provider error; the rest are
+ * `fatal`/`transient`/`rate_limited`/`unknown` classify a provider error; the rest are
  * engine-detected causes. Mirrored from `NodeFailureKind` in `@archon/workflows`.
  * A fixed enum — raw error text never leaves the machine.
  */
