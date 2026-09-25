@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
   checkFailureClasses,
+  checkSettled,
   runProviderConformance,
   type ProviderFailureCase,
+  type ProviderTurnCase,
 } from './conformance';
 
 function turn(...chunks: unknown[]): () => AsyncIterable<unknown> {
@@ -17,13 +19,26 @@ const conforming: ProviderFailureCase = {
   evidence: 'HTTP 401',
   run: turn(
     { type: 'assistant', content: 'partial' },
-    { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } }
+    { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } },
+    { type: 'settled' }
+  ),
+};
+
+const settlingTurn: ProviderTurnCase = {
+  name: 'background work',
+  run: turn(
+    { type: 'result' },
+    { type: 'background_tasks', tasks: [] },
+    { type: 'result' },
+    { type: 'settled' }
   ),
 };
 
 describe('failure-class conformance', () => {
   test('a provider that reports the expected class conforms', async () => {
-    expect(await runProviderConformance({ failureCases: [conforming] })).toEqual([]);
+    expect(
+      await runProviderConformance({ failureCases: [conforming], turns: [settlingTurn] })
+    ).toEqual([]);
   });
 
   test.each<[string, ProviderFailureCase, string]>([
@@ -101,5 +116,48 @@ describe('failure-class conformance', () => {
     const violations = await checkFailureClasses([failureCase]);
     expect(violations).toHaveLength(1);
     expect(violations[0]).toStartWith(violation);
+  });
+});
+
+describe('settled conformance', () => {
+  test.each<[string, ProviderTurnCase, string]>([
+    [
+      'no settled',
+      { ...settlingTurn, run: turn({ type: 'result' }) },
+      'background work: expected one settled, got 0',
+    ],
+    [
+      'two settled',
+      { ...settlingTurn, run: turn({ type: 'result' }, { type: 'settled' }, { type: 'settled' }) },
+      'background work: expected one settled, got 2',
+    ],
+    [
+      'settled before the final result',
+      { ...settlingTurn, run: turn({ type: 'result' }, { type: 'settled' }, { type: 'result' }) },
+      'background work: settled is not the last chunk',
+    ],
+    [
+      'settled with no result',
+      { ...settlingTurn, run: turn({ type: 'settled' }) },
+      'background work: settled arrives before any result',
+    ],
+  ])('flags %s', async (_label, turnCase, violation) => {
+    const violations = await checkSettled([turnCase]);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toStartWith(violation);
+  });
+
+  test('a failed turn must settle too', async () => {
+    const unsettledFailure: ProviderFailureCase = {
+      ...conforming,
+      run: turn({
+        type: 'result',
+        isError: true,
+        failure: { class: 'auth', evidence: 'HTTP 401' },
+      }),
+    };
+    expect(
+      await runProviderConformance({ failureCases: [unsettledFailure], turns: [settlingTurn] })
+    ).toEqual(['expired key: expected one settled, got 0']);
   });
 });

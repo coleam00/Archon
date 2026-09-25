@@ -854,7 +854,8 @@ export class CodexProvider implements IAgentProvider {
 
   /**
    * One call is one Codex turn. A failure ends in a `result` carrying a typed `failure`,
-   * and the engine decides whether to try again. Only cancellation throws.
+   * and the engine decides whether to try again. Every turn ends in `settled`. Only
+   * cancellation throws.
    */
   async *sendQuery(
     prompt: string,
@@ -969,7 +970,7 @@ export class CodexProvider implements IAgentProvider {
             if (chunk.type === 'result') resultReported = true;
             yield chunk;
           }
-          return;
+          break;
         } catch (error) {
           const err = error as Error;
           if (
@@ -1026,13 +1027,16 @@ export class CodexProvider implements IAgentProvider {
       getLog().error({ err, resultReported }, 'query_error');
       // The turn already reported its one result; an error while the subprocess shut
       // down afterwards does not change that outcome.
-      if (resultReported) return;
-      // The model-access advice is written for the operator; the vendor text follows it.
-      const evidence = isModelAccessError(err.message)
-        ? `${buildModelAccessMessage(requestOptions?.model)}\n\n${err.message}`
-        : err.message;
-      yield codexFailureResult('codex_query_failed', evidence, threadId);
+      if (!resultReported) {
+        // The model-access advice is written for the operator; the vendor text follows it.
+        const evidence = isModelAccessError(err.message)
+          ? `${buildModelAccessMessage(requestOptions?.model)}\n\n${err.message}`
+          : err.message;
+        yield codexFailureResult('codex_query_failed', evidence, threadId);
+      }
     }
+    // A Codex turn has no background work: once its result is in, nothing more runs.
+    yield { type: 'settled' };
   }
 
   getType(): string {

@@ -61,6 +61,7 @@ mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
 
+// Stream-shape tests below drop the trailing `settled` chunk; it has its own tests.
 import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { CodexProvider, resetCodexSingleton } from './provider';
 
@@ -208,7 +209,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test prompt', testDir, 'existing-thread', {
           nodeConfig: { nodeId: 'investigate', mcp: 'mcp.json' },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
       } finally {
         await rm(testDir, { recursive: true, force: true });
@@ -262,7 +263,7 @@ describe('CodexProvider', () => {
       for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
         nodeConfig: { nodeId: 'investigate' },
       })) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toContainEqual({ type: 'assistant', content: 'already emitted' });
@@ -309,7 +310,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(2);
@@ -330,7 +331,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toEqual([{ type: 'result', sessionId: 'new-thread-id' }]);
@@ -347,7 +348,7 @@ describe('CodexProvider', () => {
       });
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
       expect(chunks).toEqual([
         {
@@ -377,7 +378,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('remember X', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[chunks.length - 1]).toEqual({
@@ -398,7 +399,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('x', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks.find(c => c.type === 'result')).toMatchObject({
@@ -419,7 +420,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('x', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks.find(c => c.type === 'result')).toMatchObject({
@@ -443,7 +444,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('x', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks.find(c => c.type === 'result')).toMatchObject({
@@ -475,7 +476,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({ type: 'tool', toolName: 'npm test', toolCallId: 'cmd-1' });
@@ -512,7 +513,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[1]).toEqual({
@@ -544,7 +545,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -569,7 +570,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({ type: 'thinking', content: 'Let me think about this...' });
@@ -592,7 +593,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -628,7 +629,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -664,7 +665,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(3); // todoV1 + todoV2 + result
@@ -699,7 +700,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -726,7 +727,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -752,7 +753,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -778,7 +779,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -837,7 +838,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -903,7 +904,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -967,7 +968,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -1008,7 +1009,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(3);
@@ -1062,7 +1063,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace', 'existing-thread')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(mockResumeThread).toHaveBeenCalledWith(
@@ -1097,7 +1098,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace', 'bad-thread-id')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(mockResumeThread).toHaveBeenCalled();
@@ -1137,7 +1138,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
@@ -1252,7 +1253,7 @@ describe('CodexProvider', () => {
       for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
         outputFormat: { type: 'json_schema', schema },
       })) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       // OpenAI strict-mode requires additionalProperties:false on every object,
@@ -1300,7 +1301,7 @@ describe('CodexProvider', () => {
           },
         },
       })) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(mockRunStreamed).toHaveBeenCalledWith(
@@ -1522,7 +1523,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test prompt', testDir, undefined, {
           nodeConfig: { mcp: 'mcp.json' },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         expect(chunks[0]).toEqual({
@@ -1580,7 +1581,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       // Only first message and result should be yielded
@@ -1606,7 +1607,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(mockLogger.debug).toHaveBeenCalledWith(
@@ -1664,7 +1665,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks.filter(chunk => chunk.type === 'tool')).toHaveLength(1);
@@ -1694,7 +1695,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks.some(chunk => chunk.type === 'tool')).toBe(false);
@@ -1725,7 +1726,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1750,7 +1751,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1776,7 +1777,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1805,7 +1806,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1837,7 +1838,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test', testDir, undefined, {
           nodeConfig: { mcp: 'mcp.json' },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         expect(chunks[0]).toEqual({
@@ -1863,7 +1864,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1890,7 +1891,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1920,7 +1921,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1998,7 +1999,7 @@ describe('CodexProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       // Only the result should be yielded
@@ -2177,7 +2178,9 @@ describe('CodexProvider', () => {
         );
 
         const chunks: MessageChunk[] = [];
-        for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+        for await (const chunk of client.sendQuery('test', '/workspace')) {
+          if (chunk.type !== 'settled') chunks.push(chunk);
+        }
 
         expect(chunks.filter(c => c.type === 'result')).toHaveLength(1);
         expect(chunks.at(-1)).toMatchObject({
@@ -2222,7 +2225,7 @@ describe('CodexProvider', () => {
           for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
             abortSignal: controller.signal,
           })) {
-            chunks.push(chunk);
+            if (chunk.type !== 'settled') chunks.push(chunk);
           }
         } catch (e) {
           error = e as Error;
@@ -2231,7 +2234,7 @@ describe('CodexProvider', () => {
         expect(chunks.filter(c => c.type === 'result')).toHaveLength(0);
       });
 
-      test('conforms to the provider contract’s failure-class check', async () => {
+      test('conforms to the provider contract', async () => {
         function turn(run: () => void): () => AsyncIterable<unknown> {
           return () => {
             run();
@@ -2239,6 +2242,19 @@ describe('CodexProvider', () => {
           };
         }
         const violations = await runProviderConformance({
+          turns: [
+            {
+              name: 'completed turn',
+              run: turn(() =>
+                mockRunStreamed.mockResolvedValue({
+                  events: (async function* () {
+                    yield { type: 'item.completed', item: { type: 'agent_message', text: 'hi' } };
+                    yield { type: 'turn.completed', usage: defaultUsage };
+                  })(),
+                })
+              ),
+            },
+          ],
           failureCases: [
             {
               name: 'turn.failed',
@@ -2283,7 +2299,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
           outputFormat: { type: 'json_schema', schema: { type: 'object' } },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         const resultChunk = chunks.find(c => c.type === 'result');
@@ -2308,7 +2324,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
           outputFormat: { type: 'json_schema', schema: { type: 'object' } },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         const systemChunk = chunks.find(c => c.type === 'system');
@@ -2335,7 +2351,7 @@ describe('CodexProvider', () => {
 
         const chunks = [];
         for await (const chunk of client.sendQuery('test', '/tmp')) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         const resultChunk = chunks.find(c => c.type === 'result');
@@ -2359,7 +2375,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
           nodeConfig: { output_format: { type: 'object' } },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         const resultChunk = chunks.find(c => c.type === 'result');
@@ -2393,7 +2409,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
           outputFormat: { type: 'json_schema', schema: { type: 'object' } },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         const assistantChunks = chunks.filter(c => c.type === 'assistant');
@@ -2432,7 +2448,7 @@ describe('CodexProvider', () => {
         for await (const chunk of client.sendQuery('test', '/tmp', undefined, {
           nodeConfig: { output_format: { type: 'object' } },
         })) {
-          chunks.push(chunk);
+          if (chunk.type !== 'settled') chunks.push(chunk);
         }
 
         const resultChunk = chunks.find(c => c.type === 'result');
@@ -2523,7 +2539,7 @@ describe('sendQuery decomposition behaviors', () => {
 
     const chunks = [];
     for await (const chunk of client.sendQuery('test', '/workspace')) {
-      chunks.push(chunk);
+      if (chunk.type !== 'settled') chunks.push(chunk);
     }
 
     // The todo should appear on the retry attempt (not suppressed by dedup from attempt 1)
@@ -2561,7 +2577,7 @@ describe('sendQuery decomposition behaviors', () => {
     try {
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
       // Give the event loop a tick for any deferred error events.
