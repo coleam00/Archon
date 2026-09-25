@@ -9101,6 +9101,7 @@ describe('resolveDetachedRunEncryptionEnv', () => {
       ARCHON_DOCKER: '',
       WORKSPACE_PATH: '',
       HOME: '',
+      USERPROFILE: '',
     });
     expect(
       resolveDetachedRunEncryptionEnv(
@@ -9113,6 +9114,7 @@ describe('resolveDetachedRunEncryptionEnv', () => {
       ARCHON_DOCKER: '',
       WORKSPACE_PATH: '',
       HOME: '',
+      USERPROFILE: '',
     });
     expect(resolveDetachedRunEncryptionEnv({ ARCHON_HOME: '~/.archon-custom' }, '/parent')).toEqual(
       {
@@ -9121,6 +9123,7 @@ describe('resolveDetachedRunEncryptionEnv', () => {
         ARCHON_DOCKER: '',
         WORKSPACE_PATH: '',
         HOME: '',
+        USERPROFILE: '',
       }
     );
     const dockerHandoff = resolveDetachedRunEncryptionEnv(
@@ -9133,6 +9136,7 @@ describe('resolveDetachedRunEncryptionEnv', () => {
       ARCHON_DOCKER: 'true',
       WORKSPACE_PATH: '',
       HOME: '',
+      USERPROFILE: '',
     });
     expect(isDocker(dockerHandoff)).toBe(true);
     expect(getArchonHome(dockerHandoff)).toBe('/.archon');

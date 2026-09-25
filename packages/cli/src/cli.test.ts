@@ -28,17 +28,34 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 const repoRoot = join(import.meta.dir, '..', '..', '..');
 
 describe('forge user trust boundary', () => {
+  it('refuses to start when the repo .archon/.env sets ARCHON_HOME', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-repo-home-refused-'));
+    const repo = join(root, 'repo');
+    const repoEnv = join(repo, '.archon', '.env');
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    writeFileSync(repoEnv, `ARCHON_HOME=${join(root, 'repo-selected-home')}\n`);
+    try {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, 'version'], {
+        cwd: repo,
+        encoding: 'utf8',
+        env: { ...process.env, ARCHON_HOME: join(root, 'home'), ARCHON_TELEMETRY_DISABLED: '1' },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain(`${repoEnv} sets ARCHON_HOME`);
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+
   it('keeps config and executable discovery user-scoped while accepting a repo credential', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-forge-trust-'));
     const repo = join(root, 'repo');
     const trustedHome = join(root, 'trusted-home');
-    const repoSelectedHome = join(root, 'repo-selected-home');
     const plugin = join(root, 'plugin.ts');
     const trustedMarker = join(root, 'trusted-marker');
-    const repoMarker = join(root, 'repo-marker');
     mkdirSync(join(repo, '.archon'), { recursive: true });
     mkdirSync(trustedHome, { recursive: true });
-    mkdirSync(repoSelectedHome, { recursive: true });
     spawnSync('git', ['init', '-q', '.'], { cwd: repo });
     writeFileSync(
       plugin,
@@ -56,14 +73,7 @@ describe('forge user trust boundary', () => {
       join(trustedHome, 'config.yaml'),
       `forge:\n  plugins:\n    - plugin: trusted\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(trustedMarker)}]\n  hosts:\n    forge.example: trusted\n`
     );
-    writeFileSync(
-      join(repoSelectedHome, 'config.yaml'),
-      `forge:\n  plugins:\n    - plugin: trusted\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(repoMarker)}]\n  hosts:\n    forge.example: trusted\n`
-    );
-    writeFileSync(
-      join(repo, '.archon', '.env'),
-      `ARCHON_HOME=${repoSelectedHome}\nPATH=${root}\nHOME=${root}\nFORGE_SECRET=repo-secret\n`
-    );
+    writeFileSync(join(repo, '.archon', '.env'), 'FORGE_SECRET=repo-secret\n');
 
     try {
       const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
@@ -87,7 +97,6 @@ describe('forge user trust boundary', () => {
         ok: true,
         result: { value: { revision: 'trusted-revision' } },
       });
-      expect(existsSync(repoMarker)).toBe(false);
       await expect(Bun.file(trustedMarker).text()).resolves.toBe('repo-secret');
     } finally {
       await removeTempTree(root);
@@ -235,13 +244,7 @@ describe('workflow run config argument', () => {
         'WORKSPACE_PATH=/workspace\n' +
         'HOME=/root\n'
     );
-    writeFileSync(
-      join(repo, '.archon', '.env'),
-      `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n` +
-        'ARCHON_DOCKER=true\n' +
-        'WORKSPACE_PATH=/workspace\n' +
-        'HOME=/root\n'
-    );
+    writeFileSync(join(repo, '.archon', '.env'), `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n`);
 
     const savedKey = process.env.TOKEN_ENCRYPTION_KEY;
     const savedArchonHome = process.env.ARCHON_HOME;
@@ -300,14 +303,7 @@ describe('workflow run config argument', () => {
         'WORKSPACE_PATH=\n' +
         `HOME=${repo}\n`
     );
-    writeFileSync(
-      join(repo, '.archon', '.env'),
-      `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n` +
-        `ARCHON_HOME=${join(repo, 'wrong-home')}\n` +
-        'ARCHON_DOCKER=false\n' +
-        'WORKSPACE_PATH=\n' +
-        `HOME=${repo}\n`
-    );
+    writeFileSync(join(repo, '.archon', '.env'), `TOKEN_ENCRYPTION_KEY=${'22'.repeat(32)}\n`);
 
     const stripBootUrl = pathToFileURL(
       join(repoRoot, 'packages', 'paths', 'src', 'strip-cwd-env-boot.ts')
@@ -338,6 +334,7 @@ describe('workflow run config argument', () => {
             ARCHON_DOCKER: 'true',
             WORKSPACE_PATH: '/workspace',
             HOME: '/root',
+            USERPROFILE: '',
           },
         }
       );
@@ -354,6 +351,7 @@ describe('workflow run config argument', () => {
           ARCHON_DOCKER: 'true',
           WORKSPACE_PATH: '/workspace',
           HOME: '/root',
+          USERPROFILE: '',
         },
       });
     } finally {

@@ -43,8 +43,9 @@ review__publish:
   action: none
   findings_summary: "stub: the change itself is clean"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-validate__validate:
-  green: false
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__run: { status: red, summary: "stub: a check in the project gate failed" }
+validate__classify:
   red_cause: inherited
   summary: "stub: the same inherited break, still red on the base"
 ci-probe: '{"state":"pending","detail":"stub: 1 check still running"}'

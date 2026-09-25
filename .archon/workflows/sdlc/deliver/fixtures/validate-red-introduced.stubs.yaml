@@ -39,12 +39,14 @@ review__publish:
   action: none
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-validate__validate:
-  green: false
+# The real runner executes a check that exits 1, so it reports red and classify
+# is reached; only the classification itself is stubbed.
+validate__discover: { checks: [{ name: "project gate", argv: ["bun", "-e", "process.exitCode = 1"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__classify:
   red_cause: introduced
   summary: "stub: the full gate caught two type errors this change added"
 fixture:
   expect: failed
   fail-node: gate-validated
-  reached: [pr__pr, review__synthesize]
+  reached: [pr__pr, review__synthesize, validate__run, validate__classify, validate__result]
 exec-code: true

@@ -627,6 +627,8 @@ Archon keys env loading on **directory ownership, not filename**. `.archon/` (at
 2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
 3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
+A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
+
 **Operator log lines** (stderr, emitted only when there is something to report):
 
 ```
@@ -643,7 +645,7 @@ The `[archon] loaded N keys from …` lines are suppressed by default (they woul
 **Which file should I use?**
 
 - **`~/.archon/.env`** — user-wide defaults (your personal `SLACK_WEBHOOK`, `DATABASE_URL`, etc.). Applies to every project.
-- **`<cwd>/.archon/.env`** — per-project overrides. Different webhook per repo, different DB per environment, etc.
+- **`<cwd>/.archon/.env`** — per-project overrides. Different webhook per repo, different DB per environment, etc. It cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`.
 - **`<cwd>/.env`** — **your app's** env file. Archon does not read this file; it strips the keys at boot so they do not leak into Archon's process.
 
 ```bash

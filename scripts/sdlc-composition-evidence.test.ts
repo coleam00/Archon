@@ -157,6 +157,24 @@ describe('three-tree project gate evidence', () => {
     expect(result.verdict.red_cause).toBe('');
   });
 
+  it("runs the gate without the run's identity", async () => {
+    const f = fixture();
+    f.request.check.argv = [
+      process.execPath,
+      '-e',
+      'process.exit(process.env.WORKFLOW_ID ? 1 : 0)',
+    ];
+    const prior = process.env.WORKFLOW_ID;
+    process.env.WORKFLOW_ID = 'run-123';
+    try {
+      const result = await compareComposition(f.cwd, f.artifacts, f.request);
+      expect(result.evidence.observations.map(o => o.exit_code)).toEqual([0, 0, 0]);
+    } finally {
+      if (prior === undefined) delete process.env.WORKFLOW_ID;
+      else process.env.WORKFLOW_ID = prior;
+    }
+  });
+
   it('refuses a clean-tree verdict if the gate mutates a checkout, even with exit zero', async () => {
     const f = fixture();
     f.request.check.argv = [
@@ -302,9 +320,11 @@ it('keeps the validation producer schemas and script vocabulary in agreement', (
     validate.returns,
   ]);
   const ordinary = VALIDATION_RED_CAUSES.filter(cause => cause !== 'interaction');
+  // Ordinary validation's result script derives green ('') and `incomplete` from
+  // exit statuses; classify declares only the causes of a check that failed.
   expect(
-    validate.nodes.find(n => n.id === 'validate')!.output_format!.properties.red_cause.enum
-  ).toEqual(ordinary);
+    validate.nodes.find(n => n.id === 'classify')!.output_format!.properties.red_cause.enum
+  ).toEqual(ordinary.filter(cause => cause !== 'incomplete' && cause !== ''));
   expect(
     implement.nodes.find(n => n.id === 'implement')!.output_format!.properties.red_cause.enum
   ).toEqual(ordinary);

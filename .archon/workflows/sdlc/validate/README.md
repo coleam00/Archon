@@ -1,13 +1,34 @@
 # Validation and composition evidence
 
 `archon-validate` normally discovers and runs the project's checks on the current
-checkout. Its `scope` input narrows that ordinary path.
+checkout. Its `scope` input narrows that ordinary path, which has three steps:
 
-When ordinary validation stops before every applicable check runs (a usage limit,
-a killed process, a gate that cannot run) and no check that ran failed, it declares
-`green: false` with `red_cause: incomplete`. SDLC delivery refuses that result as
-unfinished rather than red; the action is to resume the run. The comparison path
-never declares `incomplete`.
+1. `discover` (agent) reads the repository and declares the checks to run, in the
+   project's own order, as argv lists. It prefers an aggregate gate script over its
+   parts, puts a locked-mode install first when dependencies are missing, and lists
+   any untracked run scaffolding under `.archon/` that the gate would refuse.
+2. `run` (script) runs those checks with no agent involved, so a gate that takes
+   longer than an agent's shell tool allows still finishes. It stops at the first
+   failing check and writes `validation.md`: each command, its exit status, how long
+   it took, and the output tail of a failure. Full output stays in `validation/`.
+   The checks run without the node's run contract (`WORKFLOW_ID`, `ARTIFACTS_DIR`,
+   `INPUTS_*` and the rest): they are the project's gate, not part of the run.
+3. `classify` (agent) runs only when a check failed. It decides whether the change
+   caused it (`introduced`), the base already had it (`inherited`) or the machine
+   did (`environment`).
+
+Green comes from exit statuses alone: every declared check exited 0. When no check
+failed but not every check ran, the result is `green: false` with
+`red_cause: incomplete`. That happens when a check cannot start, or when the `run`
+node's timeout stops the gate. On that timeout the runner kills the running check's
+whole process tree, restores anything it moved aside, and records the stop in
+`validation.md`. On Windows, or after SIGKILL, the script gets no signal it can
+catch: the check's process tree may outlive the timeout, and anything moved aside
+stays in the run's artifacts until the next attempt of the run puts it back before
+it starts. Restoring never overwrites a path the checkout has again; that moved
+copy stays in the artifacts, and `validation.md` names where. SDLC delivery refuses an incomplete result as unfinished rather
+than red; the action is to resume the run. The comparison path never declares
+`incomplete`.
 
 For an existing workflow that must test a composition, pass `comparison` as the path
 to an explicitly authored JSON request. This selects a deterministic script path;

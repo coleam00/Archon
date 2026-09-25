@@ -45,10 +45,8 @@ review__publish:
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-validate__validate:
-  green: true
-  red_cause: ""
-  summary: "stub: full gate green"
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-fix__implement:

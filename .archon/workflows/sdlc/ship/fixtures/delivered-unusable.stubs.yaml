@@ -63,10 +63,8 @@ deliver__review__publish:
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__gate-ready: '{"gate":"ready"}'
-deliver__validate__validate:
-  green: true
-  red_cause: ""
-  summary: "stub: project gate green"
+deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+deliver__validate__run: { status: green, summary: "stub: project gate green" }
 deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 # The mutation: the flip printed something that is not a URL.
