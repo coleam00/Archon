@@ -452,8 +452,8 @@ function jsonError(description: string): {
  * A paused-gate refusal. `childRunId` is present when the answer is "act on the child run
  * instead", so a client reads the run to act on instead of parsing it out of the message.
  */
-const gateRefusalSchema = z
-  .object({ error: z.string(), childRunId: z.string().optional() })
+const gateRefusalSchema = errorSchema
+  .extend({ childRunId: z.string().optional() })
   .openapi('GateRefusal');
 type GateRefusal = z.infer<typeof gateRefusalSchema>;
 

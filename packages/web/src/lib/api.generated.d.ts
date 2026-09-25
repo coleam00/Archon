@@ -4428,8 +4428,7 @@ export interface components {
       success: boolean;
       message: string;
     };
-    GateRefusal: {
-      error: string;
+    GateRefusal: components['schemas']['Error'] & {
       childRunId?: string;
     };
     ApproveWorkflowRunBody: {
