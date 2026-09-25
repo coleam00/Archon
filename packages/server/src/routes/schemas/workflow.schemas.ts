@@ -11,6 +11,7 @@ import {
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
   workflowWaitContextSchema as engineWorkflowWaitContextSchema,
+  RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import { runStopReasonSchema as engineRunStopReasonSchema } from '@archon/workflows/schemas/run-terminal-reason';
 import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
@@ -135,7 +136,7 @@ export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopRea
 export const workflowRunMetadataSchema = z
   .object({
     wait: workflowWaitContextSchema.optional(),
-    stop_reason: runStopReasonSchema.optional(),
+    [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),
   })
   .catchall(z.unknown())
   .openapi('WorkflowRunMetadata');
