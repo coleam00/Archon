@@ -4,7 +4,8 @@
 #
 # The verdict below declares no `red_cause`, which makes this the guard for the
 # absence case: the gate refuses red nobody explained exactly as it refuses red the
-# change introduced. Declared-optional must never read as permission.
+# change introduced. Declared-optional must never read as permission. The comparison
+# producer is the one that can return red with an empty cause, so it stands in here.
 #
 # It also carries the operator-override direction of the errors lens: `classify`
 # says the diff has failure paths, the operator declared `errors: false`, and the
@@ -40,10 +41,12 @@ review__publish:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the review_ready binding and the corrections if_skipped default.
-validate__validate:
+validate__mode: '{"comparison":true}'
+validate__compare:
   green: false
   red_cause: ""
   summary: "stub: tests failed — 3 red"
+  evidence: null
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 classify:

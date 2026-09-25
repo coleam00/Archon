@@ -1,8 +1,13 @@
-validate:
-  green: true
-  red_cause: ""
-  summary: "project gate passed on the current checkout"
+# Ordinary validation: only discovery is stubbed. The real runner executes the
+# declared checks and every one exits 0, so the run is green and classify, which
+# has no stub, is never reached.
+discover:
+  checks:
+    - { name: "types", argv: ["bun", "-e", "console.log('types passed')"] }
+    - { name: "tests", argv: ["bun", "-e", "console.log('tests passed')"] }
+  quarantine: []
+  notes: "stub: the project's checks"
 fixture:
   expect: completed
-  reached: [mode, validate, result]
+  reached: [mode, discover, run, result]
 exec-code: true

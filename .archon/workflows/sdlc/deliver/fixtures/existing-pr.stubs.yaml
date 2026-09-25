@@ -61,10 +61,8 @@ recheck__publish:
 read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/42" }
 publish-pr-body: {}
 sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
-validate__validate:
-  green: true
-  red_cause: ""
-  summary: "stub: full gate green"
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
 ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'

@@ -52,7 +52,7 @@ export interface CompositionEvidence {
 
 /**
  * Every cause archon-validate's result can carry. Only the comparison script declares
- * `interaction`: the ordinary validate node's schema and implement's omit it. Only
+ * `interaction`: the ordinary path's classify schema and implement's omit it. Only
  * ordinary validation and implement declare `incomplete`: the comparison script
  * records an unfinished or unusable comparison as red with an empty cause.
  */

@@ -36,8 +36,9 @@ review__publish:
   action: none
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-validate__validate:
-  green: false
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__run: { status: red, summary: "stub: a check in the project gate failed" }
+validate__classify:
   red_cause: environment
   summary: ""
 fixture:
