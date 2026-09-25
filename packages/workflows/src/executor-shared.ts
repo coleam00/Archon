@@ -12,6 +12,7 @@ import type { IWorkflowPlatform, WorkflowDeps, WorkflowMessageMetadata } from '.
 import * as archonPaths from '@archon/paths';
 import {
   liveSourceRoots,
+  packagedWorkflowDirectory,
   workflowSourceConfigForRoots,
   type WorkflowSourceRoots,
 } from './workflow-source';
@@ -22,7 +23,7 @@ import { isValidCommandName } from './command-validation';
 import type { LoadCommandResult } from './schemas';
 import type { NodeFailureKind } from './schemas/node-execution';
 import { substituteInputRefs, type JsonValue } from './output-ref';
-import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
+import { parsePackagedResourceReference } from './packaged-workflow';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -465,25 +466,15 @@ export async function loadCommandPrompt(
       }
     }
 
-    let workflowsRoot: string;
-    if (packaged.owner.source === 'project') {
-      if (roots.project === null) {
-        return {
-          success: false,
-          reason: 'not_found',
-          message: `Packaged command not found (no project source): ${packaged.name}.md`,
-        };
-      }
-      workflowsRoot = join(roots.project, '.archon', 'workflows');
-    } else if (packaged.owner.source === 'global') {
-      workflowsRoot = roots.globalWorkflows;
-    } else {
-      workflowsRoot = roots.bundledWorkflows;
+    const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
+    if (workflowDir === null) {
+      return {
+        success: false,
+        reason: 'not_found',
+        message: `Packaged command not found (no ${packaged.owner.source} source): ${packaged.name}.md`,
+      };
     }
-    const filePath = join(
-      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
-      `${packaged.name}.md`
-    );
+    const filePath = join(workflowDir, 'commands', `${packaged.name}.md`);
     try {
       const content = await readFile(filePath, 'utf-8');
       if (!content.trim()) {

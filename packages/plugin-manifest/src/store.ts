@@ -9,7 +9,7 @@
  * Pack trees sit outside `installed/` on purpose: a pack may contain a file
  * named `receipt.json`, and the receipt walk must never read one as a receipt.
  */
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { describeIssues, pluginReceiptSchema, type PluginReceipt } from './index';
 
@@ -31,13 +31,16 @@ export function packTreePath(pluginsDir: string, id: string, commit: string): st
  */
 export async function readReceipts(pluginsDir: string): Promise<PluginReceipt[]> {
   const root = join(pluginsDir, 'installed');
-  let entries: string[];
+  // Existence is checked on its own: on Windows, Bun's recursive readdir reports a
+  // missing directory as EINVAL rather than ENOENT, which would turn "nothing
+  // installed" into an error on every install that never ran `archon plugin`.
   try {
-    entries = await readdir(root, { recursive: true });
+    await stat(root);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   }
+  const entries = await readdir(root, { recursive: true });
   const receipts: PluginReceipt[] = [];
   for (const entry of entries.sort()) {
     if (basename(entry) !== RECEIPT_FILE) continue;

@@ -48,6 +48,7 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/plugin-manifest": "workspace:*",
     "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "zod": "^4.4.3"
@@ -140,6 +141,12 @@
       "src/workflow-source.test.ts"
     ],
     [
+      "src/installed-packs.test.ts"
+    ],
+    [
+      "src/installed-packs-trusted-home.test.ts"
+    ],
+    [
       "src/workflow-source-binary.test.ts"
     ],
     [
@@ -157,6 +164,9 @@
       "src/terminal-record.test.ts",
       "src/run-terminal-telemetry.test.ts",
       "src/telemetry-conformance.test.ts"
+    ],
+    [
+      "src/telemetry-shape.test.ts"
     ],
     [
       "src/state-migration.test.ts",

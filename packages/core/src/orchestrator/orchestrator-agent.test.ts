@@ -269,6 +269,7 @@ const CAPTURED_SOURCE_ROOTS: WorkflowExecutor.WorkflowSourceRoots = {
   globalScripts: '/capture/global/scripts',
   bundledWorkflows: '/capture/bundled/workflows',
   bundledCommands: '/capture/bundled/commands/defaults',
+  installed: { kind: 'captured', captureRoot: '/capture' },
   kind: 'captured',
   anchor: {
     root: '/capture',
@@ -2506,6 +2507,7 @@ describe('workflow dispatch routing — interactive flag', () => {
           globalScripts: '/capture-branch/global/scripts',
           bundledWorkflows: '/capture-branch/bundled/workflows',
           bundledCommands: '/capture-branch/bundled/commands/defaults',
+          installed: { kind: 'captured', captureRoot: '/capture-branch' },
           kind: 'captured',
           anchor: {
             root: '/capture-branch',
@@ -5869,6 +5871,59 @@ describe('chat turn telemetry', () => {
       })
     );
   });
+
+  test('a routed turn whose workflow dispatch throws is not a failed chat turn', async () => {
+    const codebase = makeNamedCodebase('my-project');
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ codebase_id: null }))
+    );
+    mockListCodebases.mockImplementation(() => Promise.resolve([codebase]));
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({
+        workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+        errors: [],
+      })
+    );
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: '/invoke-workflow assist --project my-project' };
+      yield { type: 'result', sessionId: 'session-1' };
+    });
+    mockUpdateConversation.mockImplementationOnce(() =>
+      Promise.reject(new Error('database is locked'))
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'run assist on my project');
+
+    // Positive control: dispatch reached the write that failed.
+    expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
+      codebase_id: 'id-my-project',
+    });
+    expect(mockCaptureChatTurn).not.toHaveBeenCalled();
+  });
+
+  for (const mode of ['stream', 'batch'] as const) {
+    test(`captures exactly one failed chat turn when the provider throws mid-turn (${mode})`, async () => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ codebase_id: null }))
+      );
+      mockSendQuery.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'partial' };
+        throw new Error('provider subprocess exited');
+      });
+      const platform = makePlatform();
+      platform.getStreamingMode.mockImplementation(() => mode);
+
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ platform: 'web', provider: 'claude', outcome: 'failed' })
+      );
+      // The user still hears about it from the outer handler.
+      expect(platform.sendMessage).toHaveBeenCalled();
+    });
+  }
 });
 
 // ─── Per-user AI prefs + tier-fallback nudge (Phase 3) ──────────────────────

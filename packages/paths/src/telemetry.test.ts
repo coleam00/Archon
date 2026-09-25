@@ -886,6 +886,65 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     // Only the hashed reference leaves the machine, never the run's database id.
     expect(JSON.stringify(events)).not.toContain('run-db-id');
   });
+  test('captureWorkflowInvoked serializes workflow shape and bundled ancestry', async () => {
+    delete process.env.ARCHON_TELEMETRY_DISABLED;
+    delete process.env.DO_NOT_TRACK;
+    delete process.env.CI;
+    delete process.env.POSTHOG_API_KEY;
+    const bodies: (string | Blob)[] = [];
+    const fetchImpl = Object.assign(
+      (_url: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
+        const body = (options as { body?: unknown } | undefined)?.body;
+        if (typeof body === 'string' || body instanceof Blob) bodies.push(body);
+        return Promise.resolve(new Response('{"status":"ok"}', { status: 200 }));
+      },
+      { preconnect: (): void => undefined }
+    );
+    const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(fetchImpl);
+    try {
+      captureWorkflowInvoked({
+        runId: 'run-shape',
+        isChild: false,
+        workflowName: 'acme-intake',
+        workflowSource: 'project',
+        shape: {
+          nodeCounts: { prompt: 3, bash: 1, loop: 0 },
+          graphDepth: 4,
+          maxFanOut: 2,
+          commandRefs: 1,
+          promptCharsBucket: '1k_5k',
+        },
+        ancestry: { derivedFrom: 'archon-create-issue', derivedSimilarity: 'modified' },
+      });
+      await shutdownTelemetry();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+    const events: Array<{ event: string; properties: Record<string, unknown> }> = [];
+    for (const body of bodies) {
+      const raw =
+        typeof body === 'string'
+          ? body
+          : new TextDecoder().decode(Bun.gunzipSync(new Uint8Array(await body.arrayBuffer())));
+      events.push(...((JSON.parse(raw) as { batch?: typeof events }).batch ?? []));
+    }
+    const invoked = events.find(event => event.event === 'workflow_invoked')?.properties;
+    expect(invoked).toMatchObject({
+      schema_version: TELEMETRY_SCHEMA_VERSION,
+      workflow_name: 'custom',
+      nodes_prompt: 3,
+      nodes_bash: 1,
+      graph_depth: 4,
+      max_fan_out: 2,
+      command_refs: 1,
+      prompt_chars_bucket: '1k_5k',
+      derived_from: 'archon-create-issue',
+      derived_similarity: 'modified',
+    });
+    // A node type with no nodes is left out rather than sent as zero.
+    expect(invoked).not.toHaveProperty('nodes_loop');
+    expect(JSON.stringify(events)).not.toContain('acme-intake');
+  });
 });
 
 describe('runRefForTelemetry', () => {

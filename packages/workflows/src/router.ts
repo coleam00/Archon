@@ -217,6 +217,8 @@ export function findWorkflow<T extends Pick<WorkflowDefinition, 'name'>>(
  * 3. Suffix match (e.g. "assist" → "archon-assist")
  * 4. Substring match (e.g. "smart" → "archon-smart-pr-review")
  *
+ * A qualified installed name (`owner/plugin:entrypoint`) stops after tier 2.
+ *
  * Returns the matched workflow, or undefined if no match found.
  * Throws an Error if multiple workflows match at the same tier (ambiguous).
  */
@@ -243,12 +245,19 @@ export function resolveWorkflowName<T extends Pick<WorkflowDefinition, 'name'>>(
     return undefined;
   }
 
+  const caseInsensitive = checkTier(
+    workflows.filter(w => w.name.toLowerCase() === lowerName),
+    'workflow.resolve_case_insensitive_match'
+  );
+  // A qualified installed name (`owner/plugin:entrypoint`) names exactly one workflow.
+  // When that plugin is missing or the name is a support workflow, the suffix and
+  // substring tiers would otherwise resolve it to another pack's longer name or to a
+  // copied project workflow.
+  if (name.includes(':')) return caseInsensitive;
+
   return (
     // Tier 2: Case-insensitive match
-    checkTier(
-      workflows.filter(w => w.name.toLowerCase() === lowerName),
-      'workflow.resolve_case_insensitive_match'
-    ) ??
+    caseInsensitive ??
     // Tier 3: Suffix match (e.g. "assist" matches "archon-assist")
     checkTier(
       workflows.filter(w => w.name.toLowerCase().endsWith(`-${lowerName}`)),

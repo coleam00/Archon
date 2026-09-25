@@ -28,7 +28,7 @@ describe('forge plugin discovery and dispatch', () => {
   });
 
   test('performs metadata before an operation and preserves correlation in audit', async () => {
-    const discovery = await discoverPlugins({ config: config(), includeDefaultDir: false });
+    const discovery = await discoverPlugins({ config: config() });
     const result = await dispatchForge(
       { operationId: 'resolve-ü', op: 'resolve', remote: 'git@forge.example:team/repo.git' },
       { discovery }
@@ -50,7 +50,6 @@ describe('forge plugin discovery and dispatch', () => {
   test('returns malformed stdout and exit classes as distinct protocol/process failures', async () => {
     const malformedDiscovery = await discoverPlugins({
       config: config('malformed'),
-      includeDefaultDir: false,
     });
     const malformed = await dispatchForge(
       { operationId: 'bad', op: 'resolve', remote: 'https://forge.example/a' },
@@ -60,7 +59,6 @@ describe('forge plugin discovery and dispatch', () => {
 
     const processDiscovery = await discoverPlugins({
       config: config('token-error'),
-      includeDefaultDir: false,
     });
     const failed = await dispatchForge(
       { operationId: 'failed', op: 'resolve', remote: 'https://forge.example/a' },
@@ -75,7 +73,6 @@ describe('forge plugin discovery and dispatch', () => {
   test('does not execute an undeclared operation', async () => {
     const discovery = await discoverPlugins({
       config: config('unsupported'),
-      includeDefaultDir: false,
     });
     const result = await dispatchForge(
       { operationId: 'unsupported', op: 'resolve', remote: 'https://forge.example/a' },
@@ -94,7 +91,6 @@ describe('forge plugin discovery and dispatch', () => {
           ],
           scanPath: false,
         },
-        includeDefaultDir: false,
       })
     ).rejects.toThrow();
   });
@@ -103,7 +99,6 @@ describe('forge plugin discovery and dispatch', () => {
     const discovery = await discoverPlugins({
       config: config('token'),
       env: { ...process.env, TEST_FORGE_TOKEN: 'secret' },
-      includeDefaultDir: false,
     });
     const missing = await dispatchForge(
       {
@@ -123,7 +118,7 @@ describe('forge plugin discovery and dispatch', () => {
 });
 
 test('does not accept a success response for a different operation', async () => {
-  const discovery = await discoverPlugins({ config: config(), includeDefaultDir: false });
+  const discovery = await discoverPlugins({ config: config() });
   const result = await dispatchForge(
     {
       operationId: 'wrong-op',
@@ -146,7 +141,6 @@ test.each(['bad-protocol', 'bad-metadata'])('refuses %s before operation dispatc
 test('refuses resolved identity that differs from the selected host', async () => {
   const discovery = await discoverPlugins({
     config: config('wrong-resolve'),
-    includeDefaultDir: false,
   });
   const result = await dispatchForge(
     { operationId: 'wrong-identity', op: 'resolve', remote: 'https://forge.example/a/b' },

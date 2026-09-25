@@ -2536,9 +2536,11 @@ export async function handleMessage(
     // resolved and parked with only a generic error to show for it. The outer
     // catch cannot cover this: it does not know about the resolution.
     // continueResolvedGateRun never throws, so this cannot mask the real error.
+    const turn: ChatTurn = { startedAt: Date.now(), reported: false, routed: false };
     try {
       if (mode === 'stream') {
         await handleStreamMode(
+          turn,
           platform,
           conversationId,
           message,
@@ -2556,6 +2558,7 @@ export async function handleMessage(
         );
       } else {
         await handleBatchMode(
+          turn,
           platform,
           conversationId,
           message,
@@ -2572,6 +2575,19 @@ export async function handleMessage(
           userId
         );
       }
+    } catch (error) {
+      // A provider that throws mid-turn never reaches the handler's own report. Count
+      // the turn as failed here, once, then let the outer catch tell the user.
+      if (!turn.reported && !turn.routed) {
+        reportChatTurn(turn, {
+          platform: platform.getPlatformType(),
+          provider: aiClient.getType(),
+          model: requestOptions?.model,
+          durationMs: Date.now() - turn.startedAt,
+          outcome: 'failed',
+        });
+      }
+      throw error;
     } finally {
       if (gateResolution.resolved !== null) {
         await continueResolvedGateRun(
@@ -2616,6 +2632,29 @@ export async function handleMessage(
   }
 }
 
+/**
+ * One direct-chat turn's telemetry state. Every `chat_turn_handled` for the turn goes
+ * through {@link reportChatTurn}, so the dispatcher's failure report can tell whether a
+ * mode handler already reported and never counts one turn twice.
+ */
+interface ChatTurn {
+  readonly startedAt: number;
+  reported: boolean;
+  /**
+   * The model's reply routed the turn to a workflow or a project registration, which
+   * report as `workflow_invoked` / `codebase_registered`, not as a chat turn. A throw
+   * while dispatching it is not a failed chat turn. A dispatch that fails before its run
+   * exists sends nothing, as a workflow-not-found or invalid-YAML dispatch does; the
+   * executor's own run-creation failure is reported as `run_not_created`.
+   */
+  routed: boolean;
+}
+
+function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
+  turn.reported = true;
+  captureChatTurn(props);
+}
+
 // ─── Streaming Mode ─────────────────────────────────────────────────────────
 
 /**
@@ -2623,6 +2662,7 @@ export async function handleMessage(
  * If an orchestrator command is detected, retract streamed text and dispatch.
  */
 async function handleStreamMode(
+  turn: ChatTurn,
   platform: IPlatformAdapter,
   conversationId: string,
   originalMessage: string,
@@ -2638,7 +2678,6 @@ async function handleStreamMode(
   requestOptions?: SendQueryOptions,
   userId?: string
 ): Promise<void> {
-  const turnStartedAt = Date.now();
   const allMessages: string[] = [];
   let newSessionId: string | undefined;
   let commandDetected = false;
@@ -2746,11 +2785,11 @@ async function handleStreamMode(
           await tryPersistSessionId(session.id, newSessionId);
         }
         // Anonymous telemetry: AI returned an error result for this chat turn.
-        captureChatTurn({
+        reportChatTurn(turn, {
           platform: platform.getPlatformType(),
           provider: aiClient.getType(),
           model: requestOptions?.model,
-          durationMs: Date.now() - turnStartedAt,
+          durationMs: Date.now() - turn.startedAt,
           outcome: 'failed',
         });
         return;
@@ -2785,6 +2824,7 @@ async function handleStreamMode(
   );
 
   if (commands.workflowInvocation) {
+    turn.routed = true;
     // Retract streamed text — workflow dispatch replaces it
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
@@ -2805,6 +2845,7 @@ async function handleStreamMode(
   }
 
   if (commands.projectRegistration) {
+    turn.routed = true;
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }
@@ -2835,13 +2876,13 @@ async function handleStreamMode(
   // and project-registration paths return above without reaching this — those
   // are covered by workflow_invoked / codebase_registered instead. Platform +
   // provider only, never message content.
-  captureChatTurn({
+  reportChatTurn(turn, {
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
     model: requestOptions?.model,
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
-    durationMs: Date.now() - turnStartedAt,
+    durationMs: Date.now() - turn.startedAt,
     costUsd: lastResult?.cost,
     tokensIn: lastResult?.tokens?.input,
     tokensOut: lastResult?.tokens?.output,
@@ -2856,6 +2897,7 @@ async function handleStreamMode(
  * Used by Slack, GitHub, Discord (batch), and CLI.
  */
 async function handleBatchMode(
+  turn: ChatTurn,
   platform: IPlatformAdapter,
   conversationId: string,
   originalMessage: string,
@@ -2871,7 +2913,6 @@ async function handleBatchMode(
   requestOptions?: SendQueryOptions,
   userId?: string
 ): Promise<void> {
-  const turnStartedAt = Date.now();
   const allChunks: { type: string; content: string }[] = [];
   const assistantMessages: string[] = [];
   let assistantChunksTruncated = false;
@@ -2983,11 +3024,11 @@ async function handleBatchMode(
           await tryPersistSessionId(session.id, newSessionId);
         }
         // Anonymous telemetry: AI returned an error result for this chat turn.
-        captureChatTurn({
+        reportChatTurn(turn, {
           platform: platform.getPlatformType(),
           provider: aiClient.getType(),
           model: requestOptions?.model,
-          durationMs: Date.now() - turnStartedAt,
+          durationMs: Date.now() - turn.startedAt,
           outcome: 'failed',
         });
         return;
@@ -3050,6 +3091,7 @@ async function handleBatchMode(
   );
 
   if (commands.workflowInvocation) {
+    turn.routed = true;
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }
@@ -3069,6 +3111,7 @@ async function handleBatchMode(
   }
 
   if (commands.projectRegistration) {
+    turn.routed = true;
     if (platform.emitRetract) {
       await platform.emitRetract(conversationId);
     }
@@ -3099,13 +3142,13 @@ async function handleBatchMode(
   await maybeSendResultFooter(platform, conversationId, lastResult);
   // Anonymous telemetry: one completed direct-chat turn (same exclusion
   // rationale as the stream-mode capture in handleStreamMode above).
-  captureChatTurn({
+  reportChatTurn(turn, {
     platform: platform.getPlatformType(),
     provider: aiClient.getType(),
     model: requestOptions?.model,
     // durationMs deliberately measures from mode-handler entry — it includes
     // pre-AI setup, i.e. "time the user waited", not pure model latency.
-    durationMs: Date.now() - turnStartedAt,
+    durationMs: Date.now() - turn.startedAt,
     costUsd: lastResult?.cost,
     tokensIn: lastResult?.tokens?.input,
     tokensOut: lastResult?.tokens?.output,

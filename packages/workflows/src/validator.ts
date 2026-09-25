@@ -9,15 +9,13 @@
  * REST API can use it.
  */
 
-import { dirname, join, resolve, isAbsolute } from 'path';
+import { join, resolve, isAbsolute } from 'path';
 import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
   getCommandFolderSearchPaths,
   getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
   getHomeCommandsPath,
-  getHomeWorkflowsPath,
   findCommandFiles,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
@@ -64,7 +62,8 @@ import type { ScriptRuntime } from './script-discovery';
 import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
 import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
-import { getPackagedResourceDirectory, parsePackagedResourceReference } from './packaged-workflow';
+import { parsePackagedResourceReference } from './packaged-workflow';
+import { liveSourceRoots, packagedWorkflowDirectory } from './workflow-source';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
 // =============================================================================
@@ -233,18 +232,9 @@ async function resolveCommand(
       }
       if (!(await bundlesPackagedResources(packaged.owner.pack))) return null;
     }
-    let workflowsRoot: string;
-    if (packaged.owner.source === 'project') {
-      workflowsRoot = join(cwd, '.archon', 'workflows');
-    } else if (packaged.owner.source === 'global') {
-      workflowsRoot = getHomeWorkflowsPath();
-    } else {
-      workflowsRoot = dirname(getDefaultWorkflowsPath());
-    }
-    const path = join(
-      getPackagedResourceDirectory(workflowsRoot, packaged.owner, 'commands'),
-      `${packaged.name}.md`
-    );
+    const workflowDir = await packagedWorkflowDirectory(liveSourceRoots(cwd), packaged.owner);
+    if (workflowDir === null) return null;
+    const path = join(workflowDir, 'commands', `${packaged.name}.md`);
     try {
       return (await stat(path)).isFile() ? path : null;
     } catch (error) {
@@ -412,7 +402,9 @@ export async function validateWorkflowResources(
   const issues: ValidationIssue[] = [];
   const availableCommands = await discoverAvailableCommands(cwd, config);
   const requiresPortableModelRefs =
-    config?.workflowSource === 'bundled' || config?.workflowSource === 'global';
+    config?.workflowSource === 'bundled' ||
+    config?.workflowSource === 'global' ||
+    config?.workflowSource === 'installed';
   const modelProfileProvider = config?.assistant ?? defaultProvider ?? 'claude';
   let aiProfile: ResolvedAiProfile | undefined;
 
