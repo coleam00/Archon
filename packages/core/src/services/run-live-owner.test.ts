@@ -36,6 +36,12 @@ import {
  */
 const LIVE_OWNER_EVENT_DEADLINE_MS = 3_000;
 
+/**
+ * Longer than the cold Windows process listing a stop waits on (4-8 s on a loaded runner),
+ * which is longer than the idle lease timeout that used to cut a slow stop off (#3516).
+ */
+const SLOW_STOP_IDLE_MS = 9_000;
+
 async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
@@ -205,6 +211,29 @@ describe('run live owner', () => {
     await waitForOwnerEvent(() => events.includes('attention'));
     expect(events).toEqual(['control_handoff', 'attention']);
   });
+
+  test(
+    'holds a committed stop lease for as long as both ends are alive, however slow the stop',
+    async () => {
+      // A Windows stop lists the process table before it kills, and a cold listing on a
+      // loaded host takes 4-8 s with nothing sent on the lease (#3516). An idle timer on
+      // either end used to close the lease during that listing, and the stop then refused
+      // a live owner. Idle past that window, then prove both ends still hold the lease.
+      const runId = `slow-stop-${crypto.randomUUID()}`;
+      const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
+      const lease = await requestRunLiveOwnerStop(runId);
+      try {
+        await lease.commit();
+        await Bun.sleep(SLOW_STOP_IDLE_MS);
+        expect(lease.isLive()).toBe(true);
+        expect(owner.isStopRequested()).toBe(true);
+      } finally {
+        lease.release();
+        await owner.close();
+      }
+    },
+    SLOW_STOP_IDLE_MS + 5_000
+  );
 
   test('bounds close while a controller retains an uncommitted stop lease', async () => {
     const runId = `retained-${crypto.randomUUID()}`;

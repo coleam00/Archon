@@ -185,7 +185,8 @@ export async function terminateWindowsProcessTree(
 
   // The owner's lease socket closes when the owner exits, so a lease still open after
   // the listing proves the listed root is the owner and not a later holder of its PID.
-  // The first listing can take seconds, which is long enough for the lease to lapse.
+  // The first listing can take seconds; the lease has no idle timeout, so only the
+  // owner's exit or its own shutdown closes it in that time.
   if (!ownsLiveLease()) {
     throw new Error(
       `Detached workflow owner ${String(pid)} released its termination lease before it was stopped`

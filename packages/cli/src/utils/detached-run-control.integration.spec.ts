@@ -141,8 +141,8 @@ async function rejectedError(action: () => Promise<unknown>): Promise<Error> {
  * itself in front of a PID the test chose, which is the only way to stage a target
  * that is already gone, or one that is alive and out of reach.
  *
- * `leaseMs` closes the lease that long after committing it, as a real owner does when
- * its termination lease lapses.
+ * `leaseMs` closes the lease that long after committing it, as a real owner's lease
+ * closes when the owner exits.
  */
 function stubOwner(pid: number, leaseMs?: number): Server {
   return createServer((socket: Socket): void => {
@@ -379,7 +379,7 @@ describe('detached run control integration', () => {
   );
 
   it(
-    'kills nothing on Windows when the lease lapses before the kill',
+    'kills nothing on Windows when the lease closes before the kill',
     async () => {
       // The first process listing takes hundreds of milliseconds at least. A lease that
       // closes during it no longer proves the listed root is the owner, so the stop must
