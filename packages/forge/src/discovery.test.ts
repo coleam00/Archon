@@ -40,7 +40,6 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
     // budget and cannot be misread as timed out on a loaded machine.
     const hung = await discoverPlugins({
       config: { pluginDirs: [await fixtureDir('timeout')], scanPath: false },
-      includeDefaultDir: false,
       timeoutMs: 500,
     });
     expect(hung.plugins).toHaveLength(0);
@@ -48,7 +47,7 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
       'plugin-dir:timeout: metadata handshake failed',
     ]);
     const config = { pluginDirs: dirs, scanPath: false };
-    const found = await discoverPlugins({ config, includeDefaultDir: false });
+    const found = await discoverPlugins({ config });
     expect(found.byHost.has('good.example')).toBe(true);
     expect(found.unavailable).toHaveLength(4);
     expect(found.plugins).toHaveLength(1);
@@ -66,7 +65,6 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
     await expect(
       discoverPlugins({
         config: { ...config, hosts: { 'selected.example': 'invalid' } },
-        includeDefaultDir: false,
       })
     ).rejects.toThrow('metadata is not JSON');
     await expect(
@@ -83,7 +81,6 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
           ],
           scanPath: false,
         },
-        includeDefaultDir: false,
       })
     ).rejects.toThrow('metadata is not JSON');
     // The default directory plus a duplicate configured entry used to shift source labels.
@@ -100,7 +97,6 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
       await symlink(join(root, 'missing'), join(broken, 'archon-forge-missing'));
       const linked = await discoverPlugins({
         config: { pluginDirs: [dirs[0], broken], scanPath: false },
-        includeDefaultDir: false,
       });
       expect(linked.byHost.has('good.example')).toBe(true);
       expect(linked.unavailable).toHaveLength(1);

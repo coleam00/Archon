@@ -50,7 +50,6 @@ async function dispatch(
       plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture, '--mode', mode] }],
       scanPath: false,
     },
-    includeDefaultDir: false,
   });
   return dispatchForge(request, { discovery, ...(timeoutMs === undefined ? {} : { timeoutMs }) });
 }
@@ -148,7 +147,6 @@ describe('mutation evidence at the dispatch boundary', () => {
     // An empty discovery that never scans the developer's own plugin directory.
     const discovery = await discoverPlugins({
       config: { scanPath: false },
-      includeDefaultDir: false,
     });
     const result = await dispatchForge(edit, { discovery });
     expect(result.response).toMatchObject({
@@ -162,7 +160,7 @@ describe('mutation evidence at the dispatch boundary', () => {
     const result = await dispatchForge(
       { operationId: 'view-1', op: 'pr.view', selector: { kind: 'number', ref } },
       {
-        discovery: await discoverPlugins({ config: { scanPath: false }, includeDefaultDir: false }),
+        discovery: await discoverPlugins({ config: { scanPath: false } }),
       }
     );
     expect(result.response.ok).toBe(false);

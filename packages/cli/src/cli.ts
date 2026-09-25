@@ -36,9 +36,9 @@ let forgeTrustedEnv: NodeJS.ProcessEnv = {};
 loadArchonEnv(process.cwd(), {
   afterUserLoad: () => {
     forgeConfigPath = getArchonConfigPath();
-    // Discovery receives this snapshot only through its constrained process
-    // boundary. Resolve ARCHON_HOME so Docker and HOME-based installs keep the
-    // same user-scoped plugin location after repo env loads.
+    // Forge plugin processes receive this snapshot only through their constrained
+    // process boundary. Pin ARCHON_HOME to the trusted home so repo env cannot
+    // change it.
     forgeTrustedEnv = { ...process.env, ARCHON_HOME: getTrustedArchonHome() };
   },
 });

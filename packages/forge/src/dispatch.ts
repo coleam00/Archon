@@ -242,6 +242,8 @@ export async function dispatchForge(
     env?: NodeJS.ProcessEnv;
     credentialEnv?: NodeJS.ProcessEnv;
     discovery?: PluginDiscovery;
+    /** Passed to `discoverPlugins`; the host owns where installed plugins live. */
+    pluginsDir?: string;
     timeoutMs?: number;
     maxOutputBytes?: number;
     signal?: AbortSignal;
@@ -270,6 +272,7 @@ export async function dispatchForge(
         (await discoverPlugins({
           config: options.config,
           env: options.env,
+          pluginsDir: options.pluginsDir,
           timeoutMs: options.timeoutMs,
           maxOutputBytes: options.maxOutputBytes,
         }));

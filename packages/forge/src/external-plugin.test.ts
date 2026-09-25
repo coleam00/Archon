@@ -31,7 +31,6 @@ test('discovers and runs an independently installed executable outside the sourc
     const discovery = await discoverPlugins({
       config: { pluginDirs: [plugins], scanPath: false },
       env,
-      includeDefaultDir: false,
     });
     expect(discovery.plugins.map(plugin => plugin.command)).toEqual([executable]);
     const request = {
