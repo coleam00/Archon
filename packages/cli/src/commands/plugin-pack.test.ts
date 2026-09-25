@@ -305,6 +305,17 @@ describe('archon plugin: workflow packs', () => {
     }
   });
 
+  test('an update that keeps the installed commit still refuses an incompatible Archon', async () => {
+    const env = await environment();
+    const newer = { ...env, archonVersion: '99.0.0' };
+    expect((await run(newer, 'install', `${ID}@crafted-compat`)).code).toBe(0);
+    const before = await snapshot(env.pluginsDir);
+    const result = await run(env, 'update', `${ID}@crafted-compat`);
+    expect(result.code).toBe(1);
+    expect(result.err).toContain('requires Archon >=99.0.0; this is Archon 0.11.0');
+    expect(await snapshot(env.pluginsDir)).toEqual(before);
+  });
+
   test('an update to another tag on the installed commit keeps the live tree and rewrites the receipt', async () => {
     const env = await environment();
     expect((await run(env, 'install', ID)).code).toBe(0);

@@ -515,8 +515,14 @@ async function installPack(
   // The installed commit again: its tree already holds these bytes. Settled without a
   // fetch, and without replacing the tree, which would briefly leave the receipt
   // pointing at no tree. Only a different tag label changes, in the receipt.
-  const settleSameCommit = async (commit: string): Promise<boolean> => {
+  // The range is still checked, so an update that installs nothing tells the operator
+  // the pack is outside this Archon's range, as a forge update does.
+  const settleSameCommit = async (
+    commit: string,
+    manifest: WorkflowPackManifest
+  ): Promise<boolean> => {
     if (previous?.commit !== commit) return false;
+    assertCompatible(`${ref.id}@${tag ?? commit}`, manifest, env.archonVersion);
     if (previous.tag === tag) {
       console.log(`${ref.id} is already at ${tag ?? 'the default branch head'} (commit ${commit})`);
       return true;
@@ -534,7 +540,7 @@ async function installPack(
     );
     return true;
   };
-  if (await settleSameCommit(source.commit)) return;
+  if (await settleSameCommit(source.commit, source.manifest)) return;
 
   // Everything fetched and checked lives here until the tree is renamed into place.
   const staging = join(env.pluginsDir, stagingName('pack'));
@@ -558,7 +564,7 @@ async function installPack(
     }
     // The fetched commit is the one installed. If the ref moved back to the installed
     // commit between `ls-remote` and the fetch, the same rule applies.
-    if (await settleSameCommit(commit)) return;
+    if (await settleSameCommit(commit, manifest)) return;
     assertPackTree(ref, manifest, files);
 
     // Git writes the plugin directory, with its executable bits, from the one commit.
