@@ -12,6 +12,7 @@ import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
 import type { WorkflowDeps } from './deps';
 import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowTerminal } from '@archon/paths';
+import { workflowTelemetryShape } from './telemetry-shape';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
 import { getDefaultBranch, toRepoPath } from '@archon/git';
 import type {
@@ -3091,6 +3092,7 @@ export async function executeWorkflow(
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
       isResume: isContinuation,
+      ...workflowTelemetryShape(workflow, runSource),
     });
 
     let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';

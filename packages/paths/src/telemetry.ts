@@ -53,7 +53,7 @@ import { createLogger } from './logger';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 9;
+export const TELEMETRY_SCHEMA_VERSION = 10;
 
 type PostHogFetch = NonNullable<NonNullable<ConstructorParameters<typeof PostHog>[1]>['fetch']>;
 type PostHogFetchOptions = Parameters<PostHogFetch>[1];
@@ -83,7 +83,7 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 // runs gained an anonymous per-run reference and cancellations were reported.
 // Bumping re-shows the updated first-run notice once per install so existing
 // users re-consent rather than silently getting broader capture.
-export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v6';
+export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v7';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -572,6 +572,31 @@ export interface WorkflowInvokedProperties {
   interactive?: boolean;
   usedIsolation?: boolean;
   isResume?: boolean;
+  shape?: WorkflowShapeProperties;
+  /** Only for a non-bundled workflow copied from a bundled one. */
+  ancestry?: WorkflowAncestryProperties;
+}
+
+export type PromptCharsBucket = 'none' | 'lt_1k' | '1k_5k' | '5k_20k' | 'gte_20k';
+
+/** Categorical shape of a workflow: counts and buckets only, never ids, names or text. */
+export interface WorkflowShapeProperties {
+  /** Nodes of each type, loop_group bodies included; a type with no nodes is absent. */
+  nodeCounts: Partial<Record<WorkflowNodeType, number>>;
+  /** Number of dependency layers in the top-level graph. */
+  graphDepth: number;
+  /** Most direct dependents of any one top-level node. */
+  maxFanOut: number;
+  /** Distinct command names referenced by agent and loop nodes. */
+  commandRefs: number;
+  /** Total inline prompt characters, bucketed. Command bodies are not read. */
+  promptCharsBucket: PromptCharsBucket;
+}
+
+export interface WorkflowAncestryProperties {
+  /** The bundled workflow's name. Bundled names are public; a custom name never is. */
+  derivedFrom: string;
+  derivedSimilarity: 'identical' | 'modified';
 }
 
 /**
@@ -785,9 +810,29 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
         interactive: Boolean(props.interactive),
         used_isolation: Boolean(props.usedIsolation),
         is_resume: Boolean(props.isResume),
+        ...(props.shape ? workflowShapeWireProps(props.shape) : {}),
+        ...(props.ancestry
+          ? {
+              derived_from: props.ancestry.derivedFrom,
+              derived_similarity: props.ancestry.derivedSimilarity,
+            }
+          : {}),
       },
     });
   });
+}
+
+function workflowShapeWireProps(shape: WorkflowShapeProperties): Record<string, string | number> {
+  const counts: Record<string, number> = {};
+  for (const [type, count] of Object.entries(shape.nodeCounts))
+    if (count) counts[`nodes_${type}`] = count;
+  return {
+    ...counts,
+    graph_depth: shape.graphDepth,
+    max_fan_out: shape.maxFanOut,
+    command_refs: shape.commandRefs,
+    prompt_chars_bucket: shape.promptCharsBucket,
+  };
 }
 
 /**

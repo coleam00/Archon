@@ -159,6 +159,9 @@
       "src/telemetry-conformance.test.ts"
     ],
     [
+      "src/telemetry-shape.test.ts"
+    ],
+    [
       "src/state-migration.test.ts",
       "src/dry-run.test.ts",
       "src/fixture-runner.test.ts"
