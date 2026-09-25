@@ -145,7 +145,7 @@ nodes:
     with:
       # The PR node's structured read-back is the target authority. Review must
       # not rediscover an ambient branch→PR mapping.
-      scope: "$pr.output.number"
+      scope: "$pr.output"
       prior_report: "$INPUTS.prior_report"
       work_order: "$INPUTS.work"
       errors: "$resolve-scope.output.errors"
@@ -195,42 +195,16 @@ nodes:
         # from separate reads could present a half-failed read as clean CI. The
         # engine owns the bounded read. A timeout skips this optional producer;
         # ci-evidence below turns that absence into the declared fallback passed
-        # to the fix. The exit code is read together with the captured output,
-        # never alone — this gh form can encode check state in its exit code and
-        # can exit zero on failing checks, so non-zero with output is data, and
-        # only empty output from a failed read means the read itself failed.
+        # to the fix. The read goes through the pack's one check reader
+        # (.shared/checks.ts), the same one check-ci and flip-ready use.
         - id: ci-note
           timeout: 45000
           on_timeout: skip
-          bash: |
-            PR_NUMBER=$pr.output.number
-            ORIGIN_REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##' || true)
-            LINES=$(gh pr checks "$PR_NUMBER" --repo "$ORIGIN_REPO" --json name,bucket \
-              --jq '.[] | if .bucket == "pending" then "PENDING" elif .bucket == "pass" or .bucket == "skipping" then "GREEN" else "RED \(.name) (\(.bucket))" end' \
-              2>/dev/null)
-            RC=$?
-            if [ "$RC" -ne 0 ] && [ -z "$LINES" ]; then
-              echo "No CI evidence is available for this round (the check read failed). Proceed on the review findings alone."
-              exit 0
-            fi
-            if [ -z "$LINES" ]; then
-              echo "No CI evidence is available for this round (no checks reported). Proceed on the review findings alone."
-              exit 0
-            fi
-            FAILING=$(printf '%s\n' "$LINES" | sed -n 's/^RED /- /p')
-            PENDING=$(printf '%s\n' "$LINES" | grep -c '^PENDING') || true
-            echo "CI state for this pull request, read at the start of this round; it describes the currently pushed head:"
-            if [ -n "$FAILING" ]; then
-              echo "Concluded non-green checks:"
-              printf '%s\n' "$FAILING"
-            else
-              echo "No concluded failures."
-            fi
-            case "$PENDING" in
-              ''|0) ;;
-              *) echo "$PENDING check(s) still running — never wait on them." ;;
-            esac
-            exit 0
+          script: ci-note
+          runtime: bun
+          with:
+            pr:
+              from: "$pr.output"
 
         - id: ci-evidence
           script: console.log(process.env.INPUTS_NOTE ?? '')
@@ -301,7 +275,7 @@ nodes:
         - id: recheck
           include: archon-review
           with:
-            scope: "$pr.output.number"
+            scope: "$pr.output"
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             work_order: "$INPUTS.work"
             # Continuation mode owns coverage and skips every specialist,
@@ -333,17 +307,49 @@ nodes:
   # (that would be repeated public writes describing diffs the next iteration
   # falsifies). Skipped when the initial review was already ready: the diff
   # never changed after the body was written.
-  - id: sync-pr-body
-    command: sync-pr-body
-    model: medium
+  # The live description, read through the selected source: a human may have
+  # edited the body since this run wrote it, and a resync that silently reverted
+  # that edit would be a write nobody asked for.
+  - id: read-pr-body
+    script: read-pr-body
+    runtime: bun
     with:
-      pr_number: "$pr.output.number"
-      pr_head: "$pr.output.head"
+      pr: "$pr.output"
     # After the project gate, not beside it: the gates record the red they let
     # through as typed artifacts, and the body must disclose every one of them,
     # so this reads once all of them exist instead of racing the last writer.
     depends_on: [gate-validated]
     when: "$review.output.action != 'none'"
+    output_format:
+      type: object
+      properties:
+        body: { type: string }
+        url: { type: string }
+      required: [body, url]
+
+  - id: sync-pr-body
+    command: sync-pr-body
+    model: medium
+    with:
+      pr: "$pr.output"
+      current_body: "$read-pr-body.output.body"
+    depends_on: [read-pr-body]
+    output_format:
+      type: object
+      properties:
+        intent: { type: string }
+      required: [intent]
+
+  # The resync node judges which claims the final diff falsified; this node owns
+  # the edit and its read-back, through whichever source the run selected.
+  - id: publish-pr-body
+    script: publish-pr-body
+    runtime: bun
+    with:
+      pr: "$pr.output"
+      intent: "$sync-pr-body.output.intent"
+    depends_on: [sync-pr-body]
+    output_format: { type: object }
 
   # Final local gate, ALWAYS run: the project's own checks via the validate
   # package. Uniform on every path — and when CI is maintainer-gated (fork
@@ -358,7 +364,9 @@ nodes:
   # still stops the run. Inherited or environment red proceeds to await-checks,
   # where the pull request's own CI decides — an inherited break is red there
   # too, is classified once more by the convergence pass below, and pauses for
-  # explicit operator action before any ready flip can run.
+  # explicit operator action before any ready flip can run. A validation that
+  # did not finish (`incomplete`) also stops the run, reported as unfinished
+  # rather than red, so resuming is the action.
   - id: gate-validated
     script: gate-green
     runtime: bun
@@ -401,7 +409,8 @@ nodes:
           script: check-ci
           runtime: bun
           with:
-            pr_url: "$pr.output.url"
+            pr:
+              from: "$pr.output"
           # The probe's only in-process wait is the single 60 s registration
           # grace; headroom over the 120 s script default keeps that honest.
           timeout: 180000
@@ -430,7 +439,8 @@ nodes:
     script: check-ci
     runtime: bun
     with:
-      pr_url: "$pr.output.url"
+      pr:
+        from: "$pr.output"
     timeout: 180000
     depends_on: [await-checks]
     output_format: *ci_state
@@ -492,7 +502,7 @@ nodes:
         - id: ci-recheck
           include: archon-review
           with:
-            scope: "$pr.output.number"
+            scope: "$pr.output"
             prior_report: "$ARTIFACTS_DIR/review/report.md"
             work_order: "$INPUTS.work"
             errors: "$resolve-scope.output.errors"
@@ -532,7 +542,8 @@ nodes:
           script: check-ci
           runtime: bun
           with:
-            pr_url: "$pr.output.url"
+            pr:
+              from: "$pr.output"
           timeout: 180000
           output_format: *ci_state
         - id: fix-ci-pause
@@ -571,7 +582,8 @@ nodes:
           script: check-ci
           runtime: bun
           with:
-            pr_url: "$pr.output.url"
+            pr:
+              from: "$pr.output"
           timeout: 180000
           output_format: *ci_state
         - id: attention-ci-pause
@@ -586,130 +598,23 @@ nodes:
           depends_on: [attention-ci-probe]
 
   - id: flip-ready
-    bash: |
-      set -euo pipefail
-      # --repo pins to the origin remote: gh's default resolution in a
-      # fork clone targets the upstream parent instead. With --repo, gh disables
-      # branch inference and REQUIRES an explicit selector — omitting it is a
-      # usage error.
-      # Nothing below streams a command's own output. The engine broadcasts a
-      # node's stderr to the operator as it runs and retains what the node prints,
-      # so every git and gh call here is captured: this node's authored messages
-      # are the only text that reaches its streams. That also keeps the raw origin
-      # URL — which can carry a credential (https://<token>@host/...) — out of
-      # both, since it is normalized inside the substitution that reads it and
-      # only the owner/repo below ever reaches a command line or a message.
-      if ! ORIGIN_REPO=$(git remote get-url origin 2>/dev/null | sed -E 's#^.*[:/]([^/]+/[^/]+)$#\1#; s#\.git$##'); then
-        printf '%s\n' "flip-ready: could not read the origin remote." >&2
-        exit 1
-      fi
-      case "$ORIGIN_REPO" in
-        *[!A-Za-z0-9_.-]*/* | */*[!A-Za-z0-9_.-]* | */*/* | /* | */ | "")
-          printf '%s\n' "flip-ready: origin remote does not resolve to an owner/repo." >&2
-          exit 1
-          ;;
-      esac
-      # The recorded number is the selector. Which branch is checked out is not
-      # re-derived here: the run owns its worktree and the PR was created in it,
-      # so this node cannot be the place that discovers otherwise. See the pack
-      # README on guards.
-      PR_NUMBER=$pr.output.number
-      # Public-surface preflight: the flip is the one irreversible
-      # step, so it re-verifies CI itself instead of trusting the loop above —
-      # any pending or non-green check refuses the flip loudly. The check count
-      # is read through gh's GraphQL API, whose exit code is the structured
-      # signal: success returns the JSON totalCount (0 = no checks configured,
-      # or gated checks that never started — both proceed, matching the probe's
-      # permission-agnostic skip), and a non-zero exit is a failed read that
-      # refuses. A failed observation is not evidence that no CI exists, and the
-      # flip below must never run on one. stderr is dropped like every other
-      # value read in this node — a gh notice must never become the count.
-      if ! CHECK_COUNT=$(gh api graphql \
-        -f query='query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { commits(last: 1) { nodes { commit { statusCheckRollup { contexts { totalCount } } } } } } } }' \
-        -f owner="${ORIGIN_REPO%/*}" -f repo="${ORIGIN_REPO#*/}" -F number="$PR_NUMBER" \
-        --jq '(.data.repository.pullRequest.commits.nodes[0].commit.statusCheckRollup.contexts.totalCount // 0)' 2>/dev/null); then
-        printf '%s\n' "flip-ready: could not read check state." >&2
-        exit 1
-      fi
-      if [ "$CHECK_COUNT" -gt 0 ]; then
-        # Checks exist: classify them with gh's structured bucket mapping. This
-        # read cannot legitimately be empty (the count above saw checks), so a
-        # failure here is a failed read too, never a no-checks case.
-        if ! NOT_GREEN=$(gh pr checks "$PR_NUMBER" --repo "$ORIGIN_REPO" --json name,bucket --jq '.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name) (\(.bucket))"' 2>/dev/null); then
-          printf '%s\n' "flip-ready: checks exist but their state could not be read." >&2
-          exit 1
-        fi
-        if [ -n "$NOT_GREEN" ]; then
-          printf '%s\n' "flip-ready: refusing to flip with non-green checks: $NOT_GREEN" >&2
-          exit 1
-        fi
-      fi
-      # The flip prints a confirmation this node has no use for, and its stdout is
-      # not a value, so both streams are captured together and re-emitted only where
-      # the refusal is the diagnostic — in gh's own words.
-      if FLIP=$(gh pr ready "$PR_NUMBER" --repo "$ORIGIN_REPO" 2>&1); then
-        # A VALUE read, so its stderr is dropped rather than merged: a gh notice must
-        # never become the draft state. The failure names the read it could not
-        # complete, so it is not silent. Exit 0 is not proof the state changed.
-        if ! draft=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json isDraft --jq .isDraft 2>/dev/null); then
-          printf '%s\n' "flip-ready: PR was flipped but its draft state could not be read back." >&2
-          exit 1
-        fi
-        if [ "$draft" != "false" ]; then
-          printf '%s\n' "flip-ready: PR still reports draft after the ready flip" >&2
-          exit 1
-        fi
-      else
-        # gh refuses to ready any pull request that is not an open draft, so this
-        # refusal covers both a genuine failure and a pull request someone merged or
-        # closed while the run was in flight. gh's wording is not the classifier —
-        # the pull request's own state is. Another VALUE read, stderr dropped, and a
-        # state that cannot be read leaves the refusal as the failure it looks like.
-        if ! STATE=$(gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json state --jq .state 2>/dev/null); then
-          STATE=""
-        fi
-        case "$STATE" in
-          MERGED)
-            # A merged pull request IS the outcome this node exists to reach, reached
-            # by another hand, so the delivery is reported rather than failed. The
-            # draft read-back above is not repeated here: it verifies an action this
-            # branch did not take, and a merged pull request's draft flag answers
-            # nothing. The URL read below still runs, so stdout carries the same
-            # declared result as a flip, and this note reaches the operator.
-            printf '%s\n' "flip-ready: the PR was already merged, so no flip was needed." >&2
-            ;;
-          CLOSED)
-            printf '%s\n' "flip-ready: the PR is CLOSED without a merge, so there is no delivery to report." >&2
-            exit 1
-            ;;
-          *)
-            printf '%s\n' "flip-ready: the ready flip failed: $FLIP" >&2
-            exit 1
-            ;;
-        esac
-      fi
-      # This node's stdout is its declared result and nothing else. gh's own --jq
-      # composes the document, so the URL never passes through shell quoting, and
-      # the schema below is what makes it a contract rather than a convention: a
-      # composing caller reads the pr_url field off this workflow's result, and the
-      # tail's own report reads the same field, neither re-deriving a URL from raw
-      # text.
-      if ! gh pr view "$PR_NUMBER" --repo "$ORIGIN_REPO" --json url --jq '{pr_url: .url}' 2>/dev/null; then
-        printf '%s\n' "flip-ready: the PR URL could not be read back." >&2
-        exit 1
-      fi
+    script: flip-ready
+    runtime: bun
     output_format:
       type: object
       properties:
         pr_url: { type: string, minLength: 1 }
       required: [pr_url]
+    with:
+      pr:
+        from: "$pr.output"
     # Failure-cascade skips block this join, so a failed ancestor no longer has to
     # be named directly: the skip carries `upstream_failed` from the node that
     # actually failed, across every hop. ci-verdict is the successful dependency
     # the rule requires — a strict transitive reduction without it can leave a
-    # clean-review delivery with no success at all. sync-pr-body orders the flip
-    # after the resync even when the CI waits return immediately.
-    depends_on: [ci-verdict, ci-attention-route, ci-attention, sync-pr-body]
+    # clean-review delivery with no success at all. publish-pr-body orders the
+    # flip after the resync even when the CI waits return immediately.
+    depends_on: [ci-verdict, ci-attention-route, ci-attention, publish-pr-body]
     trigger_rule: none_failed_min_one_success
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts).

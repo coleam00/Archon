@@ -9,7 +9,7 @@
   "scripts": {
     "cli": "bun src/cli.ts",
     "test": "bun run ../../scripts/package-tests.ts",
-    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts",
+    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -22,7 +22,10 @@
     "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@clack/prompts": "^1.0.0",
-    "dotenv": "^17.2.3"
+    "@archon/forge": "workspace:*",
+    "@hono/zod-openapi": "^1.4.0",
+    "dotenv": "^17.2.3",
+    "@archon/plugin-manifest": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
@@ -37,6 +40,9 @@
     ],
     [
       "src/commands/workflow.test.ts"
+    ],
+    [
+      "src/commands/setup-exit.test.ts"
     ],
     [
       "src/commands/isolation.test.ts"
@@ -58,10 +64,8 @@
       "src/help.test.ts",
       "src/default-cwd-canonicalization.test.ts",
       "src/utils/stdout.test.ts",
-      "src/utils/safe-console.test.ts"
-    ],
-    [
-      "src/utils/detached-run-control.test.ts"
+      "src/utils/safe-console.test.ts",
+      "src/utils/cli-start-telemetry.test.ts"
     ],
     [
       "src/utils/detached-run-control.integration.spec.ts"
@@ -74,6 +78,9 @@
     ],
     [
       "src/commands/workflow-continuation-provider.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-adopt-source.integration.spec.ts"
     ],
     [
       "src/commands/workflow-resume-conversation.integration.spec.ts"
@@ -89,6 +96,18 @@
     ],
     [
       "src/adapters/cli-adapter.test.ts"
+    ],
+    [
+      "src/commands/forge.test.ts"
+    ],
+    [
+      "src/commands/plugin.test.ts"
+    ],
+    [
+      "src/triggers/native-schedule.test.ts"
+    ],
+    [
+      "src/commands/trigger.integration.spec.ts"
     ]
   ]
 }

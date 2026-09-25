@@ -57,6 +57,7 @@ import {
 import {
   canonicalValueText,
   LOOP_PREV_OUTPUT_REF_SOURCE,
+  EXECUTION_CHECKOUT_REF_SOURCE,
   parseWholeInputsRef,
   type JsonValue,
 } from './output-ref';
@@ -226,6 +227,14 @@ function applyOutputRefRename(text: string, rename: (id: string) => string): str
   return text.replace(OUTPUT_REF_PATTERN, (match, id: string) => {
     const renamed = rename(id);
     return renamed === id ? match : `$${renamed}.output`;
+  });
+}
+
+/** `$<id>.execution.checkoutStart` names a sibling node too, so its id follows the same rename. */
+function applyExecutionCheckoutRefRename(text: string, rename: (id: string) => string): string {
+  return text.replace(new RegExp(EXECUTION_CHECKOUT_REF_SOURCE, 'g'), (match, id: string) => {
+    const renamed = rename(id);
+    return renamed === id ? match : `$${renamed}.execution.checkoutStart`;
   });
 }
 
@@ -474,7 +483,10 @@ function rewriteNodeOutputRefs(
   renameLoopPrevRef: (id: string) => string
 ): void {
   const code = (text: string): string =>
-    applyLoopPrevOutputRefRename(applyOutputRefRename(text, renameOutputRef), renameLoopPrevRef);
+    applyExecutionCheckoutRefRename(
+      applyLoopPrevOutputRefRename(applyOutputRefRename(text, renameOutputRef), renameLoopPrevRef),
+      renameOutputRef
+    );
   const whenExpr = (text: string): string => applyWhenRefRename(text, renameOutputRef);
 
   if (node.when !== undefined) node.when = whenExpr(node.when);
@@ -886,6 +898,10 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   'inputs',
   // #1764: unioned into the composing workflow's own requirement set, not dropped.
   'requires',
+  // A notice for launching this file directly. Inlining never launches it, so there
+  // is nothing to carry; warning "dropped" would fire on every discovery of a
+  // composer that includes a deprecated block.
+  'deprecated',
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */

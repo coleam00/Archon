@@ -32,7 +32,6 @@ import { useBuilderProject } from './connect/use-builder-project';
 import {
   blockingErrors,
   clientIssue,
-  errorDetail,
   errorToIssues,
   isReadOnlySource,
   isValidWorkflowName,
@@ -58,7 +57,7 @@ import {
 import { listProjects, type WorkflowListResult } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
-import { HttpError } from '../lib/http';
+import { HttpError, errorDetail } from '../lib/http';
 import type { Project } from '../primitives/project';
 import type { Workflow } from '../primitives/workflow';
 

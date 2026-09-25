@@ -159,8 +159,22 @@ export interface OpencodeProviderDefaults {
 /** Generic per-provider defaults bag used by config surfaces and UI. */
 export type ProviderDefaults = Record<string, unknown>;
 
-/** Strict parser for an explicitly selected, run-scoped provider config layer. */
-export type ProviderRunConfigParser = (raw: ProviderDefaults) => ProviderDefaults;
+/**
+ * Which authored surface a strict provider-config parse is validating.
+ *
+ * `install` is `assistants.<provider>` in a global or repository
+ * `.archon/config.yaml`; `run` is an explicitly selected per-run layer. They
+ * share one parser so both paths reject the same bad values, and the scope
+ * lets a provider refuse a key whose consumer owns process-lifetime state and
+ * therefore cannot be re-decided per run.
+ */
+export type ProviderConfigScope = 'install' | 'run';
+
+/** Strict parser for an authored provider config layer. */
+export type ProviderConfigParser = (
+  raw: ProviderDefaults,
+  scope: ProviderConfigScope
+) => ProviderDefaults;
 
 /** Provider-keyed defaults map. Built-ins may refine individual entries. */
 export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
@@ -656,7 +670,36 @@ export interface NodeConfig {
  * The orchestrator path uses base AgentRequestOptions fields only.
  * The workflow path additionally passes nodeConfig and assistantConfig.
  */
+/**
+ * The install-wide provider slot held by the current `sendQuery` call. Archon core
+ * sets it only when the operator configured a cap for this provider; a provider with
+ * no internal retry loop can ignore it, because core already releases the slot when
+ * the `sendQuery` stream closes.
+ */
+export interface ProviderAttemptAdmission {
+  /**
+   * Release the slot for a provider-internal retry backoff, run `wait`, then wait for
+   * a slot again before the next attempt. Rejects when the request is aborted while
+   * waiting for the slot, leaving no slot held.
+   */
+  releaseDuring(wait: () => Promise<void>): Promise<void>;
+}
+
+/** Typed admission transitions for one capped provider attempt. */
+export interface ProviderAdmissionEvent {
+  state: 'waiting' | 'admitted' | 'released';
+  /** Provider registration ID. */
+  provider: string;
+  /** Slot holder ID; stable from `waiting` through `released` for one attempt. */
+  attemptId: string;
+  capacity: number;
+}
+
 export interface SendQueryOptions extends AgentRequestOptions {
+  /** Set by Archon core admission; callers do not supply it. */
+  admission?: ProviderAttemptAdmission;
+  /** Observer for capped-provider admission transitions (queue visibility, #2817). */
+  onAdmission?: (event: ProviderAdmissionEvent) => void;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */
   nodeConfig?: NodeConfig;
   /** Per-provider defaults from .archon/config.yaml assistants section. */
@@ -741,12 +784,23 @@ export interface ProviderCapabilities {
    * Whether the provider emits a monetary `cost` on a turn's usage, which the
    * engine surfaces as `costUsd` on node results and rolls up into run totals.
    * True means the translation from the SDK's cost field exists; a turn may still
-   * omit the figure when the SDK reports none.
+   * omit the figure when the SDK reports none. The other reporting flags follow
+   * the same rule: they describe an available translation, not a guarantee that
+   * every result contains the field or that usage covers every nested agent.
+   * Omitted reporting flags on older providers mean unknown, not unsupported.
    *
    * Independent of {@link costControl}: an uncappable provider still prices every
    * turn, and a cappable one is not made cheaper by reporting.
    */
   costReporting: boolean;
+  /** Whether the provider translates SDK token usage into result tokens. */
+  tokenReporting?: boolean;
+  /** Whether the provider translates an SDK stop reason into the terminal result. */
+  stopReasonReporting?: boolean;
+  /** Whether the provider reports the SDK's turn count, without counting events. */
+  turnCountReporting?: boolean;
+  /** Whether the provider translates a reported model identity, not the requested alias. */
+  resolvedModelReporting?: boolean;
   effortControl: boolean;
   fallbackModel: boolean;
   sandbox: boolean;
@@ -841,11 +895,12 @@ export interface ProviderRegistration {
   credentials: ProviderCredentialCatalog;
 
   /**
-   * Validate and normalize provider defaults selected for one workflow run.
-   * Ordinary config remains defensive and tolerant; explicit run config must
-   * reject values the provider would otherwise silently discard.
+   * Validate and normalize authored provider defaults, for `.archon/config.yaml`
+   * and for a per-run config layer alike. Execution-time parsing stays defensive
+   * and tolerant; an authored setting must reject values the provider would
+   * otherwise silently discard.
    */
-  parseRunConfig: ProviderRunConfigParser;
+  parseConfig: ProviderConfigParser;
 }
 
 /**

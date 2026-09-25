@@ -1664,6 +1664,15 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
+        /** @description No live owner answered, or the owner could not be stopped; the run was not changed */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
         /** @description Server error */
         500: {
           headers: {
@@ -1861,6 +1870,15 @@ export interface paths {
         };
         /** @description Not found */
         404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description A live owner answered but could not be stopped; the run was not changed */
+        409: {
           headers: {
             [name: string]: unknown;
           };
@@ -2654,7 +2672,7 @@ export interface paths {
     };
     /**
      * List a run's artifact files
-     * @description Walks the run's artifact directory and returns relative file paths with size + mtime. Drives the console Artifacts tab. Resolves for every project kind — `owner/repo`, `_local/<basename>`, and `_folder/<slug>` — preferring the run's persisted `output_root` and re-deriving from the codebase when it is absent or no longer inside ARCHON_HOME. Returns `{ files: [] }` only when the location resolved and the run genuinely wrote nothing; returns 404 when the output location cannot be resolved at all.
+     * @description Walks the run's artifact directory and returns relative file paths with size + mtime. Drives the console Artifacts tab. Leaves out only the engine's own `.archon` child at the root, the same rule `archon workflow get` applies; a workflow's own dotfiles are listed. Resolves for every project kind — `owner/repo`, `_local/<basename>`, and `_folder/<slug>` — preferring the run's persisted `output_root` and re-deriving from the codebase when it is absent or no longer inside ARCHON_HOME. Returns `{ files: [] }` only when the location resolved and the run genuinely wrote nothing; returns 404 when the output location cannot be resolved at all.
      */
     get: {
       parameters: {
@@ -2794,7 +2812,7 @@ export interface paths {
             'application/json': components['schemas']['ConfigResponse'];
           };
         };
-        /** @description Invalid request body */
+        /** @description Invalid request body, or the resulting config is invalid */
         400: {
           headers: {
             [name: string]: unknown;
@@ -2855,7 +2873,7 @@ export interface paths {
             'application/json': components['schemas']['ConfigResponse'];
           };
         };
-        /** @description Invalid request body */
+        /** @description Invalid request body, or the resulting config is invalid */
         400: {
           headers: {
             [name: string]: unknown;
@@ -2916,7 +2934,7 @@ export interface paths {
             'application/json': components['schemas']['ConfigResponse'];
           };
         };
-        /** @description Invalid alias name, unknown provider, or invalid effort */
+        /** @description Invalid alias name, unknown provider, invalid effort, or the resulting config is invalid */
         400: {
           headers: {
             [name: string]: unknown;
@@ -3205,6 +3223,344 @@ export interface components {
       error?: string;
       reason?: components['schemas']['NodeSkipReason'];
       cause?: components['schemas']['SkipCause'];
+      execution?: {
+        runId: string;
+        path: string;
+        node:
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'agent';
+              source:
+                | {
+                    /** @enum {string} */
+                    kind: 'inline';
+                  }
+                | {
+                    /** @enum {string} */
+                    kind: 'command';
+                    name: string;
+                  };
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'exec';
+              /** @enum {string} */
+              runtime: 'sh' | 'bun' | 'uv';
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'loop';
+              command?: string;
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'loop_group';
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'gate';
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'halt';
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'wait';
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'workflow';
+            }
+          | {
+              id: string;
+              /** @enum {string} */
+              kind: 'compose_fan_out';
+            }
+          | {
+              /** @enum {string} */
+              kind: 'compose_fan_out_instance';
+              id: string;
+            };
+        invocation: {
+          id: string;
+          /** Format: date-time */
+          startedAt: string;
+          loopPath: {
+            groupId: string;
+            iteration: number;
+          }[];
+          checkoutStart?:
+            | {
+                /** @enum {string} */
+                kind: 'git';
+                /** Format: date-time */
+                sampledAt: string;
+                commit: string | null;
+                tree: string | null;
+                worktree:
+                  | {
+                      /** @enum {string} */
+                      status: 'clean';
+                    }
+                  | {
+                      /** @enum {string} */
+                      status: 'dirty';
+                      /** @enum {string} */
+                      content: 'complete' | 'incomplete';
+                      staged: number;
+                      unstaged: number;
+                      untracked: number;
+                      manifest: {
+                        pointer: {
+                          /** @enum {string} */
+                          type: 'archon_artifact';
+                          run_id: string;
+                          path: string;
+                        };
+                        sha256: string;
+                        entries: number;
+                      };
+                    };
+                cutFromCommit?: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'not_git';
+                /** Format: date-time */
+                sampledAt: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'unavailable';
+                /** Format: date-time */
+                sampledAt: string;
+                /** @enum {string} */
+                reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+              };
+        };
+        attempt: {
+          id: string;
+          /** Format: date-time */
+          startedAt: string;
+          checkoutStart?:
+            | {
+                /** @enum {string} */
+                kind: 'git';
+                /** Format: date-time */
+                sampledAt: string;
+                commit: string | null;
+                tree: string | null;
+                worktree:
+                  | {
+                      /** @enum {string} */
+                      status: 'clean';
+                    }
+                  | {
+                      /** @enum {string} */
+                      status: 'dirty';
+                      /** @enum {string} */
+                      content: 'complete' | 'incomplete';
+                      staged: number;
+                      unstaged: number;
+                      untracked: number;
+                      manifest: {
+                        pointer: {
+                          /** @enum {string} */
+                          type: 'archon_artifact';
+                          run_id: string;
+                          path: string;
+                        };
+                        sha256: string;
+                        entries: number;
+                      };
+                    };
+                cutFromCommit?: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'not_git';
+                /** Format: date-time */
+                sampledAt: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'unavailable';
+                /** Format: date-time */
+                sampledAt: string;
+                /** @enum {string} */
+                reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+              };
+        };
+        binding: {
+          provider?: string;
+          model?: {
+            requested?: string;
+            resolved:
+              | {
+                  /** @enum {string} */
+                  source: 'provider';
+                  value: string;
+                }
+              | {
+                  /** @enum {string} */
+                  source: 'unavailable';
+                  /** @enum {string} */
+                  reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+                };
+          };
+          /** @enum {string} */
+          tier?: 'small' | 'medium' | 'large';
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+          sessionPreview?: string;
+          /** @enum {string} */
+          sessionOrigin?: 'fresh' | 'resumed' | 'resume-failed-cold';
+        };
+        timing: {
+          /** Format: date-time */
+          startedAt: string;
+          durationMs?: number;
+        };
+        spend: {
+          tokens:
+            | {
+                /** @enum {string} */
+                source: 'provider';
+                value: {
+                  input: number;
+                  output: number;
+                  cacheRead?: number;
+                  cacheWrite?: number;
+                  /** @enum {boolean} */
+                  cachePartial?: true;
+                  total?: number;
+                  cost?: number;
+                };
+              }
+            | {
+                /** @enum {string} */
+                source: 'unavailable';
+                /** @enum {string} */
+                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+              };
+          costUsd:
+            | {
+                /** @enum {string} */
+                source: 'provider';
+                value: number;
+              }
+            | {
+                /** @enum {string} */
+                source: 'unavailable';
+                /** @enum {string} */
+                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+              };
+          stopReason:
+            | {
+                /** @enum {string} */
+                source: 'provider';
+                value: string;
+              }
+            | {
+                /** @enum {string} */
+                source: 'unavailable';
+                /** @enum {string} */
+                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+              };
+          numTurns:
+            | {
+                /** @enum {string} */
+                source: 'provider';
+                value: number;
+              }
+            | {
+                /** @enum {string} */
+                source: 'unavailable';
+                /** @enum {string} */
+                reason: 'unsupported' | 'not_reported' | 'unknown' | 'not_applicable' | 'invalid';
+              };
+        };
+        /** @enum {string} */
+        accounting: 'node' | 'aggregate' | 'instance' | 'amendment';
+        lifecycle:
+          | {
+              /** @enum {string} */
+              status: 'started';
+            }
+          | {
+              /** @enum {string} */
+              status: 'completed';
+            }
+          | {
+              /** @enum {string} */
+              status: 'failed';
+              error: string;
+              /** @enum {boolean} */
+              retryable?: false;
+              /** @enum {string} */
+              failureKind?:
+                | 'fatal'
+                | 'transient'
+                | 'unknown'
+                | 'timeout'
+                | 'exec_failed'
+                | 'output_contract'
+                | 'max_iterations'
+                | 'child_failed'
+                | 'cancelled'
+                | 'config';
+            }
+          | {
+              /** @enum {string} */
+              status: 'skipped';
+              /** @enum {string} */
+              reason:
+                | 'prior_success'
+                | 'when_condition'
+                | 'when_condition_parse_error'
+                | 'trigger_rule'
+                | 'timeout';
+              cause:
+                | {
+                    /** @enum {string} */
+                    kind: 'condition';
+                    expr: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    kind: 'condition_parse_error';
+                    expr: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    kind: 'timeout';
+                  }
+                | {
+                    /** @enum {string} */
+                    kind: 'upstream_failed';
+                    origin: string;
+                  }
+                | {
+                    /** @enum {string} */
+                    kind: 'upstream_skipped';
+                    origin: string;
+                  };
+            }
+          | {
+              /** @enum {string} */
+              status: 'suspended';
+              point: ('approval' | 'interactive_loop' | 'writeback' | 'child_workflow') | 'wait';
+            };
+      };
       timestamp: number;
     };
     /** @enum {string} */
@@ -3912,6 +4268,55 @@ export interface components {
       parent_run_id: string | null;
       adopted_from_run_id: string | null;
       output_root: string | null;
+      checkout_baseline:
+        | {
+            /** @enum {string} */
+            kind: 'git';
+            /** Format: date-time */
+            sampledAt: string;
+            commit: string | null;
+            tree: string | null;
+            worktree:
+              | {
+                  /** @enum {string} */
+                  status: 'clean';
+                }
+              | {
+                  /** @enum {string} */
+                  status: 'dirty';
+                  /** @enum {string} */
+                  content: 'complete' | 'incomplete';
+                  staged: number;
+                  unstaged: number;
+                  untracked: number;
+                  manifest: {
+                    pointer: {
+                      /** @enum {string} */
+                      type: 'archon_artifact';
+                      run_id: string;
+                      path: string;
+                    };
+                    sha256: string;
+                    entries: number;
+                  };
+                };
+            cutFromCommit?: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'not_git';
+            /** Format: date-time */
+            sampledAt: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unavailable';
+            /** Format: date-time */
+            sampledAt: string;
+            /** @enum {string} */
+            reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+          }
+        | unknown;
       codebase_name: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
@@ -4059,6 +4464,55 @@ export interface components {
       parent_run_id: string | null;
       adopted_from_run_id: string | null;
       output_root: string | null;
+      checkout_baseline:
+        | {
+            /** @enum {string} */
+            kind: 'git';
+            /** Format: date-time */
+            sampledAt: string;
+            commit: string | null;
+            tree: string | null;
+            worktree:
+              | {
+                  /** @enum {string} */
+                  status: 'clean';
+                }
+              | {
+                  /** @enum {string} */
+                  status: 'dirty';
+                  /** @enum {string} */
+                  content: 'complete' | 'incomplete';
+                  staged: number;
+                  unstaged: number;
+                  untracked: number;
+                  manifest: {
+                    pointer: {
+                      /** @enum {string} */
+                      type: 'archon_artifact';
+                      run_id: string;
+                      path: string;
+                    };
+                    sha256: string;
+                    entries: number;
+                  };
+                };
+            cutFromCommit?: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'not_git';
+            /** Format: date-time */
+            sampledAt: string;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'unavailable';
+            /** Format: date-time */
+            sampledAt: string;
+            /** @enum {string} */
+            reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
+          }
+        | unknown;
     };
     /** @enum {string|null} */
     WorkflowRunOutcome: 'succeeded' | 'failed' | null;
@@ -4323,6 +4777,10 @@ export interface components {
       envInjection: boolean;
       costControl: boolean;
       costReporting: boolean;
+      tokenReporting?: boolean;
+      stopReasonReporting?: boolean;
+      turnCountReporting?: boolean;
+      resolvedModelReporting?: boolean;
       effortControl: boolean;
       fallbackModel: boolean;
       sandbox: boolean;

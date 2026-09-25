@@ -732,6 +732,14 @@ describe('classifyAndFormatError', () => {
       expect(result).not.toContain('/reset');
     });
 
+    test('spells the status command for the surface', () => {
+      const result = classifyAndFormatError(new TerminalStatusWriteError(new Error('gone')), {
+        formatWorkflowCommand: command => `/archon-workflow ${command}`,
+      });
+      expect(result).toContain('`/archon-workflow status`');
+      expect(result.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
+    });
+
     test('an ordinary database error still gets the generic database guidance', () => {
       const result = classifyAndFormatError(new Error('database is locked'));
       expect(result).not.toContain('final status could not be saved');

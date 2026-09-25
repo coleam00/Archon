@@ -1,3 +1,11 @@
+import type { NodeExecutionMetadata } from './schemas/node-execution';
+
+/** The part of a node's execution record its own process may read. */
+export type NodeExecutionIdentity = Pick<
+  NodeExecutionMetadata,
+  'runId' | 'path' | 'invocation' | 'attempt'
+>;
+
 export interface ExecNodeEnvironmentContext {
   artifactsDir: string;
   stateDir: string;
@@ -10,6 +18,20 @@ export interface ExecNodeEnvironmentContext {
   rejectionReason: string;
   issueContext?: string;
   adoptedRunDir?: string | undefined;
+  /**
+   * This invocation's typed-artifact listing. Required so a real invocation cannot
+   * forget it and hand its script an empty pointer; only a caller with no listing
+   * (the dry run) passes `''` explicitly. The path is inside the run's artifact dir,
+   * so a container that mounts it reads the same bytes at the same path.
+   */
+  typedArtifactsFile: string;
+  /**
+   * The execution this process belongs to: identity plus the invocation's and this
+   * attempt's checkout starts (#3375). Carries manifest pointers and digests, never
+   * manifest contents. Required for the same reason as `typedArtifactsFile`; only a
+   * caller with no execution record passes `null`, which delivers an empty value.
+   */
+  nodeExecution: NodeExecutionIdentity | null;
 }
 
 export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): NodeJS.ProcessEnv {
@@ -32,6 +54,18 @@ export function buildExecNodeEnvironment(context: ExecNodeEnvironmentContext): N
     CONTEXT: issueContext,
     EXTERNAL_CONTEXT: issueContext,
     ISSUE_CONTEXT: issueContext,
+    // The listing path, delivered like the other engine-reserved keys: configured
+    // project env and node bindings spread before this bag, so neither can shadow it.
+    TYPED_ARTIFACTS_FILE: context.typedArtifactsFile,
+    ARCHON_NODE_EXECUTION:
+      context.nodeExecution === null
+        ? ''
+        : JSON.stringify({
+            runId: context.nodeExecution.runId,
+            path: context.nodeExecution.path,
+            invocation: context.nodeExecution.invocation,
+            attempt: context.nodeExecution.attempt,
+          }),
   };
 }
 
@@ -47,6 +81,8 @@ export const EXEC_NODE_ENVIRONMENT_NAMES: ReadonlySet<string> = new Set(
       loopUserInput: '',
       loopPrevOutput: '',
       rejectionReason: '',
+      typedArtifactsFile: '',
+      nodeExecution: null,
     })
   )
 );

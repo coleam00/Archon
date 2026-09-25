@@ -27,6 +27,7 @@ const run = {
   status: 'failed' as const,
   outcome: null,
   output_root: null,
+  checkout_baseline: null,
   metadata: {
     [RUN_GRAPH_METADATA_KEY]: {
       node_ids: ['discover', 'build', 'report', 'untouched'],
@@ -326,6 +327,7 @@ describe('durable terminal projection', () => {
         node('node_completed', 'build', { node_output: 'success' }),
         node('node_completed', 'discover', { node_output: 'old' }),
         node('node_started', 'discover'),
+        node('node_suspended', 'discover', { suspend_point: 'wait' }),
       ],
     });
     expect(record.first_failed_node).toBeNull();

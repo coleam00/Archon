@@ -6,7 +6,8 @@ export type {
   NodeConfig,
   ProviderDefaults,
   ProviderDefaultsMap,
-  ProviderRunConfigParser,
+  ProviderConfigParser,
+  ProviderConfigScope,
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,
@@ -15,6 +16,8 @@ export type {
   CredentialKind,
   CredentialSpec,
   ProviderCredentialCatalog,
+  ProviderAttemptAdmission,
+  ProviderAdmissionEvent,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
 

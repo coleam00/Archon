@@ -3,7 +3,10 @@ description: |
   Review a change through parallel specialist lenses and produce one evidence-based
   verdict. On the first round, code, seams, simplify, and tests always run; errors are
   selected for failure-path changes and docs only for shipped-doc changes. Reviews a PR when given one, otherwise the
-  working diff. Advisory and read-only: it judges, it never edits. Given the
+  working diff. Every round also holds the change to the accepted contract: each
+  stated acceptance item, invariant, and steering constraint is met with cited
+  evidence or raised as a blocking finding.
+  Advisory and read-only: it judges, it never edits. Given the
   previous round's report, one continuation reviewer verifies the prior findings,
   reviews the correction delta, and follows their causal class without repeating
   the full specialist fan-out.
@@ -45,7 +48,7 @@ inputs:
       Docs-impact lens — auto selects shipped-documentation changes from the
       reviewed diff; true or false overrides that selection.
 
-returns: synthesize
+returns: publish
 outcome_field: ready
 
 nodes:
@@ -85,7 +88,11 @@ nodes:
       type: object
       properties:
         docs: { type: boolean }
-      required: [docs]
+        # The qualified pull request this round reviewed, or `{}` for a working
+        # diff. publish below writes to this record and to nothing else, so the
+        # comment can never land on an ambient branch→PR mapping.
+        pr: { type: object }
+      required: [docs, pr]
 
   # ── Default-on lenses ─────────────────────────────────────────────
   - id: code
@@ -181,7 +188,7 @@ nodes:
     context: fresh
     output_type: review-report
     depends_on: [scope, review-complete]
-    output_format:
+    output_format: &review_verdict
       type: object
       properties:
         ready:
@@ -202,3 +209,24 @@ nodes:
             path: { type: string, enum: [review/report.md] }
           required: [type, run_id, path]
       required: [ready, action, findings_summary, report]
+
+  # The reviewer judges and writes the report; this node owns the one public
+  # write, so every round edits the same marked comment instead of appending
+  # another, through whichever forge source the run selected. The verdict passes
+  # through unchanged: publication is not what makes a review true.
+  - id: publish
+    script: publish-review
+    runtime: bun
+    depends_on: [synthesize]
+    with:
+      # Delivery's verified record, when it passed one, is the write target;
+      # the scope agent's declaration names it only for a standalone review.
+      scope: "$INPUTS.scope"
+      pr: "$scope.output.pr"
+      report: "$ARTIFACTS_DIR/review/report.md"
+      ready: "$synthesize.output.ready"
+      action: "$synthesize.output.action"
+      summary: "$synthesize.output.findings_summary"
+      report_pointer: "$synthesize.output.report"
+    output_type: review-report
+    output_format: *review_verdict

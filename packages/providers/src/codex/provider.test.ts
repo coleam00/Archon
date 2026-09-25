@@ -105,6 +105,10 @@ describe('CodexProvider', () => {
         envInjection: true,
         costControl: false,
         costReporting: false,
+        tokenReporting: true,
+        stopReasonReporting: false,
+        turnCountReporting: false,
+        resolvedModelReporting: false,
         effortControl: true,
         fallbackModel: false,
         sandbox: false,
@@ -304,6 +308,43 @@ describe('CodexProvider', () => {
         sessionId: 'new-thread-id',
         tokens: { input: 10, output: 5, cacheRead: 7, cacheWrite: 3 },
       });
+    });
+
+    test('omits tokens when turn.completed has no usage', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed' };
+        })(),
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([{ type: 'result', sessionId: 'new-thread-id' }]);
+    });
+
+    test('preserves reported zero token usage', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield {
+            type: 'turn.completed',
+            usage: { ...defaultUsage, input_tokens: 0, output_tokens: 0 },
+          };
+        })(),
+      });
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        chunks.push(chunk);
+      }
+      expect(chunks).toEqual([
+        {
+          type: 'result',
+          sessionId: 'new-thread-id',
+          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ]);
     });
 
     test('captures the new-thread id from the thread.started event (resumable sessionId)', async () => {
@@ -2210,6 +2251,35 @@ describe('CodexProvider', () => {
 
         expect(callCount).toBe(3);
         expect(chunks.some(c => c.type === 'assistant' && c.content === 'Recovered!')).toBe(true);
+      }, 5_000);
+
+      test('retry backoff runs inside the admission release, never while the slot is held', async () => {
+        const events: string[] = [];
+        mockRunStreamed.mockImplementation(() => {
+          events.push('attempt');
+          if (events.filter(e => e === 'attempt').length === 1) {
+            return Promise.reject(new Error('Codex Exec exited with code 1'));
+          }
+          return Promise.resolve({
+            events: (async function* () {
+              yield { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } };
+              yield { type: 'turn.completed', usage: defaultUsage };
+            })(),
+          });
+        });
+        const admission = {
+          releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
+            events.push('released');
+            await wait();
+            events.push('reacquired');
+          },
+        };
+
+        for await (const _ of client.sendQuery('test', '/workspace', undefined, { admission })) {
+          // consume
+        }
+
+        expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
       }, 5_000);
 
       test('classifies auth errors as fatal (no retry)', async () => {

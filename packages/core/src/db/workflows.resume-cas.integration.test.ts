@@ -38,6 +38,10 @@ mock.module('@archon/paths', () => ({
   }),
   // Consumed by workflow-operations (gate-staging tests below).
   captureApprovalResolved: () => undefined,
+  // Terminal writers report telemetry; its behavior is covered by
+  // workflow-terminal-telemetry.integration.test.ts.
+  isTelemetryDisabled: () => true,
+  captureWorkflowTerminal: () => undefined,
 }));
 
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');

@@ -28,6 +28,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     parent_run_id: null,
     adopted_from_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     ...overrides,
   };
 }
@@ -70,7 +71,8 @@ describe('resolveRunWorkflow', () => {
       makeRun({
         metadata: capturedMetadata(capture),
       }),
-      source
+      source,
+      {}
     );
 
     expect(result.ok).toBe(true);
@@ -89,7 +91,8 @@ describe('resolveRunWorkflow', () => {
 
     const result = await resolveRunWorkflow(
       makeRun({ metadata: capturedMetadata(capture) }),
-      source
+      source,
+      {}
     );
 
     expect(result.ok).toBe(false);
@@ -103,7 +106,7 @@ describe('resolveRunWorkflow', () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-resolve-legacy-run-')));
     await writeWorkflow(root, 'Legacy live graph');
 
-    const result = await resolveRunWorkflow(makeRun(), root);
+    const result = await resolveRunWorkflow(makeRun(), root, {});
 
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.workflow.description).toBe('Legacy live graph');
@@ -114,7 +117,7 @@ describe('resolveRunWorkflow', () => {
     await mkdir(join(root, '.archon', 'workflows'), { recursive: true });
     await writeFile(join(root, '.archon', 'workflows', 'continued.yaml'), 'name: [invalid');
 
-    const result = await resolveRunWorkflow(makeRun(), root);
+    const result = await resolveRunWorkflow(makeRun(), root, {});
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -126,7 +129,7 @@ describe('resolveRunWorkflow', () => {
   test('reports a missing legacy workflow', async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-legacy-run-')));
 
-    const result = await resolveRunWorkflow(makeRun(), root);
+    const result = await resolveRunWorkflow(makeRun(), root, {});
 
     expect(result).toEqual({
       ok: false,
@@ -134,5 +137,16 @@ describe('resolveRunWorkflow', () => {
         'Workflow `continued` for run run-1 was not found.\n\n' +
         'Use /workflow list to check available workflows.',
     });
+  });
+
+  test('spells the list command for the surface', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-legacy-run-')));
+
+    const result = await resolveRunWorkflow(makeRun(), root, {
+      formatWorkflowCommand: command => `/archon-workflow ${command}`,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.message).toContain('Use /archon-workflow list');
   });
 });

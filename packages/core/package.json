@@ -52,6 +52,15 @@
   },
   "testGroups": [
     [
+      "src/db/resource-starts.integration.test.ts"
+    ],
+    [
+      "src/services/provider-admission.integration.test.ts"
+    ],
+    [
+      "src/db/provider-attempts.postgres.integration.test.ts"
+    ],
+    [
       "src/handlers/command-handler.test.ts"
     ],
     [
@@ -62,6 +71,9 @@
     ],
     [
       "src/handlers/register-folder-lookup.integration.test.ts"
+    ],
+    [
+      "src/handlers/register-repository-shared-db.integration.test.ts"
     ],
     [
       "src/db/adapters/postgres.test.ts"
@@ -93,6 +105,7 @@
       "src/utils/error.test.ts",
       "src/utils/error-formatter.test.ts",
       "src/utils/github-graphql.test.ts",
+      "src/types/message-metadata.test.ts",
       "src/config/config-loader.test.ts",
       "src/config/resolve-assistant.test.ts",
       "src/state/"
@@ -116,6 +129,9 @@
       "src/db/workflows.resume-cas.integration.test.ts"
     ],
     [
+      "src/db/workflow-terminal-telemetry.integration.test.ts"
+    ],
+    [
       "src/db/workflow-events.since.integration.test.ts"
     ],
     [
@@ -131,10 +147,13 @@
       "src/db/isolation-environments.live-run.postgres.integration.test.ts"
     ],
     [
+      "src/db/resource-slots.postgres.integration.test.ts"
+    ],
+    [
       "src/db/workflows.adoption-timestamp.integration.test.ts"
     ],
     [
-      "src/utils/path-validation.test.ts"
+      "src/db/workflows.checkout-baseline.integration.test.ts"
     ],
     [
       "src/services/cleanup-service.test.ts"
@@ -144,6 +163,10 @@
     ],
     [
       "src/services/run-live-owner.test.ts"
+    ],
+    [
+      "src/services/run-owner-stop.test.ts",
+      "src/services/windows-process-tree.test.ts"
     ],
     [
       "src/services/run-attention-watch.test.ts"

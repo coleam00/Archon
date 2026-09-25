@@ -70,7 +70,7 @@ const mockRemoveEnvironment = mock<typeof CleanupService.removeEnvironment>(() =
   Promise.resolve({ worktreeRemoved: true, branchDeleted: true, warnings: [] })
 );
 const mockCleanupMergedWorktrees = mock<typeof CleanupService.cleanupMergedWorktrees>(() =>
-  Promise.resolve({ removed: [], skipped: [] })
+  Promise.resolve({ removed: [], skipped: [], baseRef: toBranchName('origin/dev') })
 );
 const mockCleanupContainerEnvironments = mock<typeof CleanupService.cleanupContainerEnvironments>(
   () => Promise.resolve({ removed: [], skipped: [], errors: [] })
@@ -97,7 +97,7 @@ const mockListEnvironments = mock<typeof IsolationOperations.listEnvironments>((
   })
 );
 const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMergedEnvironments>(
-  () => Promise.resolve({ removed: [], skipped: [] })
+  () => Promise.resolve({ removed: [], skipped: [], baseRef: toBranchName('origin/dev') })
 );
 
 mock.module('@archon/core/operations/isolation-operations', () => ({
@@ -195,6 +195,7 @@ function makeActiveWorkflowRun(overrides: Partial<ActiveWorkflowRun> = {}): Acti
     parent_run_id: null,
     adopted_from_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     ...overrides,
   };
 }
@@ -741,7 +742,11 @@ describe('isolationCleanupMergedCommand', () => {
     consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
     consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
     mockCleanupMergedEnvironments.mockReset();
-    mockCleanupMergedEnvironments.mockResolvedValue({ removed: [], skipped: [] });
+    mockCleanupMergedEnvironments.mockResolvedValue({
+      removed: [],
+      skipped: [],
+      baseRef: toBranchName('origin/dev'),
+    });
   });
 
   afterEach(() => {
@@ -759,6 +764,16 @@ describe('isolationCleanupMergedCommand', () => {
   it('defaults to includeClosed=false', async () => {
     await isolationCleanupMergedCommand();
     expect(mockCleanupMergedEnvironments).toHaveBeenCalledWith('cb-1', '/test/repo', {});
+  });
+
+  // The command used to claim "merged into main" while comparing against the repo's
+  // configured base branch (#3471).
+  it('names the base ref the sweep compared against, never a hardcoded main', async () => {
+    await isolationCleanupMergedCommand();
+
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Base: origin/dev');
+    const printed = consoleLogSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+    expect(printed).not.toContain('merged into main');
   });
 });
 

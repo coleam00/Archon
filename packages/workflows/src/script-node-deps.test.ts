@@ -5,6 +5,7 @@
  * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
+import type { CheckoutObservation } from './schemas/checkout-observation';
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdir, rm } from 'fs/promises';
 import { join } from 'path';
@@ -76,8 +77,13 @@ function createMockStore(): IWorkflowStore {
         user_id: null,
         parent_run_id: null,
         output_root: null,
+        checkout_baseline: null,
         adopted_from_run_id: null,
       })
+    ),
+    claimPendingWorkflowRun: mock(async () => null),
+    recordWorkflowRunCheckoutBaseline: mock(
+      async (_id: string, baseline: CheckoutObservation) => baseline
     ),
     getWorkflowRun: mock(() => Promise.resolve(null)),
     findChildRuns: mock(() => Promise.resolve([])),
@@ -102,6 +108,7 @@ function createMockStore(): IWorkflowStore {
         user_id: null,
         parent_run_id: null,
         output_root: null,
+        checkout_baseline: null,
         adopted_from_run_id: null,
       })
     ),
@@ -121,6 +128,7 @@ function createMockStore(): IWorkflowStore {
           workflow_run_id: id,
           event_type: 'node_completed' as const,
           step_name: completion.stepName,
+          data: {},
         },
       })
     ),
@@ -224,6 +232,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     adopted_from_run_id: null,
   };
 }

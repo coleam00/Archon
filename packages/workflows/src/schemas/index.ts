@@ -59,6 +59,21 @@ export {
   workflowRunConfigInputSchema,
   workflowRunConfigMetadataSchema,
 } from './run-config';
+
+export {
+  preparedWorkflowLaunchSchema,
+  resourceStartIntentSchema,
+  resourceStartDispositionSchema,
+  sourceReceiptInputSchema,
+  resourceStartBindingIntentSchema,
+} from './resource-start';
+export type {
+  PreparedWorkflowLaunch,
+  ResourceStartIntent,
+  ResourceStartDisposition,
+  SourceReceiptInput,
+  ResourceStartBindingIntent,
+} from './resource-start';
 export type {
   WorkflowRunConfigLayer,
   WorkflowRunConfigSource,
@@ -106,6 +121,8 @@ export {
   isWaitNode,
   isLoopNode,
   isLoopGroupNode,
+  loopGroupBodySinks,
+  loopGroupSoleTerminalSink,
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
@@ -219,6 +236,11 @@ export {
   readWorkflowSourceState,
   CONTINUATION_METADATA_KEY,
   readContinuationMode,
+  EXECUTION_OWNER_METADATA_KEY,
+  readExecutionOwner,
+  RUN_DISPATCH_METADATA_KEY,
+  runDispatchMetadataSchema,
+  readRunDispatchMetadata,
 } from './workflow-run';
 export type {
   WorkflowRunStatus,
@@ -245,6 +267,8 @@ export type {
   WorkflowSourceConfig,
   WorkflowSourceState,
   ContinuationMode,
+  ExecutionOwnerRecord,
+  RunDispatchMetadata,
 } from './workflow-run';
 
 // Per-node persisted provider sessions

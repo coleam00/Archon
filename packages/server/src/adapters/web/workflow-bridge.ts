@@ -10,6 +10,7 @@ import {
   type SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
+import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import { SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
 
@@ -95,6 +96,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
       });
 
     case 'node_started':
+    case 'node_suspended':
     case 'node_completed':
     case 'node_failed':
     case 'node_skipped': {
@@ -104,7 +106,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         nodeId: event.nodeId,
         name: event.nodeName,
         status:
-          event.type === 'node_started'
+          event.type === 'node_started' || event.type === 'node_suspended'
             ? 'running'
             : event.type === 'node_completed'
               ? 'completed'
@@ -115,6 +117,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         error: event.type === 'node_failed' ? event.error : undefined,
         reason: event.type === 'node_skipped' ? event.reason : undefined,
         cause: event.type === 'node_skipped' ? event.cause : undefined,
+        execution: event.execution,
         timestamp: Date.now(),
       };
       return JSON.stringify(payload);
@@ -256,6 +259,7 @@ const ROW_WORKFLOW_STATUS: Record<string, 'running' | 'completed' | 'failed' | '
 /** DB event_type → node-level status, emitted as a `dag_node` SSE event. */
 const ROW_NODE_STATUS: Record<string, 'running' | 'completed' | 'failed' | 'skipped'> = {
   node_started: 'running',
+  node_suspended: 'running',
   loop_iteration_started: 'running',
   node_completed: 'completed',
   loop_iteration_completed: 'completed',
@@ -350,6 +354,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
 
   const nodeStatus = ROW_NODE_STATUS[row.event_type];
   if (nodeStatus) {
+    const record = readNodeRecordEvent(row);
     const payload: DagNodeSseEvent = {
       type: 'dag_node',
       runId,
@@ -362,6 +367,7 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
           : undefined,
       reason: row.event_type === 'node_skipped' ? dataSkipReason(data) : undefined,
       cause: row.event_type === 'node_skipped' ? dataSkipCause(data) : undefined,
+      execution: record?.metadata,
       timestamp,
     };
     return JSON.stringify(payload);

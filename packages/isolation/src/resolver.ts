@@ -603,7 +603,12 @@ export class IsolationResolver {
       status: 'resolved',
       env,
       cwd: env.working_path,
-      method: { type: 'created' },
+      method: {
+        type: 'created',
+        ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.cutFromCommit !== undefined
+          ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
+          : {}),
+      },
       ...(isolatedEnv.warnings?.length ? { warnings: isolatedEnv.warnings } : {}),
     };
   }

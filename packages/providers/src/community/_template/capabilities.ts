@@ -18,6 +18,10 @@ export const YOUR_CAPABILITIES: ProviderCapabilities = {
   envInjection: false,
   costControl: false,
   costReporting: false,
+  tokenReporting: false,
+  stopReasonReporting: false,
+  turnCountReporting: false,
+  resolvedModelReporting: false,
   effortControl: false,
   fallbackModel: false,
   sandbox: false,
@@ -38,6 +42,10 @@ type OptionalCapabilityAxis = {
  */
 export const OPTIONAL_AXES = {
   sessionFork: true,
+  tokenReporting: true,
+  stopReasonReporting: true,
+  turnCountReporting: true,
+  resolvedModelReporting: true,
   knownToolNames: true,
   renamedTools: true,
 } satisfies Record<OptionalCapabilityAxis, true>;

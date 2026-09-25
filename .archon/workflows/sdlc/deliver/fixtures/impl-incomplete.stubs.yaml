@@ -1,0 +1,15 @@
+# Dry-run fixture: the implementation's checks did not finish (--exec-code, so the
+# real gate script decides). assert-changed is stubbed as passing, so this pins the
+# delivery gate on its own: gate-green refuses `incomplete` as an unfinished
+# validation before anything public happens.
+impl__implement:
+  done: true
+  green: false
+  red_cause: incomplete
+  summary: "stub: a provider limit stopped validation during tests. type-check and lint passed; tests never finished."
+impl__assert-changed: "3 files changed"
+# gate-green is deliberately unstubbed: the real script must refuse.
+fixture:
+  expect: failed
+  fail-node: gate-green
+exec-code: true

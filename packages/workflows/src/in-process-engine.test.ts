@@ -59,7 +59,6 @@ mock.module('@archon/paths', () => ({
     (root: string, wf: string, scope: string) => `${root}/scopes/${wf}/${scope}`
   ),
   captureWorkflowInvoked: mock(() => {}),
-  captureWorkflowCompleted: mock(() => {}),
 }));
 
 mock.module('@archon/git', () => ({
@@ -86,6 +85,7 @@ mock.module('./dag-executor', () => ({
 
 mock.module('./logger', () => ({
   logWorkflowStart: mock(async () => {}),
+  logWorkflowResume: mock(async () => {}),
   logWorkflowError: mock(async () => {}),
 }));
 

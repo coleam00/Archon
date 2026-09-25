@@ -2015,6 +2015,28 @@ export function isLoopGroupNode(node: DagNode): node is LoopGroupNode {
   return node.kind === 'loop_group';
 }
 
+/**
+ * A loop_group body's terminal sinks: the entries no other body entry depends on,
+ * in body order. The executor reads an iteration's output from these, and a gate or
+ * wait only pauses the enclosing loop when it is the SOLE one (#2707 step 3) — see
+ * `loopGroupSoleTerminalSink`. Load-time checks and the runtime share this so the
+ * two can never disagree about which node a body ends on.
+ */
+export function loopGroupBodySinks<T extends { id: string; depends_on?: readonly string[] }>(
+  body: readonly T[]
+): T[] {
+  const dependedOn = new Set(body.flatMap(n => n.depends_on ?? []));
+  return body.filter(n => !dependedOn.has(n.id));
+}
+
+/** The body's only terminal sink, or `undefined` when it ends on zero or several. */
+export function loopGroupSoleTerminalSink<T extends { id: string; depends_on?: readonly string[] }>(
+  body: readonly T[]
+): T | undefined {
+  const sinks = loopGroupBodySinks(body);
+  return sinks.length === 1 ? sinks[0] : undefined;
+}
+
 /** Type guard: check if a DAG node is a workflow (runtime sub-run) node */
 export function isWorkflowNode(node: DagNode): node is WorkflowNode {
   return node.kind === 'workflow';

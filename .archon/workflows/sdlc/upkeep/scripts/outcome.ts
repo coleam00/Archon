@@ -25,6 +25,7 @@ import { caveats } from '../../.shared/report.ts';
 // action this script does not recognise cannot open the spend gate, so it always
 // arrives with no delivered value and refuses through the branch below.
 const artifacts = artifactsDir();
+const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const action = text(process.env.INPUTS_ACTION);
 const summary = text(process.env.INPUTS_SUMMARY);
 const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
@@ -34,15 +35,15 @@ if (action === 'no_action') {
     delivered: false,
     summary:
       `No update needed: ${summary}\nReport: ${artifacts}/upkeep-assessment.md` +
-      caveats(artifacts, { failed: false }),
+      caveats(artifacts, { failed: false, listingFile }),
   });
 } else if (delivered === 'null') {
   refuse(
     "outcome: the assessment chose 'update' but delivery never ran — " +
       "see the run's terminal record for the node it stopped at." +
-      caveats(artifacts, { failed: true })
+      caveats(artifacts, { failed: true, listingFile })
   );
 } else {
   // Deliver ran, so the record it returned is the report.
-  emit({ delivered: true, summary: delivered + caveats(artifacts, { failed: false }) });
+  emit({ delivered: true, summary: delivered + caveats(artifacts, { failed: false, listingFile }) });
 }

@@ -6,7 +6,7 @@ import { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow'
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
-import type { IWorkflowPlatform } from '@archon/workflows/deps';
+import { spellWorkflowCommand, type IWorkflowPlatform } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import {
@@ -127,7 +127,10 @@ export async function resumeWorkflowRunFromServer(
       : null;
     const workflowCwd = codebase?.default_cwd ?? getArchonWorkspacesPath();
     const deps = createWorkflowDeps();
-    const continuation = await resolveRunWorkflow(resumableRun, workflowCwd);
+    const destination = target.kind === 'platform' ? target.destination : undefined;
+    const platform: IWorkflowPlatform =
+      destination?.platform ?? new HeadlessPlatform(resumableRun.conversation_id);
+    const continuation = await resolveRunWorkflow(resumableRun, workflowCwd, platform);
     if (!continuation.ok) {
       log.info(
         { runId: resumableRun.id, reason: continuation.message },
@@ -136,8 +139,6 @@ export async function resumeWorkflowRunFromServer(
       return false;
     }
 
-    const destination = target.kind === 'platform' ? target.destination : undefined;
-    const platform = destination?.platform ?? new HeadlessPlatform(resumableRun.conversation_id);
     const platformConversationId = destination?.conversationId ?? resumableRun.conversation_id;
     const runLiveOwner = await startRunLiveOwner(resumableRun.id);
     let runLiveOwnerClose: Promise<void> | undefined;
@@ -241,7 +242,7 @@ export async function resumeWorkflowRunFromServer(
                     destination.resultConversationId,
                     `⚠️ Run \`${resumableRun.id.slice(0, 8)}\` of **${resumableRun.workflow_name}** finished, but its ` +
                       'final status could not be saved. The run may still show as running — check it ' +
-                      `with \`/workflow status ${resumableRun.id}\` before starting another.`
+                      `with \`${spellWorkflowCommand(platform, `status ${resumableRun.id}`)}\` before starting another.`
                   )
                   .catch((sendError: unknown) => {
                     log.warn(
@@ -331,8 +332,13 @@ export async function scanDueWorkflowContinuations(
   }
 }
 
+/**
+ * @param onTick Another host duty that shares this cadence. The server passes its
+ *   resource-start drain here so queued work advances once its blocker ends.
+ */
 export function startWorkflowContinuationScheduler(
-  resolveDestination?: WorkflowResumeDestinationResolver
+  resolveDestination?: WorkflowResumeDestinationResolver,
+  onTick?: () => void
 ): void {
   if (continuationScheduler !== undefined) return;
   const resume = async (run: WorkflowRun, cursor: WorkflowResumeCursor): Promise<boolean> => {
@@ -341,14 +347,14 @@ export function startWorkflowContinuationScheduler(
       : ({ kind: 'headless' } as const);
     return resumeWorkflowRunFromServer(run, undefined, target, cursor);
   };
-  void scanDueWorkflowContinuations(new Date(), resume).catch((error: unknown) => {
-    log.error({ err: error as Error }, 'workflow_continuation_scan_failed');
-  });
-  continuationScheduler = setInterval(() => {
+  const tick = (): void => {
     void scanDueWorkflowContinuations(new Date(), resume).catch((error: unknown) => {
       log.error({ err: error as Error }, 'workflow_continuation_scan_failed');
     });
-  }, CONTINUATION_SCAN_INTERVAL_MS);
+    onTick?.();
+  };
+  tick();
+  continuationScheduler = setInterval(tick, CONTINUATION_SCAN_INTERVAL_MS);
   continuationScheduler.unref?.();
 }
 

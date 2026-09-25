@@ -7,6 +7,8 @@ export {
   getWSLDistroName,
   getArchonHome,
   getArchonWorkspacesPath,
+  isPathInside,
+  isInsideArchonWorkspaces,
   ensureArchonWorkspacesPath,
   getArchonWorktreesPath,
   getArchonTempPath,
@@ -44,6 +46,8 @@ export {
   resolveRunStorageRoot,
   getRunArtifactsDirForKey,
   getRunArtifactsDirForRoot,
+  RUN_ARTIFACTS_ENGINE_SUBDIR,
+  isRunArtifactsEngineEntry,
   getRunLogPathForRoot,
   getRunWorkflowSourceDirForRoot,
   slugifyFolderName,
@@ -52,7 +56,6 @@ export {
   getFolderProjectLogsPath,
   getFolderRunArtifactsPath,
   ensureFolderProjectStructure,
-  resolveProjectRootFromCwd,
   ensureProjectStructure,
   createProjectSourceSymlink,
   findMarkdownFilesRecursive,
@@ -74,7 +77,7 @@ export type { DetachedInstallContext, DetachedInstallContextKey } from './detach
 export { loadArchonEnv, isVerboseBoot } from './env-loader';
 
 // Logger
-export { createLogger, setLogLevel, getLogLevel, rootLogger } from './logger';
+export { createLogger, setLogLevel, getLogLevel, setLogDestination, rootLogger } from './logger';
 export type { Logger } from './logger';
 
 // Build-time constants (rewritten by scripts/build-binaries.sh)
@@ -110,7 +113,7 @@ export {
   captureChatTurn,
   captureApprovalResolved,
   captureCodebaseRegistered,
-  captureWorkflowCompleted,
+  captureWorkflowTerminal,
   classifyWorkflowForTelemetry,
   TELEMETRY_SCHEMA_VERSION,
   shutdownTelemetry,
@@ -123,7 +126,8 @@ export type {
   ArchonStartedProperties,
   ChatTurnProperties,
   DeploymentShapeProperties,
-  WorkflowCompletedProperties,
+  WorkflowTerminalProperties,
+  WorkflowCancelReason,
   WorkflowExitReason,
   WorkflowErrorClass,
   WorkflowNodeType,

@@ -22,8 +22,9 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
 | `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. |
+| `$TYPED_ARTIFACTS_FILE` | Absolute path to this invocation's typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation of the artifacts published before this invocation started, grouped by exact case-sensitive `output_type`. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/guides/authoring-workflows/#typed-artifacts-output_type). |
 | `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
-| `$BASE_BRANCH` | Base branch for git operations | Resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. `--base` sets the worktree cut-from too, so this variable always names the branch the worktree was actually cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
+| `$BASE_BRANCH` | Base branch for git operations | Resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. A continuation -- `--resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again; only a `--base` re-passed to that continuation overrides the recorded value. `--base` sets the worktree cut-from too, so this variable always names the branch the worktree was actually cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
 | `$EXTERNAL_CONTEXT` | Same as `$CONTEXT` | Alias |
@@ -258,7 +259,7 @@ is for machine readers, and a prompt inside the producing run keeps the
 
 Variables are substituted in a defined order:
 
-1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
+1. **Workflow variables** -- `$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARGUMENTS`, `$ARTIFACTS_DIR`, `$TYPED_ARTIFACTS_FILE`, `$STATE_DIR`, `$BASE_BRANCH`, `$DOCS_DIR`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`
 2. **Context variables** -- `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
@@ -275,6 +276,7 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 | `$ARGUMENTS` / `$USER_MESSAGE` | Yes | Yes (both aliases) | No |
 | `$WORKFLOW_ID` | Yes | No | No |
 | `$ARTIFACTS_DIR` | Yes | No | No |
+| `$TYPED_ARTIFACTS_FILE` | Yes (exec and AI nodes) | No | No |
 | `$STATE_DIR` | Yes | No | No |
 | `$BASE_BRANCH` | Yes | No | No |
 | `$DOCS_DIR` | Yes | No | No |

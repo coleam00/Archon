@@ -1235,6 +1235,29 @@ describe('DELETE /api/workflows/:name', () => {
     }
   });
 
+  test('does not match or delete a pack-root fixtures directory (#3183)', async () => {
+    const testDir = join(tmpdir(), `wf-del-fixtures-${Date.now()}`);
+    const packDir = join(testDir, '.archon', 'workflows', 'author-pack');
+    const fixturesDir = join(packDir, 'fixtures');
+    await mkdir(fixturesDir, { recursive: true });
+    const fixturePath = join(fixturesDir, 'clean.stubs.yaml');
+    await writeFile(fixturePath, 'name: clean.stubs\ndescription: not a workflow\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/clean.stubs?cwd=${testDir}`, {
+        method: 'DELETE',
+      });
+      expect(response.status).toBe(404);
+      await expect(readFile(fixturePath, 'utf-8')).resolves.toContain('clean.stubs');
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
   test('removes home-scoped .yml workflow when source=global', async () => {
     const testArchonHome = join(tmpdir(), `archon-home-del-yml-${Date.now()}`);
     const workflowDir = join(testArchonHome, 'workflows');
@@ -1406,6 +1429,33 @@ describe('GET /api/workflows - cwd validation', () => {
     // default mock returns /tmp/project
     const response = await app.request('/api/workflows?cwd=/tmp/project');
     expect(response.status).toBe(200);
+  });
+
+  test('accepts a subdirectory of a registered codebase path', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    const cwd = encodeURIComponent(join('/tmp/project', 'packages', 'app'));
+    const response = await app.request(`/api/workflows?cwd=${cwd}`);
+    expect(response.status).toBe(200);
+  });
+
+  test('rejects a lookalike sibling, a climb out with .., a relative path, and a case variant', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+    // Relative and case-variant spellings stay rejected on every platform: the
+    // check compares spellings, it does not resolve against the server's cwd or
+    // fold case on Windows.
+    for (const cwd of [
+      '/tmp/project-old',
+      join('/tmp/project', '..', 'secrets'),
+      'tmp/project',
+      '/tmp/PROJECT/sub',
+    ]) {
+      const response = await app.request(`/api/workflows?cwd=${encodeURIComponent(cwd)}`);
+      expect(response.status).toBe(400);
+    }
   });
 });
 

@@ -309,6 +309,7 @@ describe('workflow-events', () => {
           'run-b',
           'run-c',
           'node_started',
+          'node_suspended',
           'node_completed',
           'node_failed',
           'node_skipped',
@@ -1228,6 +1229,7 @@ describe('workflow-events', () => {
       async eventType => {
         const expected = {
           node_started: { cached: false, active: true },
+          node_suspended: { cached: false, active: true },
           node_completed: { cached: true, active: false },
           node_failed: { cached: false, active: false },
           node_skipped: { cached: false, active: false },
@@ -1270,6 +1272,116 @@ describe('workflow-events', () => {
       expect(result.costUsd).toBe(0);
       expect(result.fanOutSnapshots.size).toBe(0);
       expect(result.unresolvedNodeStarts.size).toBe(0);
+    });
+
+    test('refuses to resume through a corrupt typed completion instead of replaying its effects', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'publish',
+            event_type: 'node_completed',
+            data: { node_output: 'published', invocation: { id: 'incomplete' } },
+          },
+        ])
+      );
+      await expect(getDagResumeSnapshot('run-corrupt')).rejects.toThrow(
+        "Invalid node execution record for 'publish'"
+      );
+    });
+
+    test('retains unfinished typed invocations by path and loop lineage', async () => {
+      const typed = (invocationId: string, iteration: number) => ({
+        node: { id: 'worker', kind: 'exec', runtime: 'sh' },
+        invocation: {
+          id: invocationId,
+          startedAt: '2026-09-22T10:00:00Z',
+          loopPath: [{ groupId: 'group', iteration }],
+        },
+        attempt: { id: `${invocationId}-attempt`, startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+      });
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'group.worker', event_type: 'node_started', data: typed('first', 0) },
+          {
+            step_name: 'group.worker',
+            event_type: 'node_completed',
+            data: { ...typed('first', 0), node_output: 'done' },
+          },
+          { step_name: 'group.worker', event_type: 'node_started', data: typed('second', 1) },
+          {
+            step_name: 'group.worker',
+            event_type: 'node_suspended',
+            data: { ...typed('second', 1), suspend_point: 'wait' },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-invocations');
+
+      expect(result.unfinishedInvocations?.size).toBe(1);
+      expect([...result.unfinishedInvocations!.values()][0]).toMatchObject({
+        runId: 'run-invocations',
+        path: 'group.worker',
+        invocation: { id: 'second', loopPath: [{ groupId: 'group', iteration: 1 }] },
+        lifecycle: { status: 'suspended', point: 'wait' },
+      });
+    });
+
+    test('a reusable output keeps its completion facts across prior-success replays', async () => {
+      const checkoutStart = {
+        kind: 'git',
+        sampledAt: '2026-09-22T10:00:00Z',
+        commit: 'a'.repeat(40),
+        tree: 'b'.repeat(40),
+        worktree: { status: 'clean' },
+      };
+      const completed = {
+        node: { id: 'implement', kind: 'loop' },
+        invocation: {
+          id: 'impl-1',
+          startedAt: '2026-09-22T10:00:00Z',
+          loopPath: [],
+          checkoutStart,
+        },
+        attempt: { id: 'impl-1-attempt', startedAt: '2026-09-22T10:00:00Z', checkoutStart },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting: 'node',
+        node_output: 'done',
+      };
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { step_name: 'implement', event_type: 'node_completed', data: completed },
+          // A first resume replayed it; the replay row carries no execution facts itself.
+          {
+            step_name: 'implement',
+            event_type: 'node_skipped_prior_success',
+            data: { node: { id: 'implement', kind: 'loop' }, node_output: 'done' },
+          },
+        ])
+      );
+
+      const result = await getDagResumeSnapshot('run-replayed');
+
+      expect(result.completedNodeOutputs.get('implement')?.execution).toMatchObject({
+        path: 'implement',
+        invocation: { id: 'impl-1', checkoutStart },
+      });
     });
 
     test('keeps the first valid fan-out instance snapshot authoritative', async () => {

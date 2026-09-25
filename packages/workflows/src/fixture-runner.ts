@@ -32,7 +32,7 @@ import { readdir, realpath, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import { createLogger, getArchonTempPath } from '@archon/paths';
+import { createLogger, getArchonTempPath, isPathInside } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import {
   RESERVED_FIXTURE_KEYS,
@@ -52,6 +52,7 @@ import {
   type WorkflowSourceConfig,
   type WorkflowSourceRoots,
 } from './workflow-source';
+import { FIXTURE_SUFFIX, FIXTURES_DIR } from './fixture-layout';
 
 /** Compares text the checkout may have converted to CRLF against a fixture's LF expectation. */
 const withLfEndings = (text: string): string => text.replaceAll('\r\n', '\n');
@@ -131,8 +132,6 @@ export function parseFixtureFile(text: string, path: string): ParsedFixtureFile 
   return { declaration, execCode, stubs: stubsResult.data };
 }
 
-const FIXTURES_DIR = 'fixtures';
-const FIXTURE_SUFFIX = '.stubs.yaml';
 // Discovery walks user directories. This is a hang-guard margin for a pathological
 // tree, not a mirror of discovery's cap (MAX_DISCOVERY_DEPTH is 1, and the catalog
 // reaches one packaged-scanner level deeper): fixtures below the catalog's reach are
@@ -493,7 +492,7 @@ export async function runFixtures(options: RunFixturesOptions): Promise<FixtureR
       fixture =>
         (targetIsLoadedWorkflow && fixture.workflowNames.includes(targetName)) ||
         fixture.dirs.includes(targetName) ||
-        fixture.path.startsWith(targetReal + sep)
+        isPathInside(targetReal, fixture.path, { lexical: true })
     );
     if (selected.length === 0) {
       // Suggest only workflows a discovered fixture actually targets AND that the catalog

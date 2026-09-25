@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { homedir, tmpdir } from 'os';
-import { dirname, join, sep } from 'path';
+import { dirname, join, posix, sep, win32 } from 'path';
 import { existsSync, readFileSync } from 'fs';
 import { mkdir, rm, writeFile, lstat, readlink, symlink as fsSymlink } from 'fs/promises';
 import { removeTempTree } from './test-utils';
@@ -57,7 +57,9 @@ import {
   getFolderProjectArtifactsPath,
   getFolderProjectLogsPath,
   getFolderRunArtifactsPath,
-  resolveProjectRootFromCwd,
+  isPathInside,
+  isInsideArchonWorkspaces,
+  isInsideArchonHome,
   ensureProjectStructure,
   createProjectSourceSymlink,
   findMarkdownFilesRecursive,
@@ -1079,47 +1081,130 @@ describe('archon-paths', () => {
     });
   });
 
-  describe('resolveProjectRootFromCwd', () => {
-    test('resolves project root from a path under workspaces', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_HOME;
-      delete process.env.ARCHON_DOCKER;
-      const workspacesPath = getArchonWorkspacesPath();
-      const cwd = join(workspacesPath, 'acme', 'widget', 'source');
-      expect(resolveProjectRootFromCwd(cwd)).toBe(join(workspacesPath, 'acme', 'widget'));
+  describe('isPathInside', () => {
+    test('POSIX: a descendant is inside; the root itself, a sibling, and a lookalike are not', () => {
+      const root = '/home/me/.archon/workspaces';
+      expect(
+        isPathInside(root, '/home/me/.archon/workspaces/owner/repo/source', { pathApi: posix })
+      ).toBe(true);
+      expect(
+        isPathInside(root, '/home/me/.archon/workspaces/../workspaces/o/r', { pathApi: posix })
+      ).toBe(true);
+      expect(isPathInside(root, '/home/me/.archon/workspaces/..hidden', { pathApi: posix })).toBe(
+        true
+      );
+      expect(isPathInside(root, root, { pathApi: posix })).toBe(false);
+      expect(isPathInside(root, `${root}/`, { pathApi: posix })).toBe(false);
+      expect(isPathInside(root, '/home/me/.archon/workspaces-old/o/r', { pathApi: posix })).toBe(
+        false
+      );
+      expect(
+        isPathInside(root, '/mnt/backup/.archon/workspaces/o/r/source', { pathApi: posix })
+      ).toBe(false);
+      expect(
+        isPathInside(root, '/home/me/.archon/workspaces/../elsewhere', { pathApi: posix })
+      ).toBe(false);
     });
 
-    test('resolves from worktrees subpath', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_HOME;
-      delete process.env.ARCHON_DOCKER;
-      const workspacesPath = getArchonWorkspacesPath();
-      const cwd = join(workspacesPath, 'acme', 'widget', 'worktrees', 'feature-auth');
-      expect(resolveProjectRootFromCwd(cwd)).toBe(join(workspacesPath, 'acme', 'widget'));
+    test('Windows: either separator and any case match; another drive or a lookalike does not', () => {
+      const root = 'C:\\Users\\me\\.archon\\workspaces';
+      const inside = [
+        'C:\\Users\\me\\.archon\\workspaces\\owner\\repo\\source',
+        'C:/Users/me/.archon/workspaces/owner/repo/source',
+        'c:\\users\\ME\\.Archon\\Workspaces\\owner\\repo',
+      ];
+      for (const candidate of inside)
+        expect(isPathInside(root, candidate, { pathApi: win32 })).toBe(true);
+      expect(isPathInside('C:/Users/me/.archon/workspaces', inside[0], { pathApi: win32 })).toBe(
+        true
+      );
+
+      const outside = [
+        root,
+        'C:\\Users\\me\\.archon\\workspaces-old\\o\\r',
+        'D:\\Users\\me\\.archon\\workspaces\\o\\r',
+        'C:\\backup\\.archon\\workspaces\\o\\r\\source',
+        'C:\\Users\\me\\.archon\\workspaces\\..\\elsewhere',
+      ];
+      for (const candidate of outside)
+        expect(isPathInside(root, candidate, { pathApi: win32 })).toBe(false);
     });
 
-    test('returns null for path outside workspaces', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_HOME;
-      delete process.env.ARCHON_DOCKER;
-      expect(resolveProjectRootFromCwd('/home/user/projects/my-repo')).toBeNull();
+    test('includeRoot counts the root itself, with or without a trailing separator', () => {
+      const root = '/home/me/.archon';
+      expect(isPathInside(root, root, { includeRoot: true, pathApi: posix })).toBe(true);
+      expect(isPathInside(root, `${root}/`, { includeRoot: true, pathApi: posix })).toBe(true);
+      expect(
+        isPathInside(root, '/home/me/.archon-old', { includeRoot: true, pathApi: posix })
+      ).toBe(false);
     });
 
-    test('returns null for path with only owner (no repo)', () => {
-      delete process.env.WORKSPACE_PATH;
-      delete process.env.ARCHON_HOME;
-      delete process.env.ARCHON_DOCKER;
-      const workspacesPath = getArchonWorkspacesPath();
-      expect(resolveProjectRootFromCwd(join(workspacesPath, 'acme'))).toBeNull();
+    test('lexical POSIX: never resolves against the cwd, and keeps the separator boundary', () => {
+      const opts = { includeRoot: true, lexical: true, pathApi: posix };
+      const root = '/home/me/.archon';
+      expect(isPathInside(root, root, opts)).toBe(true);
+      expect(isPathInside(root, `${root}/`, opts)).toBe(true);
+      expect(isPathInside(root, '/home/me/.archon/runs/r1', opts)).toBe(true);
+      expect(isPathInside(`${root}/`, '/home/me/.archon/runs/r1', opts)).toBe(true);
+      expect(isPathInside('/', '/etc', opts)).toBe(true);
+
+      expect(isPathInside(root, '/home/me/.archon-old/runs', opts)).toBe(false);
+      expect(isPathInside(root, '/home/me/.archon/../other', opts)).toBe(false);
+      expect(isPathInside(root, '/home/me/.archon/runs/../../other', opts)).toBe(false);
+      expect(isPathInside(root, '/home/me/.ARCHON/runs', opts)).toBe(false);
+      // A relative path is never inside an absolute root, even when the cwd is the root.
+      expect(isPathInside(process.cwd(), 'runs/r1', { ...opts, pathApi: undefined })).toBe(false);
+      expect(isPathInside(root, '', opts)).toBe(false);
+
+      const strict = { lexical: true, pathApi: posix };
+      expect(isPathInside(root, root, strict)).toBe(false);
+      expect(isPathInside(root, `${root}/`, strict)).toBe(false);
+      expect(isPathInside(root, '/home/me/.archon/x', strict)).toBe(true);
     });
 
-    test('works with ARCHON_HOME override', () => {
+    test('lexical Windows: either separator matches, but a case variant or another drive does not', () => {
+      const opts = { includeRoot: true, lexical: true, pathApi: win32 };
+      const root = 'C:\\Users\\me\\.archon';
+      expect(isPathInside(root, 'C:\\Users\\me\\.archon\\runs\\r1', opts)).toBe(true);
+      expect(isPathInside(root, 'C:/Users/me/.archon/runs/r1', opts)).toBe(true);
+      expect(isPathInside(root, 'C:\\Users\\me\\.archon\\', opts)).toBe(true);
+      expect(isPathInside('C:\\', 'C:\\Users', opts)).toBe(true);
+
+      expect(isPathInside(root, 'c:\\users\\ME\\.archon\\runs', opts)).toBe(false);
+      expect(isPathInside(root, 'C:\\Users\\me\\.archon-old\\runs', opts)).toBe(false);
+      expect(isPathInside(root, 'C:\\Users\\me\\.archon\\..\\other', opts)).toBe(false);
+      expect(isPathInside(root, 'D:\\Users\\me\\.archon\\runs', opts)).toBe(false);
+      expect(isPathInside(root, '.archon\\runs', opts)).toBe(false);
+    });
+  });
+
+  describe('isInsideArchonHome', () => {
+    test('accepts the home and its descendants; rejects lookalikes, traversal, and relative paths', () => {
+      delete process.env.ARCHON_DOCKER;
+      const home = join(tmpdir(), 'archon-home-inside');
+      process.env.ARCHON_HOME = home;
+      expect(isInsideArchonHome(home)).toBe(true);
+      expect(isInsideArchonHome(join(home, 'workspaces', 'o', 'r'))).toBe(true);
+      expect(isInsideArchonHome(`${home}${sep}`)).toBe(true);
+
+      expect(isInsideArchonHome(`${home}-old${sep}workspaces`)).toBe(false);
+      expect(isInsideArchonHome(`${home}${sep}..${sep}elsewhere`)).toBe(false);
+      expect(isInsideArchonHome(join('workspaces', 'o', 'r'))).toBe(false);
+      expect(isInsideArchonHome('')).toBe(false);
+    });
+  });
+
+  describe('isInsideArchonWorkspaces', () => {
+    test('answers against the configured workspaces root, not a path fragment', () => {
       delete process.env.WORKSPACE_PATH;
       delete process.env.ARCHON_DOCKER;
-      process.env.ARCHON_HOME = join('/', 'custom', 'archon');
-      const cwd = join('/', 'custom', 'archon', 'workspaces', 'acme', 'widget', 'source');
-      expect(resolveProjectRootFromCwd(cwd)).toBe(
-        join('/', 'custom', 'archon', 'workspaces', 'acme', 'widget')
+      process.env.ARCHON_HOME = join(tmpdir(), 'custom-home', '.archon');
+      const workspaces = getArchonWorkspacesPath();
+      expect(isInsideArchonWorkspaces(join(workspaces, 'owner', 'repo', 'source'))).toBe(true);
+      expect(isInsideArchonWorkspaces(workspaces)).toBe(false);
+      // The default ~/.archon/workspaces is not this host's root once ARCHON_HOME moves it.
+      expect(isInsideArchonWorkspaces(join(homedir(), '.archon', 'workspaces', 'o', 'r'))).toBe(
+        false
       );
     });
   });

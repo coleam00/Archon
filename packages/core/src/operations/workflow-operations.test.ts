@@ -1,10 +1,27 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import {
+  startNodeExecution,
+  finishNodeExecution,
+  newNodeInvocation,
+  executionMetadata,
+} from '@archon/workflows/node-execution';
+import {
+  getWorkflowEventEmitter,
+  type WorkflowEmitterEvent,
+} from '@archon/workflows/event-emitter';
+import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { existsSync } from 'fs';
+import { mkdtemp, readFile } from 'fs/promises';
+import { hostname, tmpdir } from 'node:os';
+import { join } from 'path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
 import type * as WorkflowDb from '../db/workflows';
 import type * as WorkflowEventDb from '../db/workflow-events';
 import type * as WorkflowNodeSessionDb from '../db/workflow-node-sessions';
 import type * as CleanupService from '../services/cleanup-service';
+import { createServer } from 'node:net';
+import { runLiveOwnerPath, startRunLiveOwner } from '../services/run-live-owner';
 
 // ---------------------------------------------------------------------------
 // Mock DB modules before importing the module under test
@@ -31,6 +48,7 @@ const mockCancelResumableRunsForConversation = mock<
   typeof WorkflowDb.cancelResumableRunsForConversation
 >(() => Promise.resolve([]));
 const mockFindChildRuns = mock<typeof WorkflowDb.findChildRuns>(() => Promise.resolve([]));
+const mockGetRunAncestry = mock<typeof WorkflowDb.getRunAncestry>(() => Promise.resolve([]));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
@@ -49,6 +67,7 @@ mock.module('../db/workflows', () => ({
   cancelWorkflowRun: mockCancelWorkflowRun,
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   findChildRuns: mockFindChildRuns,
+  getRunAncestry: mockGetRunAncestry,
   resolveApprovalGate: mockResolveApprovalGate,
   resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
 }));
@@ -78,6 +97,20 @@ mock.module('../services/cleanup-service', () => ({
   reclaimContainerEnv: mockReclaimContainerEnv,
 }));
 
+// Capture the real class before mock.module replaces the module, so the mock
+// can re-export it without a hand-declared copy that would silently drift.
+import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
+/** What the stop path reports when nothing listens at the run's endpoint. */
+function noOwnerAnswers(): Promise<never> {
+  return Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable'));
+}
+const mockRequestDetachedRunStop =
+  mock<typeof import('../services/run-owner-stop').requestDetachedRunStop>(noOwnerAnswers);
+mock.module('../services/run-owner-stop', () => ({
+  requestDetachedRunStop: mockRequestDetachedRunStop,
+  DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
+}));
+
 const mockLogger = {
   fatal: mock(() => undefined),
   error: mock(() => undefined),
@@ -100,6 +133,10 @@ const {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
+  AbandonOwnerNotStoppedError,
+  cancelWorkflow,
+  CancelRefusedError,
+  describeAbandonOwner,
   abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
   assertApprovable,
@@ -135,6 +172,7 @@ function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     parent_run_id: null,
     adopted_from_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     ...overrides,
   };
 }
@@ -222,6 +260,67 @@ describe('approveWorkflow', () => {
     // Anonymous telemetry: binary resolution captured exactly once
     expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
+  });
+
+  test('a gate completion keeps its paused identity and only publishes after the CAS wins', async () => {
+    const execution = executionMetadata(
+      finishNodeExecution(
+        startNodeExecution({
+          runId: 'run-1',
+          path: 'outer.review',
+          invocation: newNodeInvocation(),
+          node: {
+            id: 'review',
+            kind: 'gate',
+            message: 'Review',
+            decisions: [{ id: 'approve' }],
+            decisionsAuthored: true,
+            captureResponse: true,
+          },
+        }),
+        { status: 'suspended', point: 'approval' }
+      )
+    );
+    const run = makePausedRun({
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          message: 'Review',
+          type: 'approval',
+          execution,
+        },
+      },
+    });
+    const observed: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => observed.push(event));
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(run);
+      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+      await expect(approveWorkflow('run-1')).rejects.toThrow('already resolved');
+      expect(observed).toHaveLength(0);
+      mockGetWorkflowRun.mockResolvedValueOnce(run);
+      await approveWorkflow('run-1');
+      const row = mockResolveApprovalGate.mock.calls.at(-1)?.[2][0];
+      expect(row).toMatchObject({
+        step_name: 'outer.review',
+        data: {
+          invocation: execution.invocation,
+          attempt: execution.attempt,
+          binding: execution.binding,
+        },
+      });
+      expect(observed).toHaveLength(1);
+      expect(observed[0]).toMatchObject({
+        type: 'node_completed',
+        execution: {
+          invocation: execution.invocation,
+          attempt: execution.attempt,
+          path: 'outer.review',
+        },
+      });
+    } finally {
+      unsubscribe();
+    }
   });
 
   test('approves a new-mode gate (decisionsAuthored) — writes node_completed with structured {decision,text} output (#2707)', async () => {
@@ -1067,6 +1166,144 @@ describe('rejectWorkflow', () => {
   });
 });
 
+describe('gate decisions in the run transcript', () => {
+  // The approving process is usually not the one that ran the run, so the row has to
+  // reach the run's own transcript through the persisted `output_root`.
+  const originalArchonHome = process.env.ARCHON_HOME;
+  let home: string;
+  let root: string;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'archon-gate-transcript-'));
+    process.env.ARCHON_HOME = home;
+    root = join(home, 'workspaces', 'acme', 'widget');
+    mockGetWorkflowRun.mockClear();
+    mockResolveApprovalGate.mockClear();
+    mockResolveAndCancelApprovalGate.mockClear();
+  });
+
+  afterEach(async () => {
+    if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = originalArchonHome;
+    await removeTempTree(home);
+  });
+
+  async function decisionRows(): Promise<Record<string, unknown>[]> {
+    const path = join(root, 'logs', 'run-1.jsonl');
+    if (!existsSync(path)) return [];
+    return (await readFile(path, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .filter(row => row.type === 'gate_decision');
+  }
+
+  test('an approval writes one decision row with the comment the DB event stores', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
+
+    await approveWorkflow('run-1', 'Looks good');
+
+    const rows = await decisionRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      type: 'gate_decision',
+      workflow_id: 'run-1',
+      step: 'review',
+      decision: 'approved',
+      content: 'Looks good',
+    });
+  });
+
+  test('a rejection that cancels the run writes its decision row with the reason', async () => {
+    // No on_reject: the run is cancelled and never resumes, so this row is the only
+    // transcript record of why it stopped.
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
+
+    await rejectWorkflow('run-1', 'wrong approach');
+
+    const rows = await decisionRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      step: 'review',
+      decision: 'rejected',
+      content: 'wrong approach',
+    });
+  });
+
+  test('a write-back rejection writes a decision row with no comment', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        output_root: root,
+        metadata: {
+          approval: { nodeId: '__writeback__', message: '7 files changed', type: 'writeback' },
+        },
+      })
+    );
+
+    await rejectWorkflow('run-1');
+
+    const rows = await decisionRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ step: '__writeback__', decision: 'rejected' });
+    expect(rows[0]).not.toHaveProperty('content');
+  });
+
+  test('a declared decision writes its decision row with the response text', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        output_root: root,
+        metadata: {
+          approval: {
+            nodeId: 'review',
+            message: 'Continue?',
+            type: 'approval',
+            decisions: [{ id: 'approve' }, { id: 'revise' }],
+            decisionsAuthored: true,
+          },
+        },
+      })
+    );
+
+    await respondToWorkflow('run-1', 'revise', 'tighten the tests');
+
+    const rows = await decisionRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      step: 'review',
+      decision: 'revise',
+      content: 'tighten the tests',
+    });
+  });
+
+  test('a run with no recorded transcript location skips the row and says so', async () => {
+    // A run whose identity lookup faulted never persisted its location; guessing a root
+    // would start a second transcript no reader connects to the run.
+    mockLogger.warn.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: null }));
+
+    await approveWorkflow('run-1', 'Looks good');
+
+    expect(await decisionRows()).toEqual([]);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      {
+        runId: 'run-1',
+        steps: ['review', 'review'],
+        eventTypes: ['node_completed', 'approval_received'],
+      },
+      'workflow.gate_transcript_root_missing'
+    );
+  });
+
+  test('a resolution that loses the race writes no decision row', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
+    mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+
+    await expect(approveWorkflow('run-1', 'late')).rejects.toThrow(/already resolved/);
+
+    expect(await decisionRows()).toEqual([]);
+  });
+});
+
 describe('respondToWorkflow', () => {
   beforeEach(() => {
     mockCaptureApprovalResolved.mockClear();
@@ -1356,6 +1593,8 @@ describe('abandonWorkflow', () => {
     mockReclaimContainerEnv.mockImplementation(() => Promise.resolve());
     mockFindChildRuns.mockClear();
     mockFindChildRuns.mockImplementation(() => Promise.resolve([]));
+    mockRequestDetachedRunStop.mockClear();
+    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
   });
 
   test('cancels a non-terminal run', async () => {
@@ -1366,7 +1605,7 @@ describe('abandonWorkflow', () => {
     expect(cancelled).toBe(true);
     expect(cascadeFailures).toBe(0);
     expect(blockedParentRunId).toBeNull();
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
   // #2121 Phase 2 (D7): abandoning a parent cascade-cancels its non-terminal
@@ -1531,7 +1770,7 @@ describe('abandonWorkflow', () => {
     mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
     const { run } = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
     expect(run.id).toBe('run-1');
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
   test('cancels a failed run', async () => {
@@ -1541,7 +1780,7 @@ describe('abandonWorkflow', () => {
     expect(run.id).toBe('run-1');
     expect(cascadeFailures).toBe(0);
     expect(blockedParentRunId).toBeNull();
-    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
   test('throws on completed run', async () => {
@@ -1557,6 +1796,422 @@ describe('abandonWorkflow', () => {
 
     await expect(abandonWorkflow('run-1')).rejects.toThrow(
       "Cannot abandon run with status 'cancelled'"
+    );
+  });
+
+  // --- live owner (#2325) ---
+  // The stop path itself (lease, commit, process-tree termination) is proven against
+  // real processes in run-owner-stop.test.ts and the CLI integration specs. Here the
+  // operation's own decision is under test: which answers stop, fall through, or refuse.
+
+  test('stops a live owner before recording cancelled', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    const order: string[] = [];
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        stop: async () => {
+          order.push('stop');
+        },
+        release: () => undefined,
+      })
+    );
+    mockCancelWorkflowRun.mockImplementationOnce(() => {
+      order.push('cancel');
+      return Promise.resolve({ cancelled: true });
+    });
+
+    const { cancelled, owner } = await abandonWorkflow('run-1');
+
+    expect(order).toEqual(['stop', 'cancel']);
+    expect(cancelled).toBe(true);
+    expect(owner).toEqual({ kind: 'stopped', pid: 42 });
+  });
+
+  test('records cancelled with the recorded owner facts when no owner answers', async () => {
+    const lastActivity = new Date('2026-09-20T10:00:00.000Z');
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'running',
+        last_activity_at: lastActivity,
+        metadata: { execution_owner: { host: hostname(), pid: 4242, uid: 501 } },
+      })
+    );
+
+    const { cancelled, owner } = await abandonWorkflow('run-1');
+
+    expect(cancelled).toBe(true);
+    expect(owner).toEqual({
+      kind: 'no_owner_answered',
+      detail: 'ENOENT',
+      recordedOwner: { host: hostname(), pid: 4242, uid: 501 },
+      lastActivityAt: lastActivity,
+      thisHost: hostname(),
+      thisUid: process.getuid?.(),
+    });
+  });
+
+  for (const reason of ['not_detached', 'unproven', undefined] as const) {
+    test(`an owner endpoint that answered (${String(reason)}) leaves the run unchanged`, async () => {
+      mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+      mockRequestDetachedRunStop.mockImplementationOnce(() =>
+        Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', reason))
+      );
+
+      const error = await abandonWorkflow('run-1').then(
+        () => undefined,
+        (rejection: unknown) => rejection
+      );
+
+      expect(error).toBeInstanceOf(AbandonOwnerNotStoppedError);
+      expect((error as Error).message).toContain('The run was not changed.');
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    });
+  }
+
+  test('an owner that answers but cannot be stopped fails with the reason', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        stop: () =>
+          Promise.reject(new Error('Detached workflow process group 42 is still running')),
+        release: () => undefined,
+      })
+    );
+
+    await expect(abandonWorkflow('run-1')).rejects.toThrow(
+      'Could not stop the live owner of run run-1 (pid 42): Detached workflow process group 42 is still running. The run was not changed.'
+    );
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // Invariant (#2325): no timer, age or PID decides liveness. An owner recorded as this
+  // very process, active a moment ago, is still not an owner that answered.
+  test('a recent, live-looking recorded owner does not stand in for an owner that answered', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'running',
+        last_activity_at: new Date(),
+        metadata: {
+          execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+        },
+      })
+    );
+
+    const { cancelled, owner } = await abandonWorkflow('run-1');
+
+    expect(cancelled).toBe(true);
+    expect(owner.kind).toBe('no_owner_answered');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+  });
+});
+
+describe('cancelWorkflow', () => {
+  beforeEach(() => {
+    mockGetWorkflowRun.mockClear();
+    mockCancelWorkflowRun.mockClear();
+    mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
+    mockFindChildRuns.mockClear();
+    mockFindChildRuns.mockImplementation(() => Promise.resolve([]));
+    mockRequestDetachedRunStop.mockClear();
+    mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
+    mockGetRunAncestry.mockReset();
+    mockGetRunAncestry.mockImplementation(() => Promise.resolve([]));
+  });
+
+  async function refusal(runId = 'run-1'): Promise<InstanceType<typeof CancelRefusedError>> {
+    const error = await cancelWorkflow(runId).then(
+      () => undefined,
+      (rejection: unknown) => rejection
+    );
+    expect(error).toBeInstanceOf(CancelRefusedError);
+    return error as InstanceType<typeof CancelRefusedError>;
+  }
+
+  test('cancels cooperatively a run this process executes, without a stop request', async () => {
+    // A real endpoint published by this process: the server's own runs look like this.
+    const runId = `cancel-in-process-${crypto.randomUUID()}`;
+    const owner = await startRunLiveOwner(runId);
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ id: runId, status: 'running' }));
+
+      const result = await cancelWorkflow(runId);
+
+      expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
+      expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith(runId, { cancel_reason: 'operator' });
+    } finally {
+      await owner.close();
+    }
+  });
+
+  // A nested sub-run publishes no endpoint of its own, but the executor still stamps it
+  // with an execution owner (its root's process), so the sub-run's own record cannot tell
+  // "runs inside a live root" from "its owner is gone". Only the root's owner can.
+  function nestedSubRun(rootRunId: string): WorkflowRun {
+    mockGetRunAncestry.mockResolvedValueOnce([
+      makePausedRun({ id: 'parent-run', status: 'running', parent_run_id: rootRunId }),
+      makePausedRun({ id: rootRunId, status: 'running' }),
+    ]);
+    return makePausedRun({
+      status: 'running',
+      parent_run_id: 'parent-run',
+      metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
+    });
+  }
+
+  test('cancels a sub-run cooperatively when its root is executed by this process', async () => {
+    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
+    const rootOwner = await startRunLiveOwner(rootRunId);
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
+
+      const result = await cancelWorkflow('run-1');
+
+      expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
+      expect(mockRequestDetachedRunStop).toHaveBeenCalledWith('run-1');
+      expect(mockGetRunAncestry).toHaveBeenCalledWith('run-1');
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+    } finally {
+      await rootOwner.close();
+    }
+  });
+
+  test("cancels a sub-run cooperatively when its root's owner in another process answers", async () => {
+    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
+    // Something listening at the root's endpoint that this process did not publish.
+    const listener = createServer(socket => socket.destroy());
+    await new Promise<void>(resolve => listener.listen(runLiveOwnerPath(rootRunId), resolve));
+    try {
+      mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
+
+      const result = await cancelWorkflow('run-1');
+
+      expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
+      expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+    } finally {
+      await new Promise(resolve => listener.close(resolve));
+    }
+  });
+
+  // #2325: cancel refuses when no owner answers. A sub-run resumed on its own whose
+  // process died, or one inside a root whose process died, has nobody to see the flip.
+  test('refuses a sub-run when no owner answers for it or its root, showing the recorded owner', async () => {
+    const rootRunId = `cancel-root-${crypto.randomUUID()}`;
+    mockGetWorkflowRun.mockResolvedValueOnce(nestedSubRun(rootRunId));
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('no_owner_answered');
+    expect(error.message).toContain('Recorded owner: host build-box, pid 4242.');
+    expect(error.message).toContain(
+      `No live owner answered for its root run ${rootRunId} on this host either.`
+    );
+    expect(error.message).toContain('abandon the run to release it');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('refuses a sub-run whose ancestor rows are gone: no root is left to answer', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({ status: 'running', parent_run_id: 'deleted-parent' })
+    );
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('no_owner_answered');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // A sub-run resumed on its own (a durable wait or a scheduled quota resume) has a live
+  // owner of its own, in whatever process resumed it. Its parent id says nothing about that.
+  test('refuses a sub-run whose own live owner answered and cannot be stopped from here', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({ status: 'running', parent_run_id: 'root-run' })
+    );
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', 'not_detached'))
+    );
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('not_stopped');
+    expect(error.message).toContain('The run was not changed.');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('stops a sub-run whose own detached owner answered before recording cancelled', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({ status: 'running', parent_run_id: 'root-run' })
+    );
+    const order: string[] = [];
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        stop: async () => {
+          order.push('stop');
+        },
+        release: () => undefined,
+      })
+    );
+    mockCancelWorkflowRun.mockImplementationOnce(() => {
+      order.push('cancel');
+      return Promise.resolve({ cancelled: true });
+    });
+
+    const result = await cancelWorkflow('run-1');
+
+    expect(order).toEqual(['stop', 'cancel']);
+    expect(result).toMatchObject({ kind: 'stopped', pid: 42 });
+  });
+
+  test('stops an owner in another process before recording cancelled', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    const order: string[] = [];
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        stop: async () => {
+          order.push('stop');
+        },
+        release: () => undefined,
+      })
+    );
+    mockCancelWorkflowRun.mockImplementationOnce(() => {
+      order.push('cancel');
+      return Promise.resolve({ cancelled: true });
+    });
+
+    const result = await cancelWorkflow('run-1');
+
+    expect(order).toEqual(['stop', 'cancel']);
+    expect(result).toMatchObject({ kind: 'stopped', pid: 42 });
+  });
+
+  test('refuses when no owner answers, showing the recorded owner facts', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'running',
+        last_activity_at: new Date('2026-09-20T10:00:00.000Z'),
+        metadata: { execution_owner: { host: 'build-box', pid: 4242 } },
+      })
+    );
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('no_owner_answered');
+    expect(error.message).toContain('Recorded owner: host build-box, pid 4242.');
+    expect(error.message).toContain('Last activity: 2026-09-20T10:00:00.000Z.');
+    expect(error.message).toContain('run run-1 was not changed');
+    expect(error.message).toContain('abandon the run');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  for (const reason of ['not_detached', 'unproven', undefined] as const) {
+    test(`an owner endpoint that answered (${String(reason)}) is refused unchanged`, async () => {
+      mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+      mockRequestDetachedRunStop.mockImplementationOnce(() =>
+        Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', reason))
+      );
+
+      const error = await refusal();
+
+      expect(error.reason).toBe('not_stopped');
+      expect(error.message).toContain('The run was not changed.');
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    });
+  }
+
+  test('an owner that cannot be stopped is refused unchanged', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.resolve({
+        pid: 42,
+        stop: () => Promise.reject(new Error('process group 42 is still running')),
+        release: () => undefined,
+      })
+    );
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('not_stopped');
+    expect(error.message).toContain('(pid 42): process group 42 is still running');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  // Invariant (#2325): no timer, age or PID decides liveness. An owner recorded as this
+  // very process, active a moment ago, is still not an owner that answered.
+  test('a recent, live-looking recorded owner does not stand in for an owner that answered', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(
+      makePausedRun({
+        status: 'running',
+        last_activity_at: new Date(),
+        metadata: {
+          execution_owner: { host: hostname(), pid: process.pid, uid: process.getuid?.() },
+        },
+      })
+    );
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('no_owner_answered');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('refuses a run that is not running without asking for an owner', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'paused' }));
+
+    const error = await refusal();
+
+    expect(error.reason).toBe('not_running');
+    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+});
+
+describe('describeAbandonOwner', () => {
+  const noOwner = (recordedOwner: { host: string; pid: number; uid?: number } | undefined) =>
+    ({
+      kind: 'no_owner_answered',
+      detail: 'ENOENT',
+      recordedOwner,
+      lastActivityAt: new Date('2026-09-20T10:00:00.000Z'),
+      thisHost: 'here',
+      thisUid: 501,
+    }) as const;
+
+  test('shows the recorded host, pid, and last activity', () => {
+    expect(describeAbandonOwner(noOwner({ host: 'here', pid: 4242 }))).toEqual([
+      'No live owner answered for this run on this host (here; ENOENT).',
+      'Recorded owner: host here, pid 4242.',
+      'Last activity: 2026-09-20T10:00:00.000Z.',
+    ]);
+  });
+
+  test('says plainly when the recorded owner is on another host', () => {
+    const lines = describeAbandonOwner(noOwner({ host: 'build-box', pid: 4242 }));
+    expect(lines).toContain('Recorded owner: host build-box, pid 4242.');
+    expect(lines.at(-1)).toBe(
+      'The recorded owner is on another host (build-box). Abandon cannot reach or stop a process there; ' +
+        'if it is still running, it keeps running after this run is marked cancelled.'
+    );
+  });
+
+  test('says plainly when the recorded owner ran as another user on this host', () => {
+    // The endpoint directory is per-uid, so an owner running as another user is as
+    // unreachable as one on another host.
+    const lines = describeAbandonOwner(noOwner({ host: 'here', pid: 4242, uid: 1000 }));
+    expect(lines.at(-1)).toBe(
+      'The recorded owner ran as another user (uid 1000), and abandon runs as uid 501. ' +
+        'Abandon can only reach owners running as its own user; ' +
+        'if it is still running, it keeps running after this run is marked cancelled.'
+    );
+    expect(describeAbandonOwner(noOwner({ host: 'here', pid: 4242, uid: 501 }))).toHaveLength(3);
+  });
+
+  test('says when no owner was recorded', () => {
+    expect(describeAbandonOwner(noOwner(undefined))).toContain(
+      'Recorded owner: none (the run predates owner recording).'
     );
   });
 });

@@ -1,6 +1,5 @@
 # An adjacent proved defect survives in discovery artifacts and the report but
 # does not turn an otherwise-ready review into correction work.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
@@ -8,7 +7,8 @@ impl__implement:
   summary: "stub: implementation preserved one adjacent discovery"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
   errors: false
   docs: false
@@ -20,6 +20,7 @@ review__mode: '{"continuation":false}'
 review__scope:
   # accepted contract recorded
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 5 }
 review__code: "0 findings; 1 adjacent discovery recorded"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -30,8 +31,19 @@ review__synthesize:
   action: none
   findings_summary: "stub: no blockers; one adjacent discovery preserved"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no blockers; one adjacent discovery preserved"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 gate-ready: '{"ready":"true"}'
+validate__mode: '{"comparison":false}'
 validate__validate:
+  green: true
+  red_cause: ""
+  summary: "stub: full gate green"
+validate__result:
+  evidence: null
   green: true
   red_cause: ""
   summary: "stub: full gate green"

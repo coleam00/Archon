@@ -1,9 +1,10 @@
 import { readFile, access } from 'fs/promises';
-import { isAbsolute, join, resolve } from 'path';
+import { isAbsolute, join, relative, resolve } from 'path';
 import {
   createLogger,
   getArchonWorkspacesPath,
   getProjectWorktreesPath,
+  isInsideArchonWorkspaces,
   parseOwnerRepo,
   resolveRepoProjectIdentity,
 } from '@archon/paths';
@@ -73,10 +74,8 @@ function resolveOwnerRepo(
     if (parsed) return parsed;
     getLog().warn({ codebaseName }, 'worktree.invalid_codebase_name_format');
   }
-  const workspacesPath = getArchonWorkspacesPath();
-  if (repoPath.startsWith(workspacesPath)) {
-    const relative = repoPath.substring(workspacesPath.length + 1);
-    const parts = relative.split(/[/\\]/).filter(p => p.length > 0);
+  if (isInsideArchonWorkspaces(repoPath)) {
+    const parts = relative(resolve(getArchonWorkspacesPath()), resolve(repoPath)).split(/[/\\]/);
     if (parts.length >= 2) {
       return { owner: parts[0], repo: parts[1] };
     }
@@ -281,6 +280,56 @@ export async function isWorktreePath(path: string): Promise<boolean> {
   }
 }
 
+/** A git worktree lock, with the reason recorded when it was taken (`''` when none was given). */
+export interface WorktreeLock {
+  reason: string;
+}
+
+/**
+ * Release a worktree lock. Throws if the worktree is not locked.
+ *
+ * There is no counterpart that takes a lock: a worktree Archon creates is locked
+ * by `git worktree add --lock`, because taking the lock as a separate step
+ * leaves the new checkout adoptable for the length of that gap (#3448).
+ */
+export async function unlockWorktree(
+  repoPath: RepoPath,
+  worktreePath: WorktreePath
+): Promise<void> {
+  await execFileAsync('git', ['-C', repoPath, 'worktree', 'unlock', worktreePath], {
+    timeout: 15000,
+  });
+}
+
+/**
+ * Read a worktree's lock, or `null` when it is not locked.
+ *
+ * Reads the `locked` file in the worktree's administrative directory, which
+ * git-worktree(1) documents, instead of matching a path against
+ * `worktree list --porcelain`: git prints paths in its own spelling (forward
+ * slashes on Windows, symlinks resolved on macOS), so the comparison is the
+ * unreliable half of that route.
+ */
+export async function readWorktreeLock(worktreePath: WorktreePath): Promise<WorktreeLock | null> {
+  const { gitDir } = await getGitCheckoutIdentity(worktreePath);
+  try {
+    const reason = await readFile(join(gitDir, 'locked'), 'utf-8');
+    return { reason: reason.trim() };
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      return null;
+    }
+    getLog().error({ worktreePath, gitDir, err, code: err.code }, 'worktree.lock_read_failed');
+    throw new Error(
+      `Cannot read the lock state of the worktree at ${worktreePath}: ${err.message}`,
+      {
+        cause: err,
+      }
+    );
+  }
+}
+
 /**
  * Remove a git worktree
  * Throws if uncommitted changes exist (git's natural guardrail)
@@ -291,6 +340,22 @@ export async function removeWorktree(
 ): Promise<void> {
   await execFileAsync('git', ['-C', repoPath, 'worktree', 'remove', worktreePath], {
     timeout: 30000,
+  });
+}
+
+/**
+ * Refresh the stat data in the index of a worktree the caller just created. `git worktree
+ * add` writes files and index within the same second, and Git's racy-clean check compares
+ * whole seconds, so it re-hashes every such entry on each later `git status`. Read-only
+ * callers (`--no-optional-locks`) never write the result back, so the cost repeats. The
+ * refresh waits for the clock to leave the second the checkout finished in, so the index it
+ * writes is newer than every file. It re-hashes before it marks an entry clean, so it never
+ * hides a change. Call it only on a worktree nobody else is using yet.
+ */
+export async function refreshWorktreeIndex(worktreePath: WorktreePath): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 1000 - (Date.now() % 1000)));
+  await execFileAsync('git', ['-C', worktreePath, 'update-index', '-q', '--refresh'], {
+    timeout: 120000,
   });
 }
 

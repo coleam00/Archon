@@ -132,6 +132,7 @@ export class SlackWorkflowBridge {
           await this.onWorkflowStarted(event, conversationId, trigger);
           break;
         case 'node_started':
+        case 'node_suspended':
           this.upsertNode(event.runId, event.nodeId, event.nodeName, 'running');
           this.scheduleStatusUpdate(event.runId);
           break;
@@ -608,47 +609,84 @@ export class SlackWorkflowBridge {
 
     try {
       try {
-        await workflowOperations.abandonWorkflow(runId);
+        const result = await workflowOperations.cancelWorkflow(runId);
         getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
-        // The eventual workflow_cancelled event will repaint the status message.
+        // The eventual workflow_cancelled event repaints the status message. It carries
+        // no cascade facts, so a stop that left sub-runs or a parent behind says so here.
+        if (result.kind === 'stopped') {
+          let note = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled the run.`;
+          if (result.cascadeFailures > 0) {
+            note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
+          }
+          if (result.blockedParentRunId) {
+            note += `\n:warning: Parent run \`${result.blockedParentRunId}\` was blocked on this sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`;
+          }
+          await this.postCancelNote(body, runId, note);
+        } else if (!result.cancelled) {
+          await this.postCancelNote(
+            body,
+            runId,
+            `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
+          );
+        }
         return;
       } catch (error) {
         const err = error as Error;
         // Full error stays in logs; the user-facing message is intentionally
-        // generic so internal DB / library errors don't leak into a channel.
+        // generic so internal DB / library errors don't leak into a channel. A refusal
+        // is the exception: its message is written for the operator and says why the
+        // run was left unchanged.
         getLog().warn({ err, runId }, 'slack.bridge_cancel_failed');
-
-        // Tell the user something. If we still have run state, drop a note in
-        // the thread. Otherwise (run already terminated) try to acknowledge in
-        // the channel/thread of the message the button was attached to.
-        const state = this.runs.get(runId);
-        const fallbackChannel = body.channel?.id;
-        const fallbackThreadTs = body.message?.ts;
-        const target = state
-          ? { channel: state.channel, thread_ts: state.threadTs }
-          : fallbackChannel
-            ? { channel: fallbackChannel, thread_ts: fallbackThreadTs }
-            : undefined;
-
-        if (!target) {
-          getLog().info({ runId }, 'slack.bridge_cancel_no_target');
-          return;
-        }
-
-        try {
-          await this.adapter.getApp().client.chat.postMessage({
-            channel: target.channel,
-            thread_ts: target.thread_ts,
-            text: state
+        await this.postCancelNote(
+          body,
+          runId,
+          error instanceof workflowOperations.CancelRefusedError
+            ? `:warning: ${error.message}` +
+                (error.reason === 'no_owner_answered'
+                  ? `\nAbandon it: \`/archon-workflow abandon ${runId}\``
+                  : '')
+            : this.runs.has(runId)
               ? `:warning: Could not cancel run \`${runId}\`. Check the server logs or try again.`
-              : `:information_source: Run \`${runId}\` already finished — nothing to cancel.`,
-          });
-        } catch (notifyError) {
-          getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_cancel_notify_failed');
-        }
+              : `:information_source: Run \`${runId}\` already finished — nothing to cancel.`
+        );
       }
     } catch (error) {
       getLog().error({ err: error as Error, runId }, 'slack.bridge_cancel_handler_failed');
+    }
+  }
+
+  /**
+   * Post a note about a cancel click. If we still have run state, the note goes in
+   * the run's thread. Otherwise (run already terminated) it goes to the
+   * channel/thread of the message the button was attached to.
+   */
+  private async postCancelNote(
+    body: BlockButtonAction,
+    runId: string,
+    text: string
+  ): Promise<void> {
+    const state = this.runs.get(runId);
+    const fallbackChannel = body.channel?.id;
+    const fallbackThreadTs = body.message?.ts;
+    const target = state
+      ? { channel: state.channel, thread_ts: state.threadTs }
+      : fallbackChannel
+        ? { channel: fallbackChannel, thread_ts: fallbackThreadTs }
+        : undefined;
+
+    if (!target) {
+      getLog().info({ runId }, 'slack.bridge_cancel_no_target');
+      return;
+    }
+
+    try {
+      await this.adapter.getApp().client.chat.postMessage({
+        channel: target.channel,
+        thread_ts: target.thread_ts,
+        text,
+      });
+    } catch (notifyError) {
+      getLog().debug({ err: notifyError as Error, runId }, 'slack.bridge_cancel_notify_failed');
     }
   }
 

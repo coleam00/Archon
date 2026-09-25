@@ -17,18 +17,36 @@ inputs:
     default: "true"
     description: '"true" opens the PR as a draft; anything else opens it ready for review.'
 
-returns: pr
+returns: publish
 
 nodes:
+  # The agent establishes the target, writes the body, pushes, and decides
+  # whether this work already has a pull request. It performs no forge write:
+  # publish below owns that, so the same intent is published the same way
+  # whichever source the run selected.
   - id: pr
     command: pr
-    output_type: pull-request
-    # This is the durable ownership record for every later public action in
-    # delivery and inbound forge event. Consumers use this qualified identity,
-    # never gh's ambient branch lookup.
+    output_type: pull-request-intent
     output_format:
       type: object
       properties:
+        intent: { type: string }
+      required: [intent]
+
+  # This is the durable ownership record for every later public action in
+  # delivery and inbound forge event. Consumers use this qualified identity,
+  # never gh's ambient branch lookup.
+  - id: publish
+    script: publish-pr
+    runtime: bun
+    depends_on: [pr]
+    with:
+      intent: "$pr.output.intent"
+    output_type: pull-request
+    output_format:
+      type: object
+      properties:
+        schemaVersion: { type: integer, enum: [1] }
         repo:
           type: object
           properties:
@@ -40,4 +58,28 @@ nodes:
         head: { type: string }
         base: { type: string }
         is_draft: { type: boolean }
-      required: [repo, number, url, head, base, is_draft]
+        state: { type: string, enum: [open, closed, merged] }
+        head_repo:
+          type: [object, 'null']
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
+        head_revision: { type: [string, 'null'] }
+        base_revision: { type: [string, 'null'] }
+        maintainer_can_modify: { type: [boolean, 'null'] }
+      required:
+        [
+          schemaVersion,
+          repo,
+          number,
+          url,
+          head,
+          base,
+          is_draft,
+          state,
+          head_repo,
+          head_revision,
+          base_revision,
+          maintainer_can_modify,
+        ]

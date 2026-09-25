@@ -1,17 +1,13 @@
 import { describe, it, expect } from 'bun:test';
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  writeFileSync,
-} from 'fs';
+import { spawnSync } from 'child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { execFileAsync } from '@archon/git';
+import {
+  fakeGhPreload,
+  type GhFake,
+} from '../../../../.archon/scripts/__tests__/deliver-checks-harness';
 import {
   isBinaryBuild,
   BUNDLED_COMMANDS,
@@ -24,9 +20,6 @@ import {
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
-import { dryRunWorkflow } from '../dry-run';
-import { resolveWorkflow } from '../graph-plan';
-import { makeTestWorkflow } from '../test-utils';
 import {
   isExecNode,
   isIncludeDirective,
@@ -352,7 +345,7 @@ describe('bundled-defaults', () => {
       expect(review?.kind).toBe('include');
       if (review?.kind !== 'include') throw new Error('review is not an include');
       expect(review.with).toMatchObject({
-        scope: '$pr.output.number',
+        scope: '$pr.output',
         work_order: '$INPUTS.work',
         errors: '$resolve-scope.output.errors',
         docs: '$classify.output.docs',
@@ -374,7 +367,12 @@ describe('bundled-defaults', () => {
       const ciNote = corrections.loop_group.nodes.find(node => node.id === 'ci-note');
       expect(ciNote?.kind).toBe('exec');
       if (ciNote?.kind !== 'exec') throw new Error('ci-note is not executable');
-      expect(ciNote).toMatchObject({ runtime: 'sh', timeout: 45_000, on_timeout: 'skip' });
+      expect(ciNote).toMatchObject({
+        runtime: 'bun',
+        timeout: 45_000,
+        on_timeout: 'skip',
+        with: { pr: { from: '$pr.output' } },
+      });
       expect(ciNote.script).not.toContain('mktemp');
       expect(ciNote.script).not.toContain('GH_PID');
       expect(ciNote.script).not.toContain('WATCHDOG');
@@ -416,7 +414,7 @@ describe('bundled-defaults', () => {
         'ci-verdict',
         'ci-attention-route',
         'ci-attention',
-        'sync-pr-body',
+        'publish-pr-body',
       ]);
       expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
     });
@@ -439,8 +437,8 @@ describe('bundled-defaults', () => {
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       expect(scope.output_format).toEqual({
         type: 'object',
-        properties: { docs: { type: 'boolean' } },
-        required: ['docs'],
+        properties: { docs: { type: 'boolean' }, pr: { type: 'object' } },
+        required: ['docs', 'pr'],
       });
       expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
@@ -509,6 +507,24 @@ describe('bundled-defaults', () => {
       // Carried-forward findings keep the lens that found them, or a multi-round review
       // reattributes every surviving finding to its last round.
       expect(synthesize).toContain('keeping the `sources` it was first attributed to');
+    });
+
+    // The lenses judge defects in what changed; only synthesis runs on every round, so it
+    // owns holding the change to the contract's acceptance, invariants, and steering. Scope
+    // must carry those items for it to judge, and an unmet one must block like any
+    // Important finding and stay attributable in findings.json.
+    it('review holds the change to the accepted contract on every round', () => {
+      // Triage is where the delivery chain first restates the contract; a count or summary
+      // of acceptance there is where the items were lost.
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:triage::triage']).toContain(
+        "quote the source's invariants, acceptance items, and any solution steering"
+      );
+      const scope = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-scope'];
+      expect(scope).toContain('list every **acceptance** item');
+      const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
+      expect(synthesize).toContain('## Judge contract coverage');
+      expect(synthesize).toContain('`sources: [contract]`');
+      expect(synthesize).toContain('An unmet contract item is an Important or Critical finding');
     });
 
     // The same "does this diff earn a docs review" call is made in two packs — at
@@ -665,46 +681,44 @@ describe('bundled-defaults', () => {
   });
 
   describe('run-owned public actions (#2909)', () => {
-    it('records a PR identity and uses it for review and the ready flip', () => {
+    it('records a PR identity and uses it for review, the body resync and the ready flip', () => {
       const pr = BUNDLED_WORKFLOWS['archon-pr'];
       const deliver = BUNDLED_WORKFLOWS['archon-deliver'];
       const sync = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::sync-pr-body'];
 
       expect(pr).toContain('output_type: pull-request');
       expect(deliver).not.toContain('output_type: public-action');
-      expect(pr).toContain('required: [repo, number, url, head, base, is_draft]');
-      expect(deliver).toContain('scope: "$pr.output.number"');
-      expect(deliver).toContain('PR_NUMBER=$pr.output.number');
-      // The flip selects by recorded number and does not re-derive the branch:
-      // the run owns its worktree, so this node cannot be where that is discovered.
-      expect(deliver).not.toContain('EXPECTED_BRANCH=');
-      expect(deliver).not.toContain('git branch --show-current');
-      expect(deliver).toContain('gh pr ready "$PR_NUMBER" --repo "$ORIGIN_REPO"');
-      // The engine retains what every exec node prints, so the node keeps no log of
-      // its own — and the rule that log existed under still binds: the raw origin URL
-      // can carry a credential (https://<token>@host/...), so it is read exactly once,
-      // inside the substitution that normalizes it, and only `$ORIGIN_REPO` is ever
-      // passed to a command or interpolated into a failure message.
-      const flipBody = deliver.slice(deliver.indexOf('- id: flip-ready'));
-      expect(flipBody).not.toContain('$ARTIFACTS_DIR/flip-ready.log');
-      const remoteReads = flipBody.split('\n').filter(line => line.includes('git remote'));
-      expect(remoteReads).toHaveLength(1);
-      expect(remoteReads[0]).toContain('ORIGIN_REPO=$(git remote get-url origin 2>/dev/null | sed');
-      expect(deliver).toContain('origin remote does not resolve to an owner/repo');
+      expect(deliver).toContain('scope: "$pr.output"');
+      const parsedDelivery = parseWorkflow(deliver, 'archon-deliver.yaml');
+      if (parsedDelivery.workflow === null) throw new Error(parsedDelivery.error.error);
+      const flip = parsedDelivery.workflow.nodes.find(node => node.id === 'flip-ready');
+      expect(flip).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        script: 'flip-ready',
+        with: { pr: { from: '$pr.output' } },
+      });
+      expect(deliver).not.toContain('git remote get-url origin');
       // A command node reads its node-local `with:` map through `$INPUTS.<name>`,
       // never the INPUTS_<UPPER_SNAKE> env form — that one is built only for
       // bash/script nodes, and naming it here left the agent reading the literal
       // token with no PR number in it (#2909 R1).
-      expect(sync).toContain('$INPUTS.pr_number');
-      expect(sync).toContain('$INPUTS.pr_head');
-      expect(sync).not.toContain('INPUTS_PR_NUMBER');
+      expect(sync).toContain('$INPUTS.pr');
+      expect(sync).toContain('$INPUTS.current_body');
+      expect(sync).not.toContain('INPUTS_PR');
+
+      // The public write belongs to a deterministic node, not to a prompt: the
+      // identity it writes to is the recorded record, and the same node performs
+      // the write whichever forge source the run selected.
       const prParsed = parseWorkflow(pr, 'archon-pr.yaml');
       if (prParsed.workflow === null) throw new Error(prParsed.error.error);
       const prNode = prParsed.workflow.nodes.find(node => node.id === 'pr');
       expect(prNode?.kind).toBe('agent');
-      if (prNode?.kind !== 'agent') throw new Error('pr is not an agent node');
-      expect(prNode.output_type).toBe('pull-request');
-      expect(prNode.output_format).toMatchObject({
+      const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
+      expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
+      if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
+      expect(publish.output_type).toBe('pull-request');
+      expect(publish.output_format).toMatchObject({
         properties: {
           repo: {
             type: 'object',
@@ -713,8 +727,10 @@ describe('bundled-defaults', () => {
           },
           number: { type: 'integer' },
         },
-        required: ['repo', 'number', 'url', 'head', 'base', 'is_draft'],
+        required: expect.arrayContaining(['repo', 'number', 'url', 'head', 'base', 'is_draft']),
       });
+      expect(prParsed.workflow.returns).toBe('publish');
+
       const deliverParsed = parseWorkflow(deliver, 'archon-deliver.yaml');
       if (deliverParsed.workflow === null) throw new Error(deliverParsed.error.error);
       const syncNode = deliverParsed.workflow.nodes.find(node => node.id === 'sync-pr-body');
@@ -723,7 +739,15 @@ describe('bundled-defaults', () => {
       // A command node carries its bindings on `source`, not the node root.
       expect(syncNode.source).toMatchObject({
         kind: 'command',
-        with: { pr_number: '$pr.output.number', pr_head: '$pr.output.head' },
+        with: { pr: '$pr.output', current_body: '$read-pr-body.output.body' },
+      });
+      expect(
+        deliverParsed.workflow.nodes.find(node => node.id === 'publish-pr-body')
+      ).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        script: 'publish-pr-body',
+        with: { pr: '$pr.output', intent: '$sync-pr-body.output.intent' },
       });
       // Composition once dropped that binding while materializing the command body
       // and then reported both names as missing caller inputs, so archon-deliver
@@ -735,107 +759,28 @@ describe('bundled-defaults', () => {
       expect(deliverParsed.workflow.inputs?.pr_head).toBeUndefined();
     });
 
-    /**
-     * Write the fake `git`/`gh` the flip-ready scenarios put on PATH. An omitted
-     * command is left absent on purpose — a refusal that must land before reaching it.
-     *
-     * Windows cannot execute these extensionless `#!/bin/sh` fakes, so every caller
-     * skips there: the harness, not the workflow, is what fails. The node body is POSIX
-     * shell either way, and ubuntu proves it.
-     */
-    const writeFakeBins = (bin: string, fakes: { git?: string[]; gh?: string[] }): void => {
-      mkdirSync(bin, { recursive: true });
-      for (const command of ['git', 'gh'] as const) {
-        const body = fakes[command];
-        if (body === undefined) continue;
-        writeFileSync(join(bin, command), body.join('\n'));
-        chmodSync(join(bin, command), 0o755);
-      }
-    };
-
-    /**
-     * Execute the bundled `flip-ready` node against those fakes, with the recorded PR
-     * supplied by a stubbed producer the way `archon-pr` supplies it in a real delivery.
-     * Returns the run and everything the fake `gh` was asked to do, so each scenario
-     * asserts on outcomes rather than repeating this setup.
-     */
-    const runFlipReady = async (scenario: {
-      name: string;
-      git: string[];
-      /** Omitted leaves no fake `gh` on PATH — for a refusal that must land before one. */
-      gh?: string[];
-      env?: Record<string, string>;
-    }): Promise<{ result: Awaited<ReturnType<typeof dryRunWorkflow>>; ghLog: string }> => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+    it('publishes the review report from a deterministic node, not the reviewer', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
-      const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
-      if (flipReady?.kind !== 'exec') throw new Error('flip-ready is not executable');
-      const producer = makeTestWorkflow({
-        name: 'recorded-pr',
-        nodes: [
-          {
-            id: 'pr',
-            prompt: 'recorded PR',
-            output_format: {
-              type: 'object',
-              properties: {
-                repo: {
-                  type: 'object',
-                  properties: { host: { type: 'string' }, path: { type: 'string' } },
-                  required: ['host', 'path'],
-                },
-                number: { type: 'integer' },
-                head: { type: 'string' },
-              },
-              required: ['repo', 'number', 'head'],
-            },
-          },
-        ],
-      }).nodes[0];
-      const workflow = resolveWorkflow({
-        ...parsed.workflow,
-        name: scenario.name,
-        nodes: [producer!, { ...flipReady, depends_on: ['pr'] }],
+      expect(parsed.workflow.returns).toBe('publish');
+      const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
+      expect(publish).toMatchObject({
+        kind: 'exec',
+        runtime: 'bun',
+        script: 'publish-review',
+        with: { pr: '$scope.output.pr' },
       });
-      const directory = mkdtempSync(join(tmpdir(), 'archon-flip-ready-'));
-      const bin = join(directory, 'bin');
-      const log = join(directory, 'gh.log');
-      const overrides: Record<string, string> = {
-        PATH: `${bin}:${process.env.PATH ?? ''}`,
-        GH_LOG: log,
-        ...scenario.env,
-      };
-      const previous = Object.fromEntries(
-        Object.keys(overrides).map(key => [key, process.env[key]])
-      );
-
-      try {
-        writeFakeBins(bin, scenario);
-        writeFileSync(log, '');
-        Object.assign(process.env, overrides);
-
-        const result = await dryRunWorkflow({
-          workflow,
-          userMessage: '',
-          cwd: directory,
-          stubs: {
-            pr: {
-              repo: { host: 'github.com', path: 'owner/repo' },
-              number: 42,
-              head: 'recorded-branch',
-            },
-          },
-          execCode: true,
-        });
-        return { result, ghLog: readFileSync(log, 'utf-8') };
-      } finally {
-        for (const [key, value] of Object.entries(previous)) {
-          if (value === undefined) delete process.env[key];
-          else process.env[key] = value;
-        }
-        await removeTempTree(directory);
+      // The verdict the composing loop terminates on passes through unchanged.
+      const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
+      if (synthesize?.kind !== 'agent' || publish?.kind !== 'exec') {
+        throw new Error('review nodes have unexpected kinds');
       }
-    };
+      expect(publish.output_format).toEqual(synthesize.output_format);
+      const synthesizeCommand =
+        BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
+      expect(synthesizeCommand).not.toContain('gh pr comment');
+      expect(synthesizeCommand).not.toContain('gh api');
+    });
 
     it('uses check events as wake-ups while retaining bounded probes and deadlines', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
@@ -866,176 +811,90 @@ describe('bundled-defaults', () => {
         expect(pause.when).toBe(`$${probeId}.output.state == 'pending'`);
       }
     });
+  });
 
-    it.skipIf(process.platform === 'win32')(
-      'refuses an origin that does not resolve to an owner/repo before flipping ready',
-      async () => {
-        // The guard that remains protects this node's own `gh` calls: a remote
-        // that does not normalize to `owner/repo` would point them somewhere
-        // unintended, and the raw URL can carry a token. Assert the reason, not
-        // just `failed`, so it stays anchored to that check.
-        const { result, ghLog } = await runFlipReady({
-          name: 'run-owned-ready-flip',
-          git: [
-            '#!/bin/sh',
-            'case "$*" in',
-            '  "remote get-url origin") printf "%s\\n" "$TEST_ORIGIN" ;;',
-            'esac',
-          ],
-          // No fake `gh`: the node refuses at the origin check before reaching one.
-          env: { TEST_ORIGIN: 'https://token@example.com/repo.git' },
-        });
-
-        expect(result.outcome).toBe('failed');
-        const flip = result.trace.find(entry => entry.nodeId === 'flip-ready');
-        expect(flip?.state).toBe('failed');
-        expect(flip?.reason).toContain('origin remote does not resolve to an owner/repo');
-        expect(ghLog).not.toContain('pr ready');
-      }
-    );
-
-    it.skipIf(process.platform === 'win32')(
-      'flips ready when the PR reports no checks at all',
-      async () => {
-        const { result, ghLog } = await runFlipReady({
-          name: 'no-checks-ready-flip',
-          git: [
-            '#!/bin/sh',
-            'case "$*" in',
-            '  "remote get-url origin") printf "%s\\n" "git@github.com:owner/repo.git" ;;',
-            'esac',
-          ],
-          // The node reads the check context count via gh's GraphQL API.
-          // A zero count means the PR carries no checks — a repository with no
-          // CI, or checks a fork PR never starts. No `pr checks` call follows.
-          gh: [
-            '#!/bin/sh',
-            'printf "%s\\n" "$*" >> "$GH_LOG"',
-            'case "$*" in',
-            '  "api graphql"*) printf "%s\\n" "0" ;;',
-            '  "pr checks"*)',
-            '    printf "%s\\n" "no checks reported on the \'recorded-branch\' branch" >&2',
-            '    exit 1',
-            '    ;;',
-            // On stdout deliberately: which stream gh confirms the flip on is gh's
-            // choice, so the node redirects that write itself rather than trusting it.
-            '  "pr ready"*) printf "%s\\n" "marked as ready for review" ;;',
-            '  *isDraft*) printf "%s\\n" "false" ;;',
-            '  *"--json url"*) printf "%s\\n" "https://example.com/repo/pull/42" ;;',
-            'esac',
-          ],
-        });
-
-        expect(result.outcome).toBe('completed');
-        const flip = result.trace.find(entry => entry.nodeId === 'flip-ready');
-        expect(flip?.state).toBe('completed');
-        // The node's stdout is the verified URL and nothing else — `outcome` reads it
-        // whole. The checks probe's stderr and the flip's own confirmation are retained
-        // by the engine as stderr, never merged into that value.
-        expect(flip?.output?.trim()).toBe('https://example.com/repo/pull/42');
-        expect(ghLog).toContain('pr ready 42 --repo owner/repo');
-      }
-    );
-
-    it.skipIf(process.platform === 'win32')(
-      'refuses a non-green check instead of flipping',
-      async () => {
-        const { result, ghLog } = await runFlipReady({
-          name: 'red-checks-ready-flip',
-          git: [
-            '#!/bin/sh',
-            'case "$*" in',
-            '  "remote get-url origin") printf "%s\\n" "git@github.com:owner/repo.git" ;;',
-            'esac',
-          ],
-          // The count read sees checks; the classification returns one
-          // non-green check. Real gh with --json exits 0 on red (the --json
-          // exporter succeeds regardless of check outcome).
-          gh: [
-            '#!/bin/sh',
-            'printf "%s\\n" "$*" >> "$GH_LOG"',
-            'case "$*" in',
-            '  "api graphql"*) printf "%s\\n" "1" ;;',
-            '  "pr checks"*)',
-            '    printf "%s\\n" "test (windows-latest) (fail)"',
-            '    ;;',
-            'esac',
-          ],
-        });
-
-        expect(result.outcome).toBe('failed');
-        const flip = result.trace.find(entry => entry.nodeId === 'flip-ready');
-        expect(flip?.state).toBe('failed');
-        expect(flip?.reason).toContain('test (windows-latest) (fail)');
-        expect(ghLog).not.toContain('pr ready');
-      }
-    );
-
-    // The dry-run simulator keeps a successful node's stderr, so this scenario runs the
-    // node body as a process and reads the streams the executor would. That is the
-    // boundary the claim lives at: `executeBashNode` broadcasts ANY non-empty stderr
-    // from a SUCCEEDING node straight to the operator's chat, unredacted — redaction
-    // covers the retained transcript copy only (dag-executor.ts). So on the success
-    // path the node's stderr must be empty, and gh is chatty on stderr by habit: it
-    // explains a missing check surface there, and appends an update notice to whatever
-    // else it prints.
-    it.skipIf(process.platform === 'win32')(
-      'lets no gh output reach the node streams on the no-CI success flip',
-      async () => {
-        const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
-        if (parsed.workflow === null) throw new Error(parsed.error.error);
-        const flipReady = parsed.workflow.nodes.find(node => node.id === 'flip-ready');
-        // A `bash:` node parses to the `sh` runtime, and the executor runs it through
-        // `resolveBashPath()` — the same interpreter this test invokes.
-        if (flipReady?.kind !== 'exec' || flipReady.runtime !== 'sh') {
-          throw new Error('flip-ready is not a bash node');
+  // A binary install executes the shipped copies of the deliver check scripts, so
+  // these run the bundled pack rather than the source tree. The full matrix for
+  // both sources lives in .archon/scripts/__tests__; this pins the default and
+  // the loud opt-in failure on what actually ships.
+  describe('deliver check source (bundled pack)', () => {
+    const runShipped = async (
+      script: 'check-ci' | 'flip-ready',
+      options: { source?: string; checks?: GhFake['checks'] }
+    ): Promise<{ code: number; stdout: string; stderr: string; gh: string[] }> => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-bundled-checks-'));
+      try {
+        for (const [path, content] of Object.entries(BUNDLED_SCRIPT_PACKS.sdlc!.files)) {
+          mkdirSync(dirname(join(root, 'sdlc', path)), { recursive: true });
+          writeFileSync(join(root, 'sdlc', path), content);
         }
-        // The engine substitutes the producer ref before running the body; the dry-run
-        // scenarios above prove that wiring, so this one supplies the resolved number.
-        const script = flipReady.script.replace('$pr.output.number', '42');
-        const directory = mkdtempSync(join(tmpdir(), 'archon-flip-streams-'));
-        const bin = join(directory, 'bin');
-
-        try {
-          writeFakeBins(bin, {
-            git: [
-              '#!/bin/sh',
-              'case "$*" in',
-              '  "remote get-url origin") printf "%s\\n" "git@github.com:owner/repo.git" ;;',
-              'esac',
-            ],
-            gh: [
-              '#!/bin/sh',
-              'case "$*" in',
-              '  "api graphql"*) printf "%s\\n" "0" ;;',
-              '  "pr checks"*)',
-              '    printf "%s\\n" "no checks reported on the \'recorded-branch\' branch" >&2',
-              '    exit 1',
-              '    ;;',
-              '  "pr ready"*) printf "%s\\n" "marked as ready for review" ;;',
-              '  *isDraft*) printf "%s\\n" "false" ;;',
-              '  *"--json url"*) printf "%s\\n" "https://example.com/repo/pull/42" ;;',
-              'esac',
-              // Appended to every call, the way gh appends its update notice: it rides
-              // along with a SUCCESSFUL read, so a value read that merged stderr would
-              // carry it into the value.
-              'printf "%s\\n" "gh: A new release of gh is available" >&2',
-            ],
-          });
-
-          const { stdout, stderr } = await execFileAsync('bash', ['-c', script], {
-            cwd: directory,
-            env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}` },
-          });
-
-          // The delivered URL, alone — no confirmation, no update notice.
-          expect(stdout).toBe('https://example.com/repo/pull/42\n');
-          expect(stderr).toBe('');
-        } finally {
-          await removeTempTree(directory);
-        }
+        const ghLog = join(root, 'gh.log');
+        const preload = join(root, 'fake-gh.ts');
+        writeFileSync(preload, fakeGhPreload({ checks: options.checks ?? 'fail' }, ghLog));
+        const run = spawnSync(
+          process.execPath,
+          ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
+          {
+            cwd: root,
+            encoding: 'utf8',
+            env: {
+              ...process.env,
+              INPUTS_PR: JSON.stringify({
+                repo: { host: 'github.com', path: 'owner/repo' },
+                number: 42,
+              }),
+              ARCHON_SDLC_FORGE: options.source ?? '',
+              ARCHON_CLI_COMMAND: '',
+            },
+          }
+        );
+        return {
+          code: run.status ?? -1,
+          stdout: run.stdout,
+          stderr: run.stderr,
+          gh: existsSync(ghLog) ? readFileSync(ghLog, 'utf8').split('\n').filter(Boolean) : [],
+        };
+      } finally {
+        await removeTempTree(root);
       }
-    );
+    };
+
+    it('reads checks through gh by default', async () => {
+      const probe = await runShipped('check-ci', {
+        checks: [{ name: 'build', state: 'FAILURE', bucket: 'fail' }],
+      });
+      expect(probe.code).toBe(0);
+      expect(JSON.parse(probe.stdout)).toEqual({
+        state: 'red',
+        detail: 'non-green checks: build (failure)',
+      });
+      expect(probe.gh[0]).toBe('pr checks 42 --repo github.com/owner/repo --json name,state');
+
+      const flip = await runShipped('flip-ready', {
+        checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
+      });
+      expect(flip.code).toBe(0);
+      expect(flip.gh).toContain('pr ready 42 --repo github.com/owner/repo');
+    });
+
+    it('refuses the ready flip when the default gh read fails', async () => {
+      const flip = await runShipped('flip-ready', { checks: 'fail' });
+      expect(flip.code).not.toBe(0);
+      expect(flip.stderr).toContain('flip-ready: could not read check state');
+      expect(flip.gh.some(call => call.startsWith('pr ready'))).toBe(false);
+    });
+
+    it('fails loudly when the forge source is selected but unavailable', async () => {
+      for (const script of ['check-ci', 'flip-ready'] as const) {
+        const run = await runShipped(script, {
+          source: 'forge',
+          checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
+        });
+        expect(run.code).not.toBe(0);
+        expect(run.stderr).toContain('ARCHON_SDLC_FORGE=forge: ARCHON_CLI_COMMAND is not set');
+        expect(run.gh).toEqual([]);
+      }
+    });
   });
 
   // Every AI node in the SDLC pack must resolve a tier. A node that resolves none

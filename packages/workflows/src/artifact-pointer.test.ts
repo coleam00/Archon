@@ -40,6 +40,7 @@ describe('artifact pointers (#2453)', () => {
       parent_run_id: null,
       adopted_from_run_id: null,
       output_root: outputRoot,
+      checkout_baseline: null,
       ...overrides,
     };
   }
@@ -115,6 +116,20 @@ describe('artifact pointers (#2453)', () => {
     });
   });
 
+  it('rejects a recorded location in a lookalike of the home, or spelled relative to it', async () => {
+    for (const output_root of [
+      join(`${home}-old`, 'workspaces', '_cwd', 'proj'),
+      join('workspaces', '_cwd', 'proj'),
+    ]) {
+      expect(
+        await validateArtifactPointers(
+          pointer('run-self', 'plan.md'),
+          makeRun('run-self', { output_root })
+        )
+      ).toContain('outside the Archon home directory');
+    }
+  });
+
   describe('which paths a pointer may name', () => {
     it('rejects an absolute path', async () => {
       const current = makeRun('run-self');
@@ -134,6 +149,17 @@ describe('artifact pointers (#2453)', () => {
       expect(
         await validateArtifactPointers(pointer('run-self', '../../plan.md'), current)
       ).toContain("may not contain '..' path segments");
+    });
+
+    it('rejects a path naming the artifacts directory itself', async () => {
+      const current = makeRun('run-self');
+      await writeArtifact('run-self', 'plan.md');
+
+      for (const path of ['.', './']) {
+        expect(await validateArtifactPointers(pointer('run-self', path), current)).toContain(
+          "resolves outside this run's artifacts directory"
+        );
+      }
     });
 
     it('rejects a NUL byte', async () => {

@@ -78,6 +78,7 @@ describe('workflows database', () => {
     parent_run_id: null,
     adopted_from_run_id: null,
     output_root: null,
+    checkout_baseline: null,
   };
 
   function mockTerminalSnapshot(
@@ -1134,7 +1135,7 @@ describe('workflows database', () => {
         maxAttempts: 2,
       };
 
-      await failWorkflowRun('workflow-run-123', 'Quota exhausted', scheduled);
+      await failWorkflowRun('workflow-run-123', 'Quota exhausted', { scheduledResume: scheduled });
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("SET status = 'failed'");
@@ -1165,11 +1166,13 @@ describe('workflows database', () => {
 
       await expect(
         failWorkflowRun('workflow-run-123', 'Quota exhausted', {
-          reason: 'quota',
-          resumeAt: '2026-08-25T10:00:00.000Z',
-          deadlineAt: '2026-08-26T10:00:00.000Z',
-          attempt: 1,
-          maxAttempts: 2,
+          scheduledResume: {
+            reason: 'quota',
+            resumeAt: '2026-08-25T10:00:00.000Z',
+            deadlineAt: '2026-08-26T10:00:00.000Z',
+            attempt: 1,
+            maxAttempts: 2,
+          },
         })
       ).rejects.toThrow('audit unavailable');
     });
@@ -1177,11 +1180,13 @@ describe('workflows database', () => {
     test('rejects an invalid quota continuation before writing the failed row', async () => {
       await expect(
         failWorkflowRun('workflow-run-123', 'Quota exhausted', {
-          reason: 'quota',
-          resumeAt: '2026-08-27T10:00:00.000Z',
-          deadlineAt: '2026-08-26T10:00:00.000Z',
-          attempt: 3,
-          maxAttempts: 2,
+          scheduledResume: {
+            reason: 'quota',
+            resumeAt: '2026-08-27T10:00:00.000Z',
+            deadlineAt: '2026-08-26T10:00:00.000Z',
+            attempt: 3,
+            maxAttempts: 2,
+          },
         })
       ).rejects.toThrow();
       expect(mockQuery).not.toHaveBeenCalled();
@@ -1786,7 +1791,7 @@ describe('workflows database', () => {
       expect(result.completed_at).toBeNull();
       // First call: the row-pinning read of the error the CAS is about to clear.
       const [priorQuery, priorParams] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(priorQuery).toContain('SELECT status, metadata');
+      expect(priorQuery).toContain('SELECT w.status, w.metadata, q.resource_key');
       // Postgres row lock — without it the value read is not guaranteed to be the
       // value the CAS clears, so the preserved error could be stale (#2348).
       expect(priorQuery).toContain('FOR UPDATE');

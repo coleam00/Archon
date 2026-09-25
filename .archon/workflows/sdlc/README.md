@@ -10,8 +10,8 @@ A guard here must protect an action the node it lives in takes.
 
 **Keep** a guard when it:
 
-- verifies the effect of something this node just did — exit 0 is not proof, and
-  `gh pr ready` can succeed against an already-ready PR without changing anything; or
+- verifies the effect of something this node just did — exit 0 is not proof, and a
+  forge can accept a write and silently not apply it; or
 - refuses to proceed on a question it asked and could not get an answer to, where
   guessing is irreversible. `archon complete` blocking a branch delete it could not
   prove safe is the shape.
@@ -44,16 +44,53 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-What survived in the ready flip is the part that passes the rule: it refuses an
-origin remote that does not normalize to `owner/repo`, because its own `gh` calls
-would otherwise go somewhere unintended; it refuses to flip while any check is
-non-green; and it reads the draft state back afterwards, because a successful
-exit is not proof the state changed.
+The ready preflight re-reads checks for the recorded qualified PR itself. It refuses
+pending, red, gated and unknown checks and any failed read, because a failed
+observation is not evidence that no CI exists. The flip targets that same qualified
+PR and reads the draft state back afterwards, because a successful exit is not proof
+the state changed.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
 whether the guard is protecting *this node's own action*, or restating something
 that was already true when the node started.
+
+## Forge source
+
+One switch selects the source for every forge read and write this pack makes.
+[`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected;
+[`.shared/checks.ts`](.shared/checks.ts) owns the check read and its gate policy,
+and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes. Both
+return the same shapes from either source, so one policy classifies both:
+
+- **`gh` (default).** The GitHub CLI, acting on the recorded qualified PR. This
+  needs only the authenticated `gh` the pack has always used.
+- **`forge` (opt-in).** Set `ARCHON_SDLC_FORGE=forge` in the environment Archon
+  runs with, for example `~/.archon/.env`. Operations then go through
+  `archon forge`, which needs a forge plugin installed for the PR's host (see the
+  forge reference in the docs) and the `ARCHON_CLI_COMMAND` host command that the
+  CLI and server publish at startup.
+
+The source is never picked from what happens to be installed. When `forge` is
+selected and cannot answer (no host command, no plugin for the host, a failed
+operation), the node refuses and `ci-note` reports the failure on stderr; none of
+them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
+forge source is for host execution: a container execution receives neither
+`ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized run uses `gh`.
+
+## Public writes belong to a script
+
+An agent judges and authors; the node after it performs the one public write and
+proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
+applies the resync, `publish-review` upserts the one marked review comment, and
+`flip-ready` flips it out of draft. Each takes a recorded intent from the agent
+before it, writes through the selected source, and fails unless the result reads
+back — so "the write failed" and "the write may have landed" stay different
+outcomes, in the pack as in the forge contract.
+
+That split is also what keeps the source switch out of the prompts. A prompt that
+branched on `ARCHON_SDLC_FORGE` would be an invented protocol; the scripts read it
+and the agents never see it.
 
 ## Deterministic scripts
 
@@ -122,3 +159,11 @@ and let only your own authored messages reach the streams. Re-emit a command's
 output when it failed and its words are the diagnostic; drop it when it is just a
 tool narrating itself. Capture a value's stderr separately rather than merging it,
 too — a `gh` update notice merged into a read becomes the value.
+
+## Composition validation
+
+[archon-validate](validate/README.md) accepts an explicit composition request to run
+the same project gate on two pinned parts and their composed tree. Its `interaction`
+result remains red; delivery holds it rather than treating it as inherited or
+environmental. The report retains revision, tree and check evidence for an existing
+merger to consume. It does not install a queue or authorize a merge.

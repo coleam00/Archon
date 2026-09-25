@@ -3,6 +3,8 @@
 [test]
 # Only discover tests in packages/ - prevents finding duplicates in workspace/worktrees
 root = "./packages"
+# Tests never send telemetry (scripts/test-telemetry-off.ts)
+preload = ["./scripts/test-telemetry-off.ts"]
 # Coverage output
 coverage = true
 coverageDir = "coverage"

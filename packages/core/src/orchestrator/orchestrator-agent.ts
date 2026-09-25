@@ -26,8 +26,10 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
 import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
+import { quoteCommandArg } from '../utils/command-args';
 import { safeDeactivateSession } from '../state/session-transitions';
-import { getAgentProvider, getProviderCapabilities } from '@archon/providers';
+import { getProviderCapabilities } from '@archon/providers';
+import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
@@ -72,6 +74,7 @@ import type {
 } from '@archon/workflows/schemas/workflow';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
@@ -669,12 +672,13 @@ function formatResumableRunState(status: WorkflowRun['status']): string {
 }
 
 function buildFailedRunResumePrompt(
+  surface: WorkflowCommandSurface,
   workflowName: string,
   resumableRun: WorkflowRun,
   userMessage: string
 ): string {
   const escapedMessage = escapeWorkflowCommandArg(userMessage);
-  const baseCommand = `/workflow run ${workflowName}`;
+  const run = `run ${workflowName}`;
   const priorPreview = formatPriorRunPromptPreview(resumableRun.user_message);
   // This prompt fires for any non-paused resumable run — that includes a stale
   // 'running' orphan (started but never finished), not only 'failed' runs, so
@@ -696,21 +700,21 @@ function buildFailedRunResumePrompt(
     '',
     '**1. Resume that run** (re-runs the prompt shown above, not your current message):',
     '```',
-    `/workflow resume ${resumableRun.id}`,
+    spellWorkflowCommand(surface, `resume ${resumableRun.id}`),
     '```',
     '',
     `**2. Discard the ${stateLabel} run, then start fresh with your current message:**`,
     '```',
-    `/workflow abandon ${resumableRun.id}`,
+    spellWorkflowCommand(surface, `abandon ${resumableRun.id}`),
     '```',
     'then re-run your command:',
     '```',
-    `${baseCommand} "${escapedMessage}"`,
+    spellWorkflowCommand(surface, `${run} "${escapedMessage}"`),
     '```',
     '',
     `**3. Start fresh with your current message, leave the ${stateLabel} run as-is** (skips the resume check):`,
     '```',
-    `${baseCommand} --force "${escapedMessage}"`,
+    spellWorkflowCommand(surface, `${run} --force "${escapedMessage}"`),
     '```',
   ].join('\n');
 }
@@ -752,7 +756,7 @@ async function dispatchOrchestratorWorkflowOwned(
       );
       return;
     }
-    const resolved = await resolveRunWorkflow(request.run, runCwd);
+    const resolved = await resolveRunWorkflow(request.run, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,
@@ -890,7 +894,7 @@ async function dispatchOrchestratorWorkflowOwned(
     | undefined;
 
   if (request.kind === 'start' && willContinueExistingRun && resumableRun) {
-    const resolved = await resolveRunWorkflow(resumableRun, runCwd);
+    const resolved = await resolveRunWorkflow(resumableRun, runCwd, platform);
     if (!resolved.ok) {
       await platform.sendMessage(
         conversationId,
@@ -1037,6 +1041,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // declarative equivalent of CLI `--no-worktree` for workflows that should always
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
+  let cutFromCommit: string | undefined;
   if (adoptionLane?.kind === 'reuse-worktree') {
     // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
     // instead of cutting a fresh one (same shape as the background dispatch in
@@ -1089,6 +1094,7 @@ async function dispatchOrchestratorWorkflowOwned(
         userId
       );
       cwd = result.cwd;
+      if (result.status === 'new') cutFromCommit = result.cutFromCommit;
     } catch (error) {
       if (error instanceof IsolationBlockedError) {
         getLog().warn(
@@ -1138,7 +1144,7 @@ async function dispatchOrchestratorWorkflowOwned(
       );
       await platform.sendMessage(
         conversationId,
-        buildFailedRunResumePrompt(workflow.name, resumableRun, userMessage)
+        buildFailedRunResumePrompt(platform, workflow.name, resumableRun, userMessage)
       );
       return;
     }
@@ -1202,7 +1208,7 @@ async function dispatchOrchestratorWorkflowOwned(
               `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
                 `keeps the inputs it started with — the values you supplied now (${ignored}) were ` +
                 'not applied. To run fresh with them instead, abandon that run first ' +
-                `(\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+                `(\`${spellWorkflowCommand(platform, `abandon ${resumableRun.id}`)}\`) and re-invoke.`
             );
           }
           if (suppliedModelBindingNames.length > 0) {
@@ -1219,7 +1225,7 @@ async function dispatchOrchestratorWorkflowOwned(
               `▶️ Resuming the ${resumeStateLabel} run of **${workflow.name}** (\`${resumableRun.id}\`), which ` +
                 'keeps the model bindings it started with — the bindings you supplied now ' +
                 `(${suppliedModelBindingNames.join(', ')}) were not applied. To run fresh with them ` +
-                `instead, abandon that run first (\`/workflow abandon ${resumableRun.id}\`) and re-invoke.`
+                `instead, abandon that run first (\`${spellWorkflowCommand(platform, `abandon ${resumableRun.id}`)}\`) and re-invoke.`
             );
           }
           admission = await engine.resume({
@@ -1418,6 +1424,7 @@ async function dispatchOrchestratorWorkflowOwned(
           resolveChildIsolation,
           capturedSourceOwner: owner,
           inputs: resolvedInputs,
+          ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
           ...(options?.adoptRunId
             ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
             : options?.supersedesRunId
@@ -1597,7 +1604,7 @@ export async function continueResolvedGateRun(
       );
       await notify(
         `${decision}, but no project is attached to this conversation, so the run could not ` +
-          `continue. The decision is recorded — use \`/workflow resume ${run.id}\` from the project.`
+          `continue. The decision is recorded — use \`${spellWorkflowCommand(platform, `resume ${run.id}`)}\` from the project.`
       );
       return;
     }
@@ -1633,7 +1640,7 @@ export async function continueResolvedGateRun(
         );
         await notify(
           `${decision}, and **${run.workflow_name}** ran, but its final status could not be saved ` +
-            `(${err.message}). The decision is recorded — check \`/workflow status ${run.id}\` ` +
+            `(${err.message}). The decision is recorded — check \`${spellWorkflowCommand(platform, `status ${run.id}`)}\` ` +
             'before starting another run on this project.'
         );
         return;
@@ -1644,7 +1651,7 @@ export async function continueResolvedGateRun(
       );
       await notify(
         `${decision}, but resuming **${run.workflow_name}** failed: ${err.message}. ` +
-          `The decision is recorded — retry with \`/workflow resume ${run.id}\`.`
+          `The decision is recorded — retry with \`${spellWorkflowCommand(platform, `resume ${run.id}`)}\`.`
       );
     }
   } catch (error) {
@@ -1954,7 +1961,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message);
+        const result = await commandHandler.handleCommand(conversation, message, platform);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -2087,16 +2094,7 @@ export async function handleMessage(
           `This conversation's project directory no longer exists:\n\`${scoped.default_cwd}\`\n\n` +
             `The project "${scoped.name}" is still registered, but its folder is gone — ` +
             'deleted, moved, or on a volume that is no longer mounted.\n\n' +
-            // The name is quoted, and `"`/`\` inside it escaped, so the suggestion
-            // round-trips back through parseCommand as the same string. Without the
-            // quotes, handleUpdateProject takes only the first token as the name
-            // (`const [projectName, ...pathParts] = args`), so `Client Ops` parses
-            // as `Client` and hands the user a second, wronger error; without the
-            // escaping, a name containing a quote terminates the quoted token early
-            // and does the same thing. parseCommand honours backslash escapes inside
-            // quotes (command-handler.ts:206-212), and both are no-ops for a plain
-            // name.
-            `- \`/update-project "${scoped.name.replace(/[\\"]/g, c => `\\${c}`)}" <new-path>\` ` +
+            `- \`/update-project ${quoteCommandArg(scoped.name)} <new-path>\` ` +
             'to point it at the new location\n' +
             '- `/setproject <name>` to switch this conversation to a different project'
         );
@@ -2224,6 +2222,7 @@ export async function handleMessage(
           // section — are gated on a scoped project; without one the section
           // must not instruct the agent to use verbs it does not have.
           agentCanResolve: conversation.codebase_id !== null,
+          surface: platform,
         }) || undefined
       : undefined;
     if (pausedGateContext !== undefined) {
@@ -2481,6 +2480,7 @@ export async function handleMessage(
       requestOptions.nativeTools = [
         buildManageRunTool({
           codebaseId: scopedCodebaseId,
+          surface: platform,
           // One continuation per turn: the resume runs in this conversation and
           // to completion, so a second gate resolved in the same turn is
           // declined rather than silently dropped (the tool tells the agent).
@@ -2607,7 +2607,7 @@ export async function handleMessage(
   } catch (error) {
     const err = toError(error);
     getLog().error({ err, conversationId }, 'orchestrator_message_failed');
-    const userMessage = classifyAndFormatError(err);
+    const userMessage = classifyAndFormatError(err, platform);
     try {
       await platform.sendMessage(conversationId, userMessage);
     } catch (sendError) {
@@ -2738,7 +2738,10 @@ async function handleStreamMode(
         // rather than emitting a generic message (#1983).
         const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
         const syntheticError = new Error(errorDetail || 'AI result error');
-        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
+        await platform.sendMessage(
+          conversationId,
+          classifyAndFormatError(syntheticError, platform)
+        );
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
@@ -2972,7 +2975,10 @@ async function handleBatchMode(
         // rather than emitting a generic message (#1983).
         const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
         const syntheticError = new Error(errorDetail || 'AI result error');
-        await platform.sendMessage(conversationId, classifyAndFormatError(syntheticError));
+        await platform.sendMessage(
+          conversationId,
+          classifyAndFormatError(syntheticError, platform)
+        );
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
@@ -3203,7 +3209,7 @@ async function handleWorkflowInvocationResult(
     getLog().warn({ workflowName, projectName }, 'workflow_not_found_in_dispatch');
     await platform.sendMessage(
       conversationId,
-      `Workflow \`${workflowName}\` is not available. Use \`/workflow list\` to see available workflows.`
+      `Workflow \`${workflowName}\` is not available. Use \`${spellWorkflowCommand(platform, 'list')}\` to see available workflows.`
     );
   }
 }
@@ -3623,7 +3629,7 @@ async function handleWorkflowRunCommand(
 
       await platform.sendMessage(
         conversationId,
-        `Workflow \`${workflow.name}\` not found.\n\nUse /workflow list to see available workflows.`
+        `Workflow \`${workflow.name}\` not found.\n\nUse ${spellWorkflowCommand(platform, 'list')} to see available workflows.`
       );
       return;
     }
@@ -3648,7 +3654,7 @@ async function handleWorkflowRunCommand(
   await platform.sendMessage(
     conversationId,
     request.kind === 'resume'
-      ? `Choose a project for this conversation, then retry \`/workflow resume ${request.run.id}\`.\n\n${projectList}`
-      : `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: /workflow run ${request.definition.name} --project <name> "${request.args}"`
+      ? `Choose a project for this conversation, then retry \`${spellWorkflowCommand(platform, `resume ${request.run.id}`)}\`.\n\n${projectList}`
+      : `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: ${spellWorkflowCommand(platform, `run ${request.definition.name} --project <name> "${request.args}"`)}`
   );
 }

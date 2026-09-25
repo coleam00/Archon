@@ -15,13 +15,17 @@ Each line is a structured event. The discriminator is the `type` field. Values (
 | `type` | Meaning |
 |--------|---------|
 | `workflow_start` / `workflow_complete` / `workflow_error` | Run lifecycle |
+| `workflow_resume` | A resumed execution picked the run back up here. The first execution writes `workflow_start`; every resume writes one `workflow_resume` instead, so the rows after the n-th one belong to the run's (n+1)-th segment. Transcripts written before this row existed repeat `workflow_start` on resume |
 | `node_start` / `node_complete` / `node_error` / `node_skipped` | Node lifecycle |
+| `node_suspended` | A node paused the run; `content` names why (a gate kind such as `approval`, or `wait`) |
+| `gate_decision` | How a gate was resolved — `step` (the gate node), `decision` (`approved`, `rejected`, or an author-declared decision), and `content` (the operator's comment or rejection reason, as the run's `approval_received` event stores it: an approve without a comment records `Approved`, and the field is absent when the event stores neither). No actor is recorded. Written by the process that approved or rejected, which is often not the one running the workflow |
 | `assistant` | AI assistant message — has `content` field with the full AI output |
 | `tool` | SDK tool invocation — has `tool_name` and `tool_input` |
 | `exec_output` | What a `bash`/`script` node or `until_bash` probe printed — `stdout_tail`, `stderr_tail`, `exit_code` |
+| `watchdog_reset` | A streamed chunk renewed a node's idle watchdog — `chunk_type` only, never content. Renewals closer together than `WATCHDOG_RESET_BURST_GAP_MS` form a burst, recorded as its first and last renewal; `chunk_count` is the renewals since the node's previous record (absent on older transcripts, which wrote one row per renewal). A burst's last record can land after later rows, so order by `ts` |
 | `validation` | Historical compatibility only; current runs do not emit this type |
 
-> **Loop iteration lifecycle events are NOT in the JSONL file.** `loop_iteration_started` / `loop_iteration_completed` go through the workflow event emitter (WebSocket / `workflow_events` DB table) — query the DB or the Web UI dashboard for those. Per-iteration rows that DO reach the JSONL are keyed `<node-id>-iteration-<n>`: a loop's `node_complete` row, and the `exec_output` row for each `until_bash` probe.
+> **Loop iteration lifecycle events are NOT in the JSONL file.** `loop_iteration_started` / `loop_iteration_completed` go through the workflow event emitter (WebSocket / `workflow_events` DB table) — query the DB or the Web UI dashboard for those. Per-iteration rows that DO reach the JSONL are keyed `<node-id>-iteration-<n>`: a loop's `node_complete` row, its `watchdog_reset` rows, and the `exec_output` row for each `until_bash` probe.
 
 Find the run ID from `archon workflow runs --status failed` (or `archon workflow runs` for the most recent run of any status; `workflow status` only shows active runs). Then:
 
@@ -34,6 +38,12 @@ jq 'select(.type == "node_error" or .type == "workflow_error")' <log-file>
 
 # What a specific node actually printed (evidence for "did this really do X?")
 jq 'select(.type == "exec_output" and .step == "<node-id>")' <log-file>
+
+# Where the run was resumed, and how each gate was decided
+jq 'select(.type == "workflow_resume" or .type == "gate_decision")' <log-file>
+
+# When a node's stream last renewed its watchdog, and with what chunk type
+jq -s 'map(select(.type == "watchdog_reset" and .step == "<node-id>")) | sort_by(.ts) | last' <log-file>
 
 # Full event stream
 cat <log-file> | jq .
@@ -92,10 +102,8 @@ Three possibilities:
 
 1. **The AI is actually working.** Check `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl` — if you see recent `tool` or `assistant` events in the tail, it's fine. Wait.
 2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "No Autonomous Lifecycle Mutation" rule — `CLAUDE.md`). Transition it manually:
-   - Web UI: Dashboard → Abandon or Cancel button on the run card
-   - CLI live detached owner: `archon workflow cancel <run-id>` — stops the exact CLI `--detach` process tree before marking the row cancelled
-   - CLI verified orphan: `archon workflow abandon <run-id>` — marks the DB row cancelled without claiming to stop host work
-   - Chat (Slack / Telegram / Web): `/workflow cancel` in the conversation that owns the active run
+   - Any cancel (Web UI Cancel, `archon workflow cancel <run-id>`, chat `/workflow cancel [id]`) stops a live owner process before marking the row cancelled, and refuses when no owner answers — an orphan row gets that refusal, with the host and pid it recorded
+   - Verified orphan: `archon workflow abandon <run-id>` (or Abandon in the Web UI after the refused Cancel, or `/workflow abandon <id>` in chat) — marks the row cancelled
 3. **A node is past its `idle_timeout`.** The default is 30 minutes of complete silence (the timer resets on every streamed message — it's a deadlock detector, not a work limiter). Override with per-node `idle_timeout` (ms) if a node legitimately goes quiet for longer.
 
 ### Workflow fails mid-way; how do I resume?
@@ -154,7 +162,7 @@ Common causes:
 
 ### A workflow-level field seems to have no effect
 
-Invalid values for optional workflow-level fields (`interactive`, `effort`, `thinking`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a loader warning is logged. Same for AI-only fields on bash/script nodes (`*_node_ai_fields_ignored`). Grep the server/CLI logs for `_ignored` / warn entries before assuming the field is broken.
+Invalid values for optional workflow-level fields (`interactive`, `effort`, `sandbox`, `fallbackModel`, `betas`, `tags`, `worktree.enabled`, `mutates_checkout`) are **warn-and-drop**: the workflow still loads and runs, the field is discarded, and a warn-level `*_ignored` loader log is written (stderr for CLI commands, the server log for `archon serve`). AI-only fields on bash/script nodes, unknown keys, and deprecations are parse warnings instead: run `archon validate workflows` or `archon workflow list` to see them, or set `LOG_LEVEL=debug` to see them in the logs. Check both before assuming the field is broken.
 
 ### Persisted session didn't restore (cold resume)
 

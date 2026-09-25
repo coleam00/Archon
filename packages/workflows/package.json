@@ -10,6 +10,7 @@
     "./router": "./src/router.ts",
     "./store": "./src/store.ts",
     "./terminal-record": "./src/terminal-record.ts",
+    "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
     "./terminal-status-write": "./src/terminal-status-write.ts",
     "./deps": "./src/deps.ts",
     "./event-emitter": "./src/event-emitter.ts",
@@ -18,6 +19,7 @@
     "./run-config": "./src/run-config.ts",
     "./script-discovery": "./src/script-discovery.ts",
     "./command-validation": "./src/command-validation.ts",
+    "./fixture-layout": "./src/fixture-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
     "./dry-run": "./src/dry-run.ts",
@@ -29,8 +31,15 @@
     "./engine-port": "./src/engine-port.ts",
     "./in-process-engine": "./src/in-process-engine.ts",
     "./engine-contract-tests": "./src/engine-contract-tests.ts",
+    "./webhook-source-plugin": "./src/webhook-source-plugin.ts",
+    "./output-ref": "./src/output-ref.ts",
     "./fan-out-identity": "./src/fan-out-identity.ts",
-    "./test-utils": "./src/test-utils.ts"
+    "./test-utils": "./src/test-utils.ts",
+    "./node-record-reader": "./src/node-record-reader.ts",
+    "./node-execution": "./src/node-execution.ts",
+    "./node-record-serialization": "./src/node-record-serialization.ts",
+    "./node-event-write": "./src/node-event-write.ts",
+    "./logger": "./src/logger.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -145,12 +154,24 @@
     [
       "src/artifacts-index.test.ts",
       "src/artifact-pointer.test.ts",
-      "src/terminal-record.test.ts"
+      "src/terminal-record.test.ts",
+      "src/run-terminal-telemetry.test.ts",
+      "src/telemetry-conformance.test.ts"
     ],
     [
       "src/state-migration.test.ts",
       "src/dry-run.test.ts",
       "src/fixture-runner.test.ts"
+    ],
+    [
+      "src/node-record-reader.test.ts"
+    ],
+    [
+      "src/node-record-serialization.test.ts"
+    ],
+    [
+      "src/checkout-observation.test.ts",
+      "src/implement-guard-conformance.test.ts"
     ]
   ]
 }

@@ -14,14 +14,33 @@ import '@archon/paths/strip-cwd-env-boot';
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
 import { loadArchonEnv } from '@archon/paths/env-loader';
-import { captureDetachedInstallContext, restoreDetachedInstallContext } from '@archon/paths';
+import {
+  captureDetachedInstallContext,
+  getArchonConfigPath,
+  getArchonHome,
+  restoreDetachedInstallContext,
+  setLogDestination,
+} from '@archon/paths';
+// A command's stdout is its output (`archon … > file`, `| jq`, an agent reading
+// it); logs are diagnostics. Set before anything below can log.
+setLogDestination('stderr');
 const hasDetachedRunConfigHandoff = process.argv
   .slice(2)
   .includes('--internal-detached-run-config');
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-loadArchonEnv(process.cwd());
+let forgeConfigPath = '';
+let forgeTrustedEnv: NodeJS.ProcessEnv = {};
+loadArchonEnv(process.cwd(), {
+  afterUserLoad: () => {
+    forgeConfigPath = getArchonConfigPath();
+    // Discovery receives this snapshot only through its constrained process
+    // boundary. Resolve ARCHON_HOME so Docker and HOME-based installs keep the
+    // same user-scoped plugin location after repo env loads.
+    forgeTrustedEnv = { ...process.env, ARCHON_HOME: getArchonHome() };
+  },
+});
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
@@ -30,9 +49,8 @@ if (inheritedInstallContext) {
 }
 
 // Install the pipe-safe `console.log` shim BEFORE any command module imports.
-// `console.log` reaches fd 1 via a non-blocking pipe (pino opens it that way at
-// module load via `@archon/paths/strip-cwd-env-boot` above), and short writes
-// are silently dropped against a slow reader. The shim delegates through
+// `console.log` can reach fd 1 as a non-blocking pipe, and short writes are
+// silently dropped against a slow reader. The shim delegates through
 // `writeStdout` so the stream layer queues short writes and retries `EAGAIN`
 // instead of dropping the tail — but delivery is fire-and-forget, so the
 // patched `console.log` returns synchronously and the exit path below must
@@ -56,6 +74,7 @@ installPipeSafeConsole();
 
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
+import { shouldReportCliStart } from './utils/cli-start-telemetry';
 import { renderHelp } from './help';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
@@ -71,6 +90,7 @@ if (!process.env.CLAUDE_API_KEY && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
 
 import {
   setLogLevel,
+  getLogLevel,
   createLogger,
   checkForUpdate,
   BUNDLED_IS_BINARY,
@@ -81,6 +101,9 @@ import {
   refreshCompiledInstallManifest,
   canonicalizeProjectPath,
 } from '@archon/paths';
+import { publishArchonCliCommand } from '@archon/paths/cli-command';
+
+publishArchonCliCommand();
 
 let providersRegistered = false;
 let databaseRouteLoaded = false;
@@ -191,12 +214,12 @@ function isVersionRequest(args: string[]): boolean {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
-  // Anonymous once-per-invocation startup event (self-gates on opt-out).
-  // Emitted before any early return so EVERY invocation — including bare
-  // `archon`, `--help`, and `--version` — is counted, matching the
-  // "once per CLI invocation" contract. Each early-return path below flushes
-  // via shutdownTelemetry(); the main command path flushes in its finally.
-  captureArchonStarted({ surface: 'cli' });
+  // Anonymous startup event (self-gates on opt-out). Emitted before any early
+  // return so every invocation — including bare `archon`, `--help`, and
+  // `--version` — is counted once; `serve` and detached run owners are counted
+  // by another process (see shouldReportCliStart). Each early-return path below
+  // flushes via shutdownTelemetry(); the main command path flushes in its finally.
+  if (shouldReportCliStart(args, process.env)) captureArchonStarted({ surface: 'cli' });
 
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
@@ -269,17 +292,21 @@ async function main(): Promise<number> {
   const command = positionals[0];
   const subcommand = positionals[1];
 
-  // setup/doctor/telemetry default to warn to avoid Pino info JSON interleaving with their human-readable output; lazy loggers pick up this level at first creation
-  const isInteractiveCommand =
-    command === 'setup' || command === 'doctor' || command === 'telemetry';
-  const suppressByDefault = isInteractiveCommand && !values.verbose && !isVerboseBoot();
+  // Commands default to warn: info records are engine internals that bury the
+  // command's own output, even on stderr. `serve` is the exception: its logs are
+  // its output, so they stay at info on stdout, as when the server runs directly.
+  // Lazy loggers pick up this level at first creation.
+  const isServe = command === 'serve';
+  if (isServe) setLogDestination('stdout');
+  const suppressByDefault = !isServe && !values.verbose && !isVerboseBoot();
   const rawTranscriptCommand = command === 'workflow' && subcommand === 'logs';
   // Apply output policy before install discovery: its best-effort debug logs
   // must never prefix a machine-readable response.
   if (jsonFlag || rawTranscriptCommand) {
     setLogLevel('silent');
   } else if (values.quiet || suppressByDefault) {
-    setLogLevel('warn');
+    // Only ever quieter: an explicit LOG_LEVEL of error, fatal, or silent stays.
+    if (['trace', 'debug', 'info'].includes(getLogLevel())) setLogLevel('warn');
   } else if (values.verbose) {
     setLogLevel('debug');
   }
@@ -296,6 +323,7 @@ async function main(): Promise<number> {
 
   // Commands that don't require git repo validation
   const noGitCommands = [
+    'trigger',
     'version',
     'help',
     'setup',
@@ -329,6 +357,16 @@ async function main(): Promise<number> {
       if (resumeFlag) throw new Error(RESUME_RUN_CONFIG_CONFLICT);
     }
 
+    if (command === 'forge') {
+      const { forgeCommand } = await loadRoute(() => import('./commands/forge'));
+      return await forgeCommand(subcommand, {
+        data: typeof values.data === 'string' ? values.data : undefined,
+        dataFile: typeof values['data-file'] === 'string' ? values['data-file'] : undefined,
+        configPath: forgeConfigPath,
+        trustedEnv: forgeTrustedEnv,
+      });
+    }
+
     const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
     if (configOutsideRun) {
       console.error(configOutsideRun);
@@ -343,6 +381,17 @@ async function main(): Promise<number> {
           'Use: archon workflow run <name> --adopt <run-id> <input>\n' +
           'Find a prior run id with: archon workflow runs --open (or workflow get <run-id>)'
       );
+    }
+    if (command === 'plugin') {
+      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
+      const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
+      const { defaultPluginDir } = await import('@archon/forge/discovery');
+      return await pluginCommand(subcommand, positionals.slice(2), {
+        // The same trusted ARCHON_HOME forge discovery scans, so repo env cannot
+        // redirect where an install lands.
+        pluginsDir: defaultPluginDir(forgeTrustedEnv),
+        archonVersion: await getArchonVersion(),
+      });
     }
     // Note: orphaned run cleanup moved to `workflow cleanup` command only.
     // Running it on every CLI startup killed parallel workflow runs (all
@@ -469,6 +518,21 @@ async function main(): Promise<number> {
     }
 
     switch (command) {
+      case 'trigger': {
+        const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
+          providers: subcommand === 'fire' || subcommand === 'drain' || subcommand === 'execute',
+          database: true,
+        });
+        await triggerCommand(subcommand, positionals.slice(2), {
+          config: typeof values.config === 'string' ? values.config : undefined,
+          host: typeof values.host === 'string' ? values.host : undefined,
+          owner: typeof values.owner === 'string' ? values.owner : undefined,
+          limit: typeof values.limit === 'string' ? values.limit : undefined,
+          yes: values.yes === true,
+        });
+        break;
+      }
+
       case 'version': {
         const { versionCommand } = await loadRoute(() => import('./commands/version'));
         await versionCommand();
@@ -526,7 +590,13 @@ async function main(): Promise<number> {
           providers: true,
           database: true,
         });
-        await setupCommand({ spawn: spawnFlag, repoPath, scope, force: forceFlag });
+        const setupExitCode = await setupCommand({
+          spawn: spawnFlag,
+          repoPath,
+          scope,
+          force: forceFlag,
+        });
+        if (setupExitCode !== 0) return setupExitCode;
         break;
       }
 
@@ -1133,6 +1203,8 @@ async function main(): Promise<number> {
           aiAliasListCommand,
           aiAliasUnsetCommand,
           aiDefaultCommand,
+          aiCapacityListCommand,
+          aiCapacityReleaseCommand,
         } = await loadRoute(() => import('./commands/ai'), {
           providers: true,
           database: true,
@@ -1197,6 +1269,16 @@ async function main(): Promise<number> {
                 );
             }
           }
+          case 'capacity': {
+            const action = positionals[2];
+            if (action === undefined || action === 'list')
+              return await aiCapacityListCommand(jsonFlag);
+            if (action === 'release') return await aiCapacityReleaseCommand(positionals[3]);
+            return await fail(
+              jsonFlag,
+              'Usage: archon ai capacity [list] [--json] | capacity release <attempt-id>'
+            );
+          }
           case 'default':
             return await aiDefaultCommand(
               positionals[2],
@@ -1210,7 +1292,7 @@ async function main(): Promise<number> {
                 : `Unknown ai subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, default <provider> [<model>]`
+              `${problem}\nAvailable: key set <provider>, login <provider>, list, logout <provider>, tier set|list|unset, alias set|list|unset, capacity [list]|release <attempt-id>, default <provider> [<model>]`
             );
           }
         }

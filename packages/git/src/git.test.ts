@@ -5,8 +5,9 @@ import { tmpdir, homedir } from 'os';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createRecordingGitFixture } from './test-utils';
 // Loaded BEFORE mock.module replaces the module in the registry, so these are
-// the REAL identity validators — the mock re-exports them (no drift possible).
-import { parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
+// the REAL pure helpers (identity validators, isPathInside) — the mock
+// re-exports them (no drift possible).
+import { isPathInside, parseOwnerRepo, resolveRepoProjectIdentity } from '@archon/paths';
 
 // ---------------------------------------------------------------------------
 // Mock @archon/paths: suppress logger, pass-through path functions
@@ -59,6 +60,7 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonWorktreesPath: () => join(getArchonHome(), 'worktrees'),
   getArchonWorkspacesPath: () => join(getArchonHome(), 'workspaces'),
+  isInsideArchonWorkspaces: (p: string) => isPathInside(join(getArchonHome(), 'workspaces'), p),
   getProjectWorktreesPath: (owner: string, repo: string) =>
     join(getArchonHome(), 'workspaces', owner, repo, 'worktrees'),
   parseOwnerRepo,
@@ -442,6 +444,18 @@ describe('git utilities', () => {
       const result = git.getWorktreeBase(repo(repoPath));
       expect(result).toEqual({
         base: join(workspacesPath, 'acme', 'widget', 'worktrees'),
+        layout: 'workspace-scoped',
+      });
+    });
+
+    test('does not read owner/repo from a sibling that only shares the workspaces prefix', () => {
+      delete process.env.WORKSPACE_PATH;
+      delete process.env.ARCHON_DOCKER;
+      delete process.env.ARCHON_HOME;
+      const lookalike = join(homedir(), '.archon', 'workspaces-old', 'acme', 'widget', 'source');
+      const result = git.getWorktreeBase(repo(lookalike));
+      expect(result).toEqual({
+        base: join(homedir(), '.archon', 'workspaces', '_local', 'source', 'worktrees'),
         layout: 'workspace-scoped',
       });
     });
@@ -3737,6 +3751,97 @@ branch refs/heads/feature/auth
         expect((err as Error).cause).toBeDefined();
         expect(((err as Error).cause as NodeJS.ErrnoException).code).toBe('ENOENT');
       }
+    });
+  });
+
+  describe('worktree locks', () => {
+    let root: string;
+    let repoPath: git.RepoPath;
+    let worktreePath: git.WorktreePath;
+
+    const run = async (...args: string[]): Promise<void> => {
+      await git.execFileAsync('git', ['-C', root, ...args]);
+    };
+
+    /** Take the lock through git directly: the package only reads and releases one. */
+    const lock = async (reason: string): Promise<void> => {
+      await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'worktree',
+        'lock',
+        '--reason',
+        reason,
+        worktreePath,
+      ]);
+    };
+
+    beforeEach(async () => {
+      root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-worktree-lock-')));
+      repoPath = repo(join(root, 'repo'));
+      worktreePath = worktree(join(root, 'wt'));
+      await realMkdir(repoPath, { recursive: true });
+      await run('init', '-q', '-b', 'main', repoPath);
+      await git.execFileAsync('git', ['-C', repoPath, 'config', 'user.email', 'test@example.com']);
+      await git.execFileAsync('git', ['-C', repoPath, 'config', 'user.name', 'Archon Test']);
+      await writeFile(join(repoPath, 'README.md'), '# fixture\n');
+      await git.execFileAsync('git', ['-C', repoPath, 'add', 'README.md']);
+      await git.execFileAsync('git', ['-C', repoPath, 'commit', '-qm', 'initial commit']);
+      await git.execFileAsync('git', [
+        '-C',
+        repoPath,
+        'worktree',
+        'add',
+        '-q',
+        worktreePath,
+        '-b',
+        'feature',
+      ]);
+    });
+
+    test('an unlocked worktree reads as no lock at all', async () => {
+      expect(await git.readWorktreeLock(worktreePath)).toBeNull();
+    });
+
+    test('round-trips the reason a lock was taken with', async () => {
+      await lock('archon: worktree setup in progress');
+
+      expect(await git.readWorktreeLock(worktreePath)).toEqual({
+        reason: 'archon: worktree setup in progress',
+      });
+
+      await git.unlockWorktree(repoPath, worktreePath);
+
+      expect(await git.readWorktreeLock(worktreePath)).toBeNull();
+    });
+
+    test('a lock taken without a reason is still a lock', async () => {
+      // `null` means unlocked and nothing else, so a caller can tell the two
+      // apart without inspecting the reason text.
+      await git.execFileAsync('git', ['-C', repoPath, 'worktree', 'lock', worktreePath]);
+
+      expect(await git.readWorktreeLock(worktreePath)).toEqual({ reason: '' });
+    });
+
+    test('git refuses to remove a locked worktree unless forced twice', async () => {
+      await lock('archon: worktree setup in progress');
+
+      // The lock is only a usable marker because git itself enforces it.
+      await expect(git.removeWorktree(repoPath, worktreePath)).rejects.toThrow(/locked/);
+      await expect(
+        git.execFileAsync('git', ['-C', repoPath, 'worktree', 'remove', '--force', worktreePath])
+      ).rejects.toThrow(/locked/);
+      await expect(
+        git.execFileAsync('git', [
+          '-C',
+          repoPath,
+          'worktree',
+          'remove',
+          '--force',
+          '--force',
+          worktreePath,
+        ])
+      ).resolves.toBeDefined();
     });
   });
 });

@@ -23,16 +23,6 @@ returns: implement
 outcome_field: green
 
 nodes:
-  - id: record-start
-    bash: |
-      # The anchor assert-changed measures against: proves work happened THIS run,
-      # independent of how far the branch was already ahead when the run started.
-      # Chained with && so a failed write fails the node instead of echoing success
-      # (a bash line's failure does not abort the script without set -e).
-      mkdir -p "$ARTIFACTS_DIR" &&
-        git rev-parse HEAD > "$ARTIFACTS_DIR/.start-sha" &&
-        echo '{"start":"recorded"}'
-
   # Run success ≠ green. The loop completes on `done`, which deliberately includes
   # a definitive blocked decline (green: false) — so a completed run's status never
   # certifies the work. Consumers read $implement.output.green; compositions gate on
@@ -43,7 +33,6 @@ nodes:
       command: implement
       until_field: done
       max_iterations: 5
-    depends_on: [record-start]
     output_type: implementation
     output_format:
       type: object
@@ -52,7 +41,8 @@ nodes:
           type: boolean
         green:
           type: boolean
-        # Why the checks are red, when they are. A green turn has no red to
+        # Why the verdict is not green: a failing check's cause, or `incomplete`
+        # when the checks did not all run. A green turn has no red to
         # explain, and the empty string is how it says so: OpenAI strict mode rejects
         # any schema whose `required` omits a declared property, so optionality has to
         # live inside the type rather than in what `required` leaves out: every
@@ -61,7 +51,7 @@ nodes:
         # no cause declared, so the gate that spends on this verdict is unchanged.
         red_cause:
           type: string
-          enum: [introduced, inherited, environment, ""]
+          enum: [introduced, inherited, environment, incomplete, ""]
         summary:
           type: string
       required: [done, green, red_cause, summary]
@@ -72,7 +62,9 @@ nodes:
   # arrives as bound inputs, no artifact bridge: green, the declared cause of any
   # red, and the summary carrying the evidence for it. The guard needs all three,
   # because an iteration whose remaining red is inherited or environmental can
-  # honestly have nothing left to change.
+  # honestly have nothing left to change. `baseline` is the checkout the engine
+  # observed when this implement invocation started, so a correction round is
+  # measured from its own start and changes already in the checkout do not count.
   - id: assert-changed
     script: assert-changed
     runtime: bun
@@ -81,3 +73,4 @@ nodes:
       green: "$implement.output.green"
       red_cause: "$implement.output.red_cause"
       summary: "$implement.output.summary"
+      baseline: "$implement.execution.checkoutStart"

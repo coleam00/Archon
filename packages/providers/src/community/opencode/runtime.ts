@@ -32,8 +32,8 @@ function generateRandomPassword(): string {
 // the user's real global/project config still resolves it. Two categories,
 // `doom_loop` and `external_directory`, default to `ask` upstream when
 // nothing configures them at all (https://opencode.ai/docs/permissions/#defaults);
-// an unattended node can legitimately hit the fail-fast path below for those
-// two unless the user's own OpenCode config sets them to `allow`.
+// an unattended node can legitimately hit the `permission.asked` fail-fast
+// path for those two unless the user's own OpenCode config sets them to `allow`.
 function buildEmbeddedServerConfig(startupPort: number): Record<string, unknown> {
   return {
     server: {

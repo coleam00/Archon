@@ -26,7 +26,7 @@ mock.module('./connection', () => ({
 const { getDagResumeSnapshot } = await import('./workflow-events');
 const { createWorkflowStore } = await import('../workflows/store-adapter');
 registerBuiltinProviders();
-const telemetry = spyOn(paths, 'captureWorkflowCompleted').mockImplementation(() => {});
+const telemetry = spyOn(paths, 'captureWorkflowTerminal').mockImplementation(() => {});
 let scratch: string | undefined;
 afterEach(async () => {
   telemetry.mockRestore();
@@ -81,6 +81,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     adopted_from_run_id: null,
   };
   const store: IWorkflowStore = {

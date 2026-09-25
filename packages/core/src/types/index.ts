@@ -115,6 +115,8 @@ export interface MessageMetadata {
   workflowResult?: { workflowName: string; runId: string };
 }
 
+export { toPersistedMessageMetadata } from './message-metadata';
+
 export interface IPlatformAdapter {
   /**
    * Send a message to the platform
@@ -160,6 +162,13 @@ export interface IPlatformAdapter {
 
   /** Retract previously streamed text (used when workflow routing intercepts) */
   emitRetract?(conversationId: string): Promise<void>;
+
+  /**
+   * Optional: how an operator types a workflow command on this surface, given the
+   * command after the verb prefix (`cancel <id>`). Absent means the chat grammar the
+   * core command handler parses, `/workflow <command>`.
+   */
+  formatWorkflowCommand?(command: string): string;
 
   /**
    * Optional: Append a small footer summarising cost / token usage / stop reason

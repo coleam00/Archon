@@ -55,12 +55,12 @@ describe('CLI help output', () => {
     expect(help).toContain('Use <name> --full for one exact description');
   });
 
-  it('distinguishes active cancel from state-only abandon', () => {
+  it('describes cancel and abandon', () => {
     expect(help).toContain(
-      'workflow cancel <run-id>   Stop a running workflow started with --detach'
+      'workflow cancel <run-id>   Stop a running workflow (stops an owning process first)'
     );
     expect(help).toContain(
-      'workflow abandon <run-id>  Mark a run cancelled without stopping host work'
+      'workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first'
     );
   });
 
@@ -161,13 +161,17 @@ describe('CLI help output', () => {
   // string here means any future drift — a dropped Commands entry, a reordered
   // Options block, a column-width change in formatSpecLine — fails this test
   // instead of silently shipping.
-  const PRE_REFACTOR_GLOBAL_HELP = `
+  const EXPECTED_GLOBAL_HELP = `
 Archon CLI - Run AI workflows from the command line
 
 Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
+  forge resolve              Resolve an explicit remote through optional forge plugins
+  forge checks               Observe checks for an explicit qualified pull request
+  trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
+                             Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
   setup                      Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]
@@ -180,8 +184,8 @@ Commands:
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs a human decision
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
-  workflow cancel <run-id>   Stop a running workflow started with --detach
-  workflow abandon <run-id>  Mark a run cancelled without stopping host work
+  workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
+  workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)
@@ -196,10 +200,15 @@ Commands:
                              scratch worktree of HEAD
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove stale environments (default: 7 days)
-  isolation cleanup --merged Remove environments with branches merged into main
+  isolation cleanup --merged Remove environments with branches merged into the base branch
   complete <branch> [...]    Complete branch lifecycle (remove worktree + branches)
   serve                      Start the web UI server (binary installs download it on first run)
   skill install [path]       Install archon-cli into .claude/skills and .agents/skills
+  plugin install <owner/repo[/path][@tag]>
+                             Install a forge plugin from a GitHub release (default: latest)
+  plugin update <id>[@tag]   Reinstall an installed plugin from another release
+  plugin remove <id>         Delete the files an installed plugin wrote
+  plugin list                Show installed plugins with release tag and commit
   doctor [--full]            Verify your Archon setup (Claude/Codex binaries, gh auth, DB, adapters; --full also probes the OpenCode runtime SDK)
   auth github                Connect your GitHub identity via device flow (multi-user installs)
   ai key set <provider>      Connect an AI provider API key (multi-user installs; key read from prompt/stdin)
@@ -212,6 +221,8 @@ Commands:
   ai alias set <@n> <p> <m>  Set a @custom model alias [--effort <e>] [--scope user|install]
   ai alias list [--json]     Show configured @custom aliases (install + yours)
   ai alias unset <@name>     Remove a @custom alias [--scope user|install]
+  ai capacity [--json]       Show provider attempts holding concurrency.providers capacity
+  ai capacity release <id>   Release a held attempt whose owner process you verified is gone
   ai default <p> [<model>]   Set the default assistant (+ chat model) [--scope user|install]
   telemetry status           Show anonymous telemetry state (enabled, reason, ID, host)
   telemetry reset            Rotate the anonymous install UUID
@@ -242,8 +253,8 @@ Options:
   --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
   --spawn                    Open setup wizard in a new terminal window (for setup command)
-  --quiet, -q                Reduce log verbosity to warnings and errors only
-  --verbose, -v              Show debug-level output
+  --quiet, -q                Log warnings and errors only (the default except for serve)
+  --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
   --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)
@@ -279,19 +290,20 @@ Examples:
   archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"
   archon skill install
   archon skill install /path/to/project
+  archon plugin install coleam00/Archon/plugins/forge-github
   archon workflow search "pr review"
   archon workflow install archon-piv-loop
 
 `;
 
-  it('archon --help matches the pre-refactor global index byte-for-byte', () => {
+  it('archon --help matches the supported global index byte-for-byte', () => {
     const result = spawnSync(process.execPath, [CLI_ENTRY, '--help'], {
       encoding: 'utf8',
       env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' },
     });
     expect(result.status).toBe(0);
-    expect(result.stdout).toBe(PRE_REFACTOR_GLOBAL_HELP);
-    expect(`${renderHelp()}\n`).toBe(PRE_REFACTOR_GLOBAL_HELP);
+    expect(result.stdout).toBe(EXPECTED_GLOBAL_HELP);
+    expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
   });
 
   it('archon help <cmd> [<subcmd>] matches archon <cmd> [<subcmd>] --help', () => {

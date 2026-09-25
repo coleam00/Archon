@@ -41,6 +41,11 @@ if (envPath) {
 import { loadArchonEnv } from '@archon/paths/env-loader';
 loadArchonEnv(process.cwd());
 
+// Workflow scripts started by this server call back into the CLI through the
+// same host command the CLI publishes for its own runs.
+import { publishArchonCliCommand } from '@archon/paths/cli-command';
+publishArchonCliCommand();
+
 // Smart default: fall back to Claude Code's built-in OAuth (`claude /login`)
 // ONLY for solo installs with no explicit credentials. Per-user installs
 // (TOKEN_ENCRYPTION_KEY) deliver Claude auth per-request, so the global-auth
@@ -78,7 +83,9 @@ import { WorkflowEventBridge } from './adapters/web/workflow-bridge';
 import { DashboardEventPoller } from './adapters/web/dashboard-event-poller';
 import { PgNotifyListener } from './adapters/web/pg-notify-listener';
 import { registerApiRoutes } from './routes/api';
-import { registerGithubWebhookRoute } from './routes/webhooks';
+import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './routes/webhooks';
+import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
+import { createServerResourceStartHost } from './services/resource-start-hosting';
 import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
@@ -187,7 +194,7 @@ function createMessageErrorHandler(
   return async (error: unknown): Promise<void> => {
     getLog().error({ err: error, platform, conversationId }, 'message_processing_failed');
     try {
-      const userMessage = classifyAndFormatError(error as Error);
+      const userMessage = classifyAndFormatError(error as Error, adapter);
       await adapter.sendMessage(conversationId, userMessage);
     } catch (sendError) {
       getLog().error({ err: sendError, platform, conversationId }, 'error_message_send_failed');
@@ -202,7 +209,8 @@ function createMessageErrorHandler(
  * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
  * a DAG node abort). Those are logged at error level but do not exit the process.
  * All other unhandled rejections are unexpected bugs — they are logged at fatal
- * level and the process exits immediately (Fail Fast principle).
+ * level and the process exits as soon as queued telemetry flushes (bounded, so
+ * still Fail Fast).
  */
 export function handleUnhandledRejection(reason: unknown): void {
   const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
@@ -215,7 +223,16 @@ export function handleUnhandledRejection(reason: unknown): void {
   // All other unhandled rejections are unexpected — crash loudly so they are
   // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
-  process.exit(1);
+  void exitAfterTelemetryFlush(1);
+}
+
+/**
+ * Exit after flushing queued telemetry. Boot failures after `archon_started`
+ * otherwise drop that event, since `process.exit` skips pending async work.
+ */
+export async function exitAfterTelemetryFlush(code: number): Promise<never> {
+  await shutdownTelemetry();
+  process.exit(code);
 }
 
 export interface ServerOptions {
@@ -298,7 +315,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       },
       'no_ai_credentials'
     );
-    process.exit(1);
+    await exitAfterTelemetryFlush(1);
   }
 
   if (!hasClaudeCredentials) {
@@ -320,7 +337,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     getLog().info('database_connected');
   } catch (error) {
     getLog().fatal({ err: error }, 'database_connection_failed');
-    process.exit(1);
+    await exitAfterTelemetryFlush(1);
   }
 
   const config = await loadConfig();
@@ -465,7 +482,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         ? async (userId: string): Promise<string | undefined> =>
             (await getDecryptedAccessToken(userId)) ?? undefined
         : undefined;
-      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, { getUserToken });
+      github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention, {
+        getUserToken,
+      });
       await github.start();
       activePlatforms.push('GitHub (App)');
       getLog().info(
@@ -688,6 +707,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
 
+  const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
+  const webhookSources = webhookSourcesConfigPath
+    ? await loadWebhookSourcePlugins(webhookSourcesConfigPath)
+    : undefined;
+  // Explicit only: bindings choose their execution host, so the server never guesses one.
+  const resourceStartHostId = process.env.ARCHON_TRIGGER_HOST?.trim();
+  const resourceStartHost = resourceStartHostId
+    ? createServerResourceStartHost(resourceStartHostId)
+    : undefined;
+  const requestResourceStartDrain = resourceStartHost
+    ? (): void => void resourceStartHost.requestDrain()
+    : undefined;
+
   // Global error handler for unhandled exceptions
   app.onError((err, c) => {
     getLog().error({ err, path: c.req.path, method: c.req.method }, 'unhandled_request_error');
@@ -738,6 +770,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   if (github) {
     registerGithubWebhookRoute(app, github);
     getLog().info('github_webhook_registered');
+  }
+  if (webhookSources) {
+    registerWebhookSourceRoutes(app, webhookSources, requestResourceStartDrain);
+    getLog().info('webhook_sources_registered');
   }
 
   // Internal endpoint: git credential helper.
@@ -1000,7 +1036,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       );
     }
     return workflowResumeTargetForConversation(conversation, workflowPlatforms);
-  });
+  }, requestResourceStartDrain);
+  if (resourceStartHostId)
+    getLog().info({ hostId: resourceStartHostId }, 'resource_start_host_enabled');
 
   // Graceful shutdown
   const shutdown = (): void => {
@@ -1090,8 +1128,8 @@ async function checkGhAuth(): Promise<void> {
 
 // Run the application when executed directly (not imported as a library)
 if (import.meta.main) {
-  startServer().catch(error => {
+  startServer().catch(async (error: unknown) => {
     getLog().fatal({ err: error }, 'startup_failed');
-    process.exit(1);
+    await exitAfterTelemetryFlush(1);
   });
 }

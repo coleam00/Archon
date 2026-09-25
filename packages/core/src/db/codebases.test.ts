@@ -1,5 +1,5 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { join } from 'path';
+import { join, sep } from 'path';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
 
@@ -197,6 +197,29 @@ describe('codebases', () => {
       // …/myXapp would match …/my_app under SQL LIKE (_ = any char); it must not.
       const result = await findCodebaseByPathPrefix(P('myXapp'));
       expect(result).toBeNull();
+    });
+
+    test('does NOT match a path that climbs out of a codebase with ..', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      const result = await findCodebaseByPathPrefix(`${P('platform')}${sep}..${sep}secret`);
+      expect(result).toBeNull();
+    });
+
+    test('matches the codebase root spelled with a trailing separator', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      const result = await findCodebaseByPathPrefix(`${P('platform')}${sep}`);
+      expect(result?.id).toBe('plat');
+    });
+
+    test('ranks by the normalized root, not a stored spelling padded with separators', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { ...mockCodebase, id: 'padded', default_cwd: `${P('platform')}${sep.repeat(8)}` },
+          { ...mockCodebase, id: 'svc', default_cwd: P('platform', 'svc') },
+        ])
+      );
+      const result = await findCodebaseByPathPrefix(P('platform', 'svc', 'deep'));
+      expect(result?.id).toBe('svc');
     });
 
     test('returns null when no codebase is an ancestor', async () => {

@@ -2,7 +2,20 @@
  * Zod schemas for workflow run state types.
  */
 import { z } from '@hono/zod-openapi';
+import {
+  skipCauseSchema,
+  suspendReasonSchema,
+  type NodeState,
+  type SuspendReason,
+} from './node-state';
 import type { TokenUsage } from '@archon/providers/types';
+import {
+  nodeExecutionMetadataSchema,
+  nodeFailureKindSchema,
+  type NodeExecutionMetadata,
+} from './node-execution';
+import { checkoutObservationSchema } from './checkout-observation';
+import { workflowSourceSchema } from './workflow';
 // Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
 import type { JsonValue } from '../output-ref';
 import { isAbsolute } from 'path';
@@ -172,33 +185,8 @@ export type WorkflowStepStatus = z.infer<typeof workflowStepStatusSchema>;
 // NodeState
 // ---------------------------------------------------------------------------
 
-export const nodeStateSchema = z.enum(['pending', 'running', 'completed', 'failed', 'skipped']);
-
-export type NodeState = z.infer<typeof nodeStateSchema>;
-
-// ---------------------------------------------------------------------------
-// NodeOutput
-// ---------------------------------------------------------------------------
-
-export const skipCauseSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('condition'), expr: z.string() }),
-  z.object({ kind: z.literal('condition_parse_error'), expr: z.string() }),
-  z.object({ kind: z.literal('timeout') }),
-  z.object({ kind: z.literal('upstream_failed'), origin: z.string() }),
-  z.object({ kind: z.literal('upstream_skipped'), origin: z.string() }),
-]);
-
-export type SkipCause = z.infer<typeof skipCauseSchema>;
-
-export const nodeSkipReasonSchema = z.enum([
-  'prior_success',
-  'when_condition',
-  'when_condition_parse_error',
-  'trigger_rule',
-  'timeout',
-]);
-
-export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
+export { nodeStateSchema, skipCauseSchema, nodeSkipReasonSchema } from './node-state';
+export type { NodeState, SkipCause, NodeSkipReason } from './node-state';
 
 /**
  * Captured output from a completed DAG node.
@@ -222,6 +210,7 @@ export type NodeSkipReason = z.infer<typeof nodeSkipReasonSchema>;
  */
 export const nodeOutputSchema = z.discriminatedUnion('state', [
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.enum(['completed', 'running']),
     output: z.string(),
     sessionId: z.string().optional(),
@@ -233,6 +222,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     resumed: z.boolean().optional(),
   }),
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.literal('failed'),
     output: z.string(),
     sessionId: z.string().optional(),
@@ -245,12 +235,16 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
      *  that stdout and can read as transient. Only `false` is expressible: a producer can
      *  refuse retry, never force one past a FATAL classification. */
     retryable: z.literal(false).optional(),
+    /** Why the node failed, when the producer knows it (see `nodeFailureKindSchema`). */
+    failureKind: nodeFailureKindSchema.optional(),
   }),
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.literal('pending'),
     output: z.string(),
   }),
   z.object({
+    execution: nodeExecutionMetadataSchema.optional(),
     state: z.literal('skipped'),
     output: z.string(),
     cause: skipCauseSchema,
@@ -309,6 +303,13 @@ export const workflowRunSchema = z.object({
    * created before the column existed.
    */
   output_root: z.string().nullable(),
+  /**
+   * The checkout this run started from (#3305): observed once, immediately after the run
+   * won its execution claim and before its first node, then never rewritten. A resume
+   * keeps it. Null means not recorded — a run from before this column, or one that never
+   * started — which is different from a recorded `not_git` or `unavailable` observation.
+   */
+  checkout_baseline: checkoutObservationSchema.nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
@@ -453,12 +454,75 @@ export function readContinuationMode(
   return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
 }
 
+/**
+ * The host, process and user that last took over executing this run, stamped by the
+ * executor each time it starts or resumes execution. The live-owner endpoint is
+ * local to one host and one user, so when no owner answers, this record is what
+ * `abandon` shows the operator, including whether the owner ran on another host or
+ * as another user. It is a report, never a liveness signal: nothing decides a run is
+ * dead from it.
+ */
+export const EXECUTION_OWNER_METADATA_KEY = 'execution_owner';
+
+export interface ExecutionOwnerRecord {
+  host: string;
+  pid: number;
+  /** POSIX user id; absent on Windows, where the endpoint is not scoped by uid. */
+  uid?: number;
+}
+
+/** Typed view of the execution-owner stamp; undefined on runs that predate it. */
+export function readExecutionOwner(
+  metadata: Record<string, unknown> | undefined
+): ExecutionOwnerRecord | undefined {
+  const raw = metadata?.[EXECUTION_OWNER_METADATA_KEY];
+  if (typeof raw !== 'object' || raw === null) return undefined;
+  const { host, pid, uid } = raw as { host?: unknown; pid?: unknown; uid?: unknown };
+  if (typeof host !== 'string' || host.length === 0) return undefined;
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) return undefined;
+  return typeof uid === 'number' && Number.isInteger(uid) && uid >= 0
+    ? { host, pid, uid }
+    : { host, pid };
+}
+
 /** Typed view of the run-lifecycle keys on a run's metadata; undefined when unset. */
 export function readIdentityUnresolved(
   metadata: Record<string, unknown> | undefined
 ): boolean | undefined {
   const raw = metadata?.[RUN_METADATA_KEYS.identityUnresolved];
   return typeof raw === 'boolean' ? raw : undefined;
+}
+
+/**
+ * Key under which a run records what its DISPATCHING surface resolved for it (#2454).
+ *
+ * A resume re-enters the executor with whatever the resuming surface happens to hold,
+ * and the in-process auto-resume after a child gate holds nothing at all. Re-resolving
+ * these from the environment then lets a run change what it is halfway through: the
+ * same `$BASE_BRANCH` reference answers a different branch after the gate than before
+ * it, and a bundled workflow starts reporting itself as custom. Written once when the
+ * run starts and read back on every continuation, so the run keeps the answers it
+ * began with. Absent on runs created before this key existed — those continue to
+ * re-resolve, which is the behavior they have always had.
+ */
+export const RUN_DISPATCH_METADATA_KEY = 'dispatch';
+
+export const runDispatchMetadataSchema = z.object({
+  /** The resolved `$BASE_BRANCH`. Empty string is a real outcome (folder projects, and
+   *  repos where auto-detection failed), which is why absence is carried by the key. */
+  base_branch: z.string(),
+  /** Discovery source, for run attribution and telemetry categorization. */
+  source: workflowSourceSchema.optional(),
+});
+
+export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;
+
+/** Typed view of the dispatch stamp; undefined when the run carries none this build can read. */
+export function readRunDispatchMetadata(
+  metadata: Record<string, unknown> | undefined
+): RunDispatchMetadata | undefined {
+  const parsed = runDispatchMetadataSchema.safeParse(metadata?.[RUN_DISPATCH_METADATA_KEY]);
+  return parsed.success ? parsed.data : undefined;
 }
 
 /**
@@ -550,29 +614,8 @@ export function readWorkflowSourceState(
     : { kind: 'unreadable', detail: parsed.error.message };
 }
 
-/**
- * The suspend reason vocabulary (#2489) — a Zod-backed enum, not a renamed union: the
- * values are persisted verbatim into `workflow_runs.metadata.approval.type`, so they
- * cannot change without breaking reads of already-paused runs. Every pause site now
- * writes through one shared helper (`pauseGateRespectingExternalTransition` in
- * dag-executor.ts), but each reason's RESUME path stays deliberately separate and
- * lives at its own named site:
- *  - `'approval'` / `'interactive_loop'` — resolved externally by a human decision:
- *    `approveWorkflow`/`rejectWorkflow` (operations/workflow-operations.ts).
- *  - `'writeback'` — also resolved by `approveWorkflow`/`rejectWorkflow`'s write-back
- *    branch, then applied on parent resume by `runContainerWriteBackGate`
- *    (dag-executor.ts, `raiseWriteBackGate`'s sibling).
- *  - `'child_workflow'` — never resolved by the approve/reject endpoints directly
- *    (redirected instead — `assertApprovable`/`assertRejectable`); re-inspected by
- *    `executeWorkflowNode` re-running on parent resume (dag-executor.ts).
- */
-export const suspendReasonSchema = z.enum([
-  'approval',
-  'interactive_loop',
-  'writeback',
-  'child_workflow',
-]);
-export type SuspendReason = z.infer<typeof suspendReasonSchema>;
+export { suspendReasonSchema } from './node-state';
+export type { SuspendReason } from './node-state';
 
 /**
  * True when `type` is `undefined` (every pause before the field existed, or a plain
@@ -726,6 +769,8 @@ export interface ApprovalContext {
   signaledTokens?: TokenUsage | null;
   /** Cumulative USD cost through this single-node loop pause; paired with signaledTokens. */
   signaledCostUsd?: number | null;
+  /** Original execution facts retained across a gate; no private session handle. */
+  execution?: NodeExecutionMetadata;
   /**
    * Interactive-loop only. Read-once snapshot of the resolved loop prompt
    * template, whether authored as `loop.prompt` or loaded from `loop.command`,

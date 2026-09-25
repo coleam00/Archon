@@ -20,7 +20,12 @@ import {
   readComposedBindings,
   type LoopWithCompiledCommand,
 } from './compiled-command';
-import { declaredFieldsFromSchema, canonicalValueText, type JsonValue } from './output-ref';
+import {
+  declaredFieldsFromSchema,
+  canonicalValueText,
+  parseWholeExecutionCheckoutRef,
+  type JsonValue,
+} from './output-ref';
 import { discoverScriptsForCwd } from './script-discovery';
 import {
   describeUnmetCompletion,
@@ -45,6 +50,9 @@ import {
 } from './workflow-source';
 import { defaultRunInputs } from './workflow-inputs';
 import { buildExecNodeEnvironment } from './exec-environment';
+import { observeCheckout } from './checkout-observation';
+import { executionMetadata, newNodeInvocation, startNodeExecution } from './node-execution';
+import type { NodeExecutionMetadata } from './schemas/node-execution';
 import {
   inputEnvKey,
   isGateNode,
@@ -527,6 +535,8 @@ interface DryRunContext {
    */
   sourceRoots: WorkflowSourceRoots;
   stubs: DryRunStubs;
+  /** Nodes whose execution record some binding reads (`$<node>.execution.checkoutStart`). */
+  checkoutProducers: ReadonlySet<string>;
   /**
    * The run's EFFECTIVE `$INPUTS` map — declared defaults layered under caller-supplied
    * values, the same merge a real run performs at executor.ts (`defaultRunInputs`).
@@ -604,7 +614,10 @@ function resolveText(
     undefined,
     undefined,
     loopPrevOutput,
-    { shellSafe, stateDir: ctx.stateDir, ...(inputs ? { inputs } : {}) }
+    // A dry run never writes typed artifacts, so it has no listing to point at. Pass
+    // an explicit empty value: the preview substitutes '' rather than throwing the way
+    // a real invocation that forgot to materialize a listing does.
+    { shellSafe, stateDir: ctx.stateDir, typedArtifactsFile: '', ...(inputs ? { inputs } : {}) }
   ).prompt;
   return substituteNodeOutputRefs(substituted, outputs, escapeNodeOutputs);
 }
@@ -714,7 +727,8 @@ async function executeCodeNode(
   ctx: DryRunContext,
   /** Resolved node-local `with:` bindings (#2637) — the nearest env source, layered
    *  over run inputs exactly like the executor's `inputEnvVars` third tier. */
-  nodeBindings?: Record<string, JsonValue>
+  nodeBindings?: Record<string, JsonValue>,
+  execution?: NodeExecutionMetadata
 ): Promise<{ output: string } | { error: string }> {
   try {
     let command: string;
@@ -784,6 +798,9 @@ async function executeCodeNode(
           loopPrevOutput: '',
           rejectionReason: '',
           issueContext: '',
+          // No artifacts are written in a dry run, so there is no listing to point at.
+          typedArtifactsFile: '',
+          nodeExecution: execution ?? null,
         }),
       },
     });
@@ -1092,7 +1109,8 @@ async function simulateNode(
   node: DagNode,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
-  iteration?: number
+  iteration?: number,
+  execution?: NodeExecutionMetadata
 ): Promise<void> {
   const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs);
   if (boundaryDecision.decision === 'skip') {
@@ -1259,7 +1277,7 @@ async function simulateNode(
           );
     const stub = stubFor(node, ctx);
     if (stub === undefined && isExecNode(node) && ctx.execCode) {
-      const executed = await executeCodeNode(node, resolvedText, ctx, nodeBindings);
+      const executed = await executeCodeNode(node, resolvedText, ctx, nodeBindings, execution);
       if ('error' in executed) {
         recordFailed(node, outputs, ctx, executed.error, resolvedText, iteration);
       } else {
@@ -1329,9 +1347,67 @@ async function simulateNodes(
   for (const layer of plan.layers) {
     for (const node of layer) {
       if (ctx.halted) return;
-      await simulateNode(node, outputs, ctx, iteration);
+      const execution = await simulatedExecution(node, ctx);
+      await simulateNode(node, outputs, ctx, iteration, execution);
+      const result = outputs.get(node.id);
+      if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
+        outputs.set(node.id, { ...result, execution });
+      }
     }
   }
+}
+
+/**
+ * The execution record a real run would give this node, when anything in the simulation
+ * reads it: a node another binds with `$<node>.execution.checkoutStart`, or an exec node
+ * that actually executes and receives `ARCHON_NODE_EXECUTION`. The checkout it observes
+ * is the one executed code runs in. Stubbed nodes change nothing, so their start is the
+ * checkout as the simulation reaches them.
+ */
+async function simulatedExecution(
+  node: DagNode,
+  ctx: DryRunContext
+): Promise<NodeExecutionMetadata | undefined> {
+  const executes = isExecNode(node) && ctx.execCode && !Object.hasOwn(ctx.stubs, node.id);
+  if (!executes && !ctx.checkoutProducers.has(node.id)) return undefined;
+  if (!isExecNode(node) && !isAgentNode(node) && !isLoopNode(node)) return undefined;
+  const checkoutStart = await observeCheckout(
+    ctx.execWorkspace,
+    { kind: 'host' },
+    { runId: 'dry-run', artifactsDir: ctx.artifactsDir }
+  );
+  return executionMetadata(
+    startNodeExecution({
+      runId: 'dry-run',
+      path: node.id,
+      node,
+      invocation: { ...newNodeInvocation(), checkoutStart },
+      checkoutStart,
+    })
+  );
+}
+
+/** Producers some node binds with `$<node>.execution.checkoutStart`, at any depth. */
+function collectCheckoutProducers(
+  nodes: readonly DagNode[],
+  into = new Set<string>()
+): Set<string> {
+  for (const node of nodes) {
+    if (isLoopGroupNode(node)) collectCheckoutProducers(node.loop_group.nodes as DagNode[], into);
+    const nodeWith = isExecNode(node)
+      ? node.with
+      : isAgentNode(node)
+        ? node.source.kind === 'command'
+          ? node.source.with
+          : readComposedBindings(node)
+        : undefined;
+    for (const value of Object.values(nodeWith ?? {})) {
+      const producer =
+        typeof value === 'string' ? parseWholeExecutionCheckoutRef(value) : undefined;
+      if (producer !== undefined) into.add(producer);
+    }
+  }
+  return into;
 }
 
 function resolveDryRunAuthoredOutcome(
@@ -1411,6 +1487,7 @@ export async function dryRunWorkflow(options: {
     execWorkspace: options.execWorkspace ?? options.cwd,
     sourceRoots: options.sourceRoots ?? liveSourceRoots(options.cwd),
     stubs: options.stubs ?? {},
+    checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),

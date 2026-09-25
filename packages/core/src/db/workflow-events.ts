@@ -15,6 +15,8 @@ import { createLogger } from '@archon/paths';
 import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { readFile } from 'node:fs/promises';
 import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
+import { nodeInvocationKey, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
   NODE_STATE_EVENT_TYPES,
@@ -367,7 +369,7 @@ function foldActiveNodeIds(
   eventType: NodeStateEventType
 ): void {
   if (!stepName) return;
-  if (eventType === 'node_started') {
+  if (eventType === 'node_started' || eventType === 'node_suspended') {
     activeNodeIds.add(stepName);
   } else {
     activeNodeIds.delete(stepName);
@@ -417,6 +419,10 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
   const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
   const fanOutSnapshots = new Map<string, readonly FanOutInstanceSnapshot[]>();
   const unresolvedNodeStarts = new Set<string>();
+  const unfinishedInvocations = new Map<string, NodeExecutionMetadata>();
+  // The completion a reusable output belongs to. A prior-success replay row carries no
+  // execution facts of its own, so it inherits the completion it replays.
+  const completedExecutions = new Map<string, NodeExecutionMetadata>();
   // Collected and merged once at the end rather than folded pairwise: a pairwise fold
   // cannot tell "one of five contributions reported" from "one of two" (#2662).
   const usageContributions: { stepName: string; tokens?: TokenUsage; costUsd?: number }[] = [];
@@ -429,9 +435,10 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
       // carries no output (or its data cannot be recovered). Only success restores it.
       completedNodeOutputs.delete(row.step_name);
     }
-    let data: Record<string, unknown>;
+    let rawData: Record<string, unknown>;
+    let record: ReturnType<typeof readNodeRecordEvent>;
     try {
-      data = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
+      rawData = typeof row.data === 'string' ? JSON.parse(row.data) : row.data;
     } catch (parseErr) {
       getLog().warn(
         { err: parseErr as Error, runId: workflowRunId, stepName: row.step_name },
@@ -441,10 +448,47 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
     }
     if (row.event_type === 'fan_out_instances') {
       if (!fanOutSnapshots.has(row.step_name)) {
-        const snapshots = parseFanOutSnapshots(data.instances);
+        const snapshots = parseFanOutSnapshots(rawData.instances);
         if (snapshots !== undefined) fanOutSnapshots.set(row.step_name, snapshots);
       }
       continue;
+    }
+    try {
+      record = readNodeRecordEvent({
+        workflow_run_id: workflowRunId,
+        step_name: row.step_name,
+        event_type: row.event_type,
+        data: rawData,
+      });
+    } catch (parseErr) {
+      throw new Error(
+        `Invalid node execution record for '${row.step_name}' in run ${workflowRunId}`,
+        { cause: parseErr }
+      );
+    }
+    if (!record) continue;
+    const data = record.data;
+    if (record.metadata) {
+      const key = nodeInvocationKey(record.path, record.metadata.invocation.loopPath);
+      if (
+        record.eventType === 'node_started' ||
+        record.eventType === 'node_suspended' ||
+        record.eventType === 'node_failed'
+      ) {
+        unfinishedInvocations.set(key, record.metadata);
+      } else if (record.eventType === 'node_completed' || record.eventType === 'node_skipped') {
+        unfinishedInvocations.delete(key);
+      }
+      if (record.eventType === 'node_completed')
+        completedExecutions.set(record.path, record.metadata);
+      else completedExecutions.delete(record.path);
+    } else if (
+      record.eventType === 'node_skipped_prior_success' ||
+      record.eventType === 'node_always_run_reset' ||
+      record.eventType === 'node_prior_cache_invalidated'
+    ) {
+      for (const [key, metadata] of unfinishedInvocations)
+        if (metadata.path === record.path) unfinishedInvocations.delete(key);
     }
     if (
       row.event_type !== 'node_completed' &&
@@ -536,6 +580,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
           ? { structuredOutput: data.structured_output }
           : {}),
         ...(declaredFields !== undefined ? { declaredFields } : {}),
+        ...(completedExecutions.has(row.step_name)
+          ? { execution: completedExecutions.get(row.step_name) }
+          : {}),
       });
     }
     // Composed-instance terminals are the durable accounting source for their whole
@@ -549,8 +596,8 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
     const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
       stepName: row.step_name,
     };
-    if (row.event_type !== 'node_skipped_prior_success' && data.tokens !== undefined) {
-      const eventTokens = data.tokens;
+    if (row.event_type !== 'node_skipped_prior_success' && record.rawUsage.tokens !== undefined) {
+      const eventTokens = record.rawUsage.tokens;
       if (
         typeof eventTokens === 'object' &&
         eventTokens !== null &&
@@ -592,8 +639,8 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
         );
       }
     }
-    if (row.event_type !== 'node_skipped_prior_success' && data.cost_usd !== undefined) {
-      const eventCost = data.cost_usd;
+    if (row.event_type !== 'node_skipped_prior_success' && record.rawUsage.costUsd !== undefined) {
+      const eventCost = record.rawUsage.costUsd;
       // Same guard shape as tokens: a non-finite value from a provider must not
       // silently poison the total (NaN > 0 is false, which would drop the run's
       // cost from the persisted metadata with no trace).
@@ -616,6 +663,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
       !authoritativeInstancePrefixes.some(prefix => contribution.stepName.startsWith(prefix))
   );
   return {
+    unfinishedInvocations,
     completedNodeOutputs,
     fanOutSnapshots,
     unresolvedNodeStarts,

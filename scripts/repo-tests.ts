@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { bunTestCommand } from './bun-test-command';
+import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 /**
  * Runs the repository's tests, from the repository root.
@@ -99,7 +99,11 @@ function routeArgument(argument: string): RoutedArgument | undefined {
 }
 
 async function run(command: string[], cwd: string): Promise<number> {
-  const child = Bun.spawn(command, { cwd, stdio: ['inherit', 'inherit', 'inherit'] });
+  const child = Bun.spawn(command, {
+    cwd,
+    env: bunTestEnv(),
+    stdio: ['inherit', 'inherit', 'inherit'],
+  });
   return await child.exited;
 }
 

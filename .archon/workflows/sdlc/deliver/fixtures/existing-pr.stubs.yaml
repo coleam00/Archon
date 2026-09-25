@@ -7,7 +7,6 @@
 # identity proves an existing non-draft PR flows through review scope, the
 # correction round, and the flip unchanged. Reuse itself is prompt guidance in
 # pr.md that dry-run cannot exercise; a real repair run is the proof for that.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
@@ -15,11 +14,13 @@ impl__implement:
   summary: "stub: findings on PR #42 addressed on its branch"
 impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false }
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "feat/existing-42", base: "dev", is_draft: false, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__mode: '{"continuation":false}'
 review__scope:
   # PR #42 diff in scope; head sha stubbed
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
 review__code: "1 finding (Important)"
 review__seams: "0 findings"
 review__simplify: "0 findings"
@@ -29,8 +30,12 @@ review__synthesize:
   action: correct
   findings_summary: "stub: 1 Important finding open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: 1 Important finding open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
-fix__record-start: '{"start":"recorded"}'
 fix__implement:
   done: true
   green: true
@@ -42,12 +47,20 @@ recheck__mode: '{"continuation":true}'
 recheck__scope:
   # light mode; delta since cursor
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
 recheck__synthesize:
   ready: true
   action: none
   findings_summary: "stub: no open Critical/Important"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-sync-pr-body: "body resynced against the corrected diff"
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/42" }
+publish-pr-body: {}
+sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
 validate__validate:
   green: true
   red_cause: ""

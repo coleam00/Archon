@@ -1,2 +1,3 @@
+# Tests never send telemetry; transport tests re-enable it in their own child env.
 [test]
-preload = ["./src/test-env.ts"]
+preload = ["../../scripts/test-telemetry-off.ts"]

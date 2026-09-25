@@ -18,6 +18,24 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * The resource slot holders table. One definition serves fresh creation and the
+ * one-time rebuild that widens a dev database's narrow holder-kind CHECK.
+ * `owner_*` name the process that owns an 'attempt' holder and are NULL for 'run'.
+ */
+function resourceSlotHoldersTable(name: string): string {
+  return `CREATE TABLE IF NOT EXISTS ${name} (
+        resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+        holder_kind TEXT NOT NULL CHECK (holder_kind IN ('run', 'attempt')),
+        holder_id TEXT NOT NULL,
+        acquired_at TEXT NOT NULL DEFAULT (datetime('now')),
+        owner_host TEXT,
+        owner_pid INTEGER,
+        owner_instance TEXT,
+        PRIMARY KEY (resource_key, holder_kind, holder_id)
+      );`;
+}
+
 export class SqliteAdapter implements IDatabase {
   private db: Database;
   readonly dialect = 'sqlite' as const;
@@ -41,11 +59,12 @@ export class SqliteAdapter implements IDatabase {
 
     this.db = new Database(dbPath);
 
+    // Set this before WAL initialization: opening two CLI processes can make
+    // `journal_mode = WAL` itself contend on the database header.
+    this.db.run('PRAGMA busy_timeout = 5000');
+
     // Enable WAL mode for better concurrent performance
     this.db.run('PRAGMA journal_mode = WAL');
-
-    // Retry busy locks up to 5s to avoid SQLITE_BUSY during parallel workflows
-    this.db.run('PRAGMA busy_timeout = 5000');
 
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
@@ -407,6 +426,11 @@ export class SqliteAdapter implements IDatabase {
       if (!wfColNames.has('output_root')) {
         this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN output_root TEXT');
       }
+      // Run checkout baseline (#3305): JSON checkout observation written once when the
+      // run wins its execution claim. NULL means not recorded.
+      if (!wfColNames.has('checkout_baseline')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN checkout_baseline TEXT');
+      }
       if (!wfColNames.has('outcome')) {
         this.db.run(
           "ALTER TABLE remote_agent_workflow_runs ADD COLUMN outcome TEXT CHECK (outcome IN ('succeeded', 'failed'))"
@@ -566,6 +590,42 @@ export class SqliteAdapter implements IDatabase {
       }
     } catch (e: unknown) {
       getLog().warn({ err: e as Error }, 'db.sqlite_migration_provider_key_vendor_ids_failed');
+      allApplied = false;
+    }
+
+    // Resource slot holders gained the 'attempt' kind and its owner columns (#2816).
+    // SQLite cannot alter a CHECK, so a table created with the narrow ('run') CHECK is
+    // rebuilt once. Only unreleased dev builds created that shape. BEGIN IMMEDIATE and
+    // the re-check make a concurrent opener skip instead of rebuilding twice.
+    try {
+      const holdersSql = (): string =>
+        this.prepareGet<{ sql: string }>(
+          "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'remote_agent_resource_slot_holders'"
+        )?.sql ?? '';
+      if (!holdersSql().includes("'attempt'")) {
+        this.db.run('BEGIN IMMEDIATE');
+        try {
+          if (!holdersSql().includes("'attempt'")) {
+            this.db.run(resourceSlotHoldersTable('remote_agent_resource_slot_holders_next'));
+            this.db.run(
+              `INSERT INTO remote_agent_resource_slot_holders_next
+                 (resource_key, holder_kind, holder_id, acquired_at)
+               SELECT resource_key, holder_kind, holder_id, acquired_at
+                 FROM remote_agent_resource_slot_holders`
+            );
+            this.db.run('DROP TABLE remote_agent_resource_slot_holders');
+            this.db.run(
+              'ALTER TABLE remote_agent_resource_slot_holders_next RENAME TO remote_agent_resource_slot_holders'
+            );
+          }
+          this.db.run('COMMIT');
+        } catch (inner: unknown) {
+          this.db.run('ROLLBACK');
+          throw inner;
+        }
+      }
+    } catch (e: unknown) {
+      getLog().warn({ err: e as Error }, 'db.sqlite_migration_resource_slot_holders_failed');
       allApplied = false;
     }
 
@@ -770,8 +830,69 @@ export class SqliteAdapter implements IDatabase {
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
         working_path TEXT,
-        output_root TEXT
+        output_root TEXT,
+        checkout_baseline TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_start_receipts (
+        id TEXT PRIMARY KEY,
+        source_instance_id TEXT NOT NULL,
+        delivery_id TEXT,
+        content_digest TEXT NOT NULL,
+        received_at TEXT NOT NULL,
+        occurred_at TEXT,
+        source_actor TEXT,
+        outcome TEXT NOT NULL CHECK (outcome IN ('matched', 'unmatched', 'unsupported', 'malformed')),
+        reason TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(source_instance_id, delivery_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
+        receipt_id TEXT NOT NULL REFERENCES remote_agent_start_receipts(id) ON DELETE CASCADE,
+        binding_id TEXT NOT NULL,
+        binding_revision TEXT,
+        host_id TEXT,
+        intent TEXT,
+        preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
+        preparation_owner TEXT,
+        preparation_error TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+        PRIMARY KEY (receipt_id, binding_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS remote_agent_resource_slots (
+        resource_key TEXT PRIMARY KEY,
+        capacity INTEGER NOT NULL DEFAULT 1 CHECK (capacity >= 1),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+
+      ${resourceSlotHoldersTable('remote_agent_resource_slot_holders')}
+
+      CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
+        queue_position INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE,
+        resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+        host_id TEXT NOT NULL,
+        overlap_policy TEXT NOT NULL CHECK (overlap_policy IN ('skip', 'queue')),
+        status TEXT NOT NULL CHECK (status IN ('queued', 'admitted', 'skipped', 'withdrawn')),
+        blocker_run_id TEXT,
+        blocker_kind TEXT CHECK (blocker_kind IN ('run', 'request')),
+        launch TEXT NOT NULL,
+        receipt_id TEXT,
+        binding_id TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        admitted_at TEXT,
+        FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_resource_start_queue
+        ON remote_agent_resource_start_requests(resource_key, status, queue_position);
+      CREATE INDEX IF NOT EXISTS idx_resource_start_host_queue
+        ON remote_agent_resource_start_requests(host_id, status, resource_key, queue_position);
+      CREATE INDEX IF NOT EXISTS idx_start_binding_preparation
+        ON remote_agent_start_receipt_bindings(host_id, preparation_status, created_at);
 
       -- Workflow events table
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_events (

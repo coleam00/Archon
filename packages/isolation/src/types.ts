@@ -145,6 +145,8 @@ export interface AdoptedWorktreeMetadata {
 export interface CreatedWorktreeMetadata {
   adopted: false;
   request?: IsolationRequest;
+  /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
+  cutFromCommit?: string;
 }
 
 export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
@@ -179,6 +181,12 @@ export interface DestroyOptions {
 
 export interface WorktreeDestroyOptions extends DestroyOptions {
   branchName?: BranchName;
+  /**
+   * Remove the worktree even while it is locked. Implies `force`: `git worktree
+   * remove` refuses a locked worktree unless forced twice. Only the call holding
+   * the lock may pass this — for anyone else, a lock means "not yours".
+   */
+  removeLocked?: boolean;
   /** Required for branch cleanup if worktree path doesn't exist */
   canonicalRepoPath?: RepoPath;
   /** Delete the remote branch (best-effort, e.g., after PR merge) */
@@ -402,7 +410,12 @@ export type ResolutionMethod =
   | { type: 'workflow_reuse' }
   | { type: 'linked_issue_reuse'; issueNumber: number }
   | { type: 'branch_adoption'; branch: string }
-  | { type: 'created'; autoCleanedCount?: number };
+  | {
+      type: 'created';
+      autoCleanedCount?: number;
+      /** The commit the new branch was cut from, when this resolution created one. */
+      cutFromCommit?: string;
+    };
 
 export type IsolationResolution =
   | {

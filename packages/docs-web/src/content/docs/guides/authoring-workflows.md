@@ -830,9 +830,9 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 
 **Crashed servers / orphaned runs**: Archon does **not** auto-fail `running` rows on server startup — that would kill workflows actively executing in another process (CLI, adapter). If a server crash leaves a row stuck as `running`, it remains visible in the console run list. Transition it to a terminal status explicitly:
 
-- **Web UI**: open a live run and use **Cancel** in the run detail action bar.
+- **Web UI**: open the run and use **Cancel** in the run detail action bar. When no owner answers, Cancel refuses, shows what the run recorded, and offers **Abandon**; use it after verifying the owner is gone.
 - **CLI orphan cleanup**: after verifying the owner is gone, use `archon workflow abandon <run-id>`.
-- **Live detached CLI run**: use `archon workflow cancel <run-id>` to terminate the exact run's host process tree before marking it `cancelled`.
+- **Live detached CLI run**: use `archon workflow cancel <run-id>` (or Cancel on any surface) to terminate the exact run's host process tree before marking it `cancelled`.
 
 Once the row reaches a terminal status, you can resume it explicitly via the paths above. Plain `archon workflow run` never resumes implicitly.
 
@@ -914,7 +914,7 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 
 `persist_session` applies to `command:` and `prompt:` nodes only. Other node types skip it:
 
-- **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a warning at load time and is ignored.
+- **`bash:` / `script:`** — never invoke a provider, so the field is meaningless. Setting it produces a parse warning (shown by `archon validate workflows`) and is ignored.
 - **`approval:` / `cancel:`** — same: no AI call, no session to persist.
 - **`loop:` / `loop_group:`** — have their own per-iteration session threading. Cross-run persistence isn't wired for them in this release; the field is warn-and-dropped on loop and loop_group nodes. Use a `prompt:` node if you need cross-run memory.
 
@@ -1058,6 +1058,39 @@ Bindings carry *values*. For documents — a plan, a findings report, a diff —
 artifact chain below; a path in a binding plus a file on disk is still the right shape for
 anything big enough to have structure of its own.
 
+### Reading where a node started: `$node.execution.checkoutStart`
+
+The engine observes the checkout when each invocation of a prompt, command, bash, script,
+or loop node starts, and records it on that node's execution record. A binding can read the
+observation of an upstream node's invocation:
+
+```yaml
+  - id: assert-changed
+    script: assert-changed
+    runtime: bun
+    depends_on: [implement]
+    with:
+      baseline: "$implement.execution.checkoutStart"   # arrives as INPUTS_BASELINE (JSON)
+```
+
+The value is the checkout observation from the start of `implement`'s invocation: the
+commit, that commit's tree, and whether the worktree was clean. A dirty start also names a
+manifest under `$ARTIFACTS_DIR` listing each path that differed from the commit with Git's
+blob id of its content, its mode, and its type. Retries and the turns of a `loop:` node keep
+their invocation's first observation; the next invocation (for example, the next iteration
+of an enclosing `loop_group`) records a new one. A resumed run reads the same recorded
+value. Observation never changes the checkout: no stash, no index write, no `git add`.
+The recorded commit is the one `git status` reported comparing the worktree against; if
+HEAD keeps moving while the checkout is read, the observation is `unavailable` rather than a
+guess.
+
+The reference is valid only as the whole value of a `command:` or `script:` binding, and
+only for a producer that executes against the checkout. Anything else is a load error.
+Every `bash:` and `script:` node also receives its own execution identity, including this
+attempt's observation, as JSON in the `ARCHON_NODE_EXECUTION` environment variable. The
+implement workflow compares these two observations to decide whether an invocation
+changed anything since it started.
+
 ---
 
 ## The Artifact Chain
@@ -1118,6 +1151,32 @@ cannot alias another execution. Metadata keeps the readable provenance as
 load-time `<include>__<node>` ID in metadata and as the sanitized body suffix.
 
 This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
+
+#### Reading typed artifacts by type
+
+Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`/`sessionId`), and `path` is relative to `$ARTIFACTS_DIR`.
+
+```ts
+// A script: read the listing the same way in host or container runs.
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const listing = JSON.parse(readFileSync(process.env.TYPED_ARTIFACTS_FILE!, 'utf8'));
+if (listing.runId !== process.env.WORKFLOW_ID) throw new Error('listing is for another run');
+for (const error of listing.errors) console.error(`unreadable: ${error.path} (${error.kind})`);
+for (const gate of listing.artifactsByType['green-gate'] ?? []) {
+  const body = readFileSync(join(process.env.ARTIFACTS_DIR!, gate.path), 'utf8');
+  console.log(gate.nodeId, body);
+}
+```
+
+In an agent prompt, point at the listing rather than the layout: "Read `$TYPED_ARTIFACTS_FILE`, select `artifactsByType["plan"]`, and open each entry's `path` under `$ARTIFACTS_DIR`."
+
+Properties worth knowing:
+
+- **Observation, not a ledger.** Entries of a type are ordered by `producedAt` ascending, with ties broken by content path. The listing freezes which artifacts existed when the invocation started (each attempt, loop iteration, and `until_bash` check gets its own) and their metadata; it is not an execution history or a completion-order log, and re-running the same node owner overwrites its sidecar. An invocation sees artifacts published **before it started**, never a running sibling's — declare `depends_on` to order a producer ahead of its consumer. A `loop_group`'s `until_bash` runs after its body, so it sees what that iteration's body published.
+- **Failures stay visible.** `errors` lists every record the read could not turn into an artifact (malformed or foreign-run sidecar, unsafe path, missing or unreadable content). A corrupt sidecar has no trustworthy type, so it never disappears into an empty type list. An absent key means no matching readable metadata; `runId` lets a consumer reject a listing handed to it out of scope.
+- **Everywhere an invocation runs.** The path is delivered in `bash:` and `script:` nodes (as both `$TYPED_ARTIFACTS_FILE` and the `TYPED_ARTIFACTS_FILE` environment variable), agent prompts, loop attempts, and approval rework. A prompt that references it in a context with no listing fails rather than substituting an empty string. A `--dry-run` preview has no artifacts and substitutes an empty string instead, so it cannot detect a reference made from a context that never receives a listing.
 
 Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
 

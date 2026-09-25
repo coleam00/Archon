@@ -41,6 +41,7 @@ const ADVISORY_STOP: Record<string, { readonly reason: string; readonly report: 
   };
 
 const artifacts = artifactsDir();
+const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const route = text(process.env.INPUTS_ROUTE);
 const summary = text(process.env.INPUTS_SUMMARY);
 const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
@@ -50,7 +51,7 @@ if (route === 'no_action') {
     delivered: false,
     summary:
       `No delivery needed: ${summary}\nReport: ${artifacts}/triage.md` +
-      caveats(artifacts, { failed: false }),
+      caveats(artifacts, { failed: false, listingFile }),
   });
 } else if (delivered === 'null') {
   const stop = ADVISORY_STOP[route];
@@ -58,17 +59,17 @@ if (route === 'no_action') {
     refuse(
       `outcome: route '${route}' skipped delivery without an advisory report ` +
         'to point to.' +
-        caveats(artifacts, { failed: true })
+        caveats(artifacts, { failed: true, listingFile })
     );
   } else {
     emit({
       delivered: false,
       summary:
         `No delivery started: ${stop.reason}.\nReport: ${artifacts}/${stop.report}` +
-        caveats(artifacts, { failed: false }),
+        caveats(artifacts, { failed: false, listingFile }),
     });
   }
 } else {
   // Deliver ran, so the record it returned is the report.
-  emit({ delivered: true, summary: delivered + caveats(artifacts, { failed: false }) });
+  emit({ delivered: true, summary: delivered + caveats(artifacts, { failed: false, listingFile }) });
 }

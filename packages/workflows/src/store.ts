@@ -1,3 +1,7 @@
+import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
+import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
+import type { CheckoutObservation } from './schemas/checkout-observation';
+import type { RunCancelReason, RunExitReason } from './schemas/run-terminal-reason';
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
@@ -39,9 +43,17 @@ export interface PersistedNodeOutput {
   /** Present only when resume recovered a preview rather than the full text.
    * Replay must retain this original provenance instead of certifying the preview. */
   outputTruncation?: { originalBytes: number | null; spillPath: string | null };
+  /**
+   * The execution facts of the completion this output came from, carried across prior-
+   * success replays so a resumed consumer reads the same producer record a fresh run
+   * would (`$node.execution.checkoutStart`). Absent on rows written before those facts.
+   */
+  execution?: NodeExecutionMetadata;
 }
 
 export interface DagResumeSnapshot {
+  /** Latest unfinished invocation, keyed by canonical path and enclosing loop lineage. */
+  unfinishedInvocations?: Map<string, NodeExecutionMetadata>;
   completedNodeOutputs: Map<string, PersistedNodeOutput>;
   /** First durable ordered snapshot for each instance-qualified composed fan-out scope. */
   fanOutSnapshots: Map<string, readonly FanOutInstanceSnapshot[]>;
@@ -54,6 +66,7 @@ export interface DagResumeSnapshot {
 
 /** Durable wait outcome committed atomically with consumption of its active cursor. */
 export interface WorkflowWaitCompletion {
+  execution?: NodeExecutionRecord;
   stepName: string;
   result: WorkflowWaitResult;
 }
@@ -75,6 +88,7 @@ export interface WorkflowNodeSessionKey {
 
 export const NODE_LIFECYCLE_EVENT_TYPES = [
   'node_started',
+  'node_suspended',
   'node_completed',
   'node_failed',
   'node_skipped',
@@ -132,6 +146,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'quota_resume_skipped',
   'workflow_cancelled',
   'workflow_artifact',
+  'integration_operation',
   'node_session_resumed',
   // Phase 2 of #975 — subagent task lifecycle (aggregated from provider
   // task_started / task_progress / task_notification chunks). Stored
@@ -187,7 +202,7 @@ export interface WorkflowEventInput<EventType extends WorkflowEventType = Workfl
   data?: Record<string, unknown>;
 }
 
-export type NodeStateEventInput = WorkflowEventInput<NodeStateEventType>;
+export type NodeStateEventInput = SerializedNodeEvent;
 export type ObservabilityEventInput = WorkflowEventInput<
   Exclude<WorkflowEventType, NodeStateEventType>
 >;
@@ -211,17 +226,20 @@ export function waitCompletionEvents(
       step_name: stepName,
       data: result,
     },
-    node: {
-      workflow_run_id: workflowRunId,
-      event_type: 'node_completed',
-      step_name: stepName,
-      data: {
-        type: 'wait',
-        duration_ms: result.waited_ms,
-        node_output: JSON.stringify(result),
-        structured_output: result,
-      },
-    },
+    node:
+      completion.execution !== undefined
+        ? serializeNodeStateRecord(completion.execution)
+        : {
+            workflow_run_id: workflowRunId,
+            event_type: 'node_completed',
+            step_name: stepName,
+            data: {
+              type: 'wait',
+              duration_ms: result.waited_ms,
+              node_output: JSON.stringify(result),
+              structured_output: result,
+            },
+          },
   };
 }
 
@@ -235,6 +253,8 @@ export type FanOutCancelReason = (typeof FAN_OUT_CANCEL_REASONS)[number];
 export interface WorkflowCancellationEventDetails {
   step_name?: string;
   reason?: string;
+  /** Categorical cause, reported to telemetry; `reason` is free text and never is. */
+  cancel_reason?: RunCancelReason;
 }
 
 /**
@@ -299,6 +319,16 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
+  /** Fresh execution must win this pending-to-running CAS before doing any work. */
+  claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /**
+   * Record the run's checkout baseline (#3305). Write-once in the store: the first value
+   * sticks and a later call returns it unchanged. Returns the persisted baseline.
+   */
+  recordWorkflowRunCheckoutBaseline(
+    id: string,
+    baseline: CheckoutObservation
+  ): Promise<CheckoutObservation>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
   /**
    * Find the workflow run currently holding the lock on `workingPath`.
@@ -351,17 +381,28 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   ): Promise<void>;
   updateWorkflowActivity(id: string): Promise<void>;
   getWorkflowRunStatus(id: string): Promise<WorkflowRunStatus | null>;
-  /** Atomically complete the run and persist its matching lifecycle event. */
+  /**
+   * Atomically complete the run and persist its matching lifecycle event.
+   *
+   * Every terminal writer (complete, fail, cancel, fan-out cancel, and the failure of a
+   * paused attention wait) also owes terminal telemetry: after its write commits and
+   * only when it won the status change, it reports `buildRunTerminalTelemetry` over the
+   * run's row and event log. The engine sends no terminal event itself. The SQL store
+   * does this in `packages/core/src/db/workflow-terminal-telemetry.ts`.
+   */
   completeWorkflowRun(
     id: string,
     completion: { duration_ms: number },
     metadata?: Record<string, unknown>
   ): Promise<void>;
-  /** Atomically fail the run and persist its matching lifecycle event. */
+  /**
+   * Atomically fail the run and persist its matching lifecycle event. `exitReason`
+   * is recorded on that event as the run's categorical failure cause. Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   failWorkflowRun(
     id: string,
     error: string,
-    scheduledResume?: ScheduledWorkflowResume
+    options?: { scheduledResume?: ScheduledWorkflowResume; exitReason?: RunExitReason }
   ): Promise<void>;
   /**
    * Pause a running run for human review, stamping the approval context. Optional
@@ -380,7 +421,10 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowWaitContext,
     pause: WorkflowWaitPause
   ): Promise<void>;
-  /** Fail the exact paused action-required cursor after its required notification is lost. */
+  /**
+   * Fail the exact paused action-required cursor after its required notification is lost.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   failPausedAttentionWait(
     id: string,
     waitContext: WorkflowAttentionWaitContext,
@@ -429,11 +473,18 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
    * re-claim and retry. Best-effort (never throws in the caller's critical path).
    */
   releaseWritebackClaim(id: string): Promise<void>;
+  /**
+   * Atomically cancel the run and persist its matching lifecycle event.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   cancelWorkflowRun(
     id: string,
     event?: WorkflowCancellationEventDetails
   ): Promise<{ cancelled: boolean }>;
-  /** Atomically identify and cancel a fan-out child owned by the engine. */
+  /**
+   * Atomically identify and cancel a fan-out child owned by the engine.
+   * Reports terminal telemetry after a won commit (see completeWorkflowRun).
+   */
   cancelFanOutRun(id: string, reason: FanOutCancelReason): Promise<{ cancelled: boolean }>;
 
   /**

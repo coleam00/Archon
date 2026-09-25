@@ -12,6 +12,7 @@ import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import { effortOptionsForAgent } from '../lib/model-options';
 import { useCancelledRef } from '../lib/use-cancelled-ref';
+import { errorDetail } from '../lib/http';
 import { SettingsSection } from './SettingsSection';
 import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
@@ -150,7 +151,7 @@ export function AssistantConfigPanel(): ReactElement {
       await skill.updateAssistantConfig(skill.buildAssistantUpdate(form));
       invalidate(K.config); // refetch re-seeds the form and clears `dirty`
     } catch (e: unknown) {
-      setSaveError(e instanceof Error ? e.message : 'Failed to save settings.');
+      setSaveError(e instanceof Error ? errorDetail(e) : 'Failed to save settings.');
     } finally {
       setSaving(false);
     }

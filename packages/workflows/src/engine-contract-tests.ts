@@ -78,6 +78,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     user_id: null,
     parent_run_id: null,
     output_root: null,
+    checkout_baseline: null,
     adopted_from_run_id: null,
     ...overrides,
   };
@@ -99,6 +100,8 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     findChildRuns: async () => [],
     getRunAncestry: async () => [],
     createWorkflowRun: async () => makeRun(),
+    claimPendingWorkflowRun: async () => makeRun(),
+    recordWorkflowRunCheckoutBaseline: async (_id, baseline) => baseline,
     updateWorkflowRun: noop,
     failWorkflowRun: noop,
     getWorkflowRun: async () => ({ ...makeRun(), status: 'completed' as const }),
@@ -277,6 +280,65 @@ export function runWorkflowEngineContractTests(
       expect(result).toMatchObject({ success: true, workflowRunId: 'pending-run' });
       expect(created).toBe(0);
     });
+
+    it('refuses a fresh execution whose pending claim was already consumed', async () => {
+      const pending = makeRun({ id: 'pending-run', status: 'pending' });
+      const store = makeStore({ claimPendingWorkflowRun: async () => null });
+      const result = await makeEngine(makeDeps(store)).submit({
+        ...callInput(),
+        options: { preCreatedRun: pending },
+      });
+      expect(result).toEqual({
+        success: false,
+        workflowRunId: pending.id,
+        error: 'Workflow run is no longer pending or no longer owns its admitted resource',
+      });
+    });
+
+    for (const committed of [false, true]) {
+      it(`reports an uncertain pending claim without changing ownership (committed=${String(committed)})`, async () => {
+        const pending = makeRun({ id: 'pending-run', status: 'pending' });
+        let durableStatus = 'pending';
+        let terminalWrites = 0;
+        let executions = 0;
+        const messages: string[] = [];
+        const store = makeStore({
+          claimPendingWorkflowRun: async () => {
+            if (committed) durableStatus = 'running';
+            throw new Error('database connection lost');
+          },
+          failWorkflowRun: async () => {
+            terminalWrites += 1;
+          },
+        });
+        const result = await makeEngine(
+          makeDeps(store, {
+            getAgentProvider: () => {
+              executions += 1;
+              throw new Error('must not execute');
+            },
+          })
+        ).submit({
+          ...callInput(),
+          platform: {
+            ...makePlatform(),
+            sendMessage: async (_id, message) => {
+              messages.push(message);
+            },
+          },
+          options: { preCreatedRun: pending },
+        });
+        expect(result).toEqual({
+          success: false,
+          workflowRunId: pending.id,
+          error: 'Unable to confirm workflow execution claim; inspect the run before retrying',
+        });
+        expect(durableStatus).toBe(committed ? 'running' : 'pending');
+        expect(terminalWrites).toBe(0);
+        expect(executions).toBe(0);
+        expect(messages.join(' ')).toContain('inspect');
+      });
+    }
 
     it('rejects a non-pending pre-created row before executor effects', async () => {
       let created = 0;

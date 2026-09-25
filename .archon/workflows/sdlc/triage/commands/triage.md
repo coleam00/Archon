@@ -16,7 +16,7 @@ Their explicit task, constraints, and scope take precedence over the target and 
 
 Begin with the repository guidance and any product-direction document the project identifies. Treat direction as the team's current recorded judgment, not timeless law: call out evidence that it has become stale rather than silently routing against an old decision.
 
-When the target names a tracker item, retrieve its body and only the history that can change the requested outcome, constraints, current status, or an earlier decision. Stop following links once they no longer affect the route. If required source material is inaccessible, do not reconstruct it from hints: record what is missing and choose `no_action` until the input can be grounded.
+When the target names a tracker item, retrieve its body and only the history that can change the requested outcome, constraints, current status, or an earlier decision. Stop following links once they no longer affect the route. If required source material is inaccessible, do not reconstruct it from hints: record what is missing and declare `BLOCKED` until the input can be grounded.
 
 Treat the source as history, not current truth. Separate the requested outcome from its suggested implementation. An agent-written issue body, a confident root-cause claim, and a prescribed solution are all claims to verify, not instructions to repeat.
 
@@ -37,14 +37,16 @@ A run cannot recover from a premise that was never stated, so before choosing a 
 
 Then check the delivery preconditions the outcome actually depends on: an existing primitive or owner, a data shape or typed seam, a persistence model, the observability needed to verify the result. A refactor of code the work must already touch is issue-owned enabling work, not a blocker. A missing foundation with its own outcome, broader owners, or a separate product decision is a prerequisite that must land first — report it with the same weight whether or not anyone has logged it. Treat alignment with current direction as part of readiness.
 
+The verdict says whether a run should start from this item, not only whether the item is well written. A well-formed contract whose outcome already holds on the current base is `NO_ACTION`, not `READY`.
+
 Declare exactly one contract verdict:
 
-- `READY` — the six elements are present and agree with each other and with current direction, and the repository has a coherent place for the change, including any enabling work this item owns. This does not claim the solution is designed.
+- `READY` — the six elements are present and agree with each other and with current direction, the outcome is not already true on the current base, and the repository has a coherent place for the change, including any enabling work this item owns. This does not claim the solution is designed.
 - `NEEDS_CONTRACT_WORK` — one of the six elements is materially missing, ambiguous, or contradictory. Propose the contract that would make the item ready (below) and stop.
 - `BLOCKED` — the contract is clear, but something must happen first: a prerequisite that has its own owner, an owner-level product decision, source material that cannot be reached, direction that looks stale and needs a maintainer's judgment, or an open pull request that already carries this outcome (the item waits for it to merge or close; it is not a duplicate). Name what it waits on in `blocked_reason`, and list the fully qualified URLs of the items it waits on in `blocked_by` when they exist; an external decision may have none. Never invent a reference.
 - `NO_ACTION` — the item should be closed: the outcome is already delivered on the current base, another tracker item owns the same outcome, the item is obsolete or superseded, or current direction explicitly rejects it. Use direction alone only when the conflict is explicit; otherwise `BLOCKED`.
 
-Only a `READY` item carries an engineering route. For every other verdict, `route` is `no_action` and the verdict is the reason; the route you would have chosen belongs in the assessment for the human, not in the declared field.
+Only a `READY` item carries an engineering route, and a `READY` item always carries one. For every other verdict, `route` is `no_action` and the verdict is the reason; the route you would have chosen belongs in the assessment for the human, not in the declared field.
 
 When the contract is sound but the engineering shape must be settled before any run should implement — the owning type or module, the supported and rejected cases, a compatibility boundary — declare `design_first: true` and route to `plan`. That is a `READY` item whose next step is design, not a contract defect.
 
@@ -61,7 +63,7 @@ Declare one `complexity` value on the item as written, so the delivery tail can 
 - `investigate` — the work asserts broken or unexplained current behavior, but the causal chain or responsible fix boundary is not proven against current code.
 - `plan` — the desired outcome is known, but material implementation or product-shape decisions remain. Use this when a prescribed solution is stale, unsupported, or merely one option even if the issue calls itself a bug.
 - `deliver` — the current evidence already forms an implementation-ready work order: the relevant behavior and boundary are verified, acceptance and scope are clear enough to start without asking a human, and delivery will not inherit an untested assumption.
-- `no_action` — nothing should be delivered now: the outcome is already present, the item is obsolete or superseded, explicit current direction rejects it, required source context is unavailable, or a human product decision is needed before engineering can proceed.
+- `no_action` — the verdict is not `READY`. That verdict already names why nothing should be delivered now, so `no_action` never sits beside `READY`.
 
 Never route from labels or issue type alone. A bug can need planning; a feature can need investigation; a tiny request can still rest on a false premise. Cost is not the criterion — uncertainty is.
 
@@ -78,7 +80,7 @@ Write `$ARTIFACTS_DIR/triage.md`. Title it `# Triage: owner/repo#N — <item tit
 - **Source and outcome** — what was requested, the affected behavior, and which source material was considered.
 - **Current truth** — current HEAD/base context and only the evidence that decided the route.
 - **Assumptions checked** — each load-bearing claim or prescribed solution you confirmed, refuted, or could not establish.
-- **Contract** — the verdict, which of the six elements are present or missing, the preconditions checked, and any prerequisite found.
+- **Contract** — the verdict, which of the six elements are present or missing, the preconditions checked, and any prerequisite found. When the verdict is `READY`, quote the source's invariants, acceptance items, and any solution steering here, each item as the source words it. Later steps plan, implement, and review against this section, and an item you only count or summarize is one they cannot check.
 - **Disposition** — exactly one route and why the evidence requires it. When the verdict is not `READY`, name here the route the item would take once it is.
 - **Proposed contract** — only for `NEEDS_CONTRACT_WORK`: the title and body you declare in `proposed_edits`, in the repository's issue template shape when one exists, with only the context that constrains the work. Propose; never apply. A later gated step owns the edit.
 - **Handoff** — the precise investigation question, planning decision, implementation-ready work order, or reason no action should occur.
@@ -92,7 +94,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
 ## Declare the disposition
 
 - `contract` — exactly one of `READY`, `NEEDS_CONTRACT_WORK`, `BLOCKED`, or `NO_ACTION`, using the definitions above.
-- `route` — exactly one of `investigate`, `plan`, `deliver`, or `no_action`; anything but `no_action` requires `contract: READY`.
+- `route` — exactly one of `investigate`, `plan`, `deliver`, or `no_action`; `no_action` exactly when `contract` is not `READY`.
 - `design_first` — true only for a `READY` item routed to `plan` because its engineering shape must be settled before implementation.
 - `complexity` — exactly one of `small`, `risky`, or `large`.
 - `item` — `{ "repository": "owner/repo", "number": N }` when the target is a tracker issue, otherwise `{ "repository": "", "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.

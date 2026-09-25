@@ -56,7 +56,11 @@
       "src/routes/api.providers.test.ts"
     ],
     [
-      "src/services/workflow-resume-service.test.ts"
+      "src/services/workflow-resume-service.test.ts",
+      "src/services/webhook-source-plugins.test.ts"
+    ],
+    [
+      "src/services/resource-start-hosting.integration.test.ts"
     ],
     [
       "src/adapters/web/transport.test.ts"
@@ -81,6 +85,9 @@
     ],
     [
       "src/adapters/web/workflow-bridge.test.ts"
+    ],
+    [
+      "src/exit-after-telemetry-flush.test.ts"
     ],
     [
       "src/resolve-user-id.test.ts"
@@ -114,6 +121,9 @@
     ],
     [
       "src/discord-mention.test.ts"
+    ],
+    [
+      "src/host-command.test.ts"
     ]
   ]
 }

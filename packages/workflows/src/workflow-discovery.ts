@@ -54,7 +54,7 @@ import {
 } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
-import { parseWorkflow } from './loader';
+import { parseWorkflow, collectLoopGroupSinkWarnings } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import { collectFileBackedCommandNames } from './command-file';
 import {
@@ -66,6 +66,7 @@ import {
 } from './packaged-workflow';
 import type { IncludeCommandContent } from './compiled-command';
 import { discoverScriptsForCwd } from './script-discovery';
+import { FIXTURES_DIR } from './fixture-layout';
 import {
   collectExecInputValidationTargets,
   inlineExecInputSource,
@@ -187,6 +188,8 @@ async function loadWorkflowsFromDir(dirPath: string, depth = 0): Promise<DirLoad
         const entryStat = await stat(entryPath);
 
         if (entryStat.isDirectory()) {
+          // A `fixtures/` directory holds fixture data, never workflows, at any depth.
+          if (entry === FIXTURES_DIR) continue;
           // Only descend if we're still within the depth cap. Past the cap,
           // subdirectories are ignored (same convention as the paths-package
           // `findCommandFiles` depth cap).
@@ -278,6 +281,7 @@ async function loadPackagedWorkflowsFromDir(
     // `defaults/legacy` would fail "must contain exactly one .yaml" and surface
     // a bogus error on every discovery pass.
     if (pack === 'defaults') continue;
+    if (pack === FIXTURES_DIR) continue;
     if (!isValidWorkflowFolderSegment(pack)) {
       errors.push({
         filename: pack,
@@ -301,6 +305,7 @@ async function loadPackagedWorkflowsFromDir(
     }
     for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
       if (workflowFolder === PACK_SHARED_DIRECTORY) continue;
+      if (workflowFolder === FIXTURES_DIR) continue;
       const workflowPath = join(packPath, workflowFolder);
       try {
         if (!(await stat(workflowPath)).isDirectory()) continue;
@@ -834,12 +839,19 @@ export async function discoverWorkflows(
         ...(workflow.model !== undefined ? { model: workflow.model } : {}),
         ...(workflow.effort !== undefined ? { effort: workflow.effort } : {}),
       };
+      // The loop_group sink-shape verdicts belong to the EXPANDED graph (#2756): a body
+      // whose terminal sink arrives through `include:` is an opaque target name until
+      // here, so judging it at parse time silently cleared shapes it could not see.
+      // This is the check's only pass — a directly-authored sink keeps its id through
+      // expansion, so it is reported here exactly once too.
+      const warnings = [...parseWarnings];
+      collectLoopGroupSinkWarnings(expanded.nodes, warnings);
       result.push({
         workflow: expanded,
         source,
         // Omitted rather than empty, matching the `errors` field on the same
         // surfaces: presence alone is the signal.
-        ...(parseWarnings && parseWarnings.length > 0 ? { parseWarnings } : {}),
+        ...(warnings.length > 0 ? { parseWarnings: warnings } : {}),
         ...(Object.keys(declared).length > 0 ? { declared } : {}),
       });
     }

@@ -31,16 +31,19 @@
       "version": "0.10.1",
       "dependencies": {
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/workflows": "workspace:*",
+        "@hono/zod-openapi": "^1.4.0",
         "@octokit/rest": "^22.0.0",
         "@slack/bolt": "^4.6.0",
         "discord.js": "^14.16.0",
         "grammy": "^1.36.0",
         "telegramify-markdown": "^1.3.3",
+        "zod": "^4.4.3",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
@@ -55,13 +58,16 @@
       "dependencies": {
         "@archon/adapters": "workspace:*",
         "@archon/core": "workspace:*",
+        "@archon/forge": "workspace:*",
         "@archon/git": "workspace:*",
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
+        "@archon/plugin-manifest": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/server": "workspace:*",
         "@archon/workflows": "workspace:*",
         "@clack/prompts": "^1.0.0",
+        "@hono/zod-openapi": "^1.4.0",
         "dotenv": "^17.2.3",
       },
       "devDependencies": {
@@ -101,6 +107,19 @@
         "starlight-llms-txt": "^0.10.0",
       },
     },
+    "packages/forge": {
+      "name": "@archon/forge",
+      "version": "0.10.1",
+      "dependencies": {
+        "zod": "^4.4.3",
+      },
+      "devDependencies": {
+        "@archon/paths": "workspace:*",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/git": {
       "name": "@archon/git",
       "version": "0.10.1",
@@ -131,6 +150,16 @@
         "pino": "^9",
         "pino-pretty": "^13",
         "posthog-node": "^5.29.2",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
+    "packages/plugin-manifest": {
+      "name": "@archon/plugin-manifest",
+      "version": "0.10.1",
+      "dependencies": {
+        "zod": "^4.4.3",
       },
       "peerDependencies": {
         "typescript": "^5.0.0",
@@ -279,11 +308,15 @@
 
     "@archon/docs-web": ["@archon/docs-web@workspace:packages/docs-web"],
 
+    "@archon/forge": ["@archon/forge@workspace:packages/forge"],
+
     "@archon/git": ["@archon/git@workspace:packages/git"],
 
     "@archon/isolation": ["@archon/isolation@workspace:packages/isolation"],
 
     "@archon/paths": ["@archon/paths@workspace:packages/paths"],
+
+    "@archon/plugin-manifest": ["@archon/plugin-manifest@workspace:packages/plugin-manifest"],
 
     "@archon/providers": ["@archon/providers@workspace:packages/providers"],
 

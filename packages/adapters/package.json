@@ -7,25 +7,32 @@
   "exports": {
     ".": "./src/index.ts",
     "./*": "./src/*",
+    "./forge/github-source-plugin": "./src/forge/github/source-plugin.ts",
     "./community/forge/gitea": "./src/community/forge/gitea/index.ts",
-    "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts"
+    "./community/forge/gitlab": "./src/community/forge/gitlab/index.ts",
+    "./forge/github-plugin": "./src/forge/github/plugin.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
-    "type-check": "bun x tsc --noEmit"
+    "type-check": "bun x tsc --noEmit",
+    "build:github-plugin": "bun build --compile ./src/forge/github/plugin.ts --outfile ./dist/archon-forge-github",
+    "build:github-source-plugin": "bun build ./src/forge/github/source-plugin.ts --target=bun --outfile=dist/github-source-plugin.mjs"
   },
   "dependencies": {
     "@archon/core": "workspace:*",
+    "@archon/forge": "workspace:*",
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
+    "@hono/zod-openapi": "^1.4.0",
     "@octokit/rest": "^22.0.0",
     "@slack/bolt": "^4.6.0",
     "discord.js": "^14.16.0",
     "grammy": "^1.36.0",
-    "telegramify-markdown": "^1.3.3"
+    "telegramify-markdown": "^1.3.3",
+    "zod": "^4.4.3"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -61,6 +68,18 @@
     ],
     [
       "src/community/forge/gitlab/clone-security.integration.test.ts"
+    ],
+    [
+      "src/forge/github/source-plugin.test.ts"
+    ],
+    [
+      "src/forge/github/normalize-event.test.ts"
+    ],
+    [
+      "src/forge/github/operations.test.ts"
+    ],
+    [
+      "src/forge/github/lifecycle.test.ts"
     ]
   ]
 }

@@ -27,6 +27,74 @@ const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // .archon/workflows/ directory so an unknown workflow name fails deterministically.
 const repoRoot = join(import.meta.dir, '..', '..', '..');
 
+describe('forge user trust boundary', () => {
+  it('keeps config and executable discovery user-scoped while accepting a repo credential', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-forge-trust-'));
+    const repo = join(root, 'repo');
+    const trustedHome = join(root, 'trusted-home');
+    const repoSelectedHome = join(root, 'repo-selected-home');
+    const plugin = join(root, 'plugin.ts');
+    const trustedMarker = join(root, 'trusted-marker');
+    const repoMarker = join(root, 'repo-marker');
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    mkdirSync(trustedHome, { recursive: true });
+    mkdirSync(repoSelectedHome, { recursive: true });
+    spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+    writeFileSync(
+      plugin,
+      `import { appendFileSync } from 'node:fs';\n` +
+        `const marker = process.argv[2];\n` +
+        `if (process.env.ARCHON_FORGE_TOKEN) appendFileSync(marker, process.env.ARCHON_FORGE_TOKEN);\n` +
+        `if (process.argv[3] === 'metadata') {\n` +
+        `  console.log(JSON.stringify({ protocol: 1, name: 'trusted', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['checks.state'], token_env: ['FORGE_SECRET'] }));\n` +
+        `} else {\n` +
+        `  const request = JSON.parse(await Bun.stdin.text());\n` +
+        `  console.log(JSON.stringify({ operationId: request.operationId, ok: true, result: { op: 'checks.state', value: { ref: request.ref, revision: 'trusted-revision', units: [], required: null, summary: { state: 'none', counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 } } } } }));\n` +
+        `}\n`
+    );
+    writeFileSync(
+      join(trustedHome, 'config.yaml'),
+      `forge:\n  plugins:\n    - plugin: trusted\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(trustedMarker)}]\n  hosts:\n    forge.example: trusted\n`
+    );
+    writeFileSync(
+      join(repoSelectedHome, 'config.yaml'),
+      `forge:\n  plugins:\n    - plugin: trusted\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(repoMarker)}]\n  hosts:\n    forge.example: trusted\n`
+    );
+    writeFileSync(
+      join(repo, '.archon', '.env'),
+      `ARCHON_HOME=${repoSelectedHome}\nPATH=${root}\nHOME=${root}\nFORGE_SECRET=repo-secret\n`
+    );
+
+    try {
+      const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
+      const result = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'forge', 'checks', '--data', JSON.stringify({ ref })],
+        {
+          cwd: repo,
+          encoding: 'utf8',
+          env: {
+            ...process.env,
+            ARCHON_HOME: trustedHome,
+            ARCHON_TELEMETRY_DISABLED: '1',
+            FORGE_SECRET: '',
+          },
+        }
+      );
+
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: true,
+        result: { value: { revision: 'trusted-revision' } },
+      });
+      expect(existsSync(repoMarker)).toBe(false);
+      await expect(Bun.file(trustedMarker).text()).resolves.toBe('repo-secret');
+    } finally {
+      await removeTempTree(root);
+    }
+  });
+});
+
 describe('removed continue command', () => {
   // Full interpreter startup: the rejection lives in main()'s dispatch, not in
   // a pure guard, so a subprocess is the only way to pin the actual outcome.
@@ -128,8 +196,9 @@ describe('workflow run config argument', () => {
   it('rejects --config outside workflow run before dispatch', () => {
     // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
     const message = rejectConfigOutsideRun('chat', undefined, './does-not-exist.yaml');
-    expect(message).toBeDefined();
-    expect(message).toContain('--config can only be used with workflow run');
+    expect(message).toBe(
+      'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+    );
   });
 
   it('resolves a relative config path from the requested subdirectory cwd', async () => {
@@ -302,8 +371,9 @@ describe('workflow run config argument', () => {
       // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
       // of through a full interpreter startup.
       const message = rejectConfigOutsideRun(args[0], args[1], './config.minimax.yaml');
-      expect(message).toBeDefined();
-      expect(message).toContain('--config can only be used with workflow run');
+      expect(message).toBe(
+        'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.'
+      );
     });
   }
 });
@@ -1442,4 +1512,79 @@ describe('workflow test --json error envelope', () => {
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
   });
+});
+
+describe('log output channel (#3444)', () => {
+  // The contract is the split between the process's stdout and stderr, so the
+  // CLI runs as a subprocess.
+  const logRecords = (text: string): Record<string, unknown>[] =>
+    text
+      .split('\n')
+      .filter(line => line.startsWith('{"level"'))
+      .map(line => JSON.parse(line) as Record<string, unknown>);
+
+  it('keeps log records off stdout and loader warnings out of a default listing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-cli-log-channel-'));
+    const repo = join(root, 'repo');
+    const workflows = join(repo, '.archon', 'workflows');
+    mkdirSync(workflows, { recursive: true });
+    spawnSync('git', ['init', '-q', '.'], { cwd: repo });
+    writeFileSync(
+      join(workflows, 'listed.yaml'),
+      'name: listed\ndescription: The listed workflow.\nnodes:\n  - id: a\n    bash: echo a\n'
+    );
+    // Another workflow with an authoring problem: discovery parses it on every
+    // listing, but only `validate` should report it.
+    writeFileSync(
+      join(workflows, 'typo.yaml'),
+      'name: typo\ndescription: Has a typo.\nnodes:\n  - id: b\n    bash: echo b\n    contxt: fresh\n'
+    );
+    // A problem only the log reports: it must stay visible, on stderr.
+    writeFileSync(
+      join(workflows, 'bad-tags.yaml'),
+      'name: bad-tags\ndescription: Bad tags.\ntags: nope\nnodes:\n  - id: c\n    bash: echo c\n'
+    );
+    const run = (
+      args: string[],
+      logLevel = ''
+    ): { status: number | null; stdout: string; stderr: string } =>
+      spawnSync(process.execPath, [CLI_ENTRY, ...args], {
+        cwd: repo,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: join(root, 'home'),
+          ARCHON_TELEMETRY_DISABLED: '1',
+          DATABASE_URL: '',
+          LOG_LEVEL: logLevel,
+        },
+      });
+
+    try {
+      const listed = run(['workflow', 'list', 'listed', '--full']);
+      expect(listed.status).toBe(0);
+      expect(listed.stdout).toContain('The listed workflow.');
+      expect(logRecords(listed.stdout)).toEqual([]);
+      expect(logRecords(listed.stderr).map(r => [r.level, r.msg])).toEqual([
+        [40, 'invalid_tags_block_ignored'],
+      ]);
+
+      // An explicit quieter level is not raised to the warn default.
+      const quieter = run(['workflow', 'list', 'listed'], 'error');
+      expect(quieter.status).toBe(0);
+      expect(logRecords(quieter.stderr)).toEqual([]);
+
+      const verbose = run(['workflow', 'list', 'listed', '--verbose']);
+      expect(verbose.status).toBe(0);
+      expect(logRecords(verbose.stdout)).toEqual([]);
+      expect(logRecords(verbose.stderr)).toContainEqual(
+        expect.objectContaining({ level: 20, msg: 'node_unknown_key_ignored' })
+      );
+
+      const validated = run(['validate', 'workflows', 'typo']);
+      expect(validated.stdout).toContain("unknown key 'contxt' will be ignored");
+    } finally {
+      await removeTempTree(root);
+    }
+  }, 30_000);
 });

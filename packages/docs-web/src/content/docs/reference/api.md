@@ -268,9 +268,9 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/{runId}` | Get run details with events |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
-| POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow |
+| POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow |
-| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); cascade-cancels non-terminal `workflow:` sub-run descendants |
+| POST | `/api/workflows/runs/{runId}/abandon` | Abandon a run (running, paused, or failed); stops a live detached owner first and cascade-cancels non-terminal `workflow:` sub-run descendants. Returns **409** with the reason, and leaves the run unchanged, when an owner answers but cannot be stopped |
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow (400 if paused blocked on a `workflow:` child — reject the child) |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
@@ -362,7 +362,7 @@ Supported inline keys are `assistant` or `defaultAssistant`, `assistants`, `tier
 curl http://localhost:3090/api/runs/{runId}/artifacts
 ```
 
-Walks the run's on-disk artifact directory (dotfiles skipped) and returns `{ files: [{ path, size, modifiedAt }] }`. Used by the console UI's Artifacts tab. Returns `{ files: [] }` when the run has no codebase or the codebase name is not in `owner/repo` form; 400 on invalid run id or path-escape attempt, 404 if the run does not exist.
+Walks the run's on-disk artifact directory and returns `{ files: [{ path, size, modifiedAt }] }`. Used by the console UI's Artifacts tab. It leaves out only the engine's own `$ARTIFACTS_DIR/.archon/` child, the same rule `archon workflow get` applies, so a workflow's own dotfiles are listed. Returns 400 on an invalid run id or path-escape attempt, and 404 if the run does not exist or its output location cannot be resolved.
 
 #### Resume a Failed or Paused Run
 
@@ -416,7 +416,7 @@ Returns `{ commands: [{ name, source: "bundled" | "project" }] }`.
 Query parameters include status filters, date ranges, and pagination. Used by the Command Center UI.
 
 Each run includes `active_nodes`, ordered by unresolved `node_started` event order. Completion,
-failure, and both skip lifecycle events remove a node; a retrying start adds it again. Concurrent
+failure, and both skip lifecycle events remove a node; `node_suspended` keeps it active; a retrying start adds it again. Concurrent
 nodes remain separate entries. The compatibility fields `current_step_name` and
 `current_step_status` are populated only when exactly one node is active, and are `null` for zero
 or multiple active nodes. `total_steps` is `null`; observed lifecycle events do not define the
@@ -437,6 +437,8 @@ workflow's total node count. This state describes node lifecycle, not process-ow
 `GET /api/config` returns the safe config subset, now including the configured `tiers`, the built-in `tierDefaults` for the current default provider (what an unset tier resolves to), and the configured `aliases`.
 
 These config routes are **ungated** -- they write non-secret model config to `~/.archon/config.yaml` and work on solo installs (no `TOKEN_ENCRYPTION_KEY` required). Contrast with the [AI Provider Credentials](#ai-provider-credentials) routes below, which require an identity.
+
+A `PATCH` whose resulting config would be invalid is refused with `400` and nothing is written. The `error` field names the refused key, for example `Invalid assistants config: 'assistants.codex.modelReasoningEffort': ...`. This includes an invalid value already in the file that the patch leaves in place: fix that key (in the same request or by editing the file) before other changes save.
 
 ```bash
 # Read current config (includes `tiers` + `tierDefaults`)

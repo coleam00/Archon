@@ -5,6 +5,7 @@
 import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import * as codebaseDb from '../db/codebases';
+import type { Codebase } from '../types';
 import {
   cloneRepository as cloneGitRepository,
   execFileAsync,
@@ -13,6 +14,7 @@ import {
   type CloneCredentials,
 } from '@archon/git';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
+import { quoteCommandArg } from '../utils/command-args';
 import {
   expandTilde,
   canonicalizeProjectPath,
@@ -22,6 +24,7 @@ import {
   getFolderProjectRoot,
   getProjectSourcePath,
   createProjectSourceSymlink,
+  isInsideArchonWorkspaces,
   parseOwnerRepo,
   slugifyFolderName,
 } from '@archon/paths';
@@ -192,32 +195,24 @@ async function detectCurrentGitBranch(targetPath: string): Promise<string | null
 
 /**
  * Shared logic: register a repo at a given path in the DB and load commands.
+ * `existing` is the caller's lookup of a codebase with this name (dedup by
+ * project identity), made before the caller touched the filesystem.
  */
 async function registerRepoAtPath(
   targetPath: string,
   name: string,
-  repositoryUrl: string | null
+  repositoryUrl: string | null,
+  existing: Codebase | null
 ): Promise<RegisterResult> {
   const suggestedAssistant = await resolveDefaultAssistant(targetPath);
   const detectedBranch = await detectCurrentGitBranch(targetPath);
 
-  // Check if a codebase with this name already exists (dedup by project identity)
-  const existing = await codebaseDb.findCodebaseByName(name);
   if (existing) {
-    // Determine if the new path is "better" (local > archon-managed clone)
-    const isNewPathLocal = !targetPath.includes('/.archon/workspaces/');
-    const isExistingPathManaged = existing.default_cwd.includes('/.archon/workspaces/');
-    const shouldUpdateCwd = isNewPathLocal && isExistingPathManaged;
-
     const updates: {
-      default_cwd?: string;
       repository_url?: string | null;
       default_branch?: string | null;
     } = {};
-    if (shouldUpdateCwd) {
-      updates.default_cwd = targetPath;
-      updates.default_branch = detectedBranch;
-    } else if (!existing.default_branch && detectedBranch) {
+    if (!existing.default_branch && detectedBranch) {
       updates.default_branch = detectedBranch;
     }
     // Fill in repository_url if the existing record doesn't have one
@@ -229,14 +224,13 @@ async function registerRepoAtPath(
     }
 
     // Still reload commands for the existing codebase
-    const effectiveCwd = shouldUpdateCwd ? targetPath : existing.default_cwd;
     const effectiveDefaultBranch =
       updates.default_branch !== undefined
         ? updates.default_branch
         : (existing.default_branch ?? null);
     let commandsLoaded = 0;
     for (const folder of getCommandFolderSearchPaths()) {
-      const commandPath = join(effectiveCwd, folder);
+      const commandPath = join(existing.default_cwd, folder);
       try {
         await access(commandPath);
       } catch {
@@ -261,7 +255,7 @@ async function registerRepoAtPath(
       codebaseId: existing.id,
       name: existing.name,
       repositoryUrl: existing.repository_url,
-      defaultCwd: shouldUpdateCwd ? targetPath : existing.default_cwd,
+      defaultCwd: existing.default_cwd,
       defaultBranch: effectiveDefaultBranch,
       commandCount: commandsLoaded,
       alreadyExisted: true,
@@ -434,7 +428,13 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
   await execFileAsync('git', ['config', '--global', '--add', 'safe.directory', targetPath]);
   getLog().debug({ path: targetPath }, 'safe_directory_added');
 
-  const result = await registerRepoAtPath(targetPath, `${ownerName}/${repoName}`, workingUrl);
+  const name = `${ownerName}/${repoName}`;
+  const result = await registerRepoAtPath(
+    targetPath,
+    name,
+    workingUrl,
+    await codebaseDb.findCodebaseByName(name)
+  );
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
   return result;
 }
@@ -499,6 +499,30 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
     }
   }
 
+  // The name-conflict refusal runs before the project structure and `source` link
+  // are created, so a refused registration leaves the filesystem as it found it:
+  // a link left at the managed path would make it look populated to later checks.
+  //
+  // findCodebaseForCheckoutPath found no Git identity match above, so a localPath
+  // outside the workspaces root is a separate clone, not this row's checkout.
+  // Nothing on this host can prove it owns a managed row either: every Docker host
+  // resolves the Archon home to the literal /.archon, so another host sharing the
+  // database can hold its own checkout at the byte-identical path. Repointing
+  // would silently break that other host, so the operator moves it explicitly.
+  const sameName = await codebaseDb.findCodebaseByName(name);
+  if (
+    sameName &&
+    !isInsideArchonWorkspaces(localPath) &&
+    isInsideArchonWorkspaces(sameName.default_cwd)
+  ) {
+    throw new Error(
+      `Project "${sameName.name}" is already registered at ${sameName.default_cwd}, ` +
+        `a different checkout than ${localPath}. Refusing to repoint it: another host ` +
+        'sharing this database may use that path. To make this checkout the project, run ' +
+        `/update-project ${quoteCommandArg(sameName.name)} ${quoteCommandArg(localPath)}`
+    );
+  }
+
   // Create project structure and source symlink
   const parsed = parseOwnerRepo(name);
   const projOwner = parsed?.owner ?? ownerName;
@@ -511,7 +535,7 @@ export async function registerRepository(localPath: string): Promise<RegisterRes
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(localPath, name, remoteUrl);
+  return registerRepoAtPath(localPath, name, remoteUrl, sameName);
 }
 
 /**

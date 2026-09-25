@@ -766,6 +766,7 @@ export class PiProvider implements IAgentProvider {
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     };
     let resourceLoader: DefaultResourceLoader;
+    const extensionProviderNames = new Set<string>();
     if (enableExtensions) {
       const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
         cwd,
@@ -781,6 +782,7 @@ export class PiProvider implements IAgentProvider {
       // registerProvider() is a documented upsert, so the first call receiving
       // the same configs again via its own bindCore() flush is harmless.
       for (const { name, config, extensionPath } of providerRegistrations) {
+        extensionProviderNames.add(name);
         try {
           modelRegistry.registerProvider(name, config);
         } catch (err) {
@@ -908,11 +910,22 @@ export class PiProvider implements IAgentProvider {
       model = modelRegistry.find(parsed.provider, parsed.modelId);
       if (!model) {
         session.dispose();
+        const extensionProvider = extensionProviderNames.has(parsed.provider);
+        const catalogProvider =
+          !extensionProvider && modelRegistry.getProvider(parsed.provider) !== undefined;
+        const remedy = catalogProvider
+          ? 'The provider is configured, but this model id is not in the Pi model catalog. ' +
+            'If the model is newer than your catalog, refresh it with `pi update --models`; ' +
+            `Archon reads the refreshed store at ${join(piCodingAgent.getAgentDir(), 'models-store.json')}.`
+          : extensionProvider
+            ? `Provider '${parsed.provider}' comes from an installed Pi extension, but that ` +
+              'extension did not register this model id. Check the extension configuration and model name.'
+            : `Provider '${parsed.provider}' is not in the Pi model catalog. If it comes from a Pi ` +
+              'provider extension, install that extension (e.g. `pi install npm:pi-provider-kiro`) ' +
+              'and set `enableExtensions: true` in .archon/config.yaml. If it is a catalog provider, ' +
+              'refresh the catalog with `pi update --models`.';
         throw new Error(
-          `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ` +
-            'The model was not found in the static catalog or via any installed extension. ' +
-            'Ensure the provider extension is installed (e.g. `pi install npm:pi-provider-kiro`) ' +
-            'and `enableExtensions: true` is set in .archon/config.yaml.'
+          `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ${remedy}`
         );
       }
       try {

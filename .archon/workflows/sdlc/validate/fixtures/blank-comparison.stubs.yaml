@@ -1,0 +1,7 @@
+# Whitespace is an invalid requested path, not ordinary validation.
+fixture:
+  inputs:
+    comparison: "   "
+  expect: failed
+  fail-node: mode
+exec-code: true

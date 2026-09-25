@@ -81,8 +81,8 @@ export const roadmapItems: RoadmapItem[] = [
   {
     slug: 'streamlined-setup',
     title: 'Streamlined Setup & Binary Install',
-    status: 'in-progress',
-    version: 'v0.4',
+    status: 'shipped',
+    version: 'v0.2.13',
     description: 'Getting started with Archon should take under 5 minutes. A fully self-contained binary, one-line installers, and a first-run wizard that auto-detects your AI provider.',
     bullets: [
       'Fully self-contained binary distribution (no Node/Bun required)',
@@ -96,8 +96,8 @@ export const roadmapItems: RoadmapItem[] = [
   {
     slug: 'workflow-marketplace',
     title: 'Workflow Marketplace',
-    status: 'next',
-    version: 'v0.5',
+    status: 'shipped',
+    version: 'v0.3.11',
     description: 'An open source registry for community-built Archon workflows. Browse, install, and share workflows in one place.',
     bullets: [
       'archon.diy/workflows — searchable, filterable directory',
@@ -112,7 +112,6 @@ export const roadmapItems: RoadmapItem[] = [
     slug: 'eval-system',
     title: 'Eval System',
     status: 'planned',
-    version: 'v0.6',
     description: 'A built-in evaluation framework to measure and improve workflow quality — test cases, correctness scoring, and reliability testing.',
     bullets: [
       'WORKFLOW.eval.yaml — define test inputs and expected outputs inline',
@@ -126,7 +125,7 @@ export const roadmapItems: RoadmapItem[] = [
   {
     slug: 'workflow-control-flow',
     title: 'Advanced Workflow Control Flow',
-    status: 'planned',
+    status: 'in-progress',
     description: 'Make workflows expressive enough for real test/fix and approval-driven automation — multi-node loop bodies, branching on approvals, and a real expression evaluator.',
     bullets: [
       'Multi-node loop bodies (compose plan → implement → validate per iteration)',
@@ -135,12 +134,13 @@ export const roadmapItems: RoadmapItem[] = [
       'Real expression evaluator powering when:, loop_until:, and condition: clauses',
     ],
     tags: ['workflows', 'control-flow'],
-    issues: [972, 1238, 1333, 1292, 1219, 1208, 1336, 1471, 1391, 1520],
+    issues: [1333],
   },
   {
     slug: 'persistent-orchestrator',
     title: 'Persistent Project Orchestrator',
-    status: 'planned',
+    status: 'shipped',
+    version: 'v0.5.0',
     description: 'One stateful conversation per codebase that retains context across runs, with project-first navigation and observable subagent activity.',
     bullets: [
       'Persistent orchestrator session bound to each project',
@@ -149,7 +149,6 @@ export const roadmapItems: RoadmapItem[] = [
       'Live SDK lifecycle events (subagent + hook activity) streamed to the UI',
     ],
     tags: ['orchestrator', 'web', 'memory'],
-    issues: [968, 1044, 1038, 1058, 1205, 1179, 1182, 975],
   },
   {
     slug: 'local-llm-support',
@@ -162,7 +161,7 @@ export const roadmapItems: RoadmapItem[] = [
       'Bundled workflows respect DEFAULT_AI_ASSISTANT instead of locking a provider',
     ],
     tags: ['providers', 'local', 'multi-model'],
-    issues: [1334, 1127, 1449],
+    issues: [1449],
   },
   {
     slug: 'workflow-reliability',
@@ -175,7 +174,7 @@ export const roadmapItems: RoadmapItem[] = [
       'Invariant checks before state restore — refuse to auto-resume failed runs into fresh requests',
     ],
     tags: ['reliability', 'workflows'],
-    issues: [1549, 1516, 1471, 1425, 1546, 1531, 1378, 1208, 1520],
+    issues: [1378],
   },
   {
     slug: 'multi-model-providers',
@@ -185,7 +184,6 @@ export const roadmapItems: RoadmapItem[] = [
     description: 'Pluggable provider SDKs beyond Claude and Codex — Copilot, Hermes — plus per-dispatch model selection.',
     bullets: [],
     tags: ['providers'],
-    issues: [1115, 1106, 1127, 1433],
   },
   {
     slug: 'multi-repo-workspaces',
@@ -195,7 +193,7 @@ export const roadmapItems: RoadmapItem[] = [
     description: 'Multiple clones of the same remote as distinct projects, branch-aware sync, and unambiguous webhook routing.',
     bullets: [],
     tags: ['isolation', 'git'],
-    issues: [1273, 1192, 1289, 1319, 1347, 1281, 1516],
+    issues: [1192, 1319, 1347, 1281],
   },
   {
     slug: 'enterprise-github-auth',
@@ -205,7 +203,7 @@ export const roadmapItems: RoadmapItem[] = [
     description: 'GitHub App with per-installation tokens and secure secret resolution for org and team setups.',
     bullets: [],
     tags: ['auth', 'enterprise'],
-    issues: [1495, 1467, 1469, 1476, 1385],
+    issues: [1385],
   },
   {
     slug: 'production-deployment',
@@ -215,6 +213,6 @@ export const roadmapItems: RoadmapItem[] = [
     description: 'Reliable Docker, Pi and VPS support, Cloudflare Tunnel, hardened Windows execution.',
     bullets: [],
     tags: ['deployment', 'docker'],
-    issues: [1170, 1237, 1452, 1174, 1168, 1326, 1290],
+    issues: [1452],
   },
 ];

@@ -24,7 +24,10 @@
       "src/resolver.test.ts"
     ],
     [
-      "src/providers/"
+      "src/providers/worktree.test.ts"
+    ],
+    [
+      "src/providers/worktree-real-git.test.ts"
     ],
     [
       "src/errors.test.ts",

@@ -46,15 +46,17 @@ export function rejectModelOnContinue(
 }
 
 /**
- * Rejects --config for every command other than `workflow run`.
+ * Accepts run configuration and trigger deployment configuration on their owning commands.
  */
 export function rejectConfigOutsideRun(
   command: string | undefined,
   subcommand: string | undefined,
   config: unknown
 ): string | undefined {
-  if (config !== undefined && (command !== 'workflow' || subcommand !== 'run')) {
-    return 'Error: --config can only be used with workflow run.';
+  const triggerConfig =
+    command === 'trigger' && (subcommand === 'fire' || subcommand === 'schedule');
+  if (config !== undefined && !triggerConfig && (command !== 'workflow' || subcommand !== 'run')) {
+    return 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.';
   }
   return undefined;
 }

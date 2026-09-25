@@ -1,4 +1,5 @@
-import type { PiProviderDefaults } from '../../types';
+import type { PiProviderDefaults, ProviderConfigScope } from '../../types';
+import { InvalidProviderRunConfigError } from '../../errors';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
@@ -187,15 +188,49 @@ function validateExtensionPosture(raw: Record<string, unknown>, path = ''): void
   }
 }
 
-/** Strict counterpart used only for an explicitly selected per-run layer. */
-export function parsePiRunConfig(raw: Record<string, unknown>): ParsedPiConfig {
+/**
+ * Settings whose consumer owns process-lifetime state: `env` writes into
+ * `process.env` at session start and `maxConcurrent` sizes a gate initialized
+ * once per process. Both are honoured from `.archon/config.yaml`; neither can be
+ * re-decided for a single run.
+ */
+const PROCESS_SCOPED_SETTINGS = {
+  env: 'Pi extension environment mutates process.env and is process-scoped',
+  maxConcurrent: 'Pi concurrency is initialized once for the process lifetime',
+} as const;
+
+/** Strict counterpart for authored config: `.archon/config.yaml` and per-run layers. */
+export function parsePiConfigStrict(
+  raw: Record<string, unknown>,
+  scope: ProviderConfigScope
+): ParsedPiConfig {
   assertKnownRunConfigKeys(raw, [
     'model',
     'enableExtensions',
     'interactive',
     'extensionFlags',
     'nodes',
+    ...Object.keys(PROCESS_SCOPED_SETTINGS),
   ]);
+  if (scope === 'run') {
+    for (const [key, reason] of Object.entries(PROCESS_SCOPED_SETTINGS)) {
+      if (Object.hasOwn(raw, key)) throw new InvalidProviderRunConfigError(key, reason);
+    }
+  }
+  if (raw.env !== undefined) {
+    if (!isConfigRecord(raw.env)) invalidRunConfigValue('env', 'an object of string values');
+    for (const [name, value] of Object.entries(raw.env)) {
+      if (typeof value !== 'string') invalidRunConfigValue(`env.${name}`, 'a string');
+    }
+  }
+  if (
+    raw.maxConcurrent !== undefined &&
+    (typeof raw.maxConcurrent !== 'number' ||
+      !Number.isInteger(raw.maxConcurrent) ||
+      raw.maxConcurrent <= 0)
+  ) {
+    invalidRunConfigValue('maxConcurrent', 'a positive integer');
+  }
   let model = normalizeRunConfigString(raw.model, 'model');
   if (model !== undefined) {
     const parsedModel = parsePiModelRef(model);

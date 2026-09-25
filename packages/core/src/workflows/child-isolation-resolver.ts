@@ -264,6 +264,9 @@ export function createChildWorktreeResolver(
           cwd: isolatedEnv.workingPath,
           envId: envRecord.id,
           branchName: isolatedEnv.branchName,
+          ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.cutFromCommit !== undefined
+            ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
+            : {}),
         };
       } catch (err) {
         const error = err as Error;

@@ -18,6 +18,7 @@ import { copyArchonSkill } from './skill';
 import {
   checkClaudeBinary,
   checkCodexBinary,
+  checkConfigFiles,
   checkOpenCode,
   checkDatabase,
   checkConnectedProviders,
@@ -441,18 +442,15 @@ describe('checkGhAuth', () => {
 });
 
 describe('checkPi', () => {
-  // Spy on the exported `probeAuthJsonExists` wrapper rather than `fsModule.existsSync`.
-  // Named imports from 'fs' cannot be intercepted by spying on the namespace object
-  // due to ESM rebinding — the wrapper pattern (same as `probeFileExists` in setup.ts)
-  // is the correct way to make this testable.
-  let authJsonSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probeAuthJsonExists'>>;
-
-  beforeEach(() => {
-    authJsonSpy = spyOn(doctorModule, 'probeAuthJsonExists');
-  });
+  // Spy on the exported `probePiAuthValidity` wrapper rather than reaching into
+  // 'fs'. Named imports from 'fs' cannot be intercepted by spying on the
+  // namespace object due to ESM rebinding — the wrapper pattern (same as
+  // `probeFileExists` in setup.ts) is the correct way to make this testable.
+  let piAuthReaderSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probePiAuthValidity'>> | null =
+    null;
 
   afterEach(() => {
-    authJsonSpy.mockRestore();
+    piAuthReaderSpy?.mockRestore();
   });
 
   it('returns skip when Pi is not configured', async () => {
@@ -463,14 +461,27 @@ describe('checkPi', () => {
   });
 
   it('returns pass when ~/.pi/agent/auth.json exists', async () => {
-    authJsonSpy.mockReturnValue(true);
+    // The store has to hold a usable credential too — presence alone is no
+    // longer a pass (#3274), so this pins the "exists AND valid" path.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'valid',
+      providers: ['anthropic'],
+      expiredProviders: [],
+      expiresAt: Date.UTC(2027, 0, 1),
+    });
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('pass');
     expect(result.message).toContain('auth.json');
   });
 
   it('returns pass when a Pi API key env var is set', async () => {
-    authJsonSpy.mockReturnValue(false);
+    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json,
+    // so a machine that has Pi set up takes the store branch instead of the
+    // env-var branch this test exists to cover.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'missing',
+    });
+
     const result = await checkPi({
       DEFAULT_AI_ASSISTANT: 'pi',
       ANTHROPIC_API_KEY: 'sk-ant-test',
@@ -480,26 +491,155 @@ describe('checkPi', () => {
   });
 
   it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
-    authJsonSpy.mockReturnValue(false);
+    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json
+    // and passes or fails by the machine it runs on.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'missing',
+    });
+
     const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('pi /login');
   });
 
+  it('warns rather than fails when auth.json holds an expired access token (#3274)', async () => {
+    // `expires` is the access token's expiry, and Pi refreshes it on the next
+    // use while the refresh token works. A hard fail here is a false alarm on
+    // a healthy install — worse than the false pass this check replaced.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'expired',
+      providers: ['anthropic'],
+      expiredProviders: ['anthropic'],
+      expiresAt: Date.UTC(2026, 5, 8),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('anthropic');
+    expect(result.message).toContain('expired');
+  });
+
+  it('reports the expiry date rather than any credential value', async () => {
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'expired',
+      providers: ['anthropic'],
+      expiredProviders: ['anthropic'],
+      expiresAt: Date.UTC(2026, 5, 8),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.message).toContain('2026');
+    expect(result.message).not.toContain('stored-access');
+    expect(result.message).not.toContain('stored-refresh');
+  });
+
+  it('names only the expired provider when the store also holds a usable one', async () => {
+    // Two grants, one dead since June and one good until next year. The verdict
+    // is aggregate, but the message must not send the operator to renew a
+    // credential that does not need it.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'expired',
+      providers: ['anthropic', 'github-copilot'],
+      expiredProviders: ['anthropic'],
+      expiresAt: Date.UTC(2026, 5, 8),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('anthropic');
+    expect(result.message).not.toContain('github-copilot');
+  });
+
+  it('returns pass when auth.json holds a grant that is still valid', async () => {
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'valid',
+      providers: ['anthropic'],
+      expiredProviders: [],
+      expiresAt: Date.UTC(2027, 0, 1),
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('pass');
+  });
+
+  it('does not turn an unreadable store into an expired-credential failure', async () => {
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'unreadable',
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    // The file exists but says nothing usable. That is not the same defect as
+    // an expired grant, and the message must not claim it is.
+    expect(result.message).not.toContain('expired');
+    expect(result.message).toContain('auth.json');
+  });
+
+  it('an empty store is not a pass on its own', async () => {
+    // `{}` on disk means the file is present but holds no credential, so `pi`
+    // has nothing to authenticate with. It must fall through to the env-var
+    // check rather than report a green doctor for a Pi-default user.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'empty',
+    });
+
+    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
+
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('pi /login');
+  });
+
+  it('an empty store still passes when an API key env var is set', async () => {
+    // The reason `empty` falls through instead of failing outright: the env-var
+    // path is a legitimate answer for the same store.
+    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
+      status: 'empty',
+    });
+
+    const result = await checkPi({
+      DEFAULT_AI_ASSISTANT: 'pi',
+      ANTHROPIC_API_KEY: 'sk-ant-test',
+    });
+
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('ANTHROPIC_API_KEY');
+  });
+
   it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
     // Regression guard for M2: shared keys like ANTHROPIC_API_KEY must not be treated
     // as Pi evidence unless DEFAULT_AI_ASSISTANT=pi.
-    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({ ANTHROPIC_API_KEY: 'sk-ant-test' });
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');
   });
 
   it('returns skip for users with OPENROUTER_API_KEY set but Pi not configured as default', async () => {
-    authJsonSpy.mockReturnValue(false);
     const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
     expect(result.status).toBe('skip');
     expect(result.message).toContain('not configured');
+  });
+});
+
+describe('checkConfigFiles', () => {
+  it('passes and names the resolved default assistant', async () => {
+    const result = await checkConfigFiles('/repo', async () => ({ assistant: 'codex' }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toContain('codex');
+  });
+
+  it('fails with the loader message when assistants config is invalid', async () => {
+    const result = await checkConfigFiles('/repo', async () => {
+      throw new Error(
+        "Invalid assistants config in '/repo/.archon/config.yaml': " +
+          "'assistants.codex.modelReasoningEffort': expected minimal, low, medium, high, xhigh, max."
+      );
+    });
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('assistants.codex.modelReasoningEffort');
   });
 });
 
@@ -1011,6 +1151,8 @@ describe('doctorCommand', () => {
     ({ label, status: 'fail', message: 'broken' }) as const;
   const skipping = (label: string) => async () =>
     ({ label, status: 'skip', message: 'no token' }) as const;
+  const warning = (label: string) => async () =>
+    ({ label, status: 'warn', message: 'worth knowing' }) as const;
   const throwing = (label: string) => async (): Promise<never> => {
     throw new Error(`${label} blew up`);
   };
@@ -1044,6 +1186,21 @@ describe('doctorCommand', () => {
       .map(args => String(args[0] ?? ''))
       .filter(s => s.startsWith('✓') || s.startsWith('✗') || s.startsWith('○'));
     expect(renderedLines.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('a warn is not a failure: exit 0, but it is still rendered', async () => {
+    // `warn` reports a defect the operator should see on an install that
+    // works (e.g. an expired-but-refreshable Pi access token). It must not
+    // flip the exit code — that would break CI on healthy installs — yet it
+    // must still reach the operator rather than being swallowed.
+    const exit = await doctorCommand([passing('A'), warning('B')]);
+    expect(exit).toBe(0);
+
+    const warnLine = logSpy.mock.calls
+      .map(args => String(args[0] ?? ''))
+      .find(s => s.startsWith('!'));
+    expect(warnLine).toContain('B');
+    expect(warnLine).toContain('worth knowing');
   });
 });
 

@@ -34,25 +34,14 @@
  * resumed run. The engine never expands it into an absolute path and never loads the file.
  */
 import { stat } from 'node:fs/promises';
-import { isAbsolute, join, normalize, sep } from 'node:path';
-import { z } from 'zod';
-import { getRunArtifactsDirForRoot, isInsideArchonHome } from '@archon/paths';
+import { isAbsolute, join, normalize } from 'node:path';
+import { getRunArtifactsDirForRoot, isInsideArchonHome, isPathInside } from '@archon/paths';
 import type { WorkflowRun } from './schemas';
 
-/** Reserved `type` discriminator. An object carrying it MUST be a valid pointer. */
-export const ARTIFACT_POINTER_TYPE = 'archon_artifact';
+import { ARTIFACT_POINTER_TYPE, artifactPointerSchema } from './schemas/artifact-pointer';
 
-/**
- * The pointer shape. Unknown sibling keys are tolerated (an author may label a pointer for
- * their own downstream code); the three engine-owned fields are not optional.
- */
-export const artifactPointerSchema = z.object({
-  type: z.literal(ARTIFACT_POINTER_TYPE),
-  run_id: z.string().min(1),
-  path: z.string().min(1),
-});
-
-export type ArtifactPointer = z.infer<typeof artifactPointerSchema>;
+export { ARTIFACT_POINTER_TYPE, artifactPointerSchema };
+export type { ArtifactPointer } from './schemas/artifact-pointer';
 
 /** One tagged object found inside a value, with the JSON path that located it. */
 interface TaggedCandidate {
@@ -138,7 +127,7 @@ async function checkPointer(
 
   const root = normalize(getRunArtifactsDirForRoot(outputRoot, currentRun.id));
   const full = normalize(join(root, pointer.path));
-  if (!full.startsWith(root + sep)) {
+  if (!isPathInside(root, full, { lexical: true })) {
     return `${where} resolves outside this run's artifacts directory`;
   }
 

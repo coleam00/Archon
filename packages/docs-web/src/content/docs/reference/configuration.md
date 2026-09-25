@@ -100,6 +100,10 @@ paths:
 # Concurrency limits
 concurrency:
   maxConversations: 10
+  # Optional install-wide cap on simultaneous provider attempts, by provider ID.
+  # Unlisted providers are unlimited. See "Provider concurrency caps" below.
+  # providers:
+  #   pi: 1
 
 # Optional continuation for provider quota-window exhaustion. Off by default.
 workflows:
@@ -124,6 +128,27 @@ aliases:
 The `tiers:` block above is no longer hand-edit-only -- you can also set the `small`/`medium`/`large` presets from the console **AI Settings** -> **Model Tiers** panel, or from the CLI with [`archon ai tier set`](/reference/cli/#ai). Connecting your own provider API key or subscription is covered in [Per-user credentials and AI Settings](/getting-started/ai-assistants/#per-user-credentials-and-ai-settings).
 
 These files are persistent layers. For one invocation, use repeatable [`workflow run --model <name>=<spec>`](/reference/cli/#workflow-run-name-message), [`workflow run --config <path>`](/reference/cli/#per-run-config-files), or the run API's inline `config`, `tiers`, and `aliases` fields. Each run layer is sparse and sits above user, repository, global, and built-in values without editing a persistent config file.
+
+### How `assistants:` is validated
+
+Every `assistants.<provider>` block is checked by that provider when the config loads, in both `~/.archon/config.yaml` and a repository `.archon/config.yaml`. A misspelled key, an unsupported value, or a wrong type stops the load with a message naming the file, the provider, the key, and the accepted values. A `--config` run layer is checked by the same provider parser, with one difference: settings that apply to the whole process, such as `assistants.pi.env` and `assistants.pi.maxConcurrent`, are accepted in a config file and refused in a run layer. Values the provider would have quietly discarded used to reach a run and be reported as the setting the node ran at:
+
+```
+Invalid assistants config in '/Users/you/.archon/config.yaml':
+  'assistants.claude.settingSources.0': expected 'project' or 'user'.
+```
+
+`archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
+
+## Provider concurrency caps
+
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default caps. A provider without an entry is unlimited, so many runs across Claude, Codex, and Pi keep running in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+
+- **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts, including the internal retries of Claude, Codex, and OpenCode, holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
+- **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
+- **Changes apply immediately.** The cap is re-read on every admission check, including by attempts already waiting. Lowering it blocks new attempts until enough running ones finish; running attempts are never cancelled.
+- **Strict.** A key that is not a registered provider ID, a value that is not a positive integer, or a config file that cannot be parsed refuses every provider attempt with an error naming the problem, instead of silently running uncapped.
+- **Process loss.** A slot belongs to the process that took it. When that process dies, the next admission on the same host releases the slot. A holder from another host is never released by time or guesswork: list it with `archon ai capacity` and, once you have verified that process is gone, release it with `archon ai capacity release <attempt-id>`. Hosts that share one PostgreSQL database need distinct hostnames. A recreated Docker container gets a new hostname unless the compose service sets `hostname:`, so holders left by the old container need an explicit release.
 
 ## Run-scoped configuration
 
@@ -322,7 +347,7 @@ worktree:
 
 **Defaults behavior:** The app's bundled default commands and workflows are loaded at runtime and merged with repo-specific ones. Repo commands/workflows override app defaults by name. Set `defaults.loadDefaultCommands: false` or `defaults.loadDefaultWorkflows: false` to disable runtime loading.
 
-**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories. Set `worktree.initSubmodules: false` to opt out.
+**Submodule behavior:** When a repo contains `.gitmodules`, submodules are initialized in new worktrees by default (git's `worktree add` does not do this). The check is a cheap filesystem probe — repos without submodules pay zero cost. Submodule init failure throws a classified error (credentials, network, timeout) rather than silently producing a worktree with empty submodule directories, and the worktree whose setup did not finish is removed so a retry starts from a fresh checkout instead of adopting it. If that removal cannot finish, the error names the leftover path, and later runs refuse to adopt it until you delete it. Set `worktree.initSubmodules: false` to opt out.
 
 **Remote behavior:** By default, all git operations (fetch, push, branch tracking) use the `origin` remote. If your repo uses a different remote name, configure `worktree.remote`. Resolution order:
 1. If `worktree.remote` is set: Uses the configured remote name for all operations.
@@ -424,7 +449,7 @@ Environment variables override all other configuration. They are organized by ca
 | --- | --- | --- |
 | `ARCHON_HOME` | Base directory for all Archon-managed files. **Ignored in Docker** — the container always uses `/.archon`. | `~/.archon` |
 | `PORT` | HTTP server listen port | `3090` (auto-allocated in worktrees) |
-| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`) | `info` |
+| `LOG_LEVEL` | Logging verbosity (`fatal`, `error`, `warn`, `info`, `debug`, `trace`). CLI commands other than `archon serve` log at `warn` unless `--verbose` or `LOG_LEVEL=debug`/`trace` is set (a quieter `LOG_LEVEL` such as `error` is kept); see [CLI logs](/reference/cli/#logs). | `info` |
 | `BOT_DISPLAY_NAME` | Bot name shown in batch-mode "starting" messages | `Archon` |
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
@@ -576,7 +601,7 @@ Signup uses email + password (no email verification by default). **Signup postur
 
 ### Telemetry
 
-Archon sends a few anonymous events — `archon_started` (once per process), `archon_active` (daily server heartbeat), `chat_turn_handled` (direct chat turn — platform, provider, model, duration, and usage totals; never message content), `workflow_invoked` (workflow start), `workflow_completed`/`workflow_failed` (run outcome), `workflow_approval_resolved` (binary approve/reject), and `codebase_registered` (pure count — no name/path/URL). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider id (model id on `workflow_invoked`), node shape and feature flags, outcome/duration, aggregate provider-reported usage (gross input, output, optional cache-read/cache-write totals plus a flag when those totals are a floor, cost, and loop iterations), a fixed-enum failure class (never error text), deployment shape (adapter/db/auth booleans), OS/arch/version, and a random install UUID. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
+Archon sends a few anonymous events — `archon_started` (once per CLI invocation or server boot), `archon_active` (daily server heartbeat), `chat_turn_handled` (direct chat turn — platform, provider, model, duration, and usage totals; never message content), `workflow_invoked` (workflow start or resumed segment), `workflow_completed`/`workflow_failed`/`workflow_cancelled` (sent once when the run's final status is saved), `workflow_approval_resolved` (binary approve/reject), and `codebase_registered` (pure count — no name/path/URL). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider id (model id on `workflow_invoked`), node shape and feature flags, outcome/duration, aggregate provider-reported usage (gross input, output, optional cache-read/cache-write totals plus a flag when those totals are a floor, cost, and loop iterations), a fixed-enum failure class and exit/cancel reason (never error text), a `run_ref` hash that joins one run's events without sending its id, deployment shape (adapter/db/auth booleans), OS/arch/version, install channel (`binary`/`docker`/`source`) and build commit, a `schema_version`, and a random install UUID stored at `$ARCHON_HOME/telemetry-id`. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
 
 | Variable | Description | Default |
 | --- | --- | --- |

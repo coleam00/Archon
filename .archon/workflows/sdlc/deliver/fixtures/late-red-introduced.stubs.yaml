@@ -9,7 +9,6 @@
 # concludes green, and the flip proceeds. flip-ready stays stubbed as every
 # fixture must: exec-code runs bash for real and this worktree's origin is a
 # real repository — an unstubbed flip would be a live public action.
-impl__record-start: '{"start":"recorded"}'
 impl__implement:
   done: true
   green: true
@@ -18,7 +17,8 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 # gate-green, gate-validated, and gate-ci-fix are deliberately unstubbed: the
 # real gates must accept this run at every gate it reaches.
-pr__pr: { repo: { host: "github.com", path: "example/repo" }, number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true }
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
   errors: false
   docs: false
@@ -30,11 +30,17 @@ review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }
 review__code: "0 findings"
 review__seams: "0 findings"
 review__simplify: "0 findings"
 review__tests: "0 findings"
 review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
@@ -45,7 +51,6 @@ validate__validate:
   summary: "stub: full gate green"
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
-ci-fix__record-start: '{"start":"recorded"}'
 ci-fix__implement:
   done: true
   green: true
@@ -56,7 +61,13 @@ ci-recheck__mode: '{"continuation":true}'
 ci-recheck__scope:
   # light mode; delta since cursor
   docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }
 ci-recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: correction delta clean; no open Critical/Important"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+ci-recheck__publish:
   ready: true
   action: none
   findings_summary: "stub: correction delta clean; no open Critical/Important"
