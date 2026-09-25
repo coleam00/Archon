@@ -28,6 +28,7 @@ import {
   type ForgeManifest,
   type PluginManifest,
   type PluginReceipt,
+  type WorkflowPackReceipt,
   type WorkflowPackManifest,
   workflowPackManifestSchema,
 } from '@archon/plugin-manifest';
@@ -207,9 +208,9 @@ async function fetchManifest(
 /**
  * Resolve a ref to one commit and its manifest. A named tag is used as given.
  * Without one, the manifest at the default branch head decides: a workflow
- * pack installs that commit; a forge plugin's binaries exist only as release
- * assets, so it moves on to the latest release. `update` already knows the
- * kind from its receipt.
+ * pack goes on to fetch that ref, and the commit the fetch returns is the one
+ * installed; a forge plugin's binaries exist only as release assets, so it moves
+ * on to the latest release. `update` already knows the kind from its receipt.
  */
 async function resolveSource(
   ref: PluginRef,
@@ -354,6 +355,8 @@ async function git(args: string[], env: NodeJS.ProcessEnv = {}): Promise<string>
 interface FetchedPack {
   gitDir: string;
   commit: string;
+  /** The plugin directory inside the commit, `''` or ending in `/`: listed, checked and written. */
+  prefix: string;
   /** The tree's own `archon-plugin.json`: discovery reads this file, so it is the one checked. */
   manifest: WorkflowPackManifest;
   /** Every file of the plugin, relative to its root. */
@@ -380,6 +383,15 @@ async function fetchPack(
   const remote = `${env.githubUrl ?? 'https://github.com'}/${ref.owner}/${ref.repo}.git`;
   const gitDir = join(staging, 'repo.git');
   await git(['init', '--bare', '-q', gitDir]);
+  // `info/attributes` outranks every other attributes source, including a
+  // `.gitattributes` inside the pack: no end-of-line conversion, `$Id$` expansion,
+  // filter driver or re-encoding touches the checkout, so the installed bytes are the
+  // committed bytes on every machine.
+  await mkdir(join(gitDir, 'info'), { recursive: true });
+  await writeFile(
+    join(gitDir, 'info', 'attributes'),
+    '* -text -ident -filter -working-tree-encoding\n'
+  );
   try {
     await git([
       '--git-dir',
@@ -451,7 +463,7 @@ async function fetchPack(
       `Refusing ${ref.id}: ${manifestPath} is not a workflow pack manifest: ${describeIssues(parsed.error)}`
     );
   }
-  return { gitDir, commit, manifest: parsed.data, files };
+  return { gitDir, commit, prefix, manifest: parsed.data, files };
 }
 
 /** Proves the tree is the pack its manifest describes before anything is written. */
@@ -482,16 +494,53 @@ function assertPackTree(
 
 async function installPack(
   ref: PluginRef,
-  tag: string | undefined,
+  source: Extract<ResolvedSource, { kind: 'workflow-pack' }>,
   receipts: PluginReceipt[],
-  previous: PluginReceipt | undefined,
+  previous: WorkflowPackReceipt | undefined,
   env: PluginEnvironment
 ): Promise<void> {
+  const { tag } = source;
+  const receiptFile = receiptPath(env.pluginsDir, ref.id);
+  const writeReceipt = async (receipt: PluginReceipt): Promise<void> => {
+    await mkdir(dirname(receiptFile), { recursive: true });
+    const staged = join(dirname(receiptFile), stagingName(RECEIPT_FILE));
+    try {
+      await writeFile(staged, `${JSON.stringify(pluginReceiptSchema.parse(receipt), null, 2)}\n`);
+      await rename(staged, receiptFile);
+    } finally {
+      await rm(staged, { force: true });
+    }
+  };
+
+  // The installed commit again: its tree already holds these bytes. Settled without a
+  // fetch, and without replacing the tree, which would briefly leave the receipt
+  // pointing at no tree. Only a different tag label changes, in the receipt.
+  const settleSameCommit = async (commit: string): Promise<boolean> => {
+    if (previous?.commit !== commit) return false;
+    if (previous.tag === tag) {
+      console.log(`${ref.id} is already at ${tag ?? 'the default branch head'} (commit ${commit})`);
+      return true;
+    }
+    await writeReceipt({
+      schemaVersion: 1,
+      id: previous.id,
+      manifest: previous.manifest,
+      ...(tag ? { tag } : {}),
+      commit,
+      installedAt: new Date().toISOString(),
+    });
+    console.log(
+      `Updated ${ref.id}: ${previous.tag ?? 'default branch'} -> ${tag ?? 'default branch'} (commit ${commit}); files unchanged`
+    );
+    return true;
+  };
+  if (await settleSameCommit(source.commit)) return;
+
   // Everything fetched and checked lives here until the tree is renamed into place.
   const staging = join(env.pluginsDir, stagingName('pack'));
   await mkdir(staging, { recursive: true });
   try {
-    const { gitDir, commit, manifest, files } = await fetchPack(ref, tag, staging, env);
+    const { gitDir, commit, prefix, manifest, files } = await fetchPack(ref, tag, staging, env);
     assertCompatible(`${ref.id}@${tag ?? commit}`, manifest, env.archonVersion);
     // `owner/plugin:entrypoint` is the public identity, so one owner cannot have
     // two installed packs with the same name. GitHub owners are case-insensitive.
@@ -507,13 +556,27 @@ async function installPack(
         `${ref.id} and ${clash.id} are both workflow packs named ${ref.owner}/${manifest.name}. Remove one first: archon plugin remove ${clash.id}`
       );
     }
-    if (previous?.commit === commit && previous.tag === tag) {
-      console.log(`${ref.id} is already at ${tag ?? 'the default branch head'} (commit ${commit})`);
-      return;
-    }
+    // The fetched commit is the one installed. If the ref moved back to the installed
+    // commit between `ls-remote` and the fetch, the same rule applies.
+    if (await settleSameCommit(commit)) return;
     assertPackTree(ref, manifest, files);
 
-    const receipt: PluginReceipt = pluginReceiptSchema.parse({
+    // Git writes the plugin directory, with its executable bits, from the one commit.
+    const stagedTree = join(staging, 'tree');
+    const indexEnv = { GIT_INDEX_FILE: join(staging, 'index') };
+    await git(['--git-dir', gitDir, 'read-tree', `${commit}:${prefix}`], indexEnv);
+    await mkdir(stagedTree);
+    await git(['--git-dir', gitDir, '--work-tree', stagedTree, 'checkout-index', '-a'], indexEnv);
+
+    const tree = packTreePath(env.pluginsDir, ref.id, commit);
+    await mkdir(dirname(tree), { recursive: true });
+    // No receipt points at this commit (settleSameCommit returned above), so a tree
+    // here is left over from an interrupted install and nothing reads it.
+    await rm(tree, { recursive: true, force: true });
+    await rename(stagedTree, tree);
+    // The receipt is written last, so a reader sees either the old complete tree or
+    // the new one, never a receipt pointing at a partial tree.
+    await writeReceipt({
       schemaVersion: 1,
       id: ref.id,
       manifest,
@@ -521,59 +584,6 @@ async function installPack(
       commit,
       installedAt: new Date().toISOString(),
     });
-    const receiptFile = receiptPath(env.pluginsDir, ref.id);
-    const writeReceipt = async (): Promise<void> => {
-      await mkdir(dirname(receiptFile), { recursive: true });
-      const staged = join(dirname(receiptFile), stagingName(RECEIPT_FILE));
-      try {
-        await writeFile(staged, `${JSON.stringify(receipt, null, 2)}\n`);
-        await rename(staged, receiptFile);
-      } finally {
-        await rm(staged, { force: true });
-      }
-    };
-    const at = `${tag ?? 'default branch'} (commit ${commit})`;
-
-    // Same commit under another tag: the installed tree already holds these bytes, and
-    // replacing it would briefly leave the receipt pointing at no tree.
-    if (previous?.commit === commit) {
-      await writeReceipt();
-      console.log(
-        `Updated ${ref.id}: ${previous.tag ?? 'default branch'} -> ${at}; files unchanged`
-      );
-      return;
-    }
-
-    // Git writes the plugin directory, with its executable bits, from the one commit.
-    // No line-ending conversion: the installed bytes are the committed bytes.
-    const stagedTree = join(staging, 'tree');
-    const indexEnv = { GIT_INDEX_FILE: join(staging, 'index') };
-    const prefix = ref.path.length > 0 ? `${ref.path.join('/')}/` : '';
-    await git(['--git-dir', gitDir, 'read-tree', `${commit}:${prefix}`], indexEnv);
-    await mkdir(stagedTree);
-    await git(
-      [
-        '-c',
-        'core.autocrlf=false',
-        '--git-dir',
-        gitDir,
-        '--work-tree',
-        stagedTree,
-        'checkout-index',
-        '-a',
-      ],
-      indexEnv
-    );
-
-    const tree = packTreePath(env.pluginsDir, ref.id, commit);
-    await mkdir(dirname(tree), { recursive: true });
-    // No receipt points at this commit (the same-commit case returned above), so a
-    // tree here is left over from an interrupted install and nothing reads it.
-    await rm(tree, { recursive: true, force: true });
-    await rename(stagedTree, tree);
-    // The receipt is written last, so a reader sees either the old complete tree or
-    // the new one, never a receipt pointing at a partial tree.
-    await writeReceipt();
     // Runs already started are unaffected: capture copied the bytes they run.
     if (previous) {
       await rm(packTreePath(env.pluginsDir, ref.id, previous.commit), {
@@ -582,6 +592,7 @@ async function installPack(
       });
     }
 
+    const at = `${tag ?? 'default branch'} (commit ${commit})`;
     console.log(
       previous
         ? `Updated ${ref.id}: ${previous.tag ?? 'default branch'} (commit ${previous.commit}) -> ${at}`
@@ -624,8 +635,9 @@ async function installPlugin(
     assertCompatible(`${ref.id}@${source.tag}`, source.manifest, env.archonVersion);
     await installForge(ref, source, receipts, previous, env);
   } else {
-    // The pack's own fetch decides its commit; the resolution above only named its kind.
-    await installPack(ref, ref.tag, receipts, previous, env);
+    // The kind check above means an existing receipt here is a pack receipt.
+    const packReceipt = previous && !isForgeReceipt(previous) ? previous : undefined;
+    await installPack(ref, source, receipts, packReceipt, env);
   }
 }
 

@@ -155,6 +155,15 @@ beforeAll(async () => {
     },
     'crafted-compat'
   );
+  // The pack's own attributes ask for CRLF endings and `$Id$` expansion on checkout.
+  commitTree(
+    {
+      ...pack,
+      'packs/review-kit/.gitattributes': blob('* text eol=crlf ident\n'),
+      'packs/review-kit/review/review.yaml': blob('name: review\n# $Id$\n'),
+    },
+    'crafted-attributes'
+  );
 
   server = Bun.serve({
     hostname: '127.0.0.1',
@@ -274,6 +283,28 @@ describe('archon plugin: workflow packs', () => {
     expect(await snapshot(env.pluginsDir)).toEqual({});
   });
 
+  // An update that changes nothing is settled from `ls-remote` alone: fetching the
+  // repository at depth 1 costs its whole checkout size, once per idempotent update.
+  test('an update that keeps the installed commit never fetches', async () => {
+    const env = await environment();
+    expect((await run(env, 'install', `${ID}@v2`)).code).toBe(0);
+    const trace = join(env.pluginsDir, '..', 'git-trace.log');
+    for (const target of [`${ID}@v2`, ID]) {
+      await writeFile(trace, '');
+      process.env.GIT_TRACE = trace;
+      let result: Awaited<ReturnType<typeof run>>;
+      try {
+        result = await run(env, 'update', target);
+      } finally {
+        delete process.env.GIT_TRACE;
+      }
+      expect(result.err).toBe('');
+      const commands = await readFile(trace, 'utf8');
+      expect(commands).toContain('ls-remote');
+      expect(commands).not.toMatch(/built-in: git (?:.* )?fetch /);
+    }
+  });
+
   test('an update to another tag on the installed commit keeps the live tree and rewrites the receipt', async () => {
     const env = await environment();
     expect((await run(env, 'install', ID)).code).toBe(0);
@@ -367,6 +398,15 @@ describe('archon plugin: workflow packs', () => {
 
   // Windows runners and many Windows users set core.autocrlf=true globally. The
   // installed tree must hold the committed bytes regardless.
+  test("installs the committed bytes even when the pack's own .gitattributes asks otherwise", async () => {
+    const env = await environment();
+    const result = await run(env, 'install', `${ID}@crafted-attributes`);
+    expect(result.err).toBe('');
+    const tree = packTreePath(env.pluginsDir, ID, commit('crafted-attributes'));
+    expect(await readFile(join(tree, 'review/review.yaml'), 'utf8')).toBe('name: review\n# $Id$\n');
+    expect(await readFile(join(tree, '.gitattributes'), 'utf8')).toBe('* text eol=crlf ident\n');
+  });
+
   test("installs the committed bytes even when the user's git converts line endings", async () => {
     const env = await environment();
     const saved = { ...process.env };
