@@ -775,15 +775,15 @@ nodes:
 
 ### Error Classification
 
-Archon classifies errors into three buckets before deciding whether to retry:
+Archon sorts a failed AI attempt into one of three buckets before deciding whether to retry. The provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
 
-| Class | Examples | Retried by default? |
-|-------|----------|---------------------|
-| **FATAL** | Auth failure, permission denied, credit balance exhausted | Never (even with `on_error: all`) |
-| **TRANSIENT** | Process crashed (`exited with code`), rate limit, network timeout | Yes |
-| **UNKNOWN** | Unrecognised error messages | No (unless `on_error: all`) |
+| Bucket | Provider failure classes | Retried by default? |
+|--------|--------------------------|---------------------|
+| **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded` | Never (even with `on_error: all`) |
+| **TRANSIENT** | `transient`, `rate_limited` (rate limits get a longer retry budget and backoff) | Yes |
+| **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
-A provider that reports a typed failure class on its result decides the bucket itself, whatever its error message says: `auth`, `quota_exhausted` and `budget_exceeded` are FATAL, `transient` and `rate_limited` are TRANSIENT (rate limits get a longer retry budget and backoff), and `unknown` is UNKNOWN. The message examples in the table above apply only to errors a provider has not classified.
+Claude classifies from its SDK's error codes, HTTP status and process-exit fields. The Codex SDK and Pi report failures only as message strings, so every Codex and Pi failure is `unknown`: set `on_error: all` on a node that should retry them. Engine-detected failures (an idle timeout, an empty response) and errors from providers that do not report a typed class yet are still classified from their text.
 
 ### Retry Notifications
 
@@ -793,20 +793,18 @@ Before each retry the platform receives a message like:
 Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...
 ```
 
-### Two-Layer Retry Stack
+### One Retry Layer
 
-Archon uses two independent retry layers:
+The node retry is the only retry Archon adds. Claude, Codex and Pi make one attempt per call and report a typed failure; the engine decides whether to try again:
 
 ```
-SDK subprocess retry (claude.ts)  — 3 total attempts, 2 s base backoff
-    ↓ only if all SDK retries exhausted
 Node retry (dag-executor)  — AI nodes: default 2 retries, 3 s base backoff;
                              bash/script: only when retry: is set
     ↓ only if all node retries exhausted
 Workflow fails → user opts in to resume on next invocation
 ```
 
-This means a single transient crash may trigger up to **3 SDK retries** before a single node retry attempt is consumed. The SDK layer only applies to AI nodes; `bash:`/`script:` nodes have no SDK layer, so their `retry:` block wraps the raw subprocess directly.
+The vendors' own clients may still retry an individual API request inside one attempt (Claude Code's API retries, Pi's `retry` setting); that is the provider's native behaviour and its configuration.
 
 > **DAG resume**: For `nodes:` (DAG) workflows, resume is opt-in — pass `--resume` to `archon workflow run`, run `archon workflow resume <id>`, or use the web UI resume button. Plain `archon workflow run <name>` always starts a fresh run. See [DAG Resume on Failure](#dag-resume-on-failure) below.
 

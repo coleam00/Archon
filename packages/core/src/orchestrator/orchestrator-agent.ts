@@ -17,14 +17,14 @@ import type {
   AttachedFile,
   WorkflowRequest,
 } from '../types';
-import type { SendQueryOptions, TokenUsage } from '@archon/providers/types';
+import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
 import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
-import { classifyAndFormatError } from '../utils/error-formatter';
+import { classifyAndFormatError, formatProviderFailure } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { safeDeactivateSession } from '../state/session-transitions';
@@ -2650,6 +2650,19 @@ interface ChatTurn {
   routed: boolean;
 }
 
+/**
+ * The chat message for a failed turn's result. The provider's typed failure decides the
+ * advice, as it decides retry in the workflow engine. A result without one comes from a
+ * provider that does not report `failure` yet; its subtype and SDK detail still go
+ * through the text formatter so actionable cases like "Not logged in" keep their advice
+ * (#1983).
+ */
+function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface): string {
+  if (msg.failure !== undefined) return formatProviderFailure(msg.failure);
+  const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
+  return classifyAndFormatError(new Error(errorDetail || 'AI result error'), surface);
+}
+
 function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
   turn.reported = true;
   captureChatTurn(props);
@@ -2762,25 +2775,18 @@ async function handleStreamMode(
       // defends against a third-party IAgentProvider that forwards the SDK
       // pair raw — without it, direct chat would surface a spurious error to
       // the user and drop the actual conversation output.
-      if (msg.isError && msg.errorSubtype !== 'success') {
+      if (msg.failure !== undefined || (msg.isError && msg.errorSubtype !== 'success')) {
         getLog().warn(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
+            failureClass: msg.failure?.class,
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
           'ai_result_error'
         );
-        // Carry the SDK error detail (not just the subtype code) into the
-        // formatter so it can classify actionable cases like "Not logged in"
-        // rather than emitting a generic message (#1983).
-        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
-        const syntheticError = new Error(errorDetail || 'AI result error');
-        await platform.sendMessage(
-          conversationId,
-          classifyAndFormatError(syntheticError, platform)
-        );
+        await platform.sendMessage(conversationId, resultFailureMessage(msg, platform));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
@@ -3001,25 +3007,18 @@ async function handleBatchMode(
       // defends against a third-party IAgentProvider that forwards the SDK
       // pair raw — without it, direct chat would surface a spurious error to
       // the user and drop the actual conversation output.
-      if (msg.isError && msg.errorSubtype !== 'success') {
+      if (msg.failure !== undefined || (msg.isError && msg.errorSubtype !== 'success')) {
         getLog().warn(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
+            failureClass: msg.failure?.class,
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
           'ai_result_error'
         );
-        // Carry the SDK error detail (not just the subtype code) into the
-        // formatter so it can classify actionable cases like "Not logged in"
-        // rather than emitting a generic message (#1983).
-        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
-        const syntheticError = new Error(errorDetail || 'AI result error');
-        await platform.sendMessage(
-          conversationId,
-          classifyAndFormatError(syntheticError, platform)
-        );
+        await platform.sendMessage(conversationId, resultFailureMessage(msg, platform));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }

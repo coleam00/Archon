@@ -14,6 +14,7 @@ function turn(...chunks: unknown[]): () => AsyncIterable<unknown> {
 const conforming: ProviderFailureCase = {
   name: 'expired key',
   expected: 'auth',
+  evidence: 'HTTP 401',
   run: turn(
     { type: 'assistant', content: 'partial' },
     { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } }
@@ -30,9 +31,33 @@ describe('failure-class conformance', () => {
       'wrong class',
       {
         ...conforming,
-        run: turn({ type: 'result', failure: { class: 'transient', evidence: 'x' } }),
+        run: turn({
+          type: 'result',
+          isError: true,
+          failure: { class: 'transient', evidence: 'HTTP 401' },
+        }),
       },
       'expired key: reported transient, expected auth',
+    ],
+    [
+      'evidence that drops the vendor text',
+      {
+        ...conforming,
+        run: turn({
+          type: 'result',
+          isError: true,
+          failure: { class: 'auth', evidence: 'authentication failed' },
+        }),
+      },
+      'expired key: evidence does not keep the vendor text "HTTP 401"',
+    ],
+    [
+      'a failed result without isError',
+      {
+        ...conforming,
+        run: turn({ type: 'result', failure: { class: 'auth', evidence: 'HTTP 401' } }),
+      },
+      'expired key: a failed result does not set isError',
     ],
     [
       'no failure on the result',

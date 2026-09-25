@@ -1,5 +1,5 @@
 import { z } from '@hono/zod-openapi';
-import { tokenUsageSchema } from '@archon/provider-contract';
+import { providerFailureSchema, tokenUsageSchema } from '@archon/provider-contract';
 import {
   agentNodeSchema,
   execNodeSchema,
@@ -117,6 +117,8 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
     error: z.string(),
     retryable: z.literal(false).optional(),
     failureKind: nodeFailureKindSchema.optional(),
+    /** The provider's own typed failure, unchanged, when a provider reported one. */
+    providerFailure: providerFailureSchema.optional(),
   }),
   z.object({ status: z.literal('skipped'), reason: nodeSkipReasonSchema, cause: skipCauseSchema }),
   z.object({

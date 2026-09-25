@@ -4864,6 +4864,36 @@ describe('stale session ID clearing on error_during_execution', () => {
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
   });
 
+  test.each(['stream', 'batch'] as const)(
+    '%s mode: a typed failure picks the advice from its class, not its words',
+    async mode => {
+      // The evidence reads like a usage limit; the provider classified an auth failure.
+      mockSendQuery.mockImplementationOnce(async function* () {
+        yield {
+          type: 'result',
+          isError: true,
+          errors: ['usage limit reached · resets 4pm'],
+          failure: { class: 'auth', evidence: 'usage limit reached · resets 4pm' },
+        };
+      });
+      mockTransitionSession.mockResolvedValueOnce(
+        makeSession({ id: 'session-1', assistant_session_id: null })
+      );
+
+      const platform = makePlatform();
+      (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+        (c: unknown[]) => c[1] as string
+      );
+      expect(
+        sentMessages.some(m => m.startsWith('⚠️ The AI provider rejected its credentials'))
+      ).toBe(true);
+      expect(sentMessages.some(m => m.includes('AI usage limit reached'))).toBe(false);
+    }
+  );
+
   test('does NOT surface error to user on stop_sequence success (#1425)', async () => {
     // Regression test for #1425: stop_sequence terminations carry is_error:
     // true + subtype: 'success' under the Claude SDK contract. The Claude
