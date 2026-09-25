@@ -1,7 +1,4 @@
 {
   "extends": "../../scripts/tsconfig.json",
-  "compilerOptions": {
-    "allowImportingTsExtensions": true
-  },
   "include": ["*/.shared/**/*.ts", "*/*/scripts/**/*.ts"]
 }

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
 import { join, resolve } from 'node:path';
+import { projectEnvironment } from './node-env.ts';
 
 export interface CompositionRequest {
   /** Full commit IDs, never branch names. */
@@ -299,7 +300,8 @@ export async function compareComposition(
     ];
     // One frozen process environment for this comparison. The caller's environment label
     // identifies external dependencies; it is not a claim that databases/network are immutable.
-    const env = { ...process.env };
+    // The gate is the project's, not part of this run, so it never sees the node's contract.
+    const env = projectEnvironment(process.env);
     for (const subject of subjects) {
       const worktree = join(directory, subject.role);
       git(cwd, ['worktree', 'add', '--detach', worktree, subject.commit]);

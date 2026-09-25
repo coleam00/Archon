@@ -157,6 +157,24 @@ describe('three-tree project gate evidence', () => {
     expect(result.verdict.red_cause).toBe('');
   });
 
+  it("runs the gate without the run's identity", async () => {
+    const f = fixture();
+    f.request.check.argv = [
+      process.execPath,
+      '-e',
+      'process.exit(process.env.WORKFLOW_ID ? 1 : 0)',
+    ];
+    const prior = process.env.WORKFLOW_ID;
+    process.env.WORKFLOW_ID = 'run-123';
+    try {
+      const result = await compareComposition(f.cwd, f.artifacts, f.request);
+      expect(result.evidence.observations.map(o => o.exit_code)).toEqual([0, 0, 0]);
+    } finally {
+      if (prior === undefined) delete process.env.WORKFLOW_ID;
+      else process.env.WORKFLOW_ID = prior;
+    }
+  });
+
   it('refuses a clean-tree verdict if the gate mutates a checkout, even with exit zero', async () => {
     const f = fixture();
     f.request.check.argv = [
