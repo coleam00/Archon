@@ -1,22 +1,24 @@
+import type { Env, Hono, Schema } from 'hono';
+import { serveStatic } from 'hono/bun';
+
 /**
- * Cache-Control policy for the built web UI served by `serveStatic` (#3383).
+ * Serve the built web UI with the Cache-Control policy of a hashed-asset SPA
+ * (#3383).
  *
- * The two halves of a hashed-asset SPA want opposite answers:
+ * The two halves want opposite answers:
  *
- * - `/assets/*` — filenames carry a content hash, so the bytes behind a name
+ * - `/assets/*` filenames carry a content hash, so the bytes behind a name
  *   never change. Safe to keep indefinitely and never revalidate.
- * - `index.html` — names those hashes, so a stale copy pins the browser to a
- *   bundle hash that is no longer on disk. Must be revalidated on every load,
- *   which `no-cache` permits while still allowing a 304.
+ * - `index.html` names those hashes, so a stale copy pins the browser to a
+ *   bundle hash that is no longer on disk. It must be revalidated on every
+ *   load, which `no-cache` permits while still allowing a 304.
  *
- * This is the standard pairing for a hashed-asset SPA. Without it, browsers and
- * CDNs fall back to heuristic caching and invent their own expiry, so a deploy
- * can silently appear not to have happened.
+ * Without these headers, browsers and CDNs fall back to heuristic caching and
+ * invent their own expiry, so a deploy can silently appear not to have happened.
  *
- * `serveStatic`'s `onFound(path, c)` receives the resolved filesystem path, so
- * the request's query string and any URL prefix are already gone — that is what
- * keeps `/assets/index-a1b2c3.js?v=1` an immutable asset rather than an HTML
- * document.
+ * Each route sets the policy for what it serves. Classifying the resolved file
+ * path instead is wrong: `webDistPath` is absolute, so an install under a
+ * directory named `assets` would make `index.html` immutable.
  */
 
 /** `Cache-Control` value for content-hashed assets: cache forever, never revalidate. */
@@ -26,20 +28,31 @@ export const IMMUTABLE_ASSET_CACHE_CONTROL = 'public, max-age=31536000, immutabl
 export const HTML_CACHE_CONTROL = 'no-cache';
 
 /**
- * Decide the `Cache-Control` value for a file `serveStatic` just found.
- *
- * @param resolvedPath Filesystem path of the file being served.
- * @returns The `Cache-Control` value, or `undefined` when no directive applies.
+ * Register the web UI routes on `app`. The `*` SPA fallback must be registered
+ * after every API route, so call this last.
  */
-export function cacheControlForStaticPath(resolvedPath: string): string | undefined {
-  // `/assets/` first: a hashed HTML file under it is still an immutable asset,
-  // and the `.html` test below would otherwise claim it for the entry-point
-  // policy and pin the browser to a bundle hash the deploy has replaced.
-  if (resolvedPath.includes('/assets/') || resolvedPath.includes('\\assets\\')) {
-    return IMMUTABLE_ASSET_CACHE_CONTROL;
-  }
-  if (resolvedPath.endsWith('.html')) {
-    return HTML_CACHE_CONTROL;
-  }
-  return undefined;
+export function serveWebUi<E extends Env, S extends Schema, B extends string>(
+  app: Hono<E, S, B>,
+  webDistPath: string
+): void {
+  app.use(
+    '/assets/*',
+    serveStatic({
+      root: webDistPath,
+      onFound: (_path, c) => {
+        c.header('Cache-Control', IMMUTABLE_ASSET_CACHE_CONTROL);
+      },
+    })
+  );
+  app.use('/favicon.png', serveStatic({ root: webDistPath, path: 'favicon.png' }));
+  app.get(
+    '*',
+    serveStatic({
+      root: webDistPath,
+      path: 'index.html',
+      onFound: (_path, c) => {
+        c.header('Cache-Control', HTML_CACHE_CONTROL);
+      },
+    })
+  );
 }
