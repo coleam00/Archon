@@ -16,5 +16,7 @@
 export const BUNDLED_IS_BINARY = false;
 export const BUNDLED_VERSION = 'dev';
 export const BUNDLED_GIT_COMMIT = 'unknown';
+/** Full immutable source revision used by machine-readable compatibility checks. */
+export const BUNDLED_GIT_REVISION = 'unknown';
 /** SHA-256 of archon-web.tar.gz, embedded at build time by scripts/build-binaries.sh */
 export const BUNDLED_WEB_DIST_SHA256 = '';

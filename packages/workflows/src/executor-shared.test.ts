@@ -37,7 +37,8 @@ import {
   RATE_LIMIT_PATTERNS,
   RATE_LIMIT_RETRY_DELAY_MS,
   TRANSIENT_PATTERNS,
-  toTelemetryErrorClass,
+  toWorkflowErrorClass,
+  nodeFailureData,
   safeSendMessage,
   type UnknownErrorTracker,
 } from './executor-shared';
@@ -902,6 +903,29 @@ describe('classifyError', () => {
     expect(classifyError(new Error('HTTP 529 service overloaded'))).toBe('TRANSIENT');
   });
 
+  it('does not confuse durations, counters, or identifiers with HTTP status codes', () => {
+    expect(classifyError(new Error('operation timed out after 401ms'))).toBe('TRANSIENT');
+    expect(classifyError(new Error('operation failed after 403 attempts'))).toBe('UNKNOWN');
+    expect(classifyError(new Error('request id job-429-alpha failed'))).toBe('UNKNOWN');
+    expect(classifyError(new Error('processed 4293 tokens'))).toBe('UNKNOWN');
+    expect(classifyError(new Error('connected to port 5020'))).toBe('UNKNOWN');
+    expect(classifyError(new Error('403 attempts completed'))).toBe('UNKNOWN');
+    expect(classifyError(new Error('429 items processed'))).toBe('UNKNOWN');
+    expect(isRateLimitError('operation completed after 429ms')).toBe(false);
+  });
+
+  it('recognizes explicit HTTP and provider status forms', () => {
+    expect(classifyError(new Error('HTTP 401 Unauthorized'))).toBe('FATAL');
+    expect(classifyError(new Error('request failed with status code 403'))).toBe('FATAL');
+    expect(classifyError(new Error('unexpected status 503 Service Unavailable'))).toBe('TRANSIENT');
+    expect(classifyError(new Error('HTTP/1.1 503 Service Unavailable'))).toBe('TRANSIENT');
+    expect(classifyError(new Error('HTTP error 503'))).toBe('TRANSIENT');
+    expect(
+      classifyError(new Error('API Error: 401 OAuth token has expired. Please run /login'))
+    ).toBe('FATAL');
+    expect(classifyError(new Error('auth error: 503'))).toBe('TRANSIENT');
+  });
+
   it('classifies overloaded messages as TRANSIENT', () => {
     expect(classifyError(new Error('Minimax: overloaded, try again later'))).toBe('TRANSIENT');
   });
@@ -1030,23 +1054,43 @@ describe('classifyError', () => {
   });
 });
 
-describe('toTelemetryErrorClass', () => {
+describe('toWorkflowErrorClass', () => {
   it('maps FATAL to fatal', () => {
-    expect(toTelemetryErrorClass('FATAL')).toBe('fatal');
+    expect(toWorkflowErrorClass('FATAL')).toBe('fatal');
   });
 
   it('maps TRANSIENT to transient', () => {
-    expect(toTelemetryErrorClass('TRANSIENT')).toBe('transient');
+    expect(toWorkflowErrorClass('TRANSIENT')).toBe('transient');
   });
 
   it('maps UNKNOWN to unknown', () => {
-    expect(toTelemetryErrorClass('UNKNOWN')).toBe('unknown');
+    expect(toWorkflowErrorClass('UNKNOWN')).toBe('unknown');
   });
 
   it('round-trips classifyError output for every ErrorType', () => {
-    expect(toTelemetryErrorClass(classifyError(new Error('401 unauthorized')))).toBe('fatal');
-    expect(toTelemetryErrorClass(classifyError(new Error('rate limit: 429')))).toBe('transient');
-    expect(toTelemetryErrorClass(classifyError(new Error('mystery')))).toBe('unknown');
+    expect(toWorkflowErrorClass(classifyError(new Error('401 unauthorized')))).toBe('fatal');
+    expect(toWorkflowErrorClass(classifyError(new Error('rate limit: 429')))).toBe('transient');
+    expect(toWorkflowErrorClass(classifyError(new Error('mystery')))).toBe('unknown');
+  });
+});
+
+describe('nodeFailureData', () => {
+  it('adds the fixed durable class and preserves producer metadata', () => {
+    expect(nodeFailureData('rate limit: 429', { type: 'agent', attempt: 2 })).toEqual({
+      type: 'agent',
+      attempt: 2,
+      error: 'rate limit: 429',
+      error_class: 'transient',
+    });
+  });
+
+  it('does not let producer metadata override the owned failure fields', () => {
+    expect(
+      nodeFailureData('401 unauthorized', { error: 'other', error_class: 'transient' })
+    ).toEqual({
+      error: '401 unauthorized',
+      error_class: 'fatal',
+    });
   });
 });
 

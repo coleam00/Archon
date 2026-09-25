@@ -982,7 +982,7 @@ async function main(): Promise<number> {
     try {
       refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
       const { versionCommand } = await loadRoute(() => import('./commands/version'));
-      await versionCommand();
+      await versionCommand(args.includes('--json'));
       return 0;
     } finally {
       await shutdownTelemetry();
@@ -1247,7 +1247,7 @@ async function main(): Promise<number> {
     switch (command) {
       case 'version': {
         const { versionCommand } = await loadRoute(() => import('./commands/version'));
-        await versionCommand();
+        await versionCommand(jsonFlag);
         break;
       }
 

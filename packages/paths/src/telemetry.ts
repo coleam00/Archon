@@ -600,7 +600,8 @@ export type WorkflowExitReason =
  * `transient` = timeout/network/rate-limit, `unknown` = everything else.
  * A fixed enum — raw error text never leaves the machine.
  */
-export type WorkflowErrorClass = 'fatal' | 'transient' | 'unknown';
+export const WORKFLOW_ERROR_CLASSES = ['fatal', 'transient', 'unknown'] as const;
+export type WorkflowErrorClass = (typeof WORKFLOW_ERROR_CLASSES)[number];
 
 /** Closed set of DAG node types, mirrored from `@archon/workflows` schemas. */
 export type WorkflowNodeType =

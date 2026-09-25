@@ -154,7 +154,8 @@ import {
   getRetryDelayMs,
   isRateLimitError,
   RATE_LIMIT_MAX_RETRIES,
-  toTelemetryErrorClass,
+  toWorkflowErrorClass,
+  nodeFailureData,
   detectCreditExhaustion,
   isQuotaExhaustionError,
   extractQuotaResetAt,
@@ -588,7 +589,7 @@ function firstFailedNodeTaxonomy(
     if (output.state !== 'failed') continue;
     const node = nodes.find(n => n.id === nodeId);
     const taxonomy: { errorClass: WorkflowErrorClass; failedNodeType?: WorkflowNodeType } = {
-      errorClass: toTelemetryErrorClass(classifyError(new Error(output.error))),
+      errorClass: toWorkflowErrorClass(classifyError(new Error(output.error))),
     };
     if (node) {
       taxonomy.failedNodeType = dagNodeTelemetryType(node);
@@ -1331,7 +1332,7 @@ async function assertCheckoutUntouched(
       workflow_run_id: workflowRunId,
       event_type: 'node_failed',
       step_name: stepName,
-      data: { error },
+      data: nodeFailureData(error),
     })
     .catch((err: Error) => {
       getLog().error(
@@ -2205,14 +2206,13 @@ async function executeNodeInternal(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: {
-          error,
+        data: nodeFailureData(error, {
           duration_ms: Date.now() - nodeStartTime,
           ...usage,
           ...namedSessionAuditData,
           ...iterationData,
           ...(extras.data ?? {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -4052,7 +4052,7 @@ async function executeBashNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: { error: errorMsg, type: 'bash' },
+        data: nodeFailureData(errorMsg, { type: 'bash' }),
       })
       .catch((dbErr: Error) => {
         getLog().error(
@@ -4310,7 +4310,7 @@ async function executeScriptNode(
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
             step_name: stepName,
-            data: { error: errorMsg, type: 'script' },
+            data: nodeFailureData(errorMsg, { type: 'script' }),
           })
           .catch((dbErr: Error) => {
             getLog().error(
@@ -4341,7 +4341,7 @@ async function executeScriptNode(
             workflow_run_id: workflowRun.id,
             event_type: 'node_failed',
             step_name: stepName,
-            data: { error: errorMsg, type: 'script' },
+            data: nodeFailureData(errorMsg, { type: 'script' }),
           })
           .catch((dbErr: Error) => {
             getLog().error(
@@ -4481,7 +4481,7 @@ async function executeScriptNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: { error: errorMsg, type: 'script' },
+        data: nodeFailureData(errorMsg, { type: 'script' }),
       })
       .catch((dbErr: Error) => {
         getLog().error(
@@ -5919,11 +5919,10 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: {
-          error,
+        data: nodeFailureData(error, {
           ...loopUsage,
           ...(extras.data ?? {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -7892,12 +7891,11 @@ async function executeWorkflowNode(
         workflow_run_id: parentRun.id,
         event_type: 'node_failed',
         step_name: executionNodeId,
-        data: {
-          error,
+        data: nodeFailureData(error, {
           type: 'workflow',
           ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
           ...(tokens !== undefined ? { tokens } : {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -8479,12 +8477,11 @@ async function executeFanOutWorkflowNode(
         workflow_run_id: parentRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: {
-          error,
+        data: nodeFailureData(error, {
           type: 'workflow',
           ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
           ...(tokens !== undefined ? { tokens } : {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -9139,13 +9136,12 @@ async function executeComposeFanOutNode(
         workflow_run_id: parentRun.id,
         event_type: 'node_failed',
         step_name: stepName,
-        data: {
-          error,
+        data: nodeFailureData(error, {
           type: 'compose_fan_out',
           aggregate: true,
           ...(costUsd !== undefined ? { cost_usd: costUsd } : {}),
           ...(tokens !== undefined ? { tokens } : {}),
-        },
+        }),
       })
       .catch((err: Error) => {
         getLog().error(
@@ -9557,13 +9553,12 @@ async function executeComposeFanOutNode(
             workflow_run_id: parentRun.id,
             event_type: 'node_failed',
             step_name: instanceScopeName,
-            data: {
+            data: nodeFailureData(error, {
               type: 'compose_fan_out_instance',
               aggregate: true,
-              error,
               ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
               ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
-            },
+            }),
           });
         } catch (persistErr) {
           return {
@@ -9588,13 +9583,12 @@ async function executeComposeFanOutNode(
             workflow_run_id: parentRun.id,
             event_type: 'node_failed',
             step_name: instanceScopeName,
-            data: {
+            data: nodeFailureData(outcome.error ?? 'composed instance node failed', {
               type: 'compose_fan_out_instance',
               aggregate: true,
-              error: outcome.error,
               ...(outcome.costUsd !== undefined ? { cost_usd: outcome.costUsd } : {}),
               ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
-            },
+            }),
           });
         } catch (err) {
           return {
@@ -11035,12 +11029,11 @@ async function runLayers(ctx: RunLayersContext): Promise<void> {
                 workflow_run_id: ctx.workflowRun.id,
                 event_type: 'node_failed',
                 step_name: ctx.stepNamePrefix + node.id,
-                data: {
-                  error: err.message,
+                data: nodeFailureData(err.message, {
                   ...(isNodeContextResume(node.context)
                     ? { session_source_node_id: node.context.resume }
                     : {}),
-                },
+                }),
               })
               .catch((dbErr: Error) => {
                 getLog().error({ err: dbErr, nodeId: node.id }, 'workflow_event_persist_failed');

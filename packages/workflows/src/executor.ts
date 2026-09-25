@@ -91,7 +91,7 @@ export type {
 } from './child-isolation';
 import {
   classifyError,
-  toTelemetryErrorClass,
+  toWorkflowErrorClass,
   safeSendMessage,
   runWithAdoptedRunDir,
   type SendMessageContext,
@@ -3234,7 +3234,7 @@ export async function executeWorkflow(
       provider: resolvedProvider,
       exitReason: 'unhandled_error',
       // Categorical class only (fatal/transient/unknown) — err.message never leaves.
-      errorClass: toTelemetryErrorClass(classifyError(err)),
+      errorClass: toWorkflowErrorClass(classifyError(err)),
     });
     emitter.unregisterRun(workflowRun.id);
 

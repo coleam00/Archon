@@ -71,4 +71,29 @@ describe('versionCommand', () => {
     const buildCall = consoleSpy.mock.calls[2][0] as string;
     expect(buildCall).toContain('source (bun)');
   });
+
+  it('outputs the exact revision and fixed node failure contract as JSON', async () => {
+    const revision = 'abc1234567890abc1234567890abc1234567890a';
+    execSpy.mockResolvedValueOnce({ stdout: `${revision}\n`, stderr: '' });
+
+    await versionCommand(true);
+
+    expect(consoleSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(consoleSpy.mock.calls[0][0] as string)).toEqual(
+      expect.objectContaining({
+        revision,
+        contracts: {
+          'node_failed.data.error_class': {
+            version: 1,
+            values: ['fatal', 'transient', 'unknown'],
+          },
+        },
+      })
+    );
+    expect(execSpy).toHaveBeenCalledWith(
+      'git',
+      ['rev-parse', 'HEAD'],
+      expect.objectContaining({ cwd: expect.any(String) })
+    );
+  });
 });

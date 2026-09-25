@@ -74,6 +74,7 @@ export const RATE_LIMIT_PATTERNS = [
 /** Transient error patterns - temporary issues that may resolve with retry */
 export const TRANSIENT_PATTERNS = [
   'timeout',
+  'timed out',
   'econnrefused',
   'econnreset',
   'etimedout',
@@ -91,8 +92,32 @@ export const TRANSIENT_PATTERNS = [
 /**
  * Check if error message matches any pattern in the list.
  */
-export function matchesPattern(message: string, patterns: string[]): boolean {
-  return patterns.some(pattern => message.includes(pattern));
+export function matchesPattern(message: string, patterns: readonly string[]): boolean {
+  return patterns.some(pattern => {
+    if (!/^\d{3}$/.test(pattern)) return message.includes(pattern);
+
+    // Bare three-digit substrings also occur in durations, counters and IDs.
+    // Treat them as HTTP/provider status codes only at the start of the message
+    // or after an explicit status/error label, and never inside an alphanumeric
+    // token such as "401ms".
+    if (message === pattern) return true;
+    const canonicalReasons: Record<string, string> = {
+      '401': 'unauthorized',
+      '403': 'forbidden',
+      '429': 'too\\s+many\\s+requests',
+      '502': 'bad\\s+gateway',
+      '503': 'service\\s+unavailable',
+      '529': 'overloaded',
+    };
+    const canonicalReason = canonicalReasons[pattern];
+    if (canonicalReason && new RegExp(`^${pattern}\\s+${canonicalReason}\\b`).test(message)) {
+      return true;
+    }
+    const labelledStatus = new RegExp(
+      String.raw`\b(?:http(?:/\d(?:\.\d)?)?(?:\s+(?:status|error))?|status(?:\s+code)?|unexpected\s+status|response\s+status|auth\s+error|(?:api\s+)?error(?:\s+code)?)\s*[:=]?\s*${pattern}(?=$|[\s,;:)\]}/-])`
+    );
+    return labelledStatus.test(message);
+  });
 }
 
 /**
@@ -125,7 +150,7 @@ export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
 
 export function isRateLimitError(error: string): boolean {
   const message = error.toLowerCase();
-  return RATE_LIMIT_PATTERNS.some(pattern => message.includes(pattern));
+  return matchesPattern(message, RATE_LIMIT_PATTERNS);
 }
 
 /**
@@ -173,10 +198,11 @@ export function extractQuotaResetAt(error: string, now = new Date()): Date | nul
 }
 
 /**
- * Map the retry-oriented {@link ErrorType} to the telemetry wire enum. The
- * telemetry event carries ONLY this fixed-enum class — never error text.
+ * Map the retry-oriented {@link ErrorType} to the workflow failure wire enum.
+ * Durable events and anonymous telemetry share this categorical value; neither
+ * mapping adds error text to a new surface.
  */
-export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
+export function toWorkflowErrorClass(errorType: ErrorType): archonPaths.WorkflowErrorClass {
   switch (errorType) {
     case 'FATAL':
       return 'fatal';
@@ -191,6 +217,22 @@ export function toTelemetryErrorClass(errorType: ErrorType): archonPaths.Workflo
       return exhaustive;
     }
   }
+}
+
+/**
+ * Build the durable payload for a failed node. Keeping this constructor beside
+ * the retry classifier makes every producer use the same fixed enum while
+ * preserving its existing diagnostic fields.
+ */
+export function nodeFailureData(
+  error: string,
+  data: Record<string, unknown> = {}
+): Record<string, unknown> & { error: string; error_class: archonPaths.WorkflowErrorClass } {
+  return {
+    ...data,
+    error,
+    error_class: toWorkflowErrorClass(classifyError(new Error(error))),
+  };
 }
 
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────
