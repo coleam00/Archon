@@ -14,8 +14,13 @@ const CONTROL_HANDOFF = 'control_handoff\n';
 const STOP_REQUEST = 'stop\n';
 const TERMINATE_REQUEST = 'terminate\n';
 const TERMINATE_READY = 'ready\n';
-const TERMINATION_LEASE_MS = 8_000;
-const OWNER_CLOSE_WAIT_MS = TERMINATION_LEASE_MS + RUN_LIVE_OWNER_IPC_TIMEOUT_MS;
+/**
+ * How long `close` waits for a controller holding a stop lease to release it before
+ * dropping the lease. A committed lease has no lifetime of its own: it lasts while both
+ * ends hold the connection open, because a stop can wait seconds on a Windows process
+ * listing with nothing to send (#3516). This bounds only the owner's own shutdown.
+ */
+const OWNER_CLOSE_WAIT_MS = 10_000;
 export const RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS = OWNER_CLOSE_WAIT_MS;
 const STARTUP_RECHECK_MS = 50;
 const MAX_MESSAGE_BYTES = 256;
@@ -319,7 +324,7 @@ export async function startRunLiveOwner(
           socket.write(stopResponseFrame({ kind: 'detached', pid: options.detachedProcessPid }));
         } else if (phase === 'lease' && frame === TERMINATE_REQUEST) {
           phase = 'terminating';
-          socket.setTimeout(TERMINATION_LEASE_MS, () => socket.destroy());
+          socket.setTimeout(0);
           for (const watcher of watcherSockets) watcher.write(CONTROL_HANDOFF);
           socket.write(TERMINATE_READY);
         } else {
@@ -622,7 +627,7 @@ export function requestRunLiveOwnerStop(runId: string): Promise<RunLiveOwnerStop
                   return;
                 }
                 cleanup();
-                socket.setTimeout(TERMINATION_LEASE_MS, () => socket.destroy());
+                socket.setTimeout(0);
                 ready();
               };
               const onError = (error: Error): void => {
