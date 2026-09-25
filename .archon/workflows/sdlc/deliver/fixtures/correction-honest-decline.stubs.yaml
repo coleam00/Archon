@@ -70,8 +70,9 @@ recheck__publish:
 read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/7" }
 publish-pr-body: {}
 sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
-validate__validate:
-  green: false
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__run: { status: red, summary: "stub: a check in the project gate failed" }
+validate__classify:
   red_cause: inherited
   summary: "stub: the same inherited lint break, still red on the base"
 ci-probe: '{"state":"pending","detail":"stub: 1 check still running"}'

@@ -52,8 +52,9 @@ deliver__review__publish:
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__gate-ready: '{"gate":"ready"}'
-deliver__validate__validate:
-  green: false
+deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+deliver__validate__run: { status: red, summary: "stub: a check in the project gate failed" }
+deliver__validate__classify:
   red_cause: introduced
   summary: "stub: the change broke one spec in the project gate"
 # deliver__gate-validated is deliberately unstubbed: the real gate must refuse

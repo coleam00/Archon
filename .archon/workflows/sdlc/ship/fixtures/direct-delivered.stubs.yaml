@@ -36,10 +36,8 @@ deliver__review__publish:
   action: none
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-deliver__validate__validate:
-  green: true
-  red_cause: ""
-  summary: "stub: project gate green"
+deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+deliver__validate__run: { status: green, summary: "stub: project gate green" }
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 deliver__classify:
   errors: false

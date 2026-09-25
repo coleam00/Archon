@@ -1,10 +1,11 @@
-# Dry-run fixture: the project gate did not finish (--exec-code, so the real gate
-# script decides). A provider limit stopped validation partway through; every check
-# that ran passed, the rest never ran. The verdict declares `incomplete`, not an
-# empty cause, so the gate reports an unfinished validation rather than red nobody
+# Dry-run fixture: the project gate did not finish (--exec-code, so the real
+# scripts decide). The first check passed and the second could not start, so no
+# check failed but not every check ran. The real runner reports `incomplete`, not
+# red, so the gate reports an unfinished validation rather than red nobody
 # explained — and still stops the run, because an unfinished gate is no verdict.
-# gate-green and gate-validated are deliberately unstubbed: the real script
-# passes the green implementation and refuses the unfinished validation.
+# The runner, result, gate-green and gate-validated are deliberately unstubbed:
+# the real scripts pass the green implementation and refuse the unfinished
+# validation.
 impl__implement:
   done: true
   green: true
@@ -39,12 +40,9 @@ review__publish:
   action: none
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-validate__validate:
-  green: false
-  red_cause: incomplete
-  summary: "stub: a provider limit stopped validation during type-check. lint and format passed; type-check, tests and build never ran."
+validate__discover: { checks: [{ name: "lint", argv: ["bun", "-e", "console.log('lint passed')"] }, { name: "tests", argv: ["archon-fixture-command-that-does-not-exist"] }], quarantine: [], notes: "stub: the project's checks" }
 fixture:
   expect: failed
   fail-node: gate-validated
-  reached: [pr__pr, review__synthesize, validate__result]
+  reached: [pr__pr, review__synthesize, validate__run, validate__result]
 exec-code: true

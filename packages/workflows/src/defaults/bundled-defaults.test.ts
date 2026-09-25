@@ -563,15 +563,17 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-validate marks the validate node as always_run (#3092)', () => {
+    it('archon-validate re-discovers and re-runs the checks on resume (#3092)', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-validate'], 'archon-validate.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
 
-      const validateNode = parsed.workflow.nodes.find(node => node.id === 'validate');
-      if (validateNode === undefined || !('always_run' in validateNode)) {
-        throw new Error('archon-validate has no executable validate node carrying always_run');
+      for (const id of ['discover', 'run']) {
+        const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
+        if (node === undefined || !('always_run' in node)) {
+          throw new Error(`archon-validate has no executable ${id} node carrying always_run`);
+        }
+        expect(node.always_run).toBe(true);
       }
-      expect(validateNode.always_run).toBe(true);
     });
 
     // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this

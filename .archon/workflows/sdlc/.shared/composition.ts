@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import { arch, platform } from 'node:os';
 import { join, resolve } from 'node:path';
+import { projectEnvironment } from './node-env.ts';
 
 export interface CompositionRequest {
   /** Full commit IDs, never branch names. */
@@ -52,7 +53,7 @@ export interface CompositionEvidence {
 
 /**
  * Every cause archon-validate's result can carry. Only the comparison script declares
- * `interaction`: the ordinary validate node's schema and implement's omit it. Only
+ * `interaction`: the ordinary path's classify schema and implement's omit it. Only
  * ordinary validation and implement declare `incomplete`: the comparison script
  * records an unfinished or unusable comparison as red with an empty cause.
  */
@@ -299,7 +300,8 @@ export async function compareComposition(
     ];
     // One frozen process environment for this comparison. The caller's environment label
     // identifies external dependencies; it is not a claim that databases/network are immutable.
-    const env = { ...process.env };
+    // The gate is the project's, not part of this run, so it never sees the node's contract.
+    const env = projectEnvironment(process.env);
     for (const subject of subjects) {
       const worktree = join(directory, subject.role);
       git(cwd, ['worktree', 'add', '--detach', worktree, subject.commit]);

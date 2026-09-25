@@ -14,7 +14,10 @@
     // package's `@/` alias, so this project needs the same mapping to follow it.
     "paths": {
       "@/*": ["../packages/web/src/*"]
-    }
+    },
+    // Tests here import SDLC pack modules, which import each other with `.ts`
+    // extensions (pack scripts run under Bun with no build step).
+    "allowImportingTsExtensions": true
   },
   "include": ["*.ts"]
 }
