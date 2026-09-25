@@ -24,6 +24,7 @@ import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { closeSync, cpSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
+import { projectEnvironment } from '../../.shared/node-env.ts';
 
 interface Check {
   name: string;
@@ -58,6 +59,8 @@ const artifacts = artifactsDir();
 const logDir = join(artifacts, 'validation');
 const quarantineDir = join(logDir, 'quarantine');
 const report = join(artifacts, 'validation.md');
+// The checks run as the project's own gate, not as part of this run.
+const gateEnv = projectEnvironment(process.env);
 
 const TAIL_LINES = 60;
 
@@ -204,7 +207,7 @@ function runOne(entry: Entry): Promise<void> {
     const [command, ...args] = entry.check.argv;
     const child = spawn(command, args, {
       cwd,
-      env: process.env,
+      env: gateEnv,
       stdio: ['ignore', fd, fd],
       detached: ownGroup,
     });

@@ -11,6 +11,8 @@ checkout. Its `scope` input narrows that ordinary path, which has three steps:
    longer than an agent's shell tool allows still finishes. It stops at the first
    failing check and writes `validation.md`: each command, its exit status, how long
    it took, and the output tail of a failure. Full output stays in `validation/`.
+   The checks run without the node's run contract (`WORKFLOW_ID`, `ARTIFACTS_DIR`,
+   `INPUTS_*` and the rest): they are the project's gate, not part of the run.
 3. `classify` (agent) runs only when a check failed. It decides whether the change
    caused it (`introduced`), the base already had it (`inherited`) or the machine
    did (`environment`).

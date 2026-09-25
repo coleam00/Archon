@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
+import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
 
 /**
  * archon-validate's runner and result scripts, run as the engine runs them: a Bun
@@ -218,6 +220,47 @@ function result(bindings: { comparison?: unknown; run?: unknown; classification?
   const stdout = out.stdout.toString().trim();
   return { exitCode: out.exitCode, output: stdout === '' ? null : JSON.parse(stdout) };
 }
+
+describe("the gate's environment", () => {
+  it("names exactly the engine's exec-node contract", () => {
+    expect([...NODE_CONTRACT_ENV].sort()).toEqual([...EXEC_NODE_ENVIRONMENT_NAMES].sort());
+  });
+
+  it("runs the checks without the run's identity or the node's bindings", () => {
+    const f = checkout();
+    mkdirSync(f.artifacts, { recursive: true });
+    const seen = join(f.artifacts, 'seen.json');
+    const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
+      cwd: f.cwd,
+      env: env(f.artifacts, {
+        WORKFLOW_ID: 'run-123',
+        PROJECT_SETTING: 'kept',
+        INPUTS_DISCOVERY: JSON.stringify({
+          checks: [
+            {
+              name: 'env',
+              argv: [
+                process.execPath,
+                '-e',
+                `require('node:fs').writeFileSync(${JSON.stringify(seen)}, JSON.stringify(process.env))`,
+              ],
+            },
+          ],
+          quarantine: [],
+          notes: '',
+        }),
+      }),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(result.exitCode).toBe(0);
+    const gate = JSON.parse(readFileSync(seen, 'utf8')) as Record<string, string>;
+    expect(gate.PROJECT_SETTING).toBe('kept');
+    expect(gate.WORKFLOW_ID).toBeUndefined();
+    expect(gate.ARTIFACTS_DIR).toBeUndefined();
+    expect(gate.INPUTS_DISCOVERY).toBeUndefined();
+  });
+});
 
 describe('validation result', () => {
   it('reports a gate the timeout stopped as incomplete, never green or red', () => {
