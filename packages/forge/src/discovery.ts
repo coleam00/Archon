@@ -1,7 +1,7 @@
 import { access, readdir, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
-import { delimiter, extname, join, resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { delimiter, extname, resolve } from 'node:path';
+import { getArchonHome, getPluginsPath } from '@archon/paths';
 import type { PluginMetadata } from './operations';
 import { pluginMetadataSchema } from './operations';
 import {
@@ -162,9 +162,13 @@ async function readMetadata(
   return parsed.data;
 }
 
-/** `ARCHON_HOME/plugins`: scanned by discovery, written by `archon plugin install`. */
+/**
+ * `ARCHON_HOME/plugins` for the env snapshot discovery runs with: scanned by
+ * discovery, written by `archon plugin install`. The CLI passes the trusted home in
+ * that snapshot, so this is `getPluginsPath()` there.
+ */
 export function defaultPluginDir(env: NodeJS.ProcessEnv): string {
-  return join(env.ARCHON_HOME ?? join(homedir(), '.archon'), 'plugins');
+  return getPluginsPath(getArchonHome(env));
 }
 
 export async function discoverPlugins(

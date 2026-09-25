@@ -27,7 +27,8 @@
 import { config } from 'dotenv';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
-import { getArchonEnvPath, getRepoArchonEnvPath } from './archon-paths';
+import { join } from 'path';
+import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './archon-paths';
 
 /**
  * Shorten a path with `~` when it lives under the current user's home directory.
@@ -50,12 +51,36 @@ export function isVerboseBoot(): boolean {
 }
 
 /**
+ * ARCHON_HOME as the user scope left it, before a repository's `.archon/.env` can
+ * override it. Plugins run code, so the directory they install into and are read from
+ * must not be one a repository chose. Undefined until `loadArchonEnv` runs (server
+ * boot without it, SDK use, tests); then the current ARCHON_HOME is the only one.
+ */
+let trustedArchonHome: string | undefined;
+
+export function getTrustedArchonHome(): string {
+  return trustedArchonHome ?? getArchonHome();
+}
+
+/**
+ * `<ARCHON_HOME>/plugins`: where every plugin kind installs, and where forge discovery
+ * and workflow-pack discovery read them. Defaults to the trusted home, so install and
+ * every reader agree no matter what a repository's env set later.
+ */
+export function getPluginsPath(archonHome: string = getTrustedArchonHome()): string {
+  return join(archonHome, 'plugins');
+}
+
+/**
  * Load archon-owned env files. Call once, immediately after
  * `@archon/paths/strip-cwd-env-boot` at each entry point.
  *
  * Both loads use `override: true` so:
  *   - `~/.archon/.env` wins over shell-inherited vars (archon intent wins).
  *   - `<cwd>/.archon/.env` wins over `~/.archon/.env` (repo scope wins).
+ *
+ * Between the two, ARCHON_HOME is pinned as the trusted home (see
+ * {@link getTrustedArchonHome}).
  *
  * A malformed env file is fatal — matches the pre-existing CLI behavior at
  * packages/cli/src/cli.ts:24-30.
@@ -78,6 +103,7 @@ export function loadArchonEnv(
     }
   }
 
+  trustedArchonHome = getArchonHome();
   options.afterUserLoad?.();
 
   const repoPath = getRepoArchonEnvPath(cwd);

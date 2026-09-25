@@ -335,8 +335,9 @@ describe('archon plugin: workflow packs', () => {
   });
 
   // A read-only receipt directory makes publishing the receipt fail after the new tree
-  // was renamed into place. Windows ignores the mode, so the failure cannot be staged there.
-  test.skipIf(process.platform === 'win32')(
+  // was renamed into place. Windows ignores the mode and root bypasses it, so the
+  // failure cannot be staged there.
+  test.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
     'a failed receipt write removes the new tree and keeps the previous install',
     async () => {
       const env = await environment();

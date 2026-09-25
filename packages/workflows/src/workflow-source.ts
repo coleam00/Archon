@@ -208,7 +208,7 @@ export function liveSourceRoots(
   config: WorkflowSourceConfig = DEFAULT_WORKFLOW_SOURCE_CONFIG,
   installed: InstalledPacksRoot = {
     kind: 'receipts',
-    pluginsDir: join(archonPaths.getArchonHome(), 'plugins'),
+    pluginsDir: archonPaths.getPluginsPath(),
   }
 ): LiveWorkflowSourceRoots {
   return {
