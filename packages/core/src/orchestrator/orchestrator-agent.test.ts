@@ -5869,6 +5869,29 @@ describe('chat turn telemetry', () => {
       })
     );
   });
+
+  for (const mode of ['stream', 'batch'] as const) {
+    test(`captures exactly one failed chat turn when the provider throws mid-turn (${mode})`, async () => {
+      mockGetOrCreateConversation.mockReturnValueOnce(
+        Promise.resolve(makeConversation({ codebase_id: null }))
+      );
+      mockSendQuery.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'partial' };
+        throw new Error('provider subprocess exited');
+      });
+      const platform = makePlatform();
+      platform.getStreamingMode.mockImplementation(() => mode);
+
+      await handleMessage(platform, 'conv-1', 'hello');
+
+      expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+      expect(mockCaptureChatTurn).toHaveBeenCalledWith(
+        expect.objectContaining({ platform: 'web', provider: 'claude', outcome: 'failed' })
+      );
+      // The user still hears about it from the outer handler.
+      expect(platform.sendMessage).toHaveBeenCalled();
+    });
+  }
 });
 
 // ─── Per-user AI prefs + tier-fallback nudge (Phase 3) ──────────────────────
