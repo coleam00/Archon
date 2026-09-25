@@ -29,11 +29,6 @@ import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './archon-paths';
-import {
-  TRUSTED_ARCHON_HOME_ENV,
-  encodeTrustedHomeHandoff,
-  readTrustedHomeHandoff,
-} from './trusted-home-env';
 
 /**
  * Shorten a path with `~` when it lives under the current user's home directory.
@@ -68,22 +63,6 @@ export function getTrustedArchonHome(): string {
 }
 
 /**
- * ARCHON_HOME for a child Archon process (`''` when it has none), with the trusted-home
- * handoff issued for that value. `loadArchonEnv` already publishes a handoff for the
- * current ARCHON_HOME, so only a spawn that sets a different ARCHON_HOME needs this;
- * setting ARCHON_HOME alone would void the inherited handoff.
- */
-export function childArchonHomeEnv(archonHome: string): {
-  ARCHON_HOME: string;
-  [TRUSTED_ARCHON_HOME_ENV]: string;
-} {
-  return {
-    ARCHON_HOME: archonHome,
-    [TRUSTED_ARCHON_HOME_ENV]: encodeTrustedHomeHandoff(getTrustedArchonHome(), archonHome),
-  };
-}
-
-/**
  * `<ARCHON_HOME>/plugins`: where every plugin kind installs, and where forge discovery
  * and workflow-pack discovery read them. Defaults to the trusted home, so install and
  * every reader agree no matter what a repository's env set later.
@@ -101,10 +80,7 @@ export function getPluginsPath(archonHome: string = getTrustedArchonHome()): str
  *   - `<cwd>/.archon/.env` wins over `~/.archon/.env` (repo scope wins).
  *
  * Between the two, ARCHON_HOME is pinned as the trusted home (see
- * {@link getTrustedArchonHome}). A process spawned by another Archon process pins the
- * home its parent handed over in {@link TRUSTED_ARCHON_HOME_ENV} instead, and loads its
- * user scope from there, so its user env and forge config are the ones its parent
- * trusted.
+ * {@link getTrustedArchonHome}).
  *
  * A malformed env file is fatal — matches the pre-existing CLI behavior at
  * packages/cli/src/cli.ts:24-30.
@@ -113,14 +89,7 @@ export function loadArchonEnv(
   cwd: string = process.cwd(),
   options: { afterUserLoad?: () => void } = {}
 ): void {
-  let inheritedTrustedHome: string | undefined;
-  try {
-    inheritedTrustedHome = readTrustedHomeHandoff(process.env);
-  } catch (error) {
-    console.error((error as Error).message);
-    process.exit(1);
-  }
-  const homePath = inheritedTrustedHome ? join(inheritedTrustedHome, '.env') : getArchonEnvPath();
+  const homePath = getArchonEnvPath();
   if (existsSync(homePath)) {
     const result = config({ path: homePath, override: true, quiet: true });
     if (result.error) {
@@ -134,7 +103,7 @@ export function loadArchonEnv(
     }
   }
 
-  trustedArchonHome = inheritedTrustedHome ?? getArchonHome();
+  trustedArchonHome = getArchonHome();
   options.afterUserLoad?.();
 
   const repoPath = getRepoArchonEnvPath(cwd);
@@ -152,9 +121,4 @@ export function loadArchonEnv(
       );
     }
   }
-
-  process.env[TRUSTED_ARCHON_HOME_ENV] = encodeTrustedHomeHandoff(
-    trustedArchonHome,
-    process.env.ARCHON_HOME ?? ''
-  );
 }

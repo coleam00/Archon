@@ -35,7 +35,7 @@ let forgeConfigPath = '';
 let forgeTrustedEnv: NodeJS.ProcessEnv = {};
 loadArchonEnv(process.cwd(), {
   afterUserLoad: () => {
-    forgeConfigPath = getArchonConfigPath(getTrustedArchonHome());
+    forgeConfigPath = getArchonConfigPath();
     // Forge plugin processes receive this snapshot only through their constrained
     // process boundary. Pin ARCHON_HOME to the trusted home so repo env cannot
     // change it.

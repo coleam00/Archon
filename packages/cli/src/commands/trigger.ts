@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import { BUNDLED_IS_BINARY, getArchonHome, childArchonHomeEnv } from '@archon/paths';
+import { BUNDLED_IS_BINARY, getArchonHome } from '@archon/paths';
 import {
   acceptStartReceipt,
   getResourceStartRequest,
@@ -81,11 +81,7 @@ async function spawnAdmitted(requestId: string, hostId: string): Promise<void> {
         detached: true,
         stdio: ['ignore', log.fd, log.fd],
         windowsHide: true,
-        env: {
-          ...process.env,
-          ...childArchonHomeEnv(getArchonHome()),
-          [DETACHED_RUN_OWNER_ENV]: '1',
-        },
+        env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
       }
     );
     await new Promise<void>((resolveSpawn, reject) => {
@@ -287,7 +283,7 @@ export async function triggerCommand(
           resolve(options.config),
         ],
         workingDirectory: config.binding.launch.cwd,
-        environment: childArchonHomeEnv(getArchonHome()),
+        archonHome: getArchonHome(),
         schedule: config.schedule,
       });
     }

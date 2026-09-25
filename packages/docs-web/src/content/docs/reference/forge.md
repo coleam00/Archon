@@ -96,7 +96,7 @@ For reads, the pack prefers a supplied required set, otherwise the full observat
 
 ## Plugin configuration
 
-Put trusted executable configuration in the user Archon config, `~/.archon/config.yaml` (or the directory selected by `ARCHON_HOME`). Repository configuration does not install or select executable plugins. The CLI captures the user-scoped config path and execution environment before loading repository `.archon/.env` overrides. Repository env may supply a credential named by trusted plugin configuration, but cannot redirect plugin discovery or execution through `ARCHON_HOME`, `PATH` or home-directory overrides. Archon processes that another Archon process starts, such as `--detach` runs, triggered runs and CLI calls from workflow scripts, receive the parent's trusted home in `ARCHON_TRUSTED_HOME` and read plugins from it. Only Archon sets that variable, and Archon refuses to start in a directory whose `.env` sets it.
+Put trusted executable configuration in the user Archon config, `~/.archon/config.yaml` (or the directory selected by `ARCHON_HOME`). Repository configuration does not install or select executable plugins. The CLI captures the user-scoped config path and execution environment before loading repository `.archon/.env` overrides. Repository env may supply a credential named by trusted plugin configuration, but cannot redirect plugin discovery or execution through `ARCHON_HOME`, `PATH` or home-directory overrides.
 
 ```yaml
 forge:
