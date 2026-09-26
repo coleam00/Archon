@@ -18,6 +18,11 @@ export type {
   ProviderCredentialCatalog,
   ProviderAttemptAdmission,
   ProviderAdmissionEvent,
+  ProviderAccountQuotaRequest,
+  ProviderAccountQuotaSnapshot,
+  ProviderAccountQuotaMeter,
+  ProviderCodexRateLimitRequest,
+  ProviderCodexRateLimitSnapshot,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
 

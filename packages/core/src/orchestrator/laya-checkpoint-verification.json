@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "method": "strict-state-dict-key-shape-dtype-v1",
+  "tensorCount": 206,
+  "sourceDtype": "float16",
+  "loadDtype": "float32",
+  "exportDtype": "float32",
+  "loadStrict": true
+}

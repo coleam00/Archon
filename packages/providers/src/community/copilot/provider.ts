@@ -13,6 +13,9 @@
  * so a future SDK update that reads the filesystem at module load can't
  * break compiled-binary bootstrap.
  */
+import { createHash } from 'node:crypto';
+import { homedir } from 'node:os';
+import path from 'node:path';
 import { createLogger } from '@archon/paths';
 import type {
   CopilotClientOptions,
@@ -27,6 +30,8 @@ import type {
   IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
+  ProviderAccountQuotaRequest,
+  ProviderAccountQuotaSnapshot,
   SendQueryOptions,
 } from '../../types';
 import { loadMcpConfig } from '../../mcp/config';
@@ -58,6 +63,18 @@ type CopilotReasoningEffort = (typeof COPILOT_EFFORTS)[number];
  */
 const COPILOT_TOKEN_ENV_KEY = 'COPILOT_GITHUB_TOKEN';
 const GENERIC_GITHUB_TOKEN_ENV_KEYS = ['GH_TOKEN', 'GITHUB_TOKEN'] as const;
+const COPILOT_AUTH_ENV_KEYS = [COPILOT_TOKEN_ENV_KEY, ...GENERIC_GITHUB_TOKEN_ENV_KEYS] as const;
+const COPILOT_QUOTA_CACHE_TTL_MS = 30_000;
+const COPILOT_QUOTA_REQUEST_TIMEOUT_MS = 5_000;
+const MAX_COPILOT_QUOTA_CACHE_ENTRIES = 1_000;
+const MAX_CONCURRENT_COPILOT_QUOTA_READS = 4;
+const COPILOT_QUOTA_METERS = new Set(['premium_interactions', 'chat', 'completions']);
+const copilotQuotaCache = new Map<
+  string,
+  { snapshot: ProviderAccountQuotaSnapshot; expiresAt: number }
+>();
+const copilotQuotaReads = new Map<string, Promise<ProviderAccountQuotaSnapshot | undefined>>();
+let copilotQuotaCacheGeneration = 0;
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -89,11 +106,28 @@ interface ProviderWarning {
  * codebase-scoped env bag. Request env wins — matches the layering
  * Claude/Codex use for their SDK env handoff.
  */
-function buildCopilotEnv(requestEnv?: Record<string, string>): Record<string, string> {
+function buildCopilotEnv(
+  requestEnv?: Record<string, string>,
+  protectedEnvKeys: readonly string[] = []
+): Record<string, string> {
   const baseEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
-  return { ...baseEnv, ...(requestEnv ?? {}) };
+  const env = { ...baseEnv, ...(requestEnv ?? {}) };
+  const protectedKeys = new Set(protectedEnvKeys);
+  const hasProtectedCopilotCredential = COPILOT_AUTH_ENV_KEYS.some(
+    key => protectedKeys.has(key) && Boolean(requestEnv?.[key])
+  );
+  if (hasProtectedCopilotCredential) {
+    // Match the actor-scoped auth supplied by the orchestrator. An install
+    // token with higher provider precedence must not shadow a protected
+    // per-user credential in the quota reader or the actual Copilot request.
+    const unprotectedAuthKeys = new Set<string>(
+      COPILOT_AUTH_ENV_KEYS.filter(key => !protectedKeys.has(key))
+    );
+    return Object.fromEntries(Object.entries(env).filter(([key]) => !unprotectedAuthKeys.has(key)));
+  }
+  return env;
 }
 
 function resolveCopilotToken(env: Record<string, string>): string | undefined {
@@ -107,6 +141,131 @@ function resolveGenericGitHubToken(env: Record<string, string>): string | undefi
     if (value) return value;
   }
   return undefined;
+}
+
+type CopilotAuthOptions = Pick<CopilotClientOptions, 'gitHubToken' | 'useLoggedInUser'> & {
+  source: 'copilot-token' | 'generic-token' | 'logged-in-user';
+};
+
+function resolveCopilotAuthOptions(
+  env: Record<string, string>,
+  config: CopilotProviderDefaults
+): CopilotAuthOptions {
+  const copilotToken = resolveCopilotToken(env);
+  if (copilotToken) {
+    return {
+      gitHubToken: copilotToken,
+      useLoggedInUser: false,
+      source: 'copilot-token',
+    };
+  }
+
+  if (config.useLoggedInUser === false) {
+    const genericToken = resolveGenericGitHubToken(env);
+    return {
+      ...(genericToken ? { gitHubToken: genericToken } : {}),
+      useLoggedInUser: false,
+      source: genericToken ? 'generic-token' : 'logged-in-user',
+    };
+  }
+
+  return { useLoggedInUser: true, source: 'logged-in-user' };
+}
+
+function buildCopilotClientOptions(
+  cwd: string,
+  env: Record<string, string>,
+  config: CopilotProviderDefaults,
+  cliPath?: string
+): { options: CopilotClientOptions; auth: CopilotAuthOptions } {
+  const options: CopilotClientOptions = { workingDirectory: cwd, env };
+  if (cliPath) options.connection = { kind: 'stdio', path: cliPath };
+  if (config.configDir) options.baseDirectory = config.configDir;
+  if (config.logLevel) options.logLevel = config.logLevel;
+  const auth = resolveCopilotAuthOptions(env, config);
+  if (auth.gitHubToken) options.gitHubToken = auth.gitHubToken;
+  options.useLoggedInUser = auth.useLoggedInUser;
+  return { options, auth };
+}
+
+function resolveCopilotProfileDirectory(
+  cwd: string,
+  config: CopilotProviderDefaults,
+  env: Record<string, string>
+): string {
+  const configuredDirectory = config.configDir?.trim() || env.COPILOT_HOME?.trim();
+  if (!configuredDirectory) return path.join(homedir(), '.copilot');
+  return path.isAbsolute(configuredDirectory)
+    ? path.resolve(configuredDirectory)
+    : path.resolve(cwd, configuredDirectory);
+}
+
+function parseCopilotQuotaSnapshot(
+  meter: ProviderAccountQuotaRequest['meter'],
+  value: unknown,
+  fetchedAt: number
+): ProviderAccountQuotaSnapshot | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const snapshot = value as Record<string, unknown>;
+  const unlimitedFlag = snapshot.isUnlimitedEntitlement;
+  const entitlementRequests = snapshot.entitlementRequests;
+  const usedRequests = snapshot.usedRequests;
+  const remainingPercentage = snapshot.remainingPercentage;
+  if (
+    typeof unlimitedFlag !== 'boolean' ||
+    typeof entitlementRequests !== 'number' ||
+    !Number.isSafeInteger(entitlementRequests) ||
+    entitlementRequests < -1 ||
+    typeof usedRequests !== 'number' ||
+    !Number.isSafeInteger(usedRequests) ||
+    usedRequests < 0 ||
+    typeof remainingPercentage !== 'number' ||
+    !Number.isFinite(remainingPercentage) ||
+    remainingPercentage < 0 ||
+    remainingPercentage > 100 ||
+    (snapshot.resetDate !== undefined &&
+      (typeof snapshot.resetDate !== 'string' || !Number.isFinite(Date.parse(snapshot.resetDate))))
+  ) {
+    return undefined;
+  }
+
+  const unlimited = unlimitedFlag || entitlementRequests === -1;
+  const exhausted = !unlimited && (remainingPercentage <= 0 || usedRequests >= entitlementRequests);
+  return {
+    meter,
+    unlimited,
+    exhausted,
+    usedRequests,
+    entitlementRequests,
+    remainingPercentage,
+    ...(typeof snapshot.resetDate === 'string' ? { resetDate: snapshot.resetDate } : {}),
+    fetchedAt,
+  };
+}
+
+function pruneCopilotQuotaCache(now: number): void {
+  for (const [key, cached] of copilotQuotaCache) {
+    if (cached.expiresAt <= now) copilotQuotaCache.delete(key);
+  }
+  while (copilotQuotaCache.size >= MAX_COPILOT_QUOTA_CACHE_ENTRIES) {
+    const oldest = copilotQuotaCache.keys().next().value;
+    if (oldest === undefined) return;
+    copilotQuotaCache.delete(oldest);
+  }
+}
+
+function withCopilotQuotaTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      timeout = setTimeout(() => {
+        reject(new Error('Copilot quota lookup timed out'));
+      }, COPILOT_QUOTA_REQUEST_TIMEOUT_MS);
+    }),
+  ]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
 }
 
 // ─── Reasoning ──────────────────────────────────────────────────────────────
@@ -412,6 +571,100 @@ export class CopilotProvider implements IAgentProvider {
     return COPILOT_CAPABILITIES;
   }
 
+  async readAccountQuota(
+    request: ProviderAccountQuotaRequest
+  ): Promise<ProviderAccountQuotaSnapshot | undefined> {
+    if (
+      !COPILOT_QUOTA_METERS.has(request.meter) ||
+      !request.cacheScope.trim() ||
+      request.cacheScope.length > 1_024
+    ) {
+      return undefined;
+    }
+
+    const assistantConfig = request.options?.assistantConfig ?? {};
+    const copilotConfig = parseCopilotConfig(assistantConfig);
+    const mergedEnv = buildCopilotEnv(request.options?.env, request.options?.protectedEnvKeys);
+    const auth = resolveCopilotAuthOptions(mergedEnv, copilotConfig);
+    const profileDirectory = resolveCopilotProfileDirectory(request.cwd, copilotConfig, mergedEnv);
+    const credentialFingerprint = auth.gitHubToken
+      ? createHash('sha256').update(auth.gitHubToken).digest('hex')
+      : undefined;
+    const cacheKey = createHash('sha256')
+      .update(
+        JSON.stringify([
+          request.cacheScope,
+          request.meter,
+          auth.useLoggedInUser,
+          credentialFingerprint,
+          profileDirectory,
+        ])
+      )
+      .digest('hex');
+    const cacheGeneration = copilotQuotaCacheGeneration;
+    const now = Date.now();
+    const cached = copilotQuotaCache.get(cacheKey);
+    if (cached && cached.expiresAt > now) return cached.snapshot;
+    copilotQuotaCache.delete(cacheKey);
+
+    const pending = copilotQuotaReads.get(cacheKey);
+    if (pending) return pending;
+    if (copilotQuotaReads.size >= MAX_CONCURRENT_COPILOT_QUOTA_READS) return undefined;
+
+    const read = (async (): Promise<ProviderAccountQuotaSnapshot | undefined> => {
+      const cliPath = await resolveCopilotBinaryPath(copilotConfig.copilotCliPath);
+      const { CopilotClient: copilotClientCtor } = await import('@github/copilot-sdk');
+      const { options: clientOptions } = buildCopilotClientOptions(
+        request.cwd,
+        mergedEnv,
+        copilotConfig,
+        cliPath
+      );
+      const client = new copilotClientCtor(clientOptions);
+
+      try {
+        const quotaResult = await withCopilotQuotaTimeout(
+          (async (): Promise<Awaited<ReturnType<typeof client.rpc.account.getQuota>>> => {
+            await client.start();
+            return client.rpc.account.getQuota(
+              auth.gitHubToken ? { gitHubToken: auth.gitHubToken } : {}
+            );
+          })()
+        );
+        const snapshot = parseCopilotQuotaSnapshot(
+          request.meter,
+          quotaResult.quotaSnapshots[request.meter],
+          Date.now()
+        );
+        if (!snapshot) return undefined;
+
+        // A Copilot attempt that starts during this RPC makes its snapshot stale,
+        // even when the RPC finishes within the normal cache freshness window.
+        if (cacheGeneration !== copilotQuotaCacheGeneration) return undefined;
+
+        pruneCopilotQuotaCache(Date.now());
+        copilotQuotaCache.set(cacheKey, {
+          snapshot,
+          expiresAt: Date.now() + COPILOT_QUOTA_CACHE_TTL_MS,
+        });
+        return snapshot;
+      } finally {
+        try {
+          await withCopilotQuotaTimeout(client.stop());
+        } catch {
+          getLog().warn('copilot.quota_client_stop_failed');
+        }
+      }
+    })();
+
+    copilotQuotaReads.set(cacheKey, read);
+    try {
+      return await read;
+    } finally {
+      if (copilotQuotaReads.get(cacheKey) === read) copilotQuotaReads.delete(cacheKey);
+    }
+  }
+
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -419,6 +672,10 @@ export class CopilotProvider implements IAgentProvider {
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
     const log = getLog();
+    // A Copilot attempt can consume entitlement after an earlier snapshot.
+    // The next independent chat decision must refresh it.
+    copilotQuotaCacheGeneration += 1;
+    copilotQuotaCache.clear();
 
     // forkSession / persistSession are boolean flags the executor may set in
     // normal operation; log-warn rather than throw — throwing would block
@@ -439,9 +696,7 @@ export class CopilotProvider implements IAgentProvider {
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const copilotConfig = parseCopilotConfig(assistantConfig);
 
-    const mergedEnv = buildCopilotEnv(requestOptions?.env);
-    const copilotToken = resolveCopilotToken(mergedEnv);
-    const genericGithubToken = resolveGenericGitHubToken(mergedEnv);
+    const mergedEnv = buildCopilotEnv(requestOptions?.env, requestOptions?.protectedEnvKeys);
     const cliPath = await resolveCopilotBinaryPath(copilotConfig.copilotCliPath);
 
     const sdk = await import('@github/copilot-sdk');
@@ -472,34 +727,13 @@ export class CopilotProvider implements IAgentProvider {
       ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
       : prompt;
 
-    const clientOpts: CopilotClientOptions = {
-      workingDirectory: cwd,
-      env: mergedEnv,
-    };
-    // copilot-sdk 1.0: a custom CLI binary rides a stdio runtime connection
-    // (replaces the removed `cliPath` option).
-    if (cliPath) clientOpts.connection = { kind: 'stdio', path: cliPath };
-    // configDir override → baseDirectory (sets COPILOT_HOME on the runtime).
-    if (copilotConfig.configDir) clientOpts.baseDirectory = copilotConfig.configDir;
-    // Auth precedence: see COPILOT_TOKEN_ENV_KEY / GENERIC_GITHUB_TOKEN_ENV_KEYS docs.
-    let tokenSource: 'copilot-token' | 'generic-token' | 'logged-in-user';
-    if (copilotToken) {
-      clientOpts.gitHubToken = copilotToken;
-      clientOpts.useLoggedInUser = false;
-      tokenSource = 'copilot-token';
-    } else if (copilotConfig.useLoggedInUser === false) {
-      if (genericGithubToken) {
-        clientOpts.gitHubToken = genericGithubToken;
-        tokenSource = 'generic-token';
-      } else {
-        tokenSource = 'logged-in-user';
-      }
-      clientOpts.useLoggedInUser = false;
-    } else {
-      clientOpts.useLoggedInUser = true;
-      tokenSource = 'logged-in-user';
-    }
-    if (copilotConfig.logLevel) clientOpts.logLevel = copilotConfig.logLevel;
+    const { options: clientOpts, auth } = buildCopilotClientOptions(
+      cwd,
+      mergedEnv,
+      copilotConfig,
+      cliPath
+    );
+    const tokenSource = auth.source;
     const client = new copilotClientCtor(clientOpts);
 
     let session: CopilotSession;

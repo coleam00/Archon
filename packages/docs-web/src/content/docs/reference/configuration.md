@@ -454,9 +454,159 @@ Environment variables override all other configuration. They are organized by ca
 | `DEFAULT_AI_ASSISTANT` | Fallback AI assistant when no config file sets the assistant. Overridden by `defaultAssistant` in global config or `assistant` in repo config. Must match a registered provider id — currently `claude`, `codex`, `pi`, or `copilot`. | `claude` |
 | `MAX_CONCURRENT_CONVERSATIONS` | Maximum concurrent AI conversations | `10` |
 | `SESSION_RETENTION_DAYS` | Delete inactive sessions older than N days | `30` |
+| `ARCHON_LAYA_TASK_HINTS` | Set to `1` to opt in to local Laya task-type hints. Requires a local model directory and its out-of-band manifest digest; disabled by default. | unset (disabled) |
+| `ARCHON_LAYA_MODEL_DIR` | Absolute path to a fully staged local Laya ONNX bundle. Archon never downloads this bundle. | -- |
+| `ARCHON_LAYA_MODEL_MANIFEST_SHA256` | Out-of-band SHA-256 pin for `laya-bundle-manifest.json`; required before local inference can start. | -- |
 | `ARCHON_VERBOSE_BOOT` | When set to `1`, prints `[archon] loaded N keys from …` lines to stderr at boot. Also enabled by `LOG_LEVEL=debug` or `LOG_LEVEL=trace`. Silent by default to avoid interleaving with interactive command output. | -- |
 | `ARCHON_BASH_PATH` | Override the bash executable path used by `bash` nodes and loop `until_bash`. Eagerly validated at resolution time — typos surface immediately instead of as opaque ENOENTs inside the first bash-node fire. | `bash` on Linux/macOS; on Windows, the first existing of the common Git-Bash locations: `%ProgramFiles%\Git\bin\bash.exe`, `%ProgramFiles%\Git\usr\bin\bash.exe`, `%ProgramFiles(x86)%\Git\bin\bash.exe`, `%LOCALAPPDATA%\Programs\Git\bin\bash.exe`, `%USERPROFILE%\scoop\apps\git\current\bin\bash.exe` |
 | `WSL_DISTRO_NAME` | Set automatically by WSL in every distro shell. Archon reads it (via `/api/health`) to emit Windows-host-friendly `vscode://vscode-remote/wsl+<distro>/...` "Open in IDE" URIs. You do not normally set this yourself; override it only to force a specific distro name into the URI. | -- (unset outside WSL) |
+
+#### Local Laya task-type hint
+
+This opt-in enables local task-type classification for configured direct-chat provider/model routing. The label is used by the route selector only; it is not added to the workflow-capable orchestrator prompt and cannot steer workflow or project selection. Classification receives the current user message, capped at 2,048 characters, plus at most the six most recent user and assistant turns from that same conversation, capped at 1,024 characters total. The current message is excluded from the history, and system messages are never sent to the classifier. Labels below a fixed 0.75 chosen-option probability are omitted; this threshold is only a conservative filter, not a calibrated correctness or safety guarantee. The label cannot dispatch workflows, grant authorization, or change credential, workflow validation, or approval behavior.
+
+The task labels distinguish a conceptual `question` from explicit work on an existing project (`project_work`), project registration or selection (`project_setup`), and management of an already-created workflow run (`run_management`). For example, “run the tests in this project” is project work, while “resume that workflow run” is run management. Ambiguous requests abstain as `unclear`. The classifier only selects among routes that an operator configured for direct chat.
+
+The feature is off unless `ARCHON_LAYA_TASK_HINTS=1`, `ARCHON_LAYA_MODEL_DIR` points to a complete local bundle, and `ARCHON_LAYA_MODEL_MANIFEST_SHA256` pins its manifest out of band. Stage the split ONNX bundle from an approved non-Hugging-Face source; the model directory must contain:
+
+```text
+encoder.onnx
+head.onnx
+rl_agent_config.json
+tokenizer.json
+laya-bundle-manifest.json
+```
+
+The manifest records the model source, immutable revision, license, pinned Laya runtime commit, a `checkpointVerification` marker, and SHA-256 plus byte size for each required file. The build helper and runtime read the same marker definition from `packages/core/src/orchestrator/laya-checkpoint-verification.json`. The exact marker attests that the build helper matched all 206 checkpoint tensor keys and shapes against the pinned model, required uniform F16 checkpoint tensors, explicitly converted them to FP32, and loaded them with `strict=True` before export. Archon rejects a missing or altered marker along with recognizable Hugging Face source names, missing or changed files, symlinks, empty files, files above their per-file limits, and bundles larger than 4 GiB in total (including the manifest) before loading the classifier. Its own digest must match the value supplied through the environment, outside the model directory. The source field is metadata and the digest proves file integrity, not provenance; review the artifact's origin independently and do not stage a Hugging Face checkpoint. The aggregate cap accommodates full-precision ONNX checkpoints while bounding artifact validation and staging. Before `Agent.load`, Archon copies the validated files into a private temporary directory, rechecks their hashes there, makes the snapshot read-only, and loads only from that snapshot. This closes the verify-then-reopen race against changes to the configured bundle directory. The temporary directory needs free space up to the bundle size during first load. The artifact cap does not guarantee peak process memory, which must be measured with the approved model before enabling inference. Keep the mounted model directory read-only. A missing, incomplete, or unpinned bundle fails locally with no download fallback. Archon vendors the upstream TypeScript runtime at [`4066d5d5fbf08b66c6757ddeedbd797bd7655bc0`](https://github.com/NandhaKishorM/laya/tree/4066d5d5fbf08b66c6757ddeedbd797bd7655bc0/laya-ts), with the web provider, URL tokenizer loader, and hosted bundle downloaders removed. The tokenizer is implemented in local TypeScript and reads only the staged tokenizer JSON. The runtime and lockfile contain no Hugging Face maintained package or hosted inference path. The only runtime package dependency is optional `onnxruntime-node`; sessions explicitly request its CPU execution provider and use no more than two intra-op threads or the CPUs available to the process. Laya is imported and loaded lazily only after all opt-in settings are present and an eligible chat message arrives.
+
+The runtime accepts only a manifest matching this shape. `scripts/build-laya-cpu-bundle.py` emits `approvalStatus: "unapproved"` and an empty approval reference; it cannot be loaded by Archon until the converted artifact is independently reviewed and receives a real approval reference. Do not change those fields just to make an unreviewed bundle load:
+
+```json
+{
+  "schemaVersion": 1,
+  "runtimeCommit": "4066d5d5fbf08b66c6757ddeedbd797bd7655bc0",
+  "exporter": {
+    "repository": "NandhaKishorM/laya",
+    "commit": "23a17522aa4942da6cce53a995a275760320b691"
+  },
+  "checkpointVerification": {
+    "schemaVersion": 1,
+    "method": "strict-state-dict-key-shape-dtype-v1",
+    "tensorCount": 206,
+    "sourceDtype": "float16",
+    "loadDtype": "float32",
+    "exportDtype": "float32",
+    "loadStrict": true
+  },
+  "model": {
+    "source": "https://www.modelscope.cn/models/convaiinnovations/laya/typed-decisions",
+    "revision": "69f17eefb6910e69dbb031dcc3c8e3f556cff267",
+    "license": "Apache-2.0",
+    "approvalStatus": "approved",
+    "approvalReference": "<review or release record>"
+  },
+  "files": {
+    "encoder.onnx": { "sha256": "<64 lowercase hex characters>", "sizeBytes": 123 },
+    "head.onnx": { "sha256": "<64 lowercase hex characters>", "sizeBytes": 123 },
+    "rl_agent_config.json": { "sha256": "<64 lowercase hex characters>", "sizeBytes": 123 },
+    "tokenizer.json": { "sha256": "<64 lowercase hex characters>", "sizeBytes": 123 }
+  }
+}
+```
+
+After the manifest is finalized and reviewed, calculate its digest with `sha256sum laya-bundle-manifest.json` (or `shasum -a 256 laya-bundle-manifest.json` on macOS) and set that value as `ARCHON_LAYA_MODEL_MANIFEST_SHA256`. Recalculate it after any metadata or file change.
+
+No Laya weights were fetched for this change. Convai Innovations publishes the typed-decisions checkpoint in its [ModelScope repository](https://www.modelscope.cn/models/convaiinnovations/laya). For Archon artifact intake, pin immutable revision `69f17eefb6910e69dbb031dcc3c8e3f556cff267`; the vendor README identifies the revision as Apache-2.0. The pinned source artifacts include:
+
+| ModelScope source file | SHA-256 | Bytes |
+| --- | --- | ---: |
+| `typed-decisions/model.safetensors` | `4fa56de72383a9d3efa9cfa78955733c81b9fc8067a587ca4beb82c78107a24e` | 842609220 |
+| `typed-decisions/tokenizer/tokenizer.json` | `6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30` | 3583228 |
+| `typed-decisions/rl_agent_config.json` | `ebf0cd524d92342a6be5e48e9fca3d7c2babfb5a56ccd79d2171ef5d8c7f7be8` | 847 |
+| `typed-decisions/encoder/config.json` | `5268d24ad3b77c8151de5dcb0762ba4391619aad9ab0bda33e36fb083cfeae6d` | 2084 |
+| `typed-decisions/tokenizer/tokenizer_config.json` | `08d4cf3ac4dca381759441b85b91a6d40e688471dcd33d15d6649eb0a9a854d1` | 337 |
+
+The runtime never contacts ModelScope or another model host. To stage the pinned source inputs, run the Archon-only intake script on a controlled artifact-intake host permitted to access ModelScope:
+
+```sh
+bun run scripts/stage-laya-modelscope.ts
+```
+
+The script writes to `$HOME/.archon/laya-source/typed-decisions/69f17eefb6910e69dbb031dcc3c8e3f556cff267/` by default. Pass one argument to choose a different `typed-decisions` source root. It requests only the five listed paths at the pinned revision, follows at most five redirects, and accepts HTTPS URLs only on `modelscope.cn` or `aliyuncs.com` and their dot-delimited subdomains. It streams each response into a private temporary directory, checks the exact byte count and SHA-256 before publication, writes a `source-manifest.json`, then atomically renames the completed new directory into place. It refuses to overwrite an existing revision directory; inspect an abandoned `.lock` file before removing it after an interrupted run. The script has no Hugging Face client, package, or URL fallback. The checksums establish the identity of those five files, not completeness or provenance of the entire ModelScope snapshot. Transfer the completed directory from the controlled intake host to the Archon host as a local artifact and verify its manifest and file hashes there; the Archon host's normal installation, startup, and inference paths perform no model-host access.
+
+The separate ONNX conversion helper uses a local checkpoint and an offline pinned exporter. Its isolated build environment still requires PyTorch, Transformers, Safetensors, and ONNX packages; Transformers and Safetensors are Hugging Face-maintained libraries. The helper removes Hugging Face credentials and enables offline flags, so it does not call Hugging Face Hub or download weights, but this is not a Hugging-Face-package-free build. If the build policy forbids those libraries entirely, do not run the converter; use a separately reviewed HF-free exporter or an independently verified ONNX source instead. These build-only packages are not installed in Archon and are not runtime dependencies.
+
+Keep these source files outside the runtime bundle. The `.safetensors` checkpoint is not directly loadable by Archon's ONNX runtime. The script is an explicit artifact-staging operation; it is not part of normal Archon installation, startup, or chat inference.
+
+The runtime bundle must be converted from the staged ModelScope files into the split ONNX files Archon loads. `scripts/build-laya-cpu-bundle.py` first runs `scripts/verify_laya_checkpoint.py` with the supplied isolated Python executable and only the verified local `--model-dir`. The preflight compares the complete 206-tensor key and shape set, requires every checkpoint tensor to be F16 and every model tensor to be FP32, explicitly converts each verified tensor to the model's FP32 dtype, then calls `load_state_dict(..., strict=True)`. It fails before export for missing or unexpected keys, shape or dtype mismatches, or strict-load errors. The exact marker in the candidate manifest records this conversion path; the runtime rejects a missing or modified marker. Only after the gate passes does the helper invoke the official Laya exporter at the pinned commit. It never accepts a Hugging Face repository name or the exporter's `--no-verify` option, and the exporter's default CPU comparison must pass before a candidate manifest is emitted. The helper sets the Transformers and Hub offline flags, but its isolated Python build environment still uses Hugging Face's `transformers` library (plus PyTorch, safetensors, ONNX, and ONNX Runtime) as build-time tooling. This does not add Hugging Face packages or model-host access to Archon's Node/ONNX runtime, installation, startup, or chat inference. Run conversion only in a network-disabled build environment with no Hub credentials; the offline flags alone are not a network sandbox. If the requirement is to avoid Hugging Face libraries at every stage, this converter does not meet it and must remain unused until a separately reviewed converter without those packages exists. The generated candidate remains `unapproved`, so keep `ARCHON_LAYA_TASK_HINTS` disabled until artifact review, runtime validation, and held-out Archon evaluation pass.
+
+To build a candidate, first stage the ModelScope source, check out the pinned exporter, and provision its build-only Python environment on a controlled artifact host. Install dependencies before disabling network access; run the conversion itself in a network-disabled environment. Example paths are intentionally new because the helper refuses to overwrite an existing output directory:
+
+```sh
+# Run this source intake step on the controlled host that can access ModelScope.
+bun run scripts/stage-laya-modelscope.ts /srv/archon-laya-source
+
+git init /srv/archon-laya-exporter
+git -C /srv/archon-laya-exporter remote add origin https://github.com/NandhaKishorM/laya.git
+git -C /srv/archon-laya-exporter fetch --depth 1 origin 23a17522aa4942da6cce53a995a275760320b691
+git -C /srv/archon-laya-exporter checkout --detach FETCH_HEAD
+python3 -m venv /srv/archon-laya-exporter-venv
+/srv/archon-laya-exporter-venv/bin/python -m pip install -e '/srv/archon-laya-exporter[onnx]'
+
+# Run after the build environment has been network-isolated.
+python3 scripts/build-laya-cpu-bundle.py \
+  --checkpoint-dir /srv/archon-laya-source/69f17eefb6910e69dbb031dcc3c8e3f556cff267 \
+  --exporter-dir /srv/archon-laya-exporter \
+  --output-dir /srv/archon-laya-cpu-candidate-unapproved \
+  --python /srv/archon-laya-exporter-venv/bin/python
+```
+
+The checkpoint-verification helper's unit tests use in-memory tensor fixtures and do not load weights or run conversion: `python3 scripts/test_verify_laya_checkpoint.py`.
+
+The output is a candidate only. Transfer it as a local artifact, review the source and exporter provenance, validate it with the Archon resolver and held-out Archon task data, then record a real approval reference and pin the final manifest digest out of band. Do not change `approvalStatus` or `approvalReference` merely to enable loading.
+
+The lockfile resolves `onnxruntime-node` to `1.30.0`. Its install script may fetch an optional CUDA 12 artifact from Microsoft's NuGet feed on Linux x64; that artifact is not used by CPU inference. Set `ONNXRUNTIME_NODE_INSTALL=skip` before dependency installation to skip that add-on acquisition. This does not make package installation fully offline or download/stage the Laya model bundle. No dependency installation was run while making this change, so no model weights or native add-ons were fetched.
+
+The first eligible turn may incur a cold model load. The 2.5-second deadline bounds how long that chat turn waits for loading and classification; if it expires, the hint is omitted and chat proceeds. ONNX work cannot be cancelled safely, so Archon keeps a process-local single-flight lock until the underlying operation settles and skips overlapping hint requests. Archon has no measured cold-start or warm-inference latency because the approved model bundle is not available. A load or inference failure disables hints for the process and is handled without exposing local paths or request content in logs.
+
+Keep Laya disabled until an Archon-specific, held-out evaluation shows a meaningful improvement over the existing orchestrator baseline. Raw confidence and the 0.75 cutoff are not a quality gate. Evaluate questions, project work, setup, run-management intent, ambiguous requests, negation, and adversarially phrased messages before enabling it for users.
+
+#### Direct-chat task routes
+
+Task routes are separately opt-in in the per-install `~/.archon/config.yaml`. A route's primary and ordered fallbacks use the same tier, `@alias`, or provider/model references as chat model settings:
+
+```yaml
+aliases:
+  '@project-work': { provider: claude, model: opus }
+  '@project-work-backup': { provider: codex, model: gpt-5.5 }
+  '@copilot-work': { provider: copilot, model: gpt-4.1 }
+  '@claude-backup': { provider: claude, model: sonnet }
+chatTaskRouting:
+  enabled: true
+  routes:
+    project_work:
+      primary: '@project-work'
+      fallbacks: ['@project-work-backup']
+      fallbackOnClaudeUsageWarning: true
+    project_setup:
+      primary: '@copilot-work'
+      fallbacks: ['@claude-backup']
+      copilotQuotaMeter: premium_interactions
+```
+
+The map is disabled by default. It applies only when Laya returns a high-confidence label, no per-user provider or model pin is set, and the current message is not a slash command or paused approval response. An enabled route may replace the provider stored as the conversation's default for that turn; it does not change that stored default. A provider change starts a provider-native session for the selected provider. An invalid/unresolved route, unavailable classifier, or ineligible credential keeps the existing chat provider and gives a one-time actionable notice per conversation. Conversation titles continue using the existing `small` model route, except Codex title generation is skipped in per-user-key mode when no actor-owned env credential is available; title work is fire-and-forget and cannot safely borrow the main turn's temporary OAuth profile. Routes affect direct chat only; workflow providers still come from workflow configuration and pass the existing validation and approval gates. `ARCHON_LAYA_TASK_HINTS=1` enables local classification for configured direct-chat routing, but the label is not added to the workflow-capable model prompt and cannot influence workflow selection.
+
+Fallbacks are considered only on a later, independently submitted message. A Claude `status: rejected` event with a valid future `resetsAt` creates a credential-scoped cooldown unless the same event explicitly says overage is still allowed. A task route can opt in with `fallbackOnClaudeUsageWarning: true`; a Claude `allowed_warning` event with a recognized rate-limit window and valid future reset then selects its configured fallback only when the effective direct-chat credential is a protected per-user OAuth token. API-key and unverified install/global credentials never create subscription-usage warnings. Shared `five_hour` and `seven_day` warnings apply to the configured Claude primary. Model-specific `seven_day_opus` and `seven_day_sonnet` warnings apply only when the route explicitly selects that model family. A new or unassociated per-model warning remains unknown and does not trigger a fallback. The router does not inspect numeric `utilization`, because the SDK does not define its units. The signal is retained in process memory only until its provider-supplied reset time.
+
+Archon never retries the message that received a signal or switches providers during a turn. It does not infer plan balance from token/cost totals, OAuth identity, or plan name. Copilot quota routing is opt-in per route through `copilotQuotaMeter`; it checks every Copilot primary or fallback candidate using only the explicitly named SDK meter, such as `premium_interactions`, `chat`, or `completions`. There is no stable model-to-meter mapping. The installed Copilot `account.getQuota` contract reports request-entitlement counts for those meters; it is not a general AI-credit, token-spend, or cross-provider balance. In per-user-key mode, quota lookup requires that same user's Copilot credential and never substitutes the process login. A Copilot candidate can use `COPILOT_GITHUB_TOKEN`, or `GH_TOKEN`/`GITHUB_TOKEN` when that provider has `useLoggedInUser: false`. Successful snapshots are cached for at most 30 seconds, coalesced by owner and effective credential/profile scope, and invalidated when a Copilot attempt starts. A snapshot whose provider reset time has passed is treated as unknown and cannot trigger fallback. A quota snapshot is not a reservation: concurrent turns can consume the remaining entitlement, and an in-flight request may still incur provider overage when the provider permits it.
+
+A Copilot primary remains selected when its quota snapshot is unknown and the route candidate is otherwise eligible; an unknown Copilot fallback candidate is skipped when another provider signal triggers fallback. A fresh exhausted snapshot skips Copilot candidates, and an exhausted Copilot primary requires an eligible configured fallback or Archon tells the user the message was not sent. Unlimited entitlements remain available. A route candidate must resolve to a registered provider and supported model/capabilities. A provider change or fallback additionally requires credentials for the same execution identity: the current user's direct-chat credential when per-user keys are enabled, otherwise the install's own provider environment. Codex task routes may set `codexRateLimitId` to an operator-selected App Server bucket. In per-user-key mode, Archon materializes that user's OpenAI OAuth credential into a private temporary `CODEX_HOME/auth.json` only when an explicit task route includes Codex, and passes that exact profile to both Codex and `account/rateLimits/read`. The reader requires an exact returned `accountId` and bucket match. Only `ordinaryUsageAllowed: false` or a recognized provider `rateLimitReachedType` marks the bucket exhausted; missing identity, null/unknown fields, or a stale snapshot leave usage unknown. It does not infer subscription allowance from percentages or reset timestamps. OAuth refreshes written by the Codex CLI are persisted only if the stored credential still matches the same user's original credential, using compare-and-set; the temporary profile is then removed. Codex API-key routes remain eligible from that user's own key, but do not have a subscription meter and cannot trigger Codex-usage fallback. The reader never consults ambient `~/.codex` or API-key credentials. OpenCode and Pi usage metrics do not trigger fallback.
+
+#### Direct-chat provider cooldowns
+
+Direct chat records a temporary cooldown only when Claude's `rate_limit_event` has `rate_limit_info.status: rejected`, a valid future `resetsAt` timestamp within seven days, and no explicit signal that overage remains allowed. Although the installed SDK declaration types `resetsAt` as a number without documenting its unit, observed Anthropic payloads use Unix seconds; Archon accepts that form only and converts it to milliseconds internally. Ambiguous, millisecond-shaped, stale, and out-of-range values fail closed. Shared `five_hour` and `seven_day` cooldowns block every Claude model in the credential scope. Rejected `seven_day_opus` and `seven_day_sonnet` windows are keyed separately and block matching model families, so an explicitly configured fallback to an unaffected Claude family can remain eligible. If a candidate model has no recognized family, Archon conservatively treats either model-specific cooldown as applicable. `allowed_warning` events with a recognized `rateLimitType` and valid future reset are retained separately as subscription-usage warnings; model-specific warnings trigger fallback only when the Claude primary positively matches that family. Unknown or unassociated per-model warning windows do not trigger fallback. Numeric `utilization` is ignored because its unit scale is undocumented. A subsequent `allowed` event for a recognized window clears that warning even if the provider reports a revised reset timestamp; `allowed_warning` clears an older rejected cooldown for that window. The state is process-local and scoped first to the credential owner: the Archon install when per-user provider keys are off, or the executing user when they are on. For env-delivered credentials, a one-way in-memory fingerprint of the effective request environment also isolates state across credential rotation. That environment follows provider delivery order across process, install config, codebase, and user credentials; protected user OAuth takes precedence over unprotected Claude API-key aliases, matching the subprocess environment. Raw credential values are not retained or logged. Providers whose credentials come from login files use the owner scope because their secret is not exposed to this route resolver. A later message in that scope can select a configured fallback when its task route explicitly enables Claude warning fallback. An `allowed_warning` is recorded for a later independent message; it does not interrupt the current response, which may still undergo normal workflow or project-command parsing. A rejected cooldown ends current response handling; any partial text is preserved or displayed, but is not parsed as a workflow or project command. Archon never replays the turn or switches providers mid-turn.
+
+These are provider-native signals, not a cross-provider usage ledger or a promise to avoid overage. Missing, stale, malformed, or unsupported usage remains unknown and does not trigger usage-based fallback. A successful Codex bucket snapshot is cached for at most 30 seconds, scoped to the execution owner and OAuth profile, and invalidated when a Codex attempt starts; it is not a reservation, so concurrent turns can consume quota after the read. State is lost on process restart, so Archon may use the primary route again after restart and must rely on the provider's native response. Task-type routing still selects only operator-configured models and fallbacks; it does not estimate subscription allowance or invent a billing policy. Fallback is evaluated only for a new independent message, never by replaying a started turn or switching providers mid-turn. Workflow runs keep their existing credential-delivery and routing paths.
 
 ### AI Providers -- Claude
 

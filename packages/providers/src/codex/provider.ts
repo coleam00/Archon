@@ -18,11 +18,14 @@ import type {
   TokenUsage,
   ProviderCapabilities,
   CodexProviderDefaults,
+  ProviderCodexRateLimitRequest,
+  ProviderCodexRateLimitSnapshot,
 } from '../types';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinaryPath } from './binary-resolver';
+import { invalidateCodexRateLimitCache, readCodexRateLimit } from './rate-limits';
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import {
@@ -129,12 +132,33 @@ function buildThreadOptions(
   };
 }
 
-function buildCodexEnv(requestEnv: Record<string, string>): Record<string, string> {
+function buildCodexEnv(
+  requestEnv: Record<string, string>,
+  isolatedUserOAuthProfile = false
+): Record<string, string> {
+  const isolatedAuthKeys = new Set([
+    'CODEX_HOME',
+    'CODEX_API_KEY',
+    'OPENAI_API_KEY',
+    'CODEX_ID_TOKEN',
+    'CODEX_ACCESS_TOKEN',
+    'CODEX_REFRESH_TOKEN',
+    'CODEX_ACCOUNT_ID',
+  ]);
   const baseEnv = Object.fromEntries(
-    Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined && !(isolatedUserOAuthProfile && isolatedAuthKeys.has(entry[0]))
+    )
   );
+  const requestEnvCopy = isolatedUserOAuthProfile
+    ? Object.fromEntries(Object.entries(requestEnv).filter(([key]) => !isolatedAuthKeys.has(key)))
+    : { ...requestEnv };
+  if (isolatedUserOAuthProfile) {
+    requestEnvCopy.CODEX_HOME = requestEnv.CODEX_HOME;
+  }
   // Managed project env intentionally overrides inherited process env for project-scoped execution.
-  return { ...baseEnv, ...requestEnv };
+  return { ...baseEnv, ...requestEnvCopy };
 }
 
 function buildMcpEnvSource(
@@ -889,7 +913,8 @@ export class CodexProvider implements IAgentProvider {
   private async createCodexClient(
     configCodexBinaryPath: string | undefined,
     requestEnv?: Record<string, string>,
-    codexConfigOverrides?: CodexConfigOverrides
+    codexConfigOverrides?: CodexConfigOverrides,
+    isolatedUserOAuthProfile = false
   ): Promise<Codex> {
     if ((!requestEnv || Object.keys(requestEnv).length === 0) && !codexConfigOverrides) {
       return getCodex(configCodexBinaryPath);
@@ -899,7 +924,7 @@ export class CodexProvider implements IAgentProvider {
       const codexOptions: CodexOptions = {
         codexPathOverride: await resolveCodexBinaryPath(configCodexBinaryPath),
         ...(requestEnv && Object.keys(requestEnv).length > 0
-          ? { env: buildCodexEnv(requestEnv) }
+          ? { env: buildCodexEnv(requestEnv, isolatedUserOAuthProfile) }
           : {}),
         ...(codexConfigOverrides ? { config: codexConfigOverrides } : {}),
       };
@@ -917,12 +942,29 @@ export class CodexProvider implements IAgentProvider {
     return CODEX_CAPABILITIES;
   }
 
+  readCodexRateLimit(
+    request: ProviderCodexRateLimitRequest
+  ): Promise<ProviderCodexRateLimitSnapshot | undefined> {
+    const assistantConfig = request.options?.assistantConfig ?? {};
+    return readCodexRateLimit({
+      ...request,
+      options: { ...request.options, assistantConfig },
+    });
+  }
+
   async *sendQuery(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    const isolatedUserOAuthProfile = requestOptions?.codexAuthProfile?.kind === 'user-oauth';
+    if (isolatedUserOAuthProfile) {
+      if (!requestOptions?.env?.CODEX_HOME) {
+        throw new Error('The direct-chat Codex OAuth profile is unavailable for this turn.');
+      }
+      invalidateCodexRateLimitCache();
+    }
     const assistantConfig = requestOptions?.assistantConfig ?? {};
     const codexConfig = parseCodexConfig(assistantConfig);
     const providerWarnings: ProviderWarning[] = [];
@@ -960,7 +1002,8 @@ export class CodexProvider implements IAgentProvider {
     let codex = await this.createCodexClient(
       codexConfig.codexBinaryPath,
       requestOptions?.env,
-      initialConfigOverrides
+      initialConfigOverrides,
+      isolatedUserOAuthProfile
     );
     const threadOptions = buildThreadOptions(
       cwd,
@@ -1109,7 +1152,8 @@ export class CodexProvider implements IAgentProvider {
               codex = await this.createCodexClient(
                 codexConfig.codexBinaryPath,
                 requestOptions?.env,
-                declaredMcpConfigOverrides
+                declaredMcpConfigOverrides,
+                isolatedUserOAuthProfile
               );
               if (resumeSessionId) {
                 try {

@@ -34,6 +34,7 @@ import {
   type HookCallback,
   type HookCallbackMatcher,
   type SDKAssistantMessageError,
+  type SDKRateLimitEvent,
   type SDKResultMessage,
   type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -216,13 +217,24 @@ export function buildRequestSubprocessEnv(
   const isContainerRun = requestOptions?.execContext?.kind === 'container';
   const subprocessEnv = isContainerRun ? buildContainerBaseEnv() : buildSubprocessEnv();
   const env = requestOptions?.env ? { ...subprocessEnv, ...requestOptions.env } : subprocessEnv;
+  const protectedEnvKeys = new Set(requestOptions?.protectedEnvKeys ?? []);
+  // Per-user Claude subscriptions are delivered as a protected OAuth token.
+  // Claude Code prefers ANTHROPIC_API_KEY when both are present, so remove an
+  // install/project API key unless the user explicitly supplied that key too.
+  // This keeps the provider's effective credential aligned with routing and
+  // usage-warning state, including inherited process.env values.
+  if (
+    protectedEnvKeys.has('CLAUDE_CODE_OAUTH_TOKEN') &&
+    env.CLAUDE_CODE_OAUTH_TOKEN &&
+    !protectedEnvKeys.has('ANTHROPIC_API_KEY')
+  ) {
+    delete env.ANTHROPIC_API_KEY;
+  }
   // CLAUDE_API_KEY is Archon's variable name; the Claude Code CLI only reads
   // ANTHROPIC_API_KEY, so mirror it or solo .env installs never authenticate
   // (delivery.ts sets both vars on the per-user api_key path). Guarded on the
-  // MERGED env, not process.env: a per-request CLAUDE_CODE_OAUTH_TOKEN (per-user
-  // subscription delivered via requestOptions.env) must stay authoritative — the
-  // CLI prefers ANTHROPIC_API_KEY over the OAuth token, so injecting the install
-  // key alongside it would silently rebill the run. Truthiness is intentional:
+  // MERGED env, not process.env. The protected per-user OAuth above must stay
+  // authoritative, so the install key is not mirrored alongside it. Truthiness is intentional:
   // empty string = missing credential. Never clobbers an explicit ANTHROPIC_API_KEY.
   if (env.CLAUDE_API_KEY && !env.ANTHROPIC_API_KEY && !env.CLAUDE_CODE_OAUTH_TOKEN) {
     env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
@@ -1185,9 +1197,9 @@ async function* streamClaudeMessages(
         getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
       }
     } else if (event.type === 'rate_limit_event') {
-      const rateLimitMsg = msg as { rate_limit_info?: Record<string, unknown> };
+      const rateLimitMsg = msg as SDKRateLimitEvent;
       getLog().warn({ rateLimitInfo: rateLimitMsg.rate_limit_info }, 'claude.rate_limit_event');
-      yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
+      yield { type: 'rate_limit', rateLimitInfo: { ...rateLimitMsg.rate_limit_info } };
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
       // The SDK's cost and per-model totals are cumulative for the session; report

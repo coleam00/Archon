@@ -32,6 +32,10 @@ const keyClassifications = {
   aliases: { kind: 'runtime' },
   tiers: { kind: 'runtime' },
   workflows: { kind: 'runtime' },
+  chatTaskRouting: {
+    kind: 'unavailable',
+    reason: 'direct-chat task routes cannot be changed by a workflow run',
+  },
   docs: { kind: 'runtime' },
   env: { kind: 'runtime' },
   commands: {

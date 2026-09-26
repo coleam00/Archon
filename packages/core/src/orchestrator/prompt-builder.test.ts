@@ -132,6 +132,7 @@ describe('buildOrchestratorSystemAppend', () => {
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Registered Projects');
     expect(result).toContain('my-project');
+    expect(result).not.toContain('## Local Task-Type Hint');
   });
 
   test('returns project-scoped prompt when codebase is scoped', () => {
@@ -139,6 +140,7 @@ describe('buildOrchestratorSystemAppend', () => {
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Active Project');
     expect(result).toContain('my-project');
+    expect(result).not.toContain('## Local Task-Type Hint');
   });
 
   test('falls back to orchestrator prompt when codebase_id does not match', () => {

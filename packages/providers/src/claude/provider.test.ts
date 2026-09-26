@@ -2,7 +2,7 @@ import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Options, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
+import type { Options, SDKRateLimitInfo, query as sdkQuery } from '@anthropic-ai/claude-agent-sdk';
 import { createMockLogger } from '../test/mocks/logger';
 import type { MessageChunk } from '../types';
 
@@ -526,10 +526,16 @@ describe('ClaudeProvider', () => {
     });
 
     test('yields rate_limit chunk and logs warn on rate_limit_event with info', async () => {
+      const rateLimitInfo = {
+        status: 'rejected',
+        resetsAt: Math.floor(Date.now() / 1_000) + 5,
+        rateLimitType: 'five_hour',
+        utilization: 1,
+      } satisfies SDKRateLimitInfo;
       mockQuery.mockImplementation(async function* () {
         yield {
           type: 'rate_limit_event',
-          rate_limit_info: { requests_remaining: 0, retry_after_ms: 5000 },
+          rate_limit_info: rateLimitInfo,
         };
       });
 
@@ -541,17 +547,22 @@ describe('ClaudeProvider', () => {
       expect(chunks).toHaveLength(1);
       expect(chunks[0]).toEqual({
         type: 'rate_limit',
-        rateLimitInfo: { requests_remaining: 0, retry_after_ms: 5000 },
+        rateLimitInfo,
       });
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { rateLimitInfo: { requests_remaining: 0, retry_after_ms: 5000 } },
-        'claude.rate_limit_event'
-      );
+      expect(mockLogger.warn).toHaveBeenCalledWith({ rateLimitInfo }, 'claude.rate_limit_event');
     });
 
-    test('yields rate_limit chunk with empty object when rate_limit_info absent', async () => {
+    test('preserves an allowed SDK rate-limit status without creating a cooldown', async () => {
       mockQuery.mockImplementation(async function* () {
-        yield { type: 'rate_limit_event' };
+        yield {
+          type: 'rate_limit_event',
+          rate_limit_info: {
+            status: 'allowed_warning',
+            resetsAt: Math.floor(Date.now() / 1_000) + 5,
+            rateLimitType: 'five_hour',
+            utilization: 0.95,
+          } satisfies SDKRateLimitInfo,
+        };
       });
 
       const chunks = [];
@@ -560,7 +571,10 @@ describe('ClaudeProvider', () => {
       }
 
       expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'rate_limit', rateLimitInfo: {} });
+      expect(chunks[0]).toMatchObject({
+        type: 'rate_limit',
+        rateLimitInfo: { status: 'allowed_warning', utilization: 0.95 },
+      });
     });
 
     test('yields result without structuredOutput when SDK result has no structured_output', async () => {
@@ -1995,6 +2009,31 @@ describe('ClaudeProvider', () => {
             CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-user',
             ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-user',
           },
+        })) {
+          // consume
+        }
+
+        expect(mockQuery).toHaveBeenCalledTimes(1);
+        const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
+        const env = callArgs.options.env as Record<string, string>;
+        expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+        expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe('sk-ant-oat01-user');
+      });
+
+      test('protected per-user subscription takes precedence over unprotected API keys', async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', session_id: 'sid' };
+        });
+
+        process.env.ANTHROPIC_API_KEY = 'sk-install-inherited';
+        process.env.CLAUDE_CODE_OAUTH_TOKEN = 'sk-ant-oat01-install';
+
+        for await (const _ of client.sendQuery('test', '/tmp', undefined, {
+          env: {
+            ANTHROPIC_API_KEY: 'sk-project-config',
+            CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat01-user',
+          },
+          protectedEnvKeys: ['CLAUDE_CODE_OAUTH_TOKEN'],
         })) {
           // consume
         }

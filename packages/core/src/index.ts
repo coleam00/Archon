@@ -38,6 +38,8 @@ export {
   type UserRole,
   type IdentityPlatform,
 } from './types';
+export { ORCHESTRATOR_TASK_TYPES } from './orchestrator/task-types';
+export type { OrchestratorTaskType } from './orchestrator/task-types';
 
 // =============================================================================
 // Database

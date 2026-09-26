@@ -1095,7 +1095,7 @@ remote_agent_conversations
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
 ├── cwd (VARCHAR) -- Explicit working-directory override, usually null (set by worktree create/remove; effective cwd falls back to codebase.default_cwd)
-├── ai_assistant_type (VARCHAR) -- LOCKED at creation
+├── ai_assistant_type (VARCHAR) -- Stored default selected at creation; an enabled direct-chat task route may select another provider for one turn without changing this value
 ├── title (VARCHAR) -- User-friendly conversation title (Web UI)
 ├── deleted_at (TIMESTAMP) -- Soft-delete support
 ├── user_id (UUID -> remote_agent_users.id, ON DELETE SET NULL) -- First user to create the conversation
@@ -1105,7 +1105,7 @@ remote_agent_sessions
 ├── id (UUID)
 ├── conversation_id (UUID -> remote_agent_conversations.id)
 ├── codebase_id (UUID -> remote_agent_codebases.id)
-├── ai_assistant_type (VARCHAR) -- Must match conversation
+├── ai_assistant_type (VARCHAR) -- Provider for this provider-native session; can differ from the conversation default after an explicit per-turn route
 ├── assistant_session_id (VARCHAR) -- SDK session ID for resume
 ├── active (BOOLEAN) -- Only one active per conversation
 ├── parent_session_id (UUID -> remote_agent_sessions.id)

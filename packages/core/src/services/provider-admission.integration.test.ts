@@ -14,7 +14,12 @@ import {
   registerBuiltinProviders,
   registerProvider,
 } from '@archon/providers';
-import type { MessageChunk, ProviderAdmissionEvent, SendQueryOptions } from '@archon/providers';
+import type {
+  MessageChunk,
+  ProviderAdmissionEvent,
+  ProviderCodexRateLimitRequest,
+  SendQueryOptions,
+} from '@archon/providers';
 import { closeDatabase, getDatabase, resetDatabase } from '../db/connection';
 import { SqliteAdapter } from '../db/adapters/sqlite';
 import {
@@ -35,6 +40,7 @@ const REPO_ROOT = join(import.meta.dir, '../../../..');
 type Script = (options: SendQueryOptions | undefined) => AsyncGenerator<MessageChunk>;
 const scripts = new Map<string, Script>();
 let calls: (SendQueryOptions | undefined)[] = [];
+let codexRateLimitRequests: ProviderCodexRateLimitRequest[] = [];
 
 beforeAll(() => {
   registerBuiltinProviders();
@@ -48,6 +54,14 @@ beforeAll(() => {
     factory: () => ({
       getType: () => PROVIDER,
       getCapabilities: () => claude.capabilities,
+      readCodexRateLimit: async request => {
+        codexRateLimitRequests.push(request);
+        return {
+          limitId: request.limitId,
+          exhausted: true,
+          fetchedAt: Date.now(),
+        };
+      },
       sendQuery: (prompt, _cwd, _resume, options) => {
         calls.push(options);
         const script = scripts.get(prompt);
@@ -123,6 +137,7 @@ beforeEach(async () => {
   resetDatabase();
   scripts.clear();
   calls = [];
+  codexRateLimitRequests = [];
 });
 
 afterEach(async () => {
@@ -144,6 +159,27 @@ describe('provider admission wrapper', () => {
     });
     await drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('p', '/tmp', undefined, options));
     expect(calls).toEqual([options]);
+    expect(await holderCount()).toBe(0);
+  });
+
+  test('provider-native Codex rate-limit reads pass through without consuming a send slot', async () => {
+    await writeCaps({ [PROVIDER]: 1 });
+    const request: ProviderCodexRateLimitRequest = {
+      limitId: 'five_hour',
+      expectedAccountId: 'test-account',
+      cacheScope: 'opaque-user-scope',
+      cwd: '/tmp/project',
+      options: {
+        env: { CODEX_HOME: '/tmp/codex-home' },
+        codexAuthProfile: { kind: 'user-oauth', accountId: 'test-account' },
+      },
+    };
+
+    const snapshot = await getAgentProvider(PROVIDER, POLL_MS).readCodexRateLimit?.(request);
+
+    expect(codexRateLimitRequests).toEqual([request]);
+    expect(snapshot).toMatchObject({ limitId: 'five_hour', exhausted: true });
+    expect(calls).toHaveLength(0);
     expect(await holderCount()).toBe(0);
   });
 

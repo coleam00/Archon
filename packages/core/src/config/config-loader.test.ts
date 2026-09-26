@@ -104,6 +104,87 @@ concurrency:
       expect(config.concurrency?.maxConversations).toBe(5);
     });
 
+    test('accepts an explicitly enabled direct-chat task route map', async () => {
+      mockFsReadFile.mockResolvedValue(`
+chatTaskRouting:
+  enabled: true
+  routes:
+    project_work:
+      primary: '@project-work'
+      fallbacks: ['@project-work-backup']
+      fallbackOnClaudeUsageWarning: true
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config.chatTaskRouting).toEqual({
+        enabled: true,
+        routes: {
+          project_work: {
+            primary: '@project-work',
+            fallbacks: ['@project-work-backup'],
+            fallbackOnClaudeUsageWarning: true,
+          },
+        },
+      });
+    });
+
+    test('rejects enabled direct-chat routing without any route', async () => {
+      mockFsReadFile.mockResolvedValue('chatTaskRouting: { enabled: true, routes: {} }');
+
+      const config = await loadGlobalConfig();
+
+      expect(config).toEqual({});
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test('rejects duplicate primary and fallback model refs', async () => {
+      mockFsReadFile.mockResolvedValue(`
+chatTaskRouting:
+  enabled: true
+  routes:
+    project_work:
+      primary: '@same'
+      fallbacks: ['@same']
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config).toEqual({});
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test('rejects a Claude usage warning fallback without an explicit fallback', async () => {
+      mockFsReadFile.mockResolvedValue(`
+chatTaskRouting:
+  enabled: true
+  routes:
+    project_work:
+      primary: '@project-work'
+      fallbackOnClaudeUsageWarning: true
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config).toEqual({});
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
+    test('rejects an unknown task label in the direct-chat route map', async () => {
+      mockFsReadFile.mockResolvedValue(`
+chatTaskRouting:
+  enabled: true
+  routes:
+    billing:
+      primary: large
+`);
+
+      const config = await loadGlobalConfig();
+
+      expect(config).toEqual({});
+      expect(mockLogger.error).toHaveBeenCalled();
+    });
+
     test.each([
       ['tiers', 'medium'],
       ['aliases', "'@deep'"],
@@ -1376,6 +1457,7 @@ assistants:
       expect(safe.assistants.claude).toBeDefined();
       expect(safe.assistants.codex).toBeDefined();
       expect(safe.assistants.codex).not.toHaveProperty('additionalDirectories');
+      expect(safe.chatTaskRouting).toEqual({ enabled: false, routes: {} });
     });
 
     test('exposes configured tiers and computed tierDefaults', async () => {

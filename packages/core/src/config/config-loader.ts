@@ -39,6 +39,7 @@ import type {
   RawTiersConfig,
 } from './config-types';
 import { workflowContinuationConfigSchema } from './config-types';
+import { chatTaskRoutingConfigSchema, DEFAULT_CHAT_TASK_ROUTING } from './chat-task-routing';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -308,6 +309,18 @@ function validateWorkflowContinuationConfig(parsed: unknown, configPath: string)
   config.workflows = result.data;
 }
 
+function validateChatTaskRoutingConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.chatTaskRouting === undefined) return;
+  const result = chatTaskRoutingConfigSchema.safeParse(parsed.chatTaskRouting);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid chatTaskRouting config', configPath, issues);
+  }
+  parsed.chatTaskRouting = result.data;
+}
+
 function isConfigRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -393,6 +406,7 @@ async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConf
     const content = await readConfigFile(configPath);
     const parsed = parseYaml(content);
     validateWorkflowContinuationConfig(parsed, configPath);
+    validateChatTaskRoutingConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
     return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
@@ -537,6 +551,7 @@ function getDefaults(): MergedConfig {
       quotaMaxAttempts: 1,
       quotaDeadlineMs: 24 * 60 * 60 * 1000,
     },
+    chatTaskRouting: DEFAULT_CHAT_TASK_ROUTING,
     commands: {
       folder: undefined,
       autoLoad: true,
@@ -672,6 +687,10 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
 
   if (global.workflows) {
     result.workflows = { ...result.workflows, ...global.workflows };
+  }
+
+  if (global.chatTaskRouting) {
+    result.chatTaskRouting = global.chatTaskRouting;
   }
 
   // Container backend defaults (folder projects)
@@ -942,6 +961,7 @@ export async function updateGlobalConfig(
     // degrade: a bad value from the settings UI would otherwise brick every later
     // config load, and a bad block already on disk must be repaired, not kept.
     validateWorkflowContinuationConfig(merged, configPath);
+    validateChatTaskRoutingConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
@@ -1019,5 +1039,6 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     tiers: config.tiers,
     tierDefaults: tierDefaultsFor(config.assistant),
     aliases: config.aliases,
+    chatTaskRouting: config.chatTaskRouting,
   };
 }

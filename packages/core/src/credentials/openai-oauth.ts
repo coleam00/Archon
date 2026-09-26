@@ -145,6 +145,59 @@ function accountIdFromAccessToken(accessToken: string): string | null {
   return typeof accountId === 'string' && accountId.length > 0 ? accountId : null;
 }
 
+/**
+ * Read the OAuth token set back from a Codex auth.json after Codex refreshed
+ * the isolated direct-chat profile. The CLI auth file does not store the
+ * access-token expiry separately, so recover it only from the JWT `exp` claim;
+ * ambiguous or identity-changing rotations are not safe to persist.
+ */
+export function parseRotatedCodexOAuthCredentials(
+  authJson: string,
+  previous: OpenAiOAuthCredentials
+): OpenAiOAuthCredentials | null {
+  try {
+    const parsed = JSON.parse(authJson) as {
+      tokens?: {
+        access_token?: unknown;
+        refresh_token?: unknown;
+        id_token?: unknown;
+        account_id?: unknown;
+      };
+    };
+    const access = parsed.tokens?.access_token;
+    const refresh = parsed.tokens?.refresh_token;
+    const idToken = parsed.tokens?.id_token;
+    const accountId = parsed.tokens?.account_id;
+    if (
+      typeof access !== 'string' ||
+      !access ||
+      typeof refresh !== 'string' ||
+      !refresh ||
+      typeof idToken !== 'string' ||
+      !idToken ||
+      typeof accountId !== 'string' ||
+      accountId !== previous.accountId ||
+      accountIdFromAccessToken(access) !== previous.accountId
+    ) {
+      return null;
+    }
+    const exp = decodeJwtPayload(access)?.exp;
+    if (typeof exp !== 'number' || !Number.isSafeInteger(exp) || exp * 1000 <= Date.now()) {
+      return null;
+    }
+    return {
+      ...previous,
+      access,
+      refresh,
+      id_token: idToken,
+      accountId,
+      expires: exp * 1000,
+    };
+  } catch {
+    return null;
+  }
+}
+
 interface OpenAiTokenResponse {
   access_token?: unknown;
   refresh_token?: unknown;

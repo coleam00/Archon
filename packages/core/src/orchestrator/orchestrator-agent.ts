@@ -6,8 +6,11 @@
  * - Can answer directly or invoke workflows
  * - Does NOT require a project to be selected before starting a conversation
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'fs';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { createLogger, captureChatTurn, canonicalizeProjectPath } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -28,7 +31,11 @@ import { classifyAndFormatError } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { safeDeactivateSession } from '../state/session-transitions';
-import { getProviderCapabilities } from '@archon/providers';
+import {
+  getProviderCapabilities,
+  isRegisteredProvider,
+  parseProviderRunModel,
+} from '@archon/providers';
 import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
@@ -79,8 +86,15 @@ import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-confi
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
-import { deliverCredential } from '../credentials/delivery';
-import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import { deliverCredential, normalizeCredentialVendor } from '../credentials/delivery';
+import {
+  listDecryptedUserProviderCredentials,
+  persistDirectChatCodexOAuthRotationIfCurrent,
+} from '../db/user-provider-key-store';
+import {
+  parseRotatedCodexOAuthCredentials,
+  type OpenAiOAuthCredentials,
+} from '../credentials/openai-oauth';
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
@@ -99,6 +113,26 @@ import {
   formatWorkflowContextSection,
 } from './prompt-builder';
 import type { WorkflowResultContext } from './prompt-builder';
+import {
+  getLayaTaskTypeHint,
+  isLayaTaskTypeHintsEnabled,
+  type LayaTaskTypeContextTurn,
+  type LayaTaskTypeHint,
+} from './laya-task-type-hint';
+import {
+  formatProviderCooldownMessage,
+  getProviderCooldownForModel,
+  getProviderUsageWarnings,
+  recordProviderCooldown,
+  recordProviderUsageWarning,
+  type ProviderCooldown,
+} from './provider-rate-limit-state';
+import {
+  getProviderCredentialScope,
+  hasProtectedClaudeOAuthCredential,
+  hasDirectChatCredential,
+  selectChatTaskRoute,
+} from './chat-task-routing';
 import { reportUnpushedWorkInSource } from './post-message-reminder';
 import * as messageDb from '../db/messages';
 import * as workflowDb from '../db/workflows';
@@ -120,6 +154,37 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('orchestrator-agent');
   return cachedLog;
+}
+
+async function getRecentLayaContext(
+  conversationId: string,
+  currentMessage: string
+): Promise<LayaTaskTypeContextTurn[]> {
+  try {
+    const rows = await messageDb.listMessages(conversationId, 8);
+    const recent: LayaTaskTypeContextTurn[] = [];
+    let skippedCurrentMessage = false;
+
+    for (let index = rows.length - 1; index >= 0 && recent.length < 6; index -= 1) {
+      const row = rows[index];
+      if (!row || (row.role !== 'user' && row.role !== 'assistant') || !row.content.trim()) {
+        continue;
+      }
+      if (!skippedCurrentMessage && row.role === 'user' && row.content.trim() === currentMessage) {
+        skippedCurrentMessage = true;
+        continue;
+      }
+      recent.push({ role: row.role, content: row.content });
+    }
+
+    return recent.reverse();
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, conversationId },
+      'orchestrator.laya_task_context_unavailable'
+    );
+    return [];
+  }
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -230,6 +295,21 @@ export function resolveChatModelRequest(
     return { ...request, model: installModel };
   }
   return request;
+}
+
+function claudeUsageWarningAppliesToModel(rateLimitType: string, model?: string): boolean {
+  if (rateLimitType === 'five_hour' || rateLimitType === 'seven_day') return true;
+  if (!model) return false;
+
+  const normalizedModel = model.toLowerCase();
+  const isOpus = /(?:^|[-_/])opus(?:$|[-_/])/.test(normalizedModel);
+  const isSonnet = /(?:^|[-_/])sonnet(?:$|[-_/])/.test(normalizedModel);
+  if (rateLimitType === 'seven_day_opus') return isOpus;
+  if (rateLimitType === 'seven_day_sonnet') return isSonnet;
+
+  // New per-model or overage windows need an explicit model association before
+  // they can change provider selection. Unknown scope stays unknown.
+  return false;
 }
 
 /** A resolved title-generation request: which provider to call, with fully resolved options. */
@@ -412,23 +492,154 @@ function isCommandFullyParsed(accumulated: string): boolean {
   return INVOKE_WORKFLOW_FULL_RE.test(normalized) || REGISTER_PROJECT_FULL_RE.test(normalized);
 }
 
+interface DirectChatCodexOAuthProfile {
+  userId: string;
+  storageProvider: string;
+  home: string;
+  authPath: string;
+  accountId: string;
+  credentialFingerprint: string;
+  originalCredential: OpenAiOAuthCredentials;
+}
+
+interface UserProviderEnvForChat {
+  env: Record<string, string>;
+  codexOAuthCredential?: {
+    storageProvider: string;
+    credential: OpenAiOAuthCredentials;
+  };
+}
+
 /**
- * Resolve the env-only per-user AI-provider credential bag for a direct-chat
- * turn (Phase 2). Drops deliveries that require file writes (Codex
- * `CODEX_HOME/auth.json` for the ChatGPT subscription path) because chat has
- * no per-call scratch directory — those rely on the workflow inject path that
- * provides an `artifactsDir`.
- *
- * NEVER THROWS — returns `{}` on any failure so the chat turn falls back to
- * whatever process-global env was already in place.
+ * Materialize one user's OpenAI OAuth credential into a private, temporary
+ * CODEX_HOME for direct-chat task routes. The same directory is passed to the
+ * quota reader and Codex provider; workflow credential delivery remains on its
+ * existing artifacts path.
  */
-async function resolveUserProviderEnvForChat(userId: string): Promise<Record<string, string>> {
+async function createDirectChatCodexOAuthProfile(
+  userId: string,
+  storageProvider: string,
+  originalCredential: OpenAiOAuthCredentials
+): Promise<DirectChatCodexOAuthProfile | undefined> {
+  if (
+    !originalCredential.access ||
+    !originalCredential.refresh ||
+    !originalCredential.id_token ||
+    !originalCredential.accountId ||
+    !Number.isFinite(originalCredential.expires) ||
+    originalCredential.expires <= Date.now()
+  ) {
+    return undefined;
+  }
+
+  const root = await mkdtemp(join(tmpdir(), 'archon-chat-codex-'));
+  try {
+    await chmod(root, 0o700);
+    const result = deliverCredential(
+      'openai',
+      { kind: 'oauth', oauthApiKey: originalCredential.access, rawCreds: originalCredential },
+      { artifactsDir: root }
+    );
+    const file = result.files?.find(item => item.path.endsWith(join('codex-home', 'auth.json')));
+    const home = result.env.CODEX_HOME;
+    if (!file || !home) throw new Error('Codex OAuth profile delivery was incomplete.');
+    await mkdir(dirname(file.path), { recursive: true, mode: 0o700 });
+    await chmod(dirname(file.path), 0o700);
+    await writeFile(file.path, file.contents, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    await chmod(file.path, 0o600);
+    return {
+      userId,
+      storageProvider,
+      home,
+      authPath: file.path,
+      accountId: originalCredential.accountId,
+      credentialFingerprint: createHash('sha256')
+        .update(`${originalCredential.access}\0${originalCredential.refresh}`)
+        .digest('hex'),
+      originalCredential,
+    };
+  } catch (error) {
+    await rm(root, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+/**
+ * Persist a refresh made by the Codex CLI from this turn's private profile.
+ * The storage operation is an optimistic compare-and-set against the original
+ * access/refresh pair, so a concurrent reconnect or refresh wins safely.
+ */
+async function persistDirectChatCodexOAuthProfileRotation(
+  profile: DirectChatCodexOAuthProfile
+): Promise<void> {
+  try {
+    const authJson = await readFile(profile.authPath, 'utf8');
+    const rotated = parseRotatedCodexOAuthCredentials(authJson, profile.originalCredential);
+    if (!rotated) return;
+    if (
+      rotated.access === profile.originalCredential.access &&
+      rotated.refresh === profile.originalCredential.refresh
+    ) {
+      return;
+    }
+    const result = await persistDirectChatCodexOAuthRotationIfCurrent({
+      userId: profile.userId,
+      provider: profile.storageProvider,
+      expectedAccess: profile.originalCredential.access,
+      expectedRefresh: profile.originalCredential.refresh,
+      refreshed: rotated,
+    });
+    if (result === 'stale' || result === 'missing') {
+      getLog().warn(
+        { userId: profile.userId, provider: profile.storageProvider, result },
+        'orchestrator.codex_chat_oauth_rotation_not_persisted'
+      );
+    }
+  } catch (error) {
+    getLog().warn(
+      { err: error as Error, userId: profile.userId, provider: profile.storageProvider },
+      'orchestrator.codex_chat_oauth_rotation_persist_failed'
+    );
+  }
+}
+
+/**
+ * Resolve the direct-chat credential bag for one execution identity. Keep a
+ * user-owned Codex OAuth credential in memory until an explicit task route
+ * resolves to Codex; only then materialize a private CODEX_HOME for that turn.
+ *
+ * NEVER THROWS — failures leave route eligibility unknown and preserve the
+ * legacy provider selection.
+ */
+async function resolveUserProviderEnvForChat(userId: string): Promise<UserProviderEnvForChat> {
   try {
     const creds = await listDecryptedUserProviderCredentials(userId);
     const env: Record<string, string> = {};
+    let codexOAuthCredential: UserProviderEnvForChat['codexOAuthCredential'];
     for (const { provider, cred } of creds) {
       try {
-        // artifactsDir intentionally empty: chat doesn't host file deliveries.
+        if (
+          !codexOAuthCredential &&
+          normalizeCredentialVendor(provider) === 'openai' &&
+          cred.kind === 'oauth'
+        ) {
+          const raw = cred.rawCreds as Partial<OpenAiOAuthCredentials>;
+          if (
+            typeof raw.access === 'string' &&
+            typeof raw.refresh === 'string' &&
+            typeof raw.id_token === 'string' &&
+            typeof raw.accountId === 'string' &&
+            typeof raw.expires === 'number'
+          ) {
+            codexOAuthCredential = {
+              storageProvider: provider,
+              credential: raw as OpenAiOAuthCredentials,
+            };
+          }
+          continue;
+        }
+        // Other direct-chat deliveries remain env-only; their file-based
+        // workflow auth paths are not copied into chat.
         const result = deliverCredential(provider, cred, { artifactsDir: '' });
         if (!result.files?.length) Object.assign(env, result.env);
       } catch (err) {
@@ -438,10 +649,10 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
         );
       }
     }
-    return env;
+    return { env, codexOAuthCredential };
   } catch (err) {
     getLog().warn({ err: err as Error, userId }, 'orchestrator.user_provider_env_resolve_failed');
-    return {};
+    return { env: {} };
   }
 }
 
@@ -451,6 +662,7 @@ async function resolveUserProviderEnvForChat(userId: string): Promise<Record<str
  * state — a server restart re-nudging once per conversation is acceptable.
  */
 const tierFallbackNudgedConversations = new Set<string>();
+const taskRoutingNudgedConversations = new Set<string>();
 
 /**
  * Resolve the user's personal AI prefs (tiers / aliases / default assistant)
@@ -461,11 +673,17 @@ const tierFallbackNudgedConversations = new Set<string>();
  * to install-wide config exactly as before.
  */
 async function resolveUserAiPrefsForChat(userId: string): Promise<UserAiPrefs> {
+  return (await resolveUserAiPrefsForChatWithStatus(userId)).prefs;
+}
+
+async function resolveUserAiPrefsForChatWithStatus(
+  userId: string
+): Promise<{ prefs: UserAiPrefs; available: boolean }> {
   try {
-    return await getUserAiPrefs(userId);
+    return { prefs: await getUserAiPrefs(userId), available: true };
   } catch (err) {
     getLog().warn({ err: err as Error, userId }, 'orchestrator.user_ai_prefs_resolve_failed');
-    return {};
+    return { prefs: {}, available: false };
   }
 }
 
@@ -1888,6 +2106,7 @@ export async function handleMessage(
   // stripping a bot mention) must not let a command masquerade as a plain
   // AI turn. Mirrors the trim already done inside commandHandler.parseCommand.
   const trimmedMessage = message.trim();
+  let directChatCodexOAuthProfile: DirectChatCodexOAuthProfile | undefined;
   try {
     getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
 
@@ -2261,14 +2480,9 @@ export async function handleMessage(
       cwd = await ensureArchonWorkspacesPath();
     }
 
-    // 4. Update activity and get/create session
+    // 4. Update activity. The provider is selected below before a session is
+    // resumed, so a routed provider never receives another provider's session id.
     await db.touchConversation(conversation.id);
-    let session = await sessionDb.getActiveSession(conversation.id);
-    if (!session) {
-      session = await sessionDb.transitionSession(conversation.id, 'first-message', {
-        ai_assistant_type: conversation.ai_assistant_type,
-      });
-    }
 
     // Reuse the config already loaded during workflow discovery (avoids a second disk read).
     // Fall back to loadConfig only when no codebase is scoped (discoveredConfig is undefined).
@@ -2292,7 +2506,10 @@ export async function handleMessage(
     // Per-user AI prefs (Phase 3): the user's tiers/aliases/default-assistant
     // override install config (highest precedence). `{}` (no identity, no row,
     // or DB failure) keeps config-only behavior byte-for-byte.
-    const userAiPrefs = executionUserId ? await resolveUserAiPrefsForChat(executionUserId) : {};
+    const preferenceRead: { prefs: UserAiPrefs; available: boolean } = executionUserId
+      ? await resolveUserAiPrefsForChatWithStatus(executionUserId)
+      : { prefs: {}, available: true };
+    const userAiPrefs = preferenceRead.prefs;
     let configuredProviderKey = userAiPrefs.defaultProvider ?? conversation.ai_assistant_type;
     let aiProfile: ReturnType<typeof buildAiProfile>;
     try {
@@ -2318,10 +2535,494 @@ export async function handleMessage(
     }
     // Main chat model: per-user default_model > configured `large` tier >
     // install assistants.<p>.model > built-in tier default (#1998).
-    const chatRequest = resolveChatModelRequest(aiProfile, configuredProviderKey, userAiPrefs, {
+    let chatRequest = resolveChatModelRequest(aiProfile, configuredProviderKey, userAiPrefs, {
       assistants: config.assistants,
       tiers: config.tiers,
     });
+    // Scope provider signals to the credential owner and fingerprint the
+    // effective direct-chat credential environment. A rotated user or install
+    // credential must not inherit its predecessor's in-memory warning. Never
+    // key provider quota state by a conversation alone or retain credential values.
+    const perUserProviderKeysEnabled = isPerUserProviderKeysEnabled();
+    const providerCooldownOwnerScope = JSON.stringify(
+      perUserProviderKeysEnabled && executionUserId ? ['user', executionUserId] : ['install']
+    );
+    // Direct-chat credentials are already scoped to executionUserId. Route
+    // eligibility below consults this bag only (or process env in install-key
+    // mode); codebase env and another user's credentials cannot make a provider
+    // eligible. File-based Codex OAuth is intentionally absent from this bag.
+    const userProviderCredentials =
+      perUserProviderKeysEnabled && executionUserId
+        ? await resolveUserProviderEnvForChat(executionUserId)
+        : { env: {} as Record<string, string> };
+    const userProviderEnv = userProviderCredentials.env;
+    let dbEnvVars: Record<string, string> = {};
+    if (conversation.codebase_id) {
+      try {
+        dbEnvVars = await getCodebaseEnvVars(conversation.codebase_id);
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, codebaseId: conversation.codebase_id },
+          'codebase_env_vars_load_failed'
+        );
+      }
+    }
+    // The Claude process inherits process.env, then request env overrides it
+    // with config, codebase, and finally the acting user's credentials.
+    const providerCredentialEnv = {
+      ...process.env,
+      ...(config.envVars ?? {}),
+      ...dbEnvVars,
+      ...userProviderEnv,
+    };
+    const protectedEnvKeys = Object.keys(userProviderEnv);
+    const providerCooldownScope = (provider: string): string =>
+      getProviderCredentialScope(
+        provider,
+        providerCooldownOwnerScope,
+        providerCredentialEnv,
+        protectedEnvKeys
+      );
+    const allowClaudeSubscriptionUsageWarnings = hasProtectedClaudeOAuthCredential(
+      providerCredentialEnv,
+      protectedEnvKeys
+    );
+    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
+
+    const routingEnabled = config.chatTaskRouting.enabled === true;
+    const userHasProviderPin =
+      userAiPrefs.defaultProvider !== undefined || userAiPrefs.defaultModel !== undefined;
+    let taskTypeHint: LayaTaskTypeHint | undefined;
+    if (
+      routingEnabled &&
+      preferenceRead.available &&
+      !userHasProviderPin &&
+      isLayaTaskTypeHintsEnabled() &&
+      !trimmedMessage.startsWith('/') &&
+      pausedGateContext === undefined
+    ) {
+      try {
+        const context = await getRecentLayaContext(conversation.id, trimmedMessage);
+        taskTypeHint = await getLayaTaskTypeHint(trimmedMessage, context);
+      } catch (error) {
+        getLog().warn({ err: error as Error }, 'orchestrator.laya_task_type_hint_unavailable');
+      }
+    }
+
+    const route = taskTypeHint ? config.chatTaskRouting.routes?.[taskTypeHint.taskType] : undefined;
+    if (
+      routingEnabled &&
+      preferenceRead.available &&
+      !userHasProviderPin &&
+      !trimmedMessage.startsWith('/') &&
+      pausedGateContext === undefined
+    ) {
+      if (!taskTypeHint) {
+        if (!taskRoutingNudgedConversations.has(conversation.id)) {
+          taskRoutingNudgedConversations.add(conversation.id);
+          void platform
+            .sendMessage(
+              conversationId,
+              'Task routing has no high-confidence Laya label for this message; using the current provider. The classifier may be disabled, unavailable, or abstaining. Check ARCHON_LAYA_TASK_HINTS, ARCHON_LAYA_MODEL_DIR, and ARCHON_LAYA_MODEL_MANIFEST_SHA256.'
+            )
+            .catch(() => undefined);
+        }
+      } else if (!route) {
+        if (!taskRoutingNudgedConversations.has(conversation.id)) {
+          taskRoutingNudgedConversations.add(conversation.id);
+          void platform
+            .sendMessage(
+              conversationId,
+              `No direct-chat route is configured for task type '${taskTypeHint.taskType}'. Using the current provider. Add chatTaskRouting.routes.${taskTypeHint.taskType} to ~/.archon/config.yaml.`
+            )
+            .catch(() => undefined);
+        }
+      } else {
+        const resolveRouteRequest = (reference: string): ResolvedModelRequest | undefined => {
+          try {
+            const request = resolveModelRequest(aiProfile, reference, configuredProviderKey);
+            if (!isRegisteredProvider(request.provider)) return undefined;
+            const capabilities = getProviderCapabilities(request.provider);
+            if (!capabilities.envInjection) return undefined;
+            if (
+              request.preset?.effort !== undefined &&
+              !resolvePresetEffort(request.provider, request.preset.effort).ok
+            ) {
+              return undefined;
+            }
+            return {
+              ...request,
+              model: request.model
+                ? parseProviderRunModel(request.provider, request.model)
+                : undefined,
+            };
+          } catch {
+            return undefined;
+          }
+        };
+        const routePrimaryRequest = resolveRouteRequest(route.primary);
+        let copilotQuotaState: 'unknown' | 'available' | 'exhausted' = 'unknown';
+        const copilotQuotaMeter = route.copilotQuotaMeter;
+        let codexQuotaState: 'unknown' | 'available' | 'exhausted' = 'unknown';
+        const codexRateLimitId = route.codexRateLimitId;
+        const routeReferences = [route.primary, ...(route.fallbacks ?? [])];
+        const hasCopilotRouteCandidate = [route.primary, ...(route.fallbacks ?? [])].some(
+          reference => resolveRouteRequest(reference)?.provider === 'copilot'
+        );
+        const hasCodexRouteCandidate = routeReferences.some(
+          reference => resolveRouteRequest(reference)?.provider === 'codex'
+        );
+        if (
+          perUserProviderKeysEnabled &&
+          executionUserId &&
+          hasCodexRouteCandidate &&
+          !directChatCodexOAuthProfile &&
+          userProviderCredentials.codexOAuthCredential
+        ) {
+          try {
+            directChatCodexOAuthProfile = await createDirectChatCodexOAuthProfile(
+              executionUserId,
+              userProviderCredentials.codexOAuthCredential.storageProvider,
+              userProviderCredentials.codexOAuthCredential.credential
+            );
+          } catch (error) {
+            getLog().warn(
+              { err: error as Error, userId: executionUserId },
+              'orchestrator.codex_chat_oauth_profile_unavailable'
+            );
+          }
+        }
+        if (copilotQuotaMeter !== undefined && !hasCopilotRouteCandidate) {
+          getLog().warn(
+            { taskType: taskTypeHint.taskType, meter: copilotQuotaMeter },
+            'orchestrator.copilot_quota_meter_has_no_copilot_route_candidate'
+          );
+        }
+        if (copilotQuotaMeter !== undefined && hasCopilotRouteCandidate) {
+          const hasActorCopilotCredential =
+            !perUserProviderKeysEnabled ||
+            hasDirectChatCredential(
+              'copilot',
+              userProviderEnv,
+              true,
+              process.env,
+              config.assistants.copilot
+            );
+          if (hasActorCopilotCredential) {
+            try {
+              const copilotProvider = getAgentProvider('copilot');
+              const quota = await copilotProvider.readAccountQuota?.({
+                meter: copilotQuotaMeter,
+                cacheScope: providerCooldownScope('copilot'),
+                cwd,
+                options: {
+                  assistantConfig: { ...(config.assistants.copilot ?? {}) },
+                  env: Object.keys(effectiveEnv).length > 0 ? effectiveEnv : undefined,
+                  protectedEnvKeys: protectedEnvKeys.length > 0 ? protectedEnvKeys : undefined,
+                },
+              });
+              const snapshotAgeMs = quota ? Date.now() - quota.fetchedAt : Number.POSITIVE_INFINITY;
+              const resetAt =
+                quota?.resetDate === undefined ? undefined : Date.parse(quota.resetDate);
+              const resetWindowIsCurrent =
+                resetAt === undefined || (Number.isFinite(resetAt) && resetAt > Date.now());
+              if (
+                quota?.meter === copilotQuotaMeter &&
+                snapshotAgeMs >= 0 &&
+                snapshotAgeMs <= 30_000 &&
+                resetWindowIsCurrent
+              ) {
+                copilotQuotaState = !quota.unlimited && quota.exhausted ? 'exhausted' : 'available';
+              } else {
+                getLog().info(
+                  { taskType: taskTypeHint.taskType, meter: copilotQuotaMeter },
+                  'orchestrator.copilot_quota_unknown'
+                );
+              }
+            } catch {
+              // Quota lookup is advisory. An unavailable or malformed snapshot
+              // must leave the configured primary route unchanged.
+              getLog().warn(
+                { taskType: taskTypeHint.taskType, meter: copilotQuotaMeter },
+                'orchestrator.copilot_quota_read_failed'
+              );
+            }
+          } else {
+            getLog().info(
+              { taskType: taskTypeHint.taskType, meter: copilotQuotaMeter },
+              'orchestrator.copilot_quota_skipped_without_actor_credential'
+            );
+          }
+        }
+        if (
+          codexRateLimitId !== undefined &&
+          hasCodexRouteCandidate &&
+          directChatCodexOAuthProfile
+        ) {
+          try {
+            const codexProvider = getAgentProvider('codex');
+            const profileEnv = {
+              ...effectiveEnv,
+              CODEX_HOME: directChatCodexOAuthProfile.home,
+            };
+            const quota = await codexProvider.readCodexRateLimit?.({
+              limitId: codexRateLimitId,
+              expectedAccountId: directChatCodexOAuthProfile.accountId,
+              cacheScope: JSON.stringify([
+                providerCooldownOwnerScope,
+                directChatCodexOAuthProfile.credentialFingerprint,
+              ]),
+              cwd,
+              options: {
+                assistantConfig: { ...(config.assistants.codex ?? {}) },
+                env: profileEnv,
+                protectedEnvKeys: [...new Set([...protectedEnvKeys, 'CODEX_HOME'])],
+                codexAuthProfile: {
+                  kind: 'user-oauth',
+                  accountId: directChatCodexOAuthProfile.accountId,
+                },
+              },
+            });
+            const snapshotAgeMs = quota ? Date.now() - quota.fetchedAt : Number.POSITIVE_INFINITY;
+            if (
+              quota?.limitId === codexRateLimitId &&
+              snapshotAgeMs >= 0 &&
+              snapshotAgeMs <= 30_000
+            ) {
+              codexQuotaState = quota.exhausted ? 'exhausted' : 'available';
+            } else {
+              getLog().info(
+                { taskType: taskTypeHint.taskType, limitId: codexRateLimitId },
+                'orchestrator.codex_rate_limit_unknown'
+              );
+            }
+          } catch {
+            // An unavailable provider-native snapshot leaves the configured
+            // primary unchanged and cannot trigger a fallback.
+            getLog().warn(
+              { taskType: taskTypeHint.taskType, limitId: codexRateLimitId },
+              'orchestrator.codex_rate_limit_read_failed'
+            );
+          }
+        }
+        const availability = (
+          request: ResolvedModelRequest,
+          _reference: string,
+          kind: 'primary' | 'fallback'
+        ):
+          | 'ready'
+          | 'cooldown'
+          | 'usage-warning'
+          | 'quota-exhausted'
+          | 'codex-rate-limit-exhausted'
+          | 'unusable' => {
+          const hasActorCredential =
+            request.provider === 'codex'
+              ? Boolean(directChatCodexOAuthProfile) ||
+                hasDirectChatCredential('codex', userProviderEnv, perUserProviderKeysEnabled)
+              : hasDirectChatCredential(
+                  request.provider,
+                  userProviderEnv,
+                  perUserProviderKeysEnabled,
+                  process.env,
+                  config.assistants[request.provider]
+                );
+          if (
+            request.provider === 'codex' &&
+            perUserProviderKeysEnabled &&
+            !directChatCodexOAuthProfile &&
+            !hasDirectChatCredential('codex', userProviderEnv, true)
+          ) {
+            return 'unusable';
+          }
+          if (
+            (kind === 'fallback' || request.provider !== chatRequest.provider) &&
+            !hasActorCredential
+          ) {
+            return 'unusable' as const;
+          }
+          const scope = providerCooldownScope(request.provider);
+          if (getProviderCooldownForModel(request.provider, scope, request.model)) {
+            return 'cooldown';
+          }
+          if (request.provider === 'copilot' && copilotQuotaMeter !== undefined) {
+            if (copilotQuotaState === 'exhausted') {
+              return kind === 'primary' ? 'quota-exhausted' : 'unusable';
+            }
+            if (kind === 'fallback' && copilotQuotaState === 'unknown') {
+              return 'unusable';
+            }
+          }
+          if (request.provider === 'codex' && codexRateLimitId !== undefined) {
+            if (codexQuotaState === 'exhausted') {
+              return kind === 'primary' ? 'codex-rate-limit-exhausted' : 'unusable';
+            }
+            if (kind === 'fallback' && codexQuotaState === 'unknown') {
+              return 'unusable';
+            }
+          }
+          if (request.provider === 'claude' && route.fallbackOnClaudeUsageWarning === true) {
+            const hasApplicableWarning = getProviderUsageWarnings(request.provider, scope).some(
+              warning => claudeUsageWarningAppliesToModel(warning.rateLimitType, request.model)
+            );
+            if (hasApplicableWarning) {
+              return kind === 'primary' ? 'usage-warning' : 'unusable';
+            }
+          }
+          return 'ready';
+        };
+        const result = selectChatTaskRoute(route, resolveRouteRequest, availability);
+        const primaryAvailability = routePrimaryRequest
+          ? availability(routePrimaryRequest, route.primary, 'primary')
+          : 'unusable';
+        if (result.kind === 'selected') {
+          chatRequest = result.selection.request;
+          if (result.selection.kind === 'cooldown-fallback') {
+            getLog().info(
+              {
+                taskType: taskTypeHint.taskType,
+                provider: chatRequest.provider,
+                model: chatRequest.model,
+              },
+              'orchestrator.task_route_cooldown_fallback_selected'
+            );
+          } else if (result.selection.kind === 'usage-warning-fallback') {
+            const primaryModel = resolveRouteRequest(route.primary)?.model;
+            const warning = getProviderUsageWarnings(
+              'claude',
+              providerCooldownScope('claude')
+            ).find(item => claudeUsageWarningAppliesToModel(item.rateLimitType, primaryModel));
+            getLog().info(
+              {
+                taskType: taskTypeHint.taskType,
+                provider: chatRequest.provider,
+                model: chatRequest.model,
+                rateLimitType: warning?.rateLimitType,
+              },
+              'orchestrator.task_route_usage_warning_fallback_selected'
+            );
+          } else if (result.selection.kind === 'copilot-quota-fallback') {
+            getLog().info(
+              {
+                taskType: taskTypeHint.taskType,
+                provider: chatRequest.provider,
+                model: chatRequest.model,
+                meter: copilotQuotaMeter,
+              },
+              'orchestrator.task_route_copilot_quota_fallback_selected'
+            );
+          } else if (result.selection.kind === 'codex-rate-limit-fallback') {
+            getLog().info(
+              {
+                taskType: taskTypeHint.taskType,
+                provider: chatRequest.provider,
+                model: chatRequest.model,
+                limitId: codexRateLimitId,
+              },
+              'orchestrator.task_route_codex_rate_limit_fallback_selected'
+            );
+          } else {
+            getLog().info(
+              {
+                taskType: taskTypeHint.taskType,
+                provider: chatRequest.provider,
+                model: chatRequest.model,
+              },
+              'orchestrator.task_route_primary_selected'
+            );
+          }
+        } else if (primaryAvailability === 'usage-warning' && routePrimaryRequest) {
+          // A usage warning is advisory. If every fallback is unavailable or
+          // quota-unknown, keep the configured primary for this turn.
+          chatRequest = routePrimaryRequest;
+          getLog().info(
+            { taskType: taskTypeHint.taskType, provider: chatRequest.provider },
+            'orchestrator.task_route_usage_warning_fallback_unavailable_primary_retained'
+          );
+        } else if (copilotQuotaState === 'exhausted' && hasCopilotRouteCandidate) {
+          getLog().warn(
+            { taskType: taskTypeHint.taskType, meter: copilotQuotaMeter, reason: result.kind },
+            'orchestrator.task_route_copilot_quota_exhausted_without_eligible_route'
+          );
+          try {
+            await platform.sendMessage(
+              conversationId,
+              'No eligible provider/model is available for this task route. The configured Copilot quota meter is exhausted, and Archon did not send this message. Choose an eligible provider/model or update this task route.'
+            );
+          } catch {
+            // A quota gate must not turn a failed platform notice into a provider attempt.
+          }
+          return;
+        } else if (codexQuotaState === 'exhausted' && routePrimaryRequest?.provider === 'codex') {
+          getLog().warn(
+            { taskType: taskTypeHint.taskType, limitId: codexRateLimitId, reason: result.kind },
+            'orchestrator.task_route_codex_rate_limit_exhausted_without_eligible_route'
+          );
+          try {
+            await platform.sendMessage(
+              conversationId,
+              'The configured Codex usage bucket is exhausted and no eligible configured fallback is available. Archon did not send this message; choose an eligible provider/model or update this task route.'
+            );
+          } catch {
+            // A quota gate must not turn a failed platform notice into a provider attempt.
+          }
+          return;
+        } else if (primaryAvailability === 'cooldown' && routePrimaryRequest) {
+          const cooldown = getProviderCooldownForModel(
+            routePrimaryRequest.provider,
+            providerCooldownScope(routePrimaryRequest.provider),
+            routePrimaryRequest.model
+          );
+          if (cooldown) {
+            await platform.sendMessage(
+              conversationId,
+              formatProviderCooldownMessage(cooldown, false)
+            );
+            return;
+          }
+          chatRequest = routePrimaryRequest;
+        } else if (!taskRoutingNudgedConversations.has(conversation.id)) {
+          taskRoutingNudgedConversations.add(conversation.id);
+          void platform
+            .sendMessage(
+              conversationId,
+              `The configured route for '${taskTypeHint.taskType}' has no eligible provider/model for this execution identity. Using the current provider. Check the route refs, registered provider capabilities, and this user's direct-chat credentials.`
+            )
+            .catch(() => undefined);
+          getLog().warn(
+            { taskType: taskTypeHint.taskType, reason: result.kind },
+            'orchestrator.task_route_unavailable'
+          );
+        }
+      }
+    }
+
+    const providerCooldown = getProviderCooldownForModel(
+      chatRequest.provider,
+      providerCooldownScope(chatRequest.provider),
+      chatRequest.model
+    );
+    if (providerCooldown) {
+      // A Claude native rate-limit/reset signal may select only an explicit
+      // configured fallback above. Never replay this message here.
+      await platform.sendMessage(
+        conversationId,
+        formatProviderCooldownMessage(providerCooldown, false)
+      );
+      return;
+    }
+
+    let session = await sessionDb.getActiveSession(conversation.id);
+    if (!session) {
+      session = await sessionDb.transitionSession(conversation.id, 'first-message', {
+        ai_assistant_type: chatRequest.provider,
+      });
+    } else if (session.ai_assistant_type !== chatRequest.provider) {
+      session = await sessionDb.transitionSession(conversation.id, 'provider-changed', {
+        codebase_id: conversation.codebase_id ?? undefined,
+        ai_assistant_type: chatRequest.provider,
+      });
+    }
     // Tier-fallback nudge (mirrors dag.model_provider_conflict): chat asks for
     // 'large'; when that tier is unset and a sibling preset answered, tell the
     // user ONCE PER CONVERSATION, non-blocking — the dedup Set below is what
@@ -2360,29 +3061,6 @@ export async function handleMessage(
       }
     }
     const providerKey = chatRequest.provider;
-    let dbEnvVars: Record<string, string> = {};
-    if (conversation.codebase_id) {
-      try {
-        dbEnvVars = await getCodebaseEnvVars(conversation.codebase_id);
-      } catch (error) {
-        getLog().warn(
-          { err: error as Error, codebaseId: conversation.codebase_id },
-          'codebase_env_vars_load_failed'
-        );
-      }
-    }
-    // Per-user AI-provider credentials (Phase 2): env-only delivery in direct
-    // chat — there's no per-call artifacts directory, so deliveries that need
-    // file writes (Codex `CODEX_HOME/auth.json` for the ChatGPT subscription
-    // path) are dropped here and only apply to workflow runs. Merged LAST so
-    // a connected user's keys win over file/db env. No-op when the feature is
-    // disabled or no execution identity resolved (sender, else creator).
-    const userProviderEnv =
-      isPerUserProviderKeysEnabled() && executionUserId
-        ? await resolveUserProviderEnvForChat(executionUserId)
-        : {};
-    const protectedEnvKeys = Object.keys(userProviderEnv);
-    const effectiveEnv = { ...(config.envVars ?? {}), ...dbEnvVars, ...userProviderEnv };
 
     // Warn if provider doesn't support env injection but env vars are configured
     if (Object.keys(effectiveEnv).length > 0) {
@@ -2425,6 +3103,17 @@ export async function handleMessage(
       model: chatRequest.model,
       systemPrompt,
     };
+    if (providerKey === 'codex' && directChatCodexOAuthProfile) {
+      requestOptions.env = {
+        ...effectiveEnv,
+        CODEX_HOME: directChatCodexOAuthProfile.home,
+      };
+      requestOptions.protectedEnvKeys = [...new Set([...(protectedEnvKeys ?? []), 'CODEX_HOME'])];
+      requestOptions.codexAuthProfile = {
+        kind: 'user-oauth',
+        accountId: directChatCodexOAuthProfile.accountId,
+      };
+    }
     if (chatRequest.preset) {
       applyPresetToRequestOptions(providerKey, chatRequest.preset, requestOptions);
     }
@@ -2444,15 +3133,33 @@ export async function handleMessage(
       if (titleRequest.preset) {
         applyPresetToRequestOptions(titleRequest.provider, titleRequest.preset, titleOptions);
       }
-      void generateAndSetTitle(
-        conversation.id,
-        message,
-        titleRequest.provider,
-        cwd,
-        undefined,
-        titleOptions.assistantConfig,
-        titleOptions
+      const titleHasActorCodexCredential = hasDirectChatCredential(
+        'codex',
+        userProviderEnv,
+        perUserProviderKeysEnabled
       );
+      if (
+        titleRequest.provider === 'codex' &&
+        perUserProviderKeysEnabled &&
+        !titleHasActorCodexCredential
+      ) {
+        // Title generation is fire-and-forget and may outlive the main turn's
+        // temporary OAuth profile. Never let it fall back to ambient Codex auth.
+        getLog().info(
+          { conversationId, userId: executionUserId },
+          'orchestrator.codex_title_generation_skipped_without_env_credential'
+        );
+      } else {
+        void generateAndSetTitle(
+          conversation.id,
+          message,
+          titleRequest.provider,
+          cwd,
+          undefined,
+          titleOptions.assistantConfig,
+          titleOptions
+        );
+      }
     }
 
     // 5. Send to AI provider
@@ -2552,6 +3259,8 @@ export async function handleMessage(
           session,
           isolationHints,
           conversation,
+          providerCooldownScope(aiClient.getType()),
+          allowClaudeSubscriptionUsageWarnings,
           issueContext,
           requestOptions,
           userId
@@ -2570,6 +3279,8 @@ export async function handleMessage(
           session,
           isolationHints,
           conversation,
+          providerCooldownScope(aiClient.getType()),
+          allowClaudeSubscriptionUsageWarnings,
           issueContext,
           requestOptions,
           userId
@@ -2629,6 +3340,18 @@ export async function handleMessage(
     } catch (sendError) {
       getLog().error({ err: toError(sendError), conversationId }, 'error_notification_failed');
     }
+  } finally {
+    if (directChatCodexOAuthProfile) {
+      await persistDirectChatCodexOAuthProfileRotation(directChatCodexOAuthProfile);
+      await rm(dirname(directChatCodexOAuthProfile.home), { recursive: true, force: true }).catch(
+        error => {
+          getLog().warn(
+            { err: error as Error, userId: directChatCodexOAuthProfile?.userId },
+            'orchestrator.codex_chat_oauth_profile_cleanup_failed'
+          );
+        }
+      );
+    }
   }
 }
 
@@ -2655,6 +3378,35 @@ function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn
   captureChatTurn(props);
 }
 
+function recordChatProviderCooldown(
+  provider: string,
+  scope: string,
+  rateLimitInfo: Record<string, unknown>,
+  allowSubscriptionUsageWarning: boolean
+): ProviderCooldown | undefined {
+  const cooldown = recordProviderCooldown(provider, scope, rateLimitInfo);
+  const usageWarning = allowSubscriptionUsageWarning
+    ? recordProviderUsageWarning(provider, scope, rateLimitInfo)
+    : undefined;
+  if (cooldown) {
+    getLog().warn(
+      { provider, resetAt: cooldown.resetAt },
+      'orchestrator.chat_provider_rate_limited'
+    );
+  }
+  if (usageWarning) {
+    getLog().info(
+      {
+        provider,
+        resetAt: usageWarning.resetAt,
+        rateLimitType: usageWarning.rateLimitType,
+      },
+      'orchestrator.chat_provider_usage_warning'
+    );
+  }
+  return cooldown;
+}
+
 // ─── Streaming Mode ─────────────────────────────────────────────────────────
 
 /**
@@ -2674,6 +3426,8 @@ async function handleStreamMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
+  providerCooldownScope: string,
+  allowClaudeSubscriptionUsageWarnings: boolean,
   issueContext?: string,
   requestOptions?: SendQueryOptions,
   userId?: string
@@ -2683,6 +3437,7 @@ async function handleStreamMode(
   let commandDetected = false;
   let commandFullyParsed = false;
   let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
+  let rateLimitCooldown: ProviderCooldown | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -2738,6 +3493,15 @@ async function handleStreamMode(
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
+    } else if (msg.type === 'rate_limit') {
+      rateLimitCooldown =
+        recordChatProviderCooldown(
+          aiClient.getType(),
+          providerCooldownScope,
+          msg.rateLimitInfo,
+          allowClaudeSubscriptionUsageWarnings
+        ) ?? rateLimitCooldown;
+      if (rateLimitCooldown) break;
     } else if (msg.type === 'result') {
       if (msg.isError && msg.errorSubtype === 'error_during_execution') {
         getLog().warn(
@@ -2812,7 +3576,23 @@ async function handleStreamMode(
   if (allMessages.length === 0) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
     // neither a completed nor a failed turn worth measuring.
+    if (rateLimitCooldown) {
+      await platform.sendMessage(
+        conversationId,
+        formatProviderCooldownMessage(rateLimitCooldown, true)
+      );
+    }
     getLog().debug({ conversationId }, 'no_ai_response');
+    return;
+  }
+
+  if (rateLimitCooldown) {
+    // A provider can emit partial text or tool activity before an exhausted
+    // event. Never parse that partial text as a workflow command or replay it.
+    await platform.sendMessage(
+      conversationId,
+      formatProviderCooldownMessage(rateLimitCooldown, true)
+    );
     return;
   }
 
@@ -2909,6 +3689,8 @@ async function handleBatchMode(
   session: { id: string; assistant_session_id: string | null },
   isolationHints: HandleMessageContext['isolationHints'],
   conversation: Conversation,
+  providerCooldownScope: string,
+  allowClaudeSubscriptionUsageWarnings: boolean,
   issueContext?: string,
   requestOptions?: SendQueryOptions,
   userId?: string
@@ -2921,6 +3703,7 @@ async function handleBatchMode(
   let commandDetected = false;
   let commandFullyParsed = false;
   let lastResult: { cost?: number; tokens?: TokenUsage; stopReason?: string } | undefined;
+  let rateLimitCooldown: ProviderCooldown | undefined;
 
   for await (const msg of aiClient.sendQuery(
     fullPrompt,
@@ -2977,6 +3760,15 @@ async function handleBatchMode(
         allChunks.push({ type: 'tool', content: toolMessage });
         getLog().debug({ toolName: msg.toolName }, 'tool_call');
       }
+    } else if (msg.type === 'rate_limit') {
+      rateLimitCooldown =
+        recordChatProviderCooldown(
+          aiClient.getType(),
+          providerCooldownScope,
+          msg.rateLimitInfo,
+          allowClaudeSubscriptionUsageWarnings
+        ) ?? rateLimitCooldown;
+      if (rateLimitCooldown) break;
     } else if (msg.type === 'result') {
       if (msg.isError && msg.errorSubtype === 'error_during_execution') {
         getLog().warn(
@@ -3072,9 +3864,26 @@ async function handleBatchMode(
   // Filter tool indicators and build final message
   const finalMessage = filterToolIndicators(assistantMessages);
 
+  if (rateLimitCooldown) {
+    // Preserve any partial answer as visible context, but do not interpret it
+    // as a workflow/project command after the provider reports exhaustion.
+    if (finalMessage) await platform.sendMessage(conversationId, finalMessage);
+    await platform.sendMessage(
+      conversationId,
+      formatProviderCooldownMessage(rateLimitCooldown, true)
+    );
+    return;
+  }
+
   if (!finalMessage) {
     // Intentionally NOT counted in chat_turn_handled — an empty response is
     // neither a completed nor a failed turn worth measuring.
+    if (rateLimitCooldown) {
+      await platform.sendMessage(
+        conversationId,
+        formatProviderCooldownMessage(rateLimitCooldown, true)
+      );
+    }
     getLog().debug({ conversationId }, 'no_ai_response');
     return;
   }

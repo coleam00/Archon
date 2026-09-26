@@ -4734,6 +4734,51 @@ export interface components {
       aliases?: {
         [key: string]: components['schemas']['TierEntry'];
       };
+      chatTaskRouting: {
+        enabled?: boolean;
+        routes?: {
+          question?: {
+            primary: string;
+            fallbacks?: string[];
+            fallbackOnClaudeUsageWarning?: boolean;
+            /** @enum {string} */
+            copilotQuotaMeter?: 'premium_interactions' | 'chat' | 'completions';
+            codexRateLimitId?: string;
+          };
+          project_work?: {
+            primary: string;
+            fallbacks?: string[];
+            fallbackOnClaudeUsageWarning?: boolean;
+            /** @enum {string} */
+            copilotQuotaMeter?: 'premium_interactions' | 'chat' | 'completions';
+            codexRateLimitId?: string;
+          };
+          project_setup?: {
+            primary: string;
+            fallbacks?: string[];
+            fallbackOnClaudeUsageWarning?: boolean;
+            /** @enum {string} */
+            copilotQuotaMeter?: 'premium_interactions' | 'chat' | 'completions';
+            codexRateLimitId?: string;
+          };
+          run_management?: {
+            primary: string;
+            fallbacks?: string[];
+            fallbackOnClaudeUsageWarning?: boolean;
+            /** @enum {string} */
+            copilotQuotaMeter?: 'premium_interactions' | 'chat' | 'completions';
+            codexRateLimitId?: string;
+          };
+          unclear?: {
+            primary: string;
+            fallbacks?: string[];
+            fallbackOnClaudeUsageWarning?: boolean;
+            /** @enum {string} */
+            copilotQuotaMeter?: 'premium_interactions' | 'chat' | 'completions';
+            codexRateLimitId?: string;
+          };
+        };
+      };
     };
     ProviderDefaults: {
       [key: string]: unknown;

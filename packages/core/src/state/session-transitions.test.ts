@@ -18,6 +18,10 @@ describe('session-transitions', () => {
       expect(shouldCreateNewSession('plan-to-execute')).toBe(true);
     });
 
+    test('creates a fresh provider-native session after a direct-chat provider change', () => {
+      expect(shouldCreateNewSession('provider-changed')).toBe(true);
+    });
+
     test('returns false for first-message (session created differently)', () => {
       expect(shouldCreateNewSession('first-message')).toBe(false);
     });
@@ -39,6 +43,10 @@ describe('session-transitions', () => {
   describe('shouldDeactivateSession', () => {
     test('returns true for plan-to-execute', () => {
       expect(shouldDeactivateSession('plan-to-execute')).toBe(true);
+    });
+
+    test('deactivates the prior provider-native session after a direct-chat provider change', () => {
+      expect(shouldDeactivateSession('provider-changed')).toBe(true);
     });
 
     test('returns true for all deactivate-only triggers', () => {

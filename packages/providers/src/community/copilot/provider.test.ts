@@ -103,9 +103,16 @@ const resumeSessionSpy = mock((_id: string, _opts: unknown): Promise<FakeSession
 });
 
 let lastClientOpts: Record<string, unknown> | undefined;
+let nextQuotaResult: { quotaSnapshots: Record<string, unknown> } = { quotaSnapshots: {} };
+const getQuotaSpy = mock(async (_opts: Record<string, string> = {}) => nextQuotaResult);
+const startClientSpy = mock(async () => undefined);
+const stopClientSpy = mock(async () => [] as Error[]);
 class FakeCopilotClient {
   createSession = createSessionSpy;
   resumeSession = resumeSessionSpy;
+  rpc = { account: { getQuota: getQuotaSpy } };
+  start = startClientSpy;
+  stop = stopClientSpy;
   constructor(opts: Record<string, unknown>) {
     lastClientOpts = opts;
   }
@@ -150,6 +157,150 @@ describe('CopilotProvider.getType / getCapabilities', () => {
     expect(c.effortControl).toBe(true);
     expect(c.mcp).toBe(true);
     expect(c.hooks).toBe(false);
+  });
+});
+
+describe('CopilotProvider.readAccountQuota', () => {
+  beforeEach(() => {
+    getQuotaSpy.mockReset();
+    getQuotaSpy.mockImplementation(async () => nextQuotaResult);
+    startClientSpy.mockReset();
+    startClientSpy.mockImplementation(async () => undefined);
+    stopClientSpy.mockReset();
+    stopClientSpy.mockImplementation(async () => []);
+    lastClientOpts = undefined;
+  });
+
+  test('reads the explicitly named meter with the request credential and caches the snapshot', async () => {
+    nextQuotaResult = {
+      quotaSnapshots: {
+        premium_interactions: {
+          isUnlimitedEntitlement: false,
+          entitlementRequests: 100,
+          usedRequests: 100,
+          remainingPercentage: 0,
+          resetDate: '2026-10-01T00:00:00.000Z',
+        },
+        chat: {
+          isUnlimitedEntitlement: false,
+          entitlementRequests: 500,
+          usedRequests: 10,
+          remainingPercentage: 98,
+        },
+      },
+    };
+    const provider = new CopilotProvider();
+    const request = {
+      meter: 'premium_interactions' as const,
+      cacheScope: `copilot-quota-${crypto.randomUUID()}`,
+      cwd: '/tmp',
+      options: { env: { COPILOT_GITHUB_TOKEN: 'quota-test-token' } },
+    };
+
+    const first = await provider.readAccountQuota(request);
+    const second = await provider.readAccountQuota(request);
+
+    expect(first).toMatchObject({
+      meter: 'premium_interactions',
+      unlimited: false,
+      exhausted: true,
+      usedRequests: 100,
+      entitlementRequests: 100,
+      remainingPercentage: 0,
+    });
+    expect(second).toEqual(first);
+    expect(getQuotaSpy).toHaveBeenCalledTimes(1);
+    expect(getQuotaSpy).toHaveBeenCalledWith({ gitHubToken: 'quota-test-token' });
+    expect(startClientSpy).toHaveBeenCalledTimes(1);
+    expect(stopClientSpy).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not let an install token shadow protected per-user generic GitHub auth', async () => {
+    const previousCopilotToken = process.env.COPILOT_GITHUB_TOKEN;
+    process.env.COPILOT_GITHUB_TOKEN = 'install-token';
+    nextQuotaResult = {
+      quotaSnapshots: {
+        premium_interactions: {
+          isUnlimitedEntitlement: false,
+          entitlementRequests: 100,
+          usedRequests: 10,
+          remainingPercentage: 90,
+        },
+      },
+    };
+
+    try {
+      await new CopilotProvider().readAccountQuota({
+        meter: 'premium_interactions',
+        cacheScope: `copilot-user-quota-${crypto.randomUUID()}`,
+        cwd: '/tmp',
+        options: {
+          assistantConfig: { useLoggedInUser: false },
+          env: { GH_TOKEN: 'actor-token' },
+          protectedEnvKeys: ['GH_TOKEN'],
+        },
+      });
+
+      expect(getQuotaSpy).toHaveBeenCalledWith({ gitHubToken: 'actor-token' });
+      expect(lastClientOpts?.gitHubToken).toBe('actor-token');
+      expect(lastClientOpts?.env).toMatchObject({ GH_TOKEN: 'actor-token' });
+      expect(lastClientOpts?.env).not.toHaveProperty('COPILOT_GITHUB_TOKEN');
+    } finally {
+      if (previousCopilotToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+      else process.env.COPILOT_GITHUB_TOKEN = previousCopilotToken;
+    }
+  });
+
+  test('keeps unlimited entitlement distinct from exhausted usage', async () => {
+    nextQuotaResult = {
+      quotaSnapshots: {
+        completions: {
+          isUnlimitedEntitlement: true,
+          entitlementRequests: -1,
+          usedRequests: 9_999,
+          remainingPercentage: 0,
+        },
+      },
+    };
+
+    await expect(
+      new CopilotProvider().readAccountQuota({
+        meter: 'completions',
+        cacheScope: `copilot-unlimited-${crypto.randomUUID()}`,
+        cwd: '/tmp',
+      })
+    ).resolves.toMatchObject({
+      meter: 'completions',
+      unlimited: true,
+      exhausted: false,
+      usedRequests: 9_999,
+      entitlementRequests: -1,
+    });
+  });
+
+  test('treats absent, malformed, or unsupported quota data as unknown', async () => {
+    for (const snapshot of [
+      undefined,
+      null,
+      { isUnlimitedEntitlement: false, entitlementRequests: 20, usedRequests: 21 },
+      {
+        isUnlimitedEntitlement: false,
+        entitlementRequests: 20,
+        usedRequests: 21,
+        remainingPercentage: 101,
+      },
+    ]) {
+      nextQuotaResult = { quotaSnapshots: { chat: snapshot } };
+      await expect(
+        new CopilotProvider().readAccountQuota({
+          meter: 'chat',
+          cacheScope: `copilot-unknown-${crypto.randomUUID()}`,
+          cwd: '/tmp',
+        })
+      ).resolves.toBeUndefined();
+    }
+
+    expect(getQuotaSpy).toHaveBeenCalledTimes(4);
   });
 });
 

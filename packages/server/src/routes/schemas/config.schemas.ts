@@ -3,6 +3,23 @@
  */
 import { z } from '@hono/zod-openapi';
 import { effortLevelSchema, rejectRetiredThinking } from '@archon/workflows/schemas/effort';
+import { ORCHESTRATOR_TASK_TYPES } from '@archon/core';
+
+const chatTaskRoutingSchema = z.object({
+  enabled: z.boolean().optional(),
+  routes: z
+    .partialRecord(
+      z.enum(ORCHESTRATOR_TASK_TYPES),
+      z.object({
+        primary: z.string(),
+        fallbacks: z.array(z.string()).optional(),
+        fallbackOnClaudeUsageWarning: z.boolean().optional(),
+        copilotQuotaMeter: z.enum(['premium_interactions', 'chat', 'completions']).optional(),
+        codexRateLimitId: z.string().trim().min(1).max(128).optional(),
+      })
+    )
+    .optional(),
+});
 
 /** Schema for the safe config subset returned to web clients (mirrors SafeConfig in config-types.ts). */
 const providerDefaultsSchema = z.record(z.string(), z.unknown()).openapi('ProviderDefaults');
@@ -65,6 +82,7 @@ export const safeConfigSchema = z
     tierDefaults: tiersConfigSchema.optional(),
     // Configured @custom model aliases (merged repo > global). Not secrets.
     aliases: z.record(z.string(), tierEntrySchema).optional(),
+    chatTaskRouting: chatTaskRoutingSchema,
   })
   .openapi('SafeConfig');
 

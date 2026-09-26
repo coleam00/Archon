@@ -21,6 +21,7 @@ import type {
   ProviderDefaultsMap,
 } from '@archon/providers/types';
 import type { RawAliasesConfig, RawTiersConfig } from '@archon/workflows/model-validation';
+import type { ChatTaskRoutingConfig } from './chat-task-routing';
 import {
   workflowRunContinuationConfigSchema,
   type WorkflowRunConfigLayer,
@@ -191,6 +192,9 @@ export interface GlobalConfig {
 
   /** Default-off policy for continuing terminal quota failures after time passes. */
   workflows?: WorkflowContinuationConfig;
+
+  /** Per-install direct-chat routing by local task-type hint. */
+  chatTaskRouting?: ChatTaskRoutingConfig;
 }
 
 // Ordinary global/repo config remains forward-compatible: unlike the explicitly
@@ -403,6 +407,8 @@ export interface MergedConfig {
     quotaMaxAttempts: number;
     quotaDeadlineMs: number;
   };
+  /** Opt-in per-install direct-chat routes; never used for workflow execution. */
+  chatTaskRouting: ChatTaskRoutingConfig;
   commands: {
     /**
      * Additional command folder to search (relative to repo root)
@@ -479,4 +485,6 @@ export interface SafeConfig {
   tierDefaults?: RawTiersConfig;
   /** Configured @custom model aliases (merged repo > global). Not secrets. */
   aliases?: RawAliasesConfig;
+  /** Per-install direct-chat route policy. Contains model refs, never credentials. */
+  chatTaskRouting: ChatTaskRoutingConfig;
 }

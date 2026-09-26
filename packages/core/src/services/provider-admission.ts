@@ -16,6 +16,8 @@ import type {
   MessageChunk,
   ProviderAdmissionEvent,
   ProviderAttemptAdmission,
+  ProviderAccountQuotaRequest,
+  ProviderCodexRateLimitRequest,
   SendQueryOptions,
 } from '@archon/providers';
 import { loadProviderConcurrencyCaps } from '../config/provider-concurrency';
@@ -171,5 +173,17 @@ export function getAgentProvider(id: string, pollMs = DEFAULT_POLL_MS): IAgentPr
     getCapabilities: () => provider.getCapabilities(),
     sendQuery: (prompt, cwd, resumeSessionId, options) =>
       admittedQuery(id, provider, pollMs, prompt, cwd, resumeSessionId, options),
+    ...(provider.readAccountQuota
+      ? {
+          readAccountQuota: (request: ProviderAccountQuotaRequest) =>
+            provider.readAccountQuota?.(request) ?? Promise.resolve(undefined),
+        }
+      : {}),
+    ...(provider.readCodexRateLimit
+      ? {
+          readCodexRateLimit: (request: ProviderCodexRateLimitRequest) =>
+            provider.readCodexRateLimit?.(request) ?? Promise.resolve(undefined),
+        }
+      : {}),
   };
 }

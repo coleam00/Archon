@@ -20,6 +20,9 @@ export default tseslint.config(
       'node_modules/**',
       'packages/*/node_modules/**',
       'packages/*/dist/**',
+      // Pinned upstream source is preserved under its own license and is type-checked
+      // with core, but is not rewritten to match Archon's first-party lint rules.
+      'packages/core/src/orchestrator/vendor/**',
       'dist/**',
       'coverage/**',
       '.agents/examples/**',

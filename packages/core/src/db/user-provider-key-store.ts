@@ -83,6 +83,62 @@ export async function saveUserProviderKey(params: SaveUserProviderKeyParams): Pr
   );
 }
 
+/**
+ * Persist a Codex CLI refresh from a temporary direct-chat profile only when
+ * the credential row still contains the exact access/refresh pair from which
+ * that profile was created. The compare-and-set prevents a late turn from
+ * overwriting a newer credential or a user's reconnect.
+ */
+export async function persistDirectChatCodexOAuthRotationIfCurrent(params: {
+  userId: string;
+  provider: string;
+  expectedAccess: string;
+  expectedRefresh: string;
+  refreshed: OpenAiOAuthCredentials;
+}): Promise<'saved' | 'already-current' | 'stale' | 'missing'> {
+  const provider = params.provider;
+  if (normalizeCredentialVendor(provider) !== OPENAI_SUBSCRIPTION_VENDOR) return 'missing';
+  const row = await getUserProviderKeyRecord(params.userId, provider);
+  if (row?.kind !== 'oauth' || !row.oauth_creds_encrypted) return 'missing';
+
+  let current: unknown;
+  try {
+    current = JSON.parse(decryptToken(row.oauth_creds_encrypted, getEncryptionKey()));
+  } catch (err) {
+    getLog().error(
+      { err: err as Error, userId: params.userId, provider },
+      'user_provider_key.codex_chat_rotation_current_decrypt_failed'
+    );
+    return 'stale';
+  }
+  if (typeof current !== 'object' || current === null) return 'stale';
+  const currentCredentials = current as Partial<OpenAiOAuthCredentials>;
+  if (
+    currentCredentials.access === params.refreshed.access &&
+    currentCredentials.refresh === params.refreshed.refresh
+  ) {
+    return 'already-current';
+  }
+  if (
+    currentCredentials.access !== params.expectedAccess ||
+    currentCredentials.refresh !== params.expectedRefresh ||
+    currentCredentials.accountId !== params.refreshed.accountId
+  ) {
+    return 'stale';
+  }
+
+  const rotatedCiphertext = encryptToken(JSON.stringify(params.refreshed), getEncryptionKey());
+  const dialect = getDialect();
+  const updated = await pool.query<{ provider: string }>(
+    `UPDATE remote_agent_user_provider_keys
+     SET oauth_creds_encrypted = $1, updated_at = ${dialect.now()}
+     WHERE user_id = $2 AND provider = $3 AND kind = 'oauth' AND oauth_creds_encrypted = $4
+     RETURNING provider`,
+    [rotatedCiphertext, params.userId, provider, row.oauth_creds_encrypted]
+  );
+  return updated.rows.length === 1 ? 'saved' : 'stale';
+}
+
 /** Internal: fetch the raw row for `(userId, provider)` or null. */
 export async function getUserProviderKeyRecord(
   userId: string,

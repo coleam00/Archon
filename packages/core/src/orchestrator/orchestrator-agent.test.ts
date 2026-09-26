@@ -31,6 +31,9 @@ import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { toBranchName } from '@archon/git';
 import type { IAgentProvider, ProviderCapabilities } from '@archon/providers/types';
+import type * as Providers from '@archon/providers';
+import type * as LayaTaskTypeHintModule from './laya-task-type-hint';
+import type { OrchestratorTaskType } from './task-types';
 import type * as Git from '@archon/git';
 import type * as ConfigLoader from '../config/config-loader';
 import type * as ConversationDb from '../db/conversations';
@@ -350,18 +353,43 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   requiresAllPropertiesRequired: false,
 };
 
+const mockReadAccountQuota = mock<NonNullable<IAgentProvider['readAccountQuota']>>(
+  async () => undefined
+);
+const mockReadCodexRateLimit = mock<NonNullable<IAgentProvider['readCodexRateLimit']>>(
+  async () => undefined
+);
+const mockGetAgentProvider = mock<typeof Providers.getAgentProvider>(provider => ({
+  sendQuery: mockSendQuery,
+  getType: mock((): string => provider),
+  getCapabilities: mock(() => ({ ...DEFAULT_PROVIDER_CAPS })),
+  ...(provider === 'copilot' ? { readAccountQuota: mockReadAccountQuota } : {}),
+  ...(provider === 'codex' ? { readCodexRateLimit: mockReadCodexRateLimit } : {}),
+}));
+const mockParseProviderRunModel = mock<typeof Providers.parseProviderRunModel>(
+  (_provider, model) => model
+);
+const mockGetRegistration = mock<typeof Providers.getRegistration>(provider => {
+  const vendor =
+    provider === 'codex' ? 'openai' : provider === 'copilot' ? 'github-copilot' : 'anthropic';
+  return {
+    credentials: {
+      kind: 'static',
+      specs: [{ vendor, displayName: vendor, kinds: ['api_key'] }],
+    },
+  } as unknown as ReturnType<typeof Providers.getRegistration>;
+});
+
 mock.module('@archon/providers', () => ({
-  getAgentProvider: mock(() => ({
-    sendQuery: mockSendQuery,
-    getType: mock(() => 'claude'),
-    getCapabilities: mock(() => ({})),
-  })),
+  getAgentProvider: mockGetAgentProvider,
   // `effortControl` decides whether a tier's `effort` reaches the provider, and
   // `isRegisteredProvider` gates that lookup — both read by
   // `validEffortsForProvider` (@archon/workflows/model-validation, #2556).
   // Omitting either lets the REAL implementation run against an empty registry.
   getProviderCapabilities: mock(() => ({ ...DEFAULT_PROVIDER_CAPS })),
   isRegisteredProvider: mock(() => true),
+  getRegistration: mockGetRegistration,
+  parseProviderRunModel: mockParseProviderRunModel,
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
   // subset of the generated map (the chat inject tests deliver through it).
@@ -502,9 +530,10 @@ const mockAddMessage = mock<typeof MessageDb.addMessage>((conversationId, role, 
 const mockGetRecentWorkflowResultMessages = mock<typeof MessageDb.getRecentWorkflowResultMessages>(
   () => Promise.resolve([])
 );
+const mockListMessages = mock<typeof MessageDb.listMessages>(() => Promise.resolve([]));
 mock.module('../db/messages', () => ({
   addMessage: mockAddMessage,
-  listMessages: mock(() => Promise.resolve([])),
+  listMessages: mockListMessages,
   getRecentWorkflowResultMessages: mockGetRecentWorkflowResultMessages,
 }));
 
@@ -584,6 +613,17 @@ mock.module('../db/user-ai-prefs-store', () => ({
   setUserAliases: mock(() => Promise.resolve()),
   setUserDefault: mock(() => Promise.resolve()),
   clearUserAiPrefs: mock(() => Promise.resolve()),
+}));
+
+const mockGetLayaTaskTypeHint = mock<typeof LayaTaskTypeHintModule.getLayaTaskTypeHint>(() =>
+  Promise.resolve(undefined)
+);
+const mockIsLayaTaskTypeHintsEnabled = mock<
+  typeof LayaTaskTypeHintModule.isLayaTaskTypeHintsEnabled
+>(() => false);
+mock.module('./laya-task-type-hint', () => ({
+  getLayaTaskTypeHint: mockGetLayaTaskTypeHint,
+  isLayaTaskTypeHintsEnabled: mockIsLayaTaskTypeHintsEnabled,
 }));
 
 // ─── Import module under test (AFTER all mocks) ───────────────────────────────
@@ -1335,6 +1375,7 @@ function makeConfig(overrides: Partial<MergedConfig> = {}): MergedConfig {
       quotaMaxAttempts: 1,
       quotaDeadlineMs: 86_400_000,
     },
+    chatTaskRouting: { enabled: false, routes: {} },
     commands: { autoLoad: true },
     defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
     envVars: {},
@@ -4940,6 +4981,7 @@ describe('stale session ID clearing on error_during_execution', () => {
 
 describe('handleMessage — multi-chunk command accumulation (regression)', () => {
   beforeEach(() => {
+    mockLogger.warn.mockClear();
     mockSendQuery.mockReset();
     mockGetOrCreateConversation.mockReset();
     mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
@@ -4963,6 +5005,79 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
     mockParseCommand.mockReset();
     mockCreateCodebase.mockClear();
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
+  });
+
+  test('stream mode stops after a native exhaustion signal and blocks later sends for that credential', async () => {
+    const conversation = makeConversation({ id: `quota-${crypto.randomUUID()}` });
+    const userId = `quota-user-${crypto.randomUUID()}`;
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(true);
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(conversation));
+    let yieldedAfterLimit = false;
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Partial response.' };
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1_000) + 60 },
+      };
+      yieldedAfterLimit = true;
+      yield {
+        type: 'assistant',
+        content: '\n/invoke-workflow test-workflow --project test-project',
+      };
+      yield { type: 'result', sessionId: 'session-after-limit' };
+    });
+
+    const platform = makePlatform();
+    (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
+
+    await handleMessage(platform, 'conv-1', 'please help with this task', { userId });
+
+    expect(yieldedAfterLimit).toBe(false);
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'Partial response.');
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('the reply may be incomplete')
+    );
+
+    await handleMessage(platform, 'conv-1', 'try again', { userId });
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Archon did not send this message to the provider')
+    );
+  });
+
+  test('batch mode does not dispatch a command that arrives after a native exhaustion signal', async () => {
+    const conversation = makeConversation({ id: `quota-batch-${crypto.randomUUID()}` });
+    const userId = `quota-user-${crypto.randomUUID()}`;
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(true);
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(conversation));
+    let yieldedAfterLimit = false;
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'Partial response.' };
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1_000) + 60 },
+      };
+      yieldedAfterLimit = true;
+      yield {
+        type: 'assistant',
+        content: '\n/invoke-workflow test-workflow --project test-project',
+      };
+    });
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'please help with this task', { userId });
+
+    expect(yieldedAfterLimit).toBe(false);
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'Partial response.');
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('the reply may be incomplete')
+    );
   });
 
   test('stream mode — register-project split across 3 chunks', async () => {
@@ -5180,6 +5295,952 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     expect(mockCreateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'Foo', default_cwd: await canonicalizeProjectPath('/path') })
     );
+  });
+});
+
+describe('handleMessage — opt-in task routing', () => {
+  const taskRouteCases: Array<{ taskType: OrchestratorTaskType; model: string }> = [
+    { taskType: 'question', model: 'question-route-model' },
+    { taskType: 'project_work', model: 'project-work-route-model' },
+    { taskType: 'project_setup', model: 'project-setup-route-model' },
+    { taskType: 'run_management', model: 'run-management-route-model' },
+    { taskType: 'unclear', model: 'unclear-route-model' },
+  ];
+
+  beforeEach(() => {
+    mockLogger.warn.mockClear();
+    mockSendQuery.mockReset();
+    mockSendQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'result', sessionId: 'provider-session' };
+    });
+    mockGetAgentProvider.mockClear();
+    mockReadAccountQuota.mockReset();
+    mockReadAccountQuota.mockImplementation(async () => undefined);
+    mockReadCodexRateLimit.mockReset();
+    mockReadCodexRateLimit.mockImplementation(async () => undefined);
+    mockGetRegistration.mockClear();
+    mockParseProviderRunModel.mockClear();
+    mockGetLayaTaskTypeHint.mockReset();
+    mockGetLayaTaskTypeHint.mockResolvedValue({ taskType: 'project_work', probability: 0.95 });
+    mockIsLayaTaskTypeHintsEnabled.mockReturnValue(true);
+    mockListMessages.mockReset();
+    mockListMessages.mockResolvedValue([]);
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ user_id: 'route-user' }))
+    );
+    mockGetActiveSession.mockReset();
+    mockGetActiveSession.mockImplementation(() => Promise.resolve(null));
+    mockTransitionSession.mockReset();
+    mockTransitionSession.mockImplementation(async (_conversationId, _trigger, options) =>
+      makeSession({ ai_assistant_type: options?.ai_assistant_type ?? 'claude' })
+    );
+    mockGetRecentWorkflowResultMessages.mockReset();
+    mockGetRecentWorkflowResultMessages.mockImplementation(() => Promise.resolve([]));
+    mockDiscoverWorkflowsWithConfig.mockReset();
+    mockDiscoverWorkflowsWithConfig.mockImplementation(() =>
+      Promise.resolve({ workflows: [], errors: [] })
+    );
+    mockListCodebases.mockReset();
+    mockListCodebases.mockImplementation(() => Promise.resolve([]));
+    mockLoadConfig.mockReset();
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve(
+        makeConfig({
+          aliases: {
+            '@task-primary': { provider: 'claude', model: 'opus' },
+            '@task-fallback': { provider: 'codex', model: 'gpt-5.5' },
+          },
+          chatTaskRouting: {
+            enabled: true,
+            routes: {
+              project_work: {
+                primary: '@task-fallback',
+                fallbacks: ['@task-primary'],
+              },
+            },
+          },
+        })
+      )
+    );
+    mockGetUserAiPrefsDb.mockReset();
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({}));
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(true);
+    mockListDecryptedUserProviderCredentials.mockReset();
+    mockListDecryptedUserProviderCredentials.mockImplementation(async () => [
+      { provider: 'openai', cred: { kind: 'api_key', apiKey: 'user-openai-key' } },
+    ]);
+  });
+
+  test('routes only after local high-confidence hint and starts a provider-native session', async () => {
+    const prior = makeSession({ ai_assistant_type: 'claude', assistant_session_id: 'claude-old' });
+    mockGetActiveSession.mockResolvedValueOnce(prior);
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
+    expect(mockTransitionSession).toHaveBeenCalledWith(
+      'conv-1-db',
+      'provider-changed',
+      expect.objectContaining({ ai_assistant_type: 'codex' })
+    );
+    expect(mockSendQuery.mock.calls[0]?.[2]).toBeUndefined();
+    expect(mockSendQuery.mock.calls[0]?.[3]).toMatchObject({
+      model: 'gpt-5.5',
+      env: { OPENAI_API_KEY: 'user-openai-key' },
+    });
+  });
+
+  test('classifies with only the recent owned user and assistant turns, excluding the current message', async () => {
+    mockListMessages.mockResolvedValueOnce([
+      makeMessage({ role: 'user', content: 'Please review this project.' }),
+      makeMessage({ role: 'assistant', content: 'I can review it.' }),
+      makeMessage({
+        role: 'system' as unknown as MessageRow['role'],
+        content: 'internal-only system context',
+      }),
+      makeMessage({ role: 'user', content: 'What about this month?' }),
+    ]);
+
+    await handleMessage(makePlatform(), 'conv-1', 'What about this month?', {
+      userId: 'route-user',
+    });
+
+    expect(mockListMessages).toHaveBeenCalledWith('conv-1-db', 8);
+    expect(mockGetLayaTaskTypeHint).toHaveBeenCalledWith('What about this month?', [
+      { role: 'user', content: 'Please review this project.' },
+      { role: 'assistant', content: 'I can review it.' },
+    ]);
+  });
+
+  test('does not read conversation history or classify when local Laya is disabled', async () => {
+    mockIsLayaTaskTypeHintsEnabled.mockReturnValue(false);
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockListMessages).not.toHaveBeenCalled();
+    expect(mockGetLayaTaskTypeHint).not.toHaveBeenCalled();
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+  });
+
+  for (const { taskType, model } of taskRouteCases) {
+    test(`uses the configured ${taskType} route for its typed Laya label`, async () => {
+      const routeReference = `@route-${taskType}`;
+      mockGetLayaTaskTypeHint.mockResolvedValueOnce({ taskType, probability: 0.95 });
+      mockLoadConfig.mockResolvedValueOnce(
+        makeConfig({
+          aliases: { [routeReference]: { provider: 'codex', model } },
+          chatTaskRouting: {
+            enabled: true,
+            routes: { [taskType]: { primary: routeReference } },
+          },
+        })
+      );
+
+      await handleMessage(makePlatform(), 'conv-1', 'route this task by its local label', {
+        userId: 'route-user',
+      });
+
+      expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
+      expect(mockSendQuery.mock.calls[0]?.[3]).toMatchObject({
+        model,
+        env: { OPENAI_API_KEY: 'user-openai-key' },
+      });
+    });
+  }
+
+  test('an explicit user provider pin takes precedence over the task route', async () => {
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({
+      defaultProvider: 'claude',
+      defaultModel: 'haiku',
+    });
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+    expect(mockSendQuery.mock.calls[0]?.[3]).toMatchObject({ model: 'haiku' });
+    expect(mockTransitionSession).not.toHaveBeenCalledWith(
+      'conv-1-db',
+      'provider-changed',
+      expect.anything()
+    );
+  });
+
+  test('an explicit provider pin alone takes precedence over the task route', async () => {
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({ defaultProvider: 'claude' });
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+    expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+  });
+
+  test('an explicit model pin alone prevents task routing from changing providers', async () => {
+    mockGetUserAiPrefsDb.mockResolvedValueOnce({ defaultModel: 'sonnet' });
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+    expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+  });
+
+  test('a missing local task hint keeps the existing provider', async () => {
+    mockGetLayaTaskTypeHint.mockResolvedValueOnce(undefined);
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+    expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+  });
+
+  test('a disabled route map cannot override a high-confidence task hint', async () => {
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({
+        aliases: { '@task-fallback': { provider: 'codex', model: 'gpt-5.5' } },
+        chatTaskRouting: {
+          enabled: false,
+          routes: { project_work: { primary: '@task-fallback' } },
+        },
+      })
+    );
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+    expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+  });
+
+  test('does not borrow an install OpenAI key when the current user has no direct-chat key', async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    const conversationId = `no-install-key-${crypto.randomUUID()}`;
+    process.env.OPENAI_API_KEY = 'install-only-key';
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([]);
+    mockGetOrCreateConversation.mockResolvedValueOnce(
+      makeConversation({ id: conversationId, user_id: 'route-user' })
+    );
+
+    try {
+      const platform = makePlatform();
+      await handleMessage(platform, 'conv-1', 'implement a project change', {
+        userId: 'route-user',
+      });
+
+      expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+      expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'conv-1',
+        expect.stringContaining('no eligible provider/model for this execution identity')
+      );
+    } finally {
+      if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalKey;
+    }
+  });
+
+  test('a Claude SDK rate-limit state enables fallback only on the next independent turn', async () => {
+    const conversationId = `routed-cooldown-${crypto.randomUUID()}`;
+    const userId = `routed-user-${crypto.randomUUID()}`;
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: conversationId, user_id: userId }))
+    );
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve(
+        makeConfig({
+          aliases: {
+            '@task-primary': { provider: 'claude', model: 'opus' },
+            '@task-fallback': { provider: 'codex', model: 'gpt-5.5' },
+          },
+          chatTaskRouting: {
+            enabled: true,
+            routes: {
+              project_work: {
+                primary: '@task-primary',
+                fallbacks: ['@task-fallback'],
+              },
+            },
+          },
+        })
+      )
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: { status: 'rejected', resetsAt: Math.floor(Date.now() / 1_000) + 60 },
+      };
+    });
+    mockGetActiveSession
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        makeSession({ conversation_id: conversationId, ai_assistant_type: 'claude' })
+      );
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', { userId });
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(1, 'claude');
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+
+    await handleMessage(makePlatform(), 'conv-1', 'continue the project change', { userId });
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(2, 'codex');
+    expect(mockSendQuery).toHaveBeenCalledTimes(2);
+    expect(mockSendQuery.mock.calls[1]?.[2]).toBeUndefined();
+  });
+
+  test('uses an explicit task fallback after a Claude subscription warning', async () => {
+    const conversationId = `routed-usage-${crypto.randomUUID()}`;
+    const userId = `routed-usage-user-${crypto.randomUUID()}`;
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: conversationId, user_id: userId }))
+    );
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve(
+        makeConfig({
+          aliases: {
+            '@task-primary': { provider: 'claude', model: 'opus' },
+            '@task-fallback': { provider: 'codex', model: 'gpt-5.5' },
+          },
+          chatTaskRouting: {
+            enabled: true,
+            routes: {
+              project_work: {
+                primary: '@task-primary',
+                fallbacks: ['@task-fallback'],
+                fallbackOnClaudeUsageWarning: true,
+              },
+            },
+          },
+        })
+      )
+    );
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      {
+        provider: 'anthropic',
+        cred: { kind: 'oauth', oauthApiKey: 'fixture-claude-oauth', rawCreds: {} },
+      },
+      { provider: 'openai', cred: { kind: 'api_key', apiKey: 'user-openai-key' } },
+    ]);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: {
+          status: 'allowed_warning',
+          resetsAt: Math.floor(Date.now() / 1_000) + 60,
+          rateLimitType: 'five_hour',
+        },
+      };
+      yield { type: 'assistant', content: 'Claude response' };
+      yield { type: 'result', sessionId: 'claude-session' };
+    });
+    mockGetActiveSession
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        makeSession({ conversation_id: conversationId, ai_assistant_type: 'claude' })
+      );
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', { userId });
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(1, 'claude');
+
+    await handleMessage(makePlatform(), 'conv-1', 'continue the project change', { userId });
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(2, 'codex');
+    expect(mockSendQuery.mock.calls[1]?.[2]).toBeUndefined();
+    expect(mockSendQuery.mock.calls[1]?.[3]).toMatchObject({
+      env: { OPENAI_API_KEY: 'user-openai-key' },
+    });
+  });
+
+  test('does not carry a Claude warning across a per-user credential rotation', async () => {
+    const conversationId = `routed-warning-rotation-${crypto.randomUUID()}`;
+    const userId = `routed-warning-rotation-user-${crypto.randomUUID()}`;
+    let claudeOAuthToken = 'credential-before-rotation';
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: conversationId, user_id: userId }))
+    );
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve(
+        makeConfig({
+          envVars: { ANTHROPIC_API_KEY: 'install-config-key' },
+          aliases: {
+            '@task-primary': { provider: 'claude', model: 'opus' },
+            '@task-fallback': { provider: 'codex', model: 'gpt-5.5' },
+          },
+          chatTaskRouting: {
+            enabled: true,
+            routes: {
+              project_work: {
+                primary: '@task-primary',
+                fallbacks: ['@task-fallback'],
+                fallbackOnClaudeUsageWarning: true,
+              },
+            },
+          },
+        })
+      )
+    );
+    mockListDecryptedUserProviderCredentials.mockImplementation(async () => [
+      {
+        provider: 'anthropic',
+        cred: { kind: 'oauth', oauthApiKey: claudeOAuthToken, rawCreds: {} },
+      },
+      { provider: 'openai', cred: { kind: 'api_key', apiKey: 'user-openai-key' } },
+    ]);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: {
+          status: 'allowed_warning',
+          resetsAt: Math.floor(Date.now() / 1_000) + 60,
+          rateLimitType: 'five_hour',
+        },
+      };
+      yield { type: 'assistant', content: 'Claude response' };
+      yield { type: 'result', sessionId: 'claude-session-before-rotation' };
+    });
+    mockGetActiveSession
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        makeSession({ conversation_id: conversationId, ai_assistant_type: 'claude' })
+      );
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement this project change', { userId });
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(1, 'claude');
+
+    claudeOAuthToken = 'credential-after-rotation';
+    await handleMessage(makePlatform(), 'conv-1', 'continue the project change', { userId });
+
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(2, 'claude');
+    expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+    expect(mockSendQuery.mock.calls[1]?.[3]).toMatchObject({
+      env: {
+        ANTHROPIC_OAUTH_TOKEN: 'credential-after-rotation',
+        CLAUDE_CODE_OAUTH_TOKEN: 'credential-after-rotation',
+      },
+      protectedEnvKeys: expect.arrayContaining(['CLAUDE_CODE_OAUTH_TOKEN']),
+    });
+  });
+
+  test('does not carry a Claude warning across an install credential rotation', async () => {
+    const conversationId = `routed-install-warning-rotation-${crypto.randomUUID()}`;
+    const userId = `routed-install-warning-rotation-user-${crypto.randomUUID()}`;
+    let installClaudeKey = 'install-credential-before-rotation';
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: conversationId, user_id: userId }))
+    );
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve(
+        makeConfig({
+          envVars: { ANTHROPIC_API_KEY: installClaudeKey },
+          aliases: {
+            '@task-primary': { provider: 'claude', model: 'opus' },
+            '@task-fallback': { provider: 'codex', model: 'gpt-5.5' },
+          },
+          chatTaskRouting: {
+            enabled: true,
+            routes: {
+              project_work: {
+                primary: '@task-primary',
+                fallbacks: ['@task-fallback'],
+                fallbackOnClaudeUsageWarning: true,
+              },
+            },
+          },
+        })
+      )
+    );
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      { provider: 'openai', cred: { kind: 'api_key', apiKey: 'user-openai-key' } },
+    ]);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: {
+          status: 'allowed_warning',
+          resetsAt: Math.floor(Date.now() / 1_000) + 60,
+          rateLimitType: 'five_hour',
+        },
+      };
+      yield { type: 'assistant', content: 'Claude response' };
+      yield { type: 'result', sessionId: 'claude-session-before-install-rotation' };
+    });
+    mockGetActiveSession
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        makeSession({ conversation_id: conversationId, ai_assistant_type: 'claude' })
+      );
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement this project change', { userId });
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(1, 'claude');
+
+    installClaudeKey = 'install-credential-after-rotation';
+    await handleMessage(makePlatform(), 'conv-1', 'continue the project change', { userId });
+
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(2, 'claude');
+    expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+    expect(mockSendQuery.mock.calls[1]?.[3]).toMatchObject({
+      env: { ANTHROPIC_API_KEY: 'install-credential-after-rotation' },
+    });
+  });
+
+  test('does not borrow an install OpenAI key for a task fallback after a Claude warning', async () => {
+    const originalKey = process.env.OPENAI_API_KEY;
+    const conversationId = `routed-warning-no-user-key-${crypto.randomUUID()}`;
+    const userId = `routed-warning-no-user-key-user-${crypto.randomUUID()}`;
+    process.env.OPENAI_API_KEY = 'install-only-key';
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: conversationId, user_id: userId }))
+    );
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve(
+        makeConfig({
+          aliases: {
+            '@task-primary': { provider: 'claude', model: 'opus' },
+            '@task-fallback': { provider: 'codex', model: 'gpt-5.5' },
+          },
+          chatTaskRouting: {
+            enabled: true,
+            routes: {
+              project_work: {
+                primary: '@task-primary',
+                fallbacks: ['@task-fallback'],
+                fallbackOnClaudeUsageWarning: true,
+              },
+            },
+          },
+        })
+      )
+    );
+    mockListDecryptedUserProviderCredentials.mockImplementation(async () => []);
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: {
+          status: 'allowed_warning',
+          resetsAt: Math.floor(Date.now() / 1_000) + 60,
+          rateLimitType: 'five_hour',
+        },
+      };
+      yield { type: 'assistant', content: 'Claude response' };
+      yield { type: 'result', sessionId: 'claude-session' };
+    });
+    mockGetActiveSession
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        makeSession({ conversation_id: conversationId, ai_assistant_type: 'claude' })
+      );
+
+    try {
+      await handleMessage(makePlatform(), 'conv-1', 'implement a project change', { userId });
+      await handleMessage(makePlatform(), 'conv-1', 'continue the project change', { userId });
+
+      expect(mockGetAgentProvider).toHaveBeenNthCalledWith(1, 'claude');
+      expect(mockGetAgentProvider).toHaveBeenNthCalledWith(2, 'claude');
+      expect(mockGetAgentProvider).not.toHaveBeenCalledWith('codex');
+      expect(mockSendQuery).toHaveBeenCalledTimes(2);
+      expect(JSON.stringify(mockSendQuery.mock.calls[1]?.[3])).not.toContain('install-only-key');
+    } finally {
+      if (originalKey === undefined) delete process.env.OPENAI_API_KEY;
+      else process.env.OPENAI_API_KEY = originalKey;
+    }
+  });
+
+  test('does not use a Claude subscription warning for fallback unless the route opts in', async () => {
+    const conversationId = `routed-warning-opt-out-${crypto.randomUUID()}`;
+    const userId = `routed-warning-opt-out-user-${crypto.randomUUID()}`;
+    mockGetOrCreateConversation.mockImplementation(() =>
+      Promise.resolve(makeConversation({ id: conversationId, user_id: userId }))
+    );
+    mockLoadConfig.mockImplementation(() =>
+      Promise.resolve(
+        makeConfig({
+          aliases: {
+            '@task-primary': { provider: 'claude', model: 'opus' },
+            '@task-fallback': { provider: 'codex', model: 'gpt-5.5' },
+          },
+          chatTaskRouting: {
+            enabled: true,
+            routes: {
+              project_work: {
+                primary: '@task-primary',
+                fallbacks: ['@task-fallback'],
+              },
+            },
+          },
+        })
+      )
+    );
+    mockSendQuery.mockImplementationOnce(async function* () {
+      yield {
+        type: 'rate_limit',
+        rateLimitInfo: {
+          status: 'allowed_warning',
+          resetsAt: Math.floor(Date.now() / 1_000) + 60,
+          rateLimitType: 'five_hour',
+        },
+      };
+      yield { type: 'assistant', content: 'Claude response' };
+      yield { type: 'result', sessionId: 'claude-session' };
+    });
+    mockGetActiveSession
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(
+        makeSession({ conversation_id: conversationId, ai_assistant_type: 'claude' })
+      );
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', { userId });
+    await handleMessage(makePlatform(), 'conv-1', 'continue the project change', { userId });
+
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(1, 'claude');
+    expect(mockGetAgentProvider).toHaveBeenNthCalledWith(2, 'claude');
+    expect(mockSendQuery.mock.calls[1]?.[3]).toMatchObject({ model: 'opus' });
+  });
+
+  test('routes to an eligible configured fallback when the Copilot native meter is exhausted', async () => {
+    const priorCopilotToken = process.env.COPILOT_GITHUB_TOKEN;
+    const priorClaudeKey = process.env.ANTHROPIC_API_KEY;
+    process.env.COPILOT_GITHUB_TOKEN = 'fixture-copilot-token';
+    process.env.ANTHROPIC_API_KEY = 'fixture-anthropic-key';
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([]);
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({
+        aliases: {
+          '@copilot-primary': { provider: 'copilot', model: 'gpt-5' },
+          '@claude-fallback': { provider: 'claude', model: 'sonnet' },
+        },
+        chatTaskRouting: {
+          enabled: true,
+          routes: {
+            project_work: {
+              primary: '@copilot-primary',
+              fallbacks: ['@claude-fallback'],
+              copilotQuotaMeter: 'premium_interactions',
+            },
+          },
+        },
+      })
+    );
+    mockReadAccountQuota.mockResolvedValueOnce({
+      meter: 'premium_interactions',
+      unlimited: false,
+      exhausted: true,
+      usedRequests: 100,
+      entitlementRequests: 100,
+      remainingPercentage: 0,
+      fetchedAt: Date.now(),
+    });
+
+    try {
+      await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+        userId: 'route-user',
+      });
+
+      expect(mockReadAccountQuota).toHaveBeenCalledTimes(1);
+      expect(mockReadAccountQuota.mock.calls[0]?.[0]).toMatchObject({
+        meter: 'premium_interactions',
+      });
+      expect(mockGetAgentProvider).toHaveBeenCalledWith('copilot');
+      expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+      expect(mockSendQuery.mock.calls[0]?.[3]).toMatchObject({ model: 'sonnet' });
+    } finally {
+      if (priorCopilotToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+      else process.env.COPILOT_GITHUB_TOKEN = priorCopilotToken;
+      if (priorClaudeKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = priorClaudeKey;
+    }
+  });
+
+  test('keeps a Copilot primary when its native quota snapshot is unknown', async () => {
+    const priorCopilotToken = process.env.COPILOT_GITHUB_TOKEN;
+    process.env.COPILOT_GITHUB_TOKEN = 'fixture-copilot-token';
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([]);
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({
+        aliases: {
+          '@copilot-primary': { provider: 'copilot', model: 'gpt-5' },
+          '@claude-fallback': { provider: 'claude', model: 'sonnet' },
+        },
+        chatTaskRouting: {
+          enabled: true,
+          routes: {
+            project_work: {
+              primary: '@copilot-primary',
+              fallbacks: ['@claude-fallback'],
+              copilotQuotaMeter: 'premium_interactions',
+            },
+          },
+        },
+      })
+    );
+    mockReadAccountQuota.mockResolvedValueOnce(undefined);
+
+    try {
+      await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+        userId: 'route-user',
+      });
+
+      expect(mockReadAccountQuota).toHaveBeenCalledTimes(1);
+      expect(mockGetAgentProvider).toHaveBeenCalledWith('copilot');
+      expect(mockGetAgentProvider).not.toHaveBeenCalledWith('claude');
+      expect(mockSendQuery.mock.calls[0]?.[3]).toMatchObject({ model: 'gpt-5' });
+    } finally {
+      if (priorCopilotToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+      else process.env.COPILOT_GITHUB_TOKEN = priorCopilotToken;
+    }
+  });
+
+  test('does not route from an exhausted Copilot snapshot whose reset window has passed', async () => {
+    const priorCopilotToken = process.env.COPILOT_GITHUB_TOKEN;
+    process.env.COPILOT_GITHUB_TOKEN = 'fixture-copilot-token';
+    mockIsPerUserProviderKeysEnabled.mockReturnValue(false);
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([]);
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({
+        aliases: {
+          '@copilot-primary': { provider: 'copilot', model: 'gpt-5' },
+          '@claude-fallback': { provider: 'claude', model: 'sonnet' },
+        },
+        chatTaskRouting: {
+          enabled: true,
+          routes: {
+            project_work: {
+              primary: '@copilot-primary',
+              fallbacks: ['@claude-fallback'],
+              copilotQuotaMeter: 'premium_interactions',
+            },
+          },
+        },
+      })
+    );
+    mockReadAccountQuota.mockResolvedValueOnce({
+      meter: 'premium_interactions',
+      unlimited: false,
+      exhausted: true,
+      usedRequests: 100,
+      entitlementRequests: 100,
+      remainingPercentage: 0,
+      resetDate: '2000-01-01T00:00:00.000Z',
+      fetchedAt: Date.now(),
+    });
+
+    try {
+      await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+        userId: 'route-user',
+      });
+
+      expect(mockReadAccountQuota).toHaveBeenCalledTimes(1);
+      expect(mockGetAgentProvider).toHaveBeenCalledWith('copilot');
+      expect(mockGetAgentProvider).not.toHaveBeenCalledWith('claude');
+      expect(mockSendQuery.mock.calls[0]?.[3]).toMatchObject({ model: 'gpt-5' });
+    } finally {
+      if (priorCopilotToken === undefined) delete process.env.COPILOT_GITHUB_TOKEN;
+      else process.env.COPILOT_GITHUB_TOKEN = priorCopilotToken;
+    }
+  });
+
+  test('uses the exact Codex OAuth profile and bucket result before choosing a later fallback', async () => {
+    const accountId = 'account-route-test';
+    const credential = {
+      access: 'fixture-access-token',
+      refresh: 'fixture-refresh-token',
+      id_token: 'fixture-id-token',
+      accountId,
+      expires: Date.now() + 60_000,
+    };
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'openai',
+        cred: { kind: 'oauth', oauthApiKey: credential.access, rawCreds: credential },
+      },
+      { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'user-anthropic-key' } },
+    ]);
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({
+        aliases: {
+          '@codex-primary': { provider: 'codex', model: 'gpt-5.5' },
+          '@claude-fallback': { provider: 'claude', model: 'sonnet' },
+        },
+        chatTaskRouting: {
+          enabled: true,
+          routes: {
+            project_work: {
+              primary: '@codex-primary',
+              fallbacks: ['@claude-fallback'],
+              codexRateLimitId: 'five_hour',
+            },
+          },
+        },
+      })
+    );
+    mockReadCodexRateLimit.mockResolvedValueOnce({
+      limitId: 'five_hour',
+      exhausted: true,
+      fetchedAt: Date.now(),
+    });
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    const quotaRequest = mockReadCodexRateLimit.mock.calls[0]?.[0];
+    expect(mockGetLayaTaskTypeHint).toHaveBeenCalled();
+    expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('route-user');
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
+    expect(mockReadCodexRateLimit).toHaveBeenCalledTimes(1);
+    expect(quotaRequest).toMatchObject({
+      limitId: 'five_hour',
+      expectedAccountId: accountId,
+      options: {
+        codexAuthProfile: { kind: 'user-oauth', accountId },
+        protectedEnvKeys: expect.arrayContaining(['CODEX_HOME']),
+      },
+    });
+    expect(quotaRequest?.options?.env?.CODEX_HOME).toBeTruthy();
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('claude');
+    expect(mockSendQuery.mock.calls[0]?.[3]).toMatchObject({ model: 'sonnet' });
+  });
+
+  test('keeps Codex primary when its usage bucket is unknown and sends with the same profile', async () => {
+    const accountId = 'account-route-unknown';
+    const credential = {
+      access: 'fixture-access-token',
+      refresh: 'fixture-refresh-token',
+      id_token: 'fixture-id-token',
+      accountId,
+      expires: Date.now() + 60_000,
+    };
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'openai',
+        cred: { kind: 'oauth', oauthApiKey: credential.access, rawCreds: credential },
+      },
+    ]);
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({
+        aliases: { '@codex-primary': { provider: 'codex', model: 'gpt-5.5' } },
+        chatTaskRouting: {
+          enabled: true,
+          routes: {
+            project_work: {
+              primary: '@codex-primary',
+              codexRateLimitId: 'five_hour',
+            },
+          },
+        },
+      })
+    );
+    mockReadCodexRateLimit.mockResolvedValueOnce(undefined);
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    const quotaRequest = mockReadCodexRateLimit.mock.calls[0]?.[0];
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
+    const sendOptions = mockSendQuery.mock.calls[0]?.[3] as {
+      model?: string;
+      env?: Record<string, string>;
+      codexAuthProfile?: { kind: string; accountId: string };
+    };
+    expect(quotaRequest?.options?.env?.CODEX_HOME).toBeTruthy();
+    expect(sendOptions.env?.CODEX_HOME).toBe(quotaRequest?.options?.env?.CODEX_HOME);
+    expect(sendOptions.codexAuthProfile).toEqual({ kind: 'user-oauth', accountId });
+    expect(sendOptions.model).toBe('gpt-5.5');
+    expect(mockSendQuery).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not send a Codex message when the exact primary bucket is exhausted without fallback', async () => {
+    const accountId = 'account-route-block';
+    const credential = {
+      access: 'fixture-access-token',
+      refresh: 'fixture-refresh-token',
+      id_token: 'fixture-id-token',
+      accountId,
+      expires: Date.now() + 60_000,
+    };
+    const platform = makePlatform();
+    mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      {
+        provider: 'openai',
+        cred: { kind: 'oauth', oauthApiKey: credential.access, rawCreds: credential },
+      },
+    ]);
+    mockLoadConfig.mockResolvedValueOnce(
+      makeConfig({
+        aliases: { '@codex-primary': { provider: 'codex', model: 'gpt-5.5' } },
+        chatTaskRouting: {
+          enabled: true,
+          routes: {
+            project_work: {
+              primary: '@codex-primary',
+              codexRateLimitId: 'five_hour',
+            },
+          },
+        },
+      })
+    );
+    mockReadCodexRateLimit.mockResolvedValueOnce({
+      limitId: 'five_hour',
+      exhausted: true,
+      fetchedAt: Date.now(),
+    });
+
+    await handleMessage(platform, 'conv-1', 'implement a project change', { userId: 'route-user' });
+
+    expect(mockGetAgentProvider).toHaveBeenCalledWith('codex');
+    expect(mockSendQuery).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'conv-1',
+      expect.stringContaining('Codex usage bucket is exhausted')
+    );
+  });
+
+  test('keeps Laya labels out of the workflow-capable provider prompt', async () => {
+    mockGetLayaTaskTypeHint.mockResolvedValueOnce({ taskType: 'project_work', probability: 0.99 });
+
+    await handleMessage(makePlatform(), 'conv-1', 'implement a project change', {
+      userId: 'route-user',
+    });
+
+    const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { systemPrompt?: unknown };
+    expect(requestOptions.systemPrompt).toBe('orchestrator system append');
+    expect(String(requestOptions.systemPrompt)).not.toContain('Local Task-Type Hint');
+    expect(String(requestOptions.systemPrompt)).not.toContain('**project_work**');
+  });
+
+  test('does not classify slash commands for task routing', async () => {
+    const platform = makePlatform();
+
+    await handleMessage(platform, 'conv-1', '/status', { userId: 'route-user' });
+
+    expect(mockGetLayaTaskTypeHint).not.toHaveBeenCalled();
+  });
+
+  test('a task label alone cannot dispatch a workflow', async () => {
+    mockGetLayaTaskTypeHint.mockResolvedValueOnce({ taskType: 'project_work', probability: 0.99 });
+    mockExecuteWorkflow.mockClear();
+    mockDispatchBackgroundWorkflow.mockClear();
+    const platform = makePlatform();
+
+    await handleMessage(platform, 'conv-1', 'Implement the project change', {
+      userId: 'route-user',
+    });
+
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 });
 

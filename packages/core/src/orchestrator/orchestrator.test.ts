@@ -27,12 +27,21 @@ import type * as WorkflowRouter from '@archon/workflows/router';
 import type * as WorkflowSourceRoot from '../utils/workflow-source-root';
 import type * as Orchestrator from './orchestrator';
 import type * as PromptBuilder from './prompt-builder';
+import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import type * as TitleGenerator from '../services/title-generator';
 import type * as WorkflowDb from '../db/workflows';
 
 // ─── Mock setup (BEFORE importing module under test) ─────────────────────────
 
 const mockLogger = createMockLogger();
+const mockRunLiveOwner: RunLiveOwnerModule.RunLiveOwner = {
+  close: mock(() => Promise.resolve()),
+  isStopRequested: () => false,
+};
+mock.module('../services/run-live-owner', () => ({
+  startRunLiveOwner: mock(() => Promise.resolve(mockRunLiveOwner)),
+  withRunLiveOwner: mock(async (_runId, _options, body) => body(mockRunLiveOwner)),
+}));
 // Stands in for the real shared canonicalizer. Tests build their expected
 // `default_cwd` by calling THIS function, so the expectation can never drift
 // from what the product resolved, on any platform.
@@ -215,6 +224,19 @@ const providerCapabilities: ProviderCapabilities = {
 const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilities>(
   () => providerCapabilities
 );
+const mockParseProviderRunModel = mock<typeof Providers.parseProviderRunModel>(
+  (_provider, model) => model
+);
+const mockGetRegistration = mock<typeof Providers.getRegistration>(provider => {
+  const vendor =
+    provider === 'codex' ? 'openai' : provider === 'copilot' ? 'github-copilot' : 'anthropic';
+  return {
+    credentials: {
+      kind: 'static',
+      specs: [{ vendor, displayName: vendor, kinds: ['api_key'] }],
+    },
+  } as unknown as ReturnType<typeof Providers.getRegistration>;
+});
 
 mock.module('@archon/providers', () => ({
   getAgentProvider: mockGetAgentProvider,
@@ -224,6 +246,8 @@ mock.module('@archon/providers', () => ({
   // Without this the REAL implementation runs against an empty registry and
   // every provider looks unregistered.
   isRegisteredProvider: mock(() => true),
+  getRegistration: mockGetRegistration,
+  parseProviderRunModel: mockParseProviderRunModel,
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
   PI_PROVIDER_ENV_VARS: { anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY' },
@@ -263,6 +287,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
       quotaMaxAttempts: 1,
       quotaDeadlineMs: 86_400_000,
     },
+    chatTaskRouting: { enabled: false, routes: {} },
     commands: { autoLoad: true },
     defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
   })
@@ -1006,6 +1031,7 @@ describe('orchestrator-agent handleMessage', () => {
           quotaMaxAttempts: 1,
           quotaDeadlineMs: 86_400_000,
         },
+        chatTaskRouting: { enabled: false, routes: {} },
         commands: { autoLoad: true },
         defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
@@ -1047,6 +1073,7 @@ describe('orchestrator-agent handleMessage', () => {
           quotaMaxAttempts: 1,
           quotaDeadlineMs: 86_400_000,
         },
+        chatTaskRouting: { enabled: false, routes: {} },
         commands: { autoLoad: true },
         defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
       });
@@ -1091,6 +1118,7 @@ describe('orchestrator-agent handleMessage', () => {
           quotaMaxAttempts: 1,
           quotaDeadlineMs: 86_400_000,
         },
+        chatTaskRouting: { enabled: false, routes: {} },
         commands: { autoLoad: true },
         defaults: { copyDefaults: true, loadDefaultCommands: true, loadDefaultWorkflows: true },
       });

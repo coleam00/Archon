@@ -25,6 +25,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export type TransitionTrigger =
   | 'first-message' // No existing session
   | 'plan-to-execute' // Plan phase completed, starting execution
+  | 'provider-changed' // Direct chat selected another provider; native sessions cannot cross providers
   | 'isolation-changed' // Working directory/worktree changed
   | 'project-changed' // Conversation was rebound to a different project
   | 'reset-requested' // User requested /reset
@@ -43,6 +44,7 @@ export type TransitionTrigger =
 const TRIGGER_BEHAVIOR: Record<TransitionTrigger, 'creates' | 'deactivates' | 'none'> = {
   'first-message': 'none', // No existing session to deactivate
   'plan-to-execute': 'creates', // Only case where we deactivate AND immediately create
+  'provider-changed': 'creates',
   'isolation-changed': 'deactivates',
   'project-changed': 'deactivates',
   'reset-requested': 'deactivates',

@@ -56,6 +56,9 @@
       "src/codex/provider.test.ts"
     ],
     [
+      "src/codex/rate-limits.test.ts"
+    ],
+    [
       "src/registry.test.ts"
     ],
     [

@@ -244,6 +244,18 @@
     [
       "src/orchestrator/prompt-builder.test.ts",
       "src/schemas/index.test.ts"
+    ],
+    [
+      "src/orchestrator/laya-task-type-hint.test.ts"
+    ],
+    [
+      "src/orchestrator/provider-rate-limit-state.test.ts"
+    ],
+    [
+      "src/orchestrator/chat-task-routing.test.ts"
     ]
-  ]
+  ],
+  "optionalDependencies": {
+    "onnxruntime-node": "1.30.0"
+  }
 }

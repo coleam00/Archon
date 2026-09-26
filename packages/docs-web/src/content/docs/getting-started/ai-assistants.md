@@ -851,7 +851,7 @@ There is no run-wide provider or bare-model shortcut. To replace every default t
 ## How Assistant Selection Works
 
 - Assistant type is set per codebase via the `assistant` field in `.archon/config.yaml` or the `DEFAULT_AI_ASSISTANT` env var
-- Once a conversation starts, the assistant type is locked for that conversation
+- The assistant type stored when a conversation starts is its default. If direct-chat task routing is explicitly enabled, a matching high-confidence route may select another provider for an individual turn when the acting user has not pinned a provider or model; this does not change the stored conversation default.
 - `DEFAULT_AI_ASSISTANT` (optional) is used only for new conversations without codebase context
 - Workflows can override the assistant on a per-node basis with `provider` and `model` fields
 - Chat and workflow resolution use different chains. Chat uses the exact chain above, including highest-precedence per-user defaults. Workflows may declare `provider` and `model` at the workflow or node level; tier and alias references resolve from per-user preferences over repo and global config, then built-in defaults (claude and codex only; any other provider must configure the tiers it uses). Literal model IDs pass unchanged to the selected provider SDK.

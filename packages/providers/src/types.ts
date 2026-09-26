@@ -669,6 +669,58 @@ export interface SendQueryOptions extends AgentRequestOptions {
    * value can never reach a provider that cannot honor it.
    */
   execContext?: ExecutionContext;
+  /**
+   * Marks a direct-chat Codex OAuth profile materialized for one execution
+   * identity. The provider must use the accompanying CODEX_HOME as the sole
+   * Codex identity and suppress ambient OpenAI/Codex auth variables. This
+   * metadata contains no token material and is never a workflow override.
+   */
+  codexAuthProfile?: { kind: 'user-oauth'; accountId: string };
+}
+
+/** Copilot SDK account-quota meters supported by direct-chat routing. */
+export type ProviderAccountQuotaMeter = 'premium_interactions' | 'chat' | 'completions';
+
+/** A validated account quota snapshot returned by a provider adapter. */
+export interface ProviderAccountQuotaSnapshot {
+  meter: ProviderAccountQuotaMeter;
+  unlimited: boolean;
+  exhausted: boolean;
+  usedRequests: number;
+  entitlementRequests: number;
+  remainingPercentage: number;
+  resetDate?: string;
+  /** Local time when the provider adapter received the snapshot. */
+  fetchedAt: number;
+}
+
+/** Read a provider's subscription quota using the same request auth/config. */
+export interface ProviderAccountQuotaRequest {
+  meter: ProviderAccountQuotaMeter;
+  /** Opaque owner-plus-credential scope; must never contain raw credentials. */
+  cacheScope: string;
+  cwd: string;
+  options?: SendQueryOptions;
+}
+
+/** A Codex-native subscription rate-limit read for one configured meter. */
+export interface ProviderCodexRateLimitRequest {
+  /** Opaque meter id configured by the Archon operator. */
+  limitId: string;
+  /** Account id parsed from the exact per-user auth.json used by this turn. */
+  expectedAccountId: string;
+  /** Opaque owner and credential fingerprint; never contains credential text. */
+  cacheScope: string;
+  cwd: string;
+  options?: SendQueryOptions;
+}
+
+/** Provider-reported exhausted state for a specific Codex rate-limit bucket. */
+export interface ProviderCodexRateLimitSnapshot {
+  limitId: string;
+  exhausted: boolean;
+  /** Local time when the provider adapter received the snapshot. */
+  fetchedAt: number;
 }
 
 /**
@@ -791,4 +843,17 @@ export interface IAgentProvider {
    * Used by the dag-executor to warn when nodes specify unsupported features.
    */
   getCapabilities(): ProviderCapabilities;
+
+  /**
+   * Optional account-level subscription quota snapshot for direct-chat routing.
+   * The snapshot is advisory and is never a reservation for a later provider call.
+   */
+  readAccountQuota?(
+    request: ProviderAccountQuotaRequest
+  ): Promise<ProviderAccountQuotaSnapshot | undefined>;
+
+  /** Read a Codex-native rate-limit bucket using an exact user OAuth profile. */
+  readCodexRateLimit?(
+    request: ProviderCodexRateLimitRequest
+  ): Promise<ProviderCodexRateLimitSnapshot | undefined>;
 }

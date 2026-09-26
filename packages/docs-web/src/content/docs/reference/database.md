@@ -83,7 +83,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 2. **`remote_agent_conversations`** - Platform conversation tracking
    - Platform type + conversation ID (unique constraint)
    - Linked to codebase via foreign key
-   - AI assistant type locked at creation
+   - AI assistant type stored as the conversation default at creation; an enabled direct-chat task route may select a different provider for one turn without changing this value
    - Nullable `user_id` records the first user who created the conversation (first-user-wins; later replies in the same thread are attributed on the workflow_run, not here)
 
 3. **`remote_agent_sessions`** - AI session management
