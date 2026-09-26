@@ -25,7 +25,7 @@ review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__review-complete: "settled"
 review__synthesize:
@@ -48,12 +48,17 @@ ci-verdict: '{"state":"concluded","detail":"no checks configured on this reposit
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-resolve-scope: '{"errors":"false"}'
+resolve-scope: '{"errors":"false","simplify":"false"}'
+polish-scope: '{"polish":false}'
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: completed
 exec-code: true

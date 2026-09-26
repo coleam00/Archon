@@ -26,21 +26,20 @@ deliver__review__publish:
   action: none
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
-deliver__validate__run: { status: green, summary: "stub: project gate green" }
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
 deliver__classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-deliver__resolve-scope: '{"errors":"false"}'
+deliver__resolve-scope: '{"errors":"false","simplify":"false"}'
 fixture:
   expect: completed
 exec-code: true
 deliver__gate-ready: '{"gate":"ready"}'
-deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
@@ -55,6 +54,6 @@ deliver__review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
-deliver__review__simplify: "0 findings"
+deliver__shape__simplify: { findings: false }
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"

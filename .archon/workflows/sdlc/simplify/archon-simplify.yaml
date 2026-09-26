@@ -1,0 +1,46 @@
+name: archon-simplify
+description: |
+  Judge whether a change delivers its outcome through more structure than it needs,
+  and name the smaller shape. Read-only: it judges, it never edits.
+
+  One charter, two callers. Delivery runs it on the implementation before the pull
+  request opens (`stage: pre-pr`), when a smaller shape is still cheap to adopt and
+  before any other reviewer spends effort on code it would delete. A standalone
+  review runs it as one of its lenses (`stage: review`).
+
+  Use when: a change needs its structure judged — "is this overbuilt", "simplify
+  review".
+  NOT for: correctness (review), fixing findings (implement), or writing code.
+
+model: medium
+
+inputs:
+  stage:
+    default: "review"
+    description: >-
+      review — a lens inside a review round, which reads that round's scope.md;
+      pre-pr — delivery's check on the committed implementation before its pull
+      request exists.
+  work_order:
+    default: ""
+    description: >-
+      The accepted outcome and scope boundaries. Required reading in pre-pr, where
+      no scope.md exists yet; a review round carries it in scope.md instead.
+
+returns: simplify
+
+nodes:
+  - id: simplify
+    command: simplify
+    context: fresh
+    mutates_checkout: false
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+    output_format:
+      type: object
+      properties:
+        # True when the report holds any finding, Suggestions included: delivery
+        # hands every one to the owner to judge before the pull request opens.
+        findings: { type: boolean }
+      required: [findings]

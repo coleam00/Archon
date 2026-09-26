@@ -25,12 +25,14 @@ deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation
 deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 deliver__classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-deliver__resolve-scope: '{"errors":"false"}'
+deliver__resolve-scope: '{"errors":"false","simplify":"false"}'
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
@@ -38,7 +40,7 @@ deliver__review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 6 }
 deliver__review__code: "0 findings"
 deliver__review__seams: "0 findings"
-deliver__review__simplify: "0 findings"
+deliver__shape__simplify: { findings: false }
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"
 deliver__review__synthesize:
@@ -59,6 +61,9 @@ deliver__validate__classify:
   summary: "stub: the change broke one spec in the project gate"
 # deliver__gate-validated is deliberately unstubbed: the real gate must refuse
 # introduced red.
+deliver__polish-scope: '{"polish":false}'
+deliver__file-discoveries: '{"issues":[]}'
+deliver__fork: '{"fork":true}'
 fixture:
   expect: failed
   fail-node: deliver__gate-validated

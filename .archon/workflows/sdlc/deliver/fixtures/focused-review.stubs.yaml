@@ -1,16 +1,10 @@
-# Dry-run fixture: the validate-RED path — initial review is clean but the project
-# gate fails, so the run fails at gate-validated (a direct dependency of flip-ready).
-# Run with --exec-code: gate-validated must EXECUTE to be seen red.
-#
-# The verdict below declares no `red_cause`, which makes this the guard for the
-# absence case: the gate refuses red nobody explained exactly as it refuses red the
-# change introduced. Declared-optional must never read as permission. The comparison
-# producer is the one that can return red with an empty cause, so it stands in here.
-#
-# It also carries the operator-override direction of the errors lens: `classify`
-# says the diff has failure paths, the operator declared `errors: false`, and the
-# real resolve-scope script must let the declaration win. review__errors has no
-# stub, so a lens that runs anyway fails and breaks the single-failure assertion.
+# Dry-run fixture: a low-risk change gets the focused tier. Seams still runs,
+# and one focused reviewer stands in for the code and tests lenses, which carry
+# no stub here: if either ran, this fixture would fail.
+# skipped and gate-ready binds the review verdict directly (the corrections
+# binding takes its if_skipped default). The pull request's head is in its own
+# repository, so the final local validation is skipped: its nodes carry no stub,
+# and running them would fail this fixture.
 impl__implement:
   done: true
   green: true
@@ -25,10 +19,10 @@ review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
-review__code: "0 findings"
+review__focused: "0 findings"
 review__seams: "0 findings"
 shape__simplify: { findings: false }
-review__tests: "0 findings"
+review__review-complete: "settled"
 review__synthesize:
   ready: true
   action: none
@@ -39,31 +33,28 @@ review__publish:
   action: none
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-# gate-ready is deliberately unstubbed: under --exec-code the real script runs,
-# proving the review_ready binding and the corrections if_skipped default.
-validate__mode: '{"comparison":true}'
-validate__compare:
-  green: false
-  red_cause: ""
-  summary: "stub: tests failed — 3 red"
-  evidence: null
+gate-ready: '{"ready":"true"}'
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-attention-route: '{"attention":false,"red_cause":""}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 classify:
-  tier: full
-  errors: true
+  tier: focused
+  errors: false
   docs: false
   reasons:
-    tier: "stub: touches persisted state"
-    errors: "stub: the diff adds a retry and a fallback"
+    tier: "stub: a one-line fix touching no risk the lenses scale on"
+    errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false","simplify":"false"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
-fork: '{"fork":true}'
+fork: '{"fork":false}'
 fixture:
-  expect: failed
-  fail-node: gate-validated
-  reached: [review__code, review__seams, review__tests]
-  inputs:
-    errors: "false"
-exec-code: true
+  expect: completed
+  # The review round is handed the verified PR record, not a bare number: the
+  # comment its publish node writes must land on that exact pull request.
+  reached: [review__seams, review__focused]
+  resolved-text-contains:
+    review__scope: '"path":"example/repo"'

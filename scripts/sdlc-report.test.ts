@@ -187,6 +187,25 @@ describe("the terminal report reads passed reds from the gates' typed artifacts"
 });
 
 describe('discoveries', () => {
+  // Delivery writes each filed issue's URL back onto its record. A record with one is
+  // on the tracker; only an unfiled record still needs an agent to relay it.
+  it('links filed discoveries and asks for a relay only while one is unfiled', async () => {
+    const dir = artifactsDir();
+    const filed = { title: 'Stale mock type', relation: 'unrelated', issue: 'https://x/issues/7' };
+    writeFileSync(join(dir, 'discoveries.json'), JSON.stringify([filed]));
+    const allFiled = await report(dir, false);
+    expect(allFiled).toContain('- Stale mock type — https://x/issues/7');
+    expect(allFiled).not.toContain('If you are an agent reading this');
+
+    writeFileSync(
+      join(dir, 'discoveries.json'),
+      JSON.stringify([filed, { title: 'Flaky timeout', relation: 'unrelated' }])
+    );
+    const oneUnfiled = await report(dir, false);
+    expect(oneUnfiled).toContain('- Flaky timeout\n');
+    expect(oneUnfiled).toContain('If you are an agent reading this');
+  });
+
   it('reports a consolidated file that is not an array with its path', async () => {
     const dir = artifactsDir();
     writeFileSync(join(dir, 'discoveries.json'), '{}');
@@ -200,12 +219,12 @@ describe('discoveries', () => {
     mkdirSync(join(dir, 'discoveries'));
     writeFileSync(
       join(dir, 'discoveries', 'code.json'),
-      JSON.stringify([{ title: 'Unused export', relation: 'adjacent', claim: 'dead code' }])
+      JSON.stringify([{ title: 'Unused export', relation: 'unrelated', claim: 'dead code' }])
     );
     writeFileSync(join(dir, 'discoveries', 'seams.json'), '{"title":"not a list"}');
     const text = await report(dir, true);
     expect(text).toContain('Unconsolidated discoveries (1)');
-    expect(text).toContain('- Unused export [adjacent]');
+    expect(text).toContain('- Unused export [unrelated]');
     expect(text).toContain('seams.json: not a JSON array of records');
   });
 });

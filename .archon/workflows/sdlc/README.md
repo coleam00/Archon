@@ -82,8 +82,11 @@ forge source is for host execution: a container execution receives neither
 
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
-applies the resync, `publish-review` upserts the one marked review comment, and
-`flip-ready` flips it out of draft. Each takes a recorded intent from the agent
+applies the resync, `publish-review` upserts the one marked review comment,
+`flip-ready` flips it out of draft, and `file-discoveries` files each unrelated
+discovery the review accepted as a tracker issue. The forge contract has no issue
+operation yet, so that one — like triage's labels — goes through `gh` whichever
+source the run selected. Each takes a recorded intent from the agent
 before it, writes through the selected source, and fails unless the result reads
 back — so "the write failed" and "the write may have landed" stay different
 outcomes, in the pack as in the forge contract.
@@ -144,11 +147,13 @@ the transcript now holds for free.
 ## The engineering-conventions sidecar
 
 A repository may declare its engineering conventions in an `engineering.md`
-(root, or a config directory such as `.archon/`). Prompts that write code read
-it before coding — `implement` carries the line today — the same way any
-workflow may read a repository's direction sidecar. The check is conditional on
-the file existing, so the pack stays portable: a repository without one loses
-nothing. A new pack workflow that writes code carries the same line.
+(root, or a config directory such as `.archon/`), and its product direction in a
+direction document. Prompts that write code read both before coding, and every
+review prompt reads them before judging: they are the project's own values, so a
+taste finding cites one of them or is left out, and an owner declines a finding
+by the same standard. The check is conditional on the file existing, so the pack
+stays portable: a repository without one loses nothing. A new pack workflow that
+writes or judges code carries the same line.
 
 ## A node's streams are the operator's channel
 

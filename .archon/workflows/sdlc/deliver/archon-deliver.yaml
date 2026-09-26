@@ -1,8 +1,10 @@
 name: archon-deliver
 description: |
   The delivery tail, autonomous on its green path: implement the work, gate on
-  green, open a draft PR, review it, correct and close the findings, validate,
-  wait for checks to clear, then flip the PR ready for review. Late CI red that
+  green, simplify it before anything is public, open a draft PR, review it at the
+  depth its risk earns, correct the findings the owner judges worth fixing, file
+  unrelated discoveries as issues, wait for checks to clear, then flip the PR
+  ready for review. Late CI red that
   the branch did not introduce pauses for an explicit rerun and resume. There
   is no in-run approval gate — the human gate is PR review and merge on GitHub,
   outside the run.
@@ -32,8 +34,9 @@ inputs:
       Cross-run review continuity: the previous delivery run's review report
       path. Round 1 then verifies prior findings (rejections included) instead
       of relitigating them from scratch. Empty on a first delivery.
-  # Error review can be forced on or off. Code, seams, simplify, and tests always run;
-  # docs runs only when the classifier finds shipped documentation in the diff.
+  # Error review can be forced on or off. Seams always runs; code and tests run on
+  # the full tier and one focused reviewer on the focused tier; docs runs only when
+  # the classifier finds shipped documentation in the diff.
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
@@ -87,17 +90,58 @@ nodes:
       summary: "$impl.output.summary"
       stage: "The implementation"
 
+  # Structure is judged before the pull request opens: a smaller shape is cheapest
+  # while nothing is published and no reviewer has spent effort on code it would
+  # delete. The same charter runs as a review lens elsewhere; delivery turns that
+  # lens off below because this pass already covered it.
+  - id: shape
+    include: archon-simplify
+    with:
+      stage: pre-pr
+      work_order: "$INPUTS.work"
+    depends_on: [gate-green]
+
+  - id: reshape
+    include: archon-implement
+    depends_on: [shape]
+    when: "$shape.output.findings == true"
+    with:
+      work: >-
+        Before this work is published, adopt the smaller shape recorded in
+        $ARTIFACTS_DIR/shape.md. Read it and the accepted work order below in full.
+        Judge every finding, Suggestions included: make each change that is
+        valid by this project's values, and decline one that is wrong or a matter
+        of taste the project's engineering conventions do not back, recording the
+        reason in implementation.md. Keep the requested outcome and its tests intact.
+
+        Accepted work order:
+        $INPUTS.work
+
+  - id: gate-reshape
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [reshape]
+    with:
+      green: "$reshape.output.green"
+      red_cause: "$reshape.output.red_cause"
+      summary: "$reshape.output.summary"
+      stage: "The structure correction"
+
   - id: pr
     include: archon-pr
     with:
       draft: "true"
-    depends_on: [gate-green]
+    depends_on: [shape, gate-reshape]
+    trigger_rule: none_failed_min_one_success
 
   # Initial review: full on a first delivery, light continuation when
   # the caller passes the previous run's report (adjudications carry across
   # runs instead of being relitigated).
   # Review scope is decided from the actual PR, not declared blind at launch:
   # the diff is information that does not exist until the PR does. classify
+  # picks the review tier from the change's risk (seams runs on every tier) and
   # judges whether errors and docs warrant their conditional lenses; resolve-scope
   # then merges the operator's declared error override over that judgment. Its
   # output feeds the errors gate, while the classifier feeds the docs gate. Round
@@ -115,15 +159,17 @@ nodes:
     output_format:
       type: object
       properties:
+        tier: { type: string, enum: [focused, full] }
         errors: { type: boolean }
         docs: { type: boolean }
         reasons:
           type: object
           properties:
+            tier: { type: string }
             errors: { type: string }
             docs: { type: string }
-          required: [errors, docs]
-      required: [errors, docs, reasons]
+          required: [tier, errors, docs]
+      required: [tier, errors, docs, reasons]
 
   # Deterministic merge at the boundary: a declared 'true'/'false' beats the
   # classifier; 'auto' adopts its judgment. Output values are the strings the
@@ -138,7 +184,8 @@ nodes:
       type: object
       properties:
         errors: { type: string, enum: ['true', 'false'] }
-      required: [errors]
+        simplify: { type: string, enum: ['false'] }
+      required: [errors, simplify]
 
   - id: review
     include: archon-review
@@ -148,6 +195,9 @@ nodes:
       scope: "$pr.output"
       prior_report: "$INPUTS.prior_report"
       work_order: "$INPUTS.work"
+      tier: "$classify.output.tier"
+      # shape already ran the simplify pass on this change.
+      simplify: "$resolve-scope.output.simplify"
       errors: "$resolve-scope.output.errors"
       docs: "$classify.output.docs"
     depends_on: [resolve-scope]
@@ -156,15 +206,14 @@ nodes:
   # remains the review outcome; `action` says what delivery may do about it.
   # A ready initial review skips this block. Otherwise each iteration corrects
   # the current canonical findings, proves the correction is green, then runs a
-  # fresh continuation review over the report and delta, never an unreviewed
-  # final fix. The bound
-  # is a runaway backstop, not a pacing device: until_bash ends the loop the
-  # moment a recheck certifies ready, so a healthy fix-class run still exits in
-  # one or two rounds. Five rounds is calibrated to the feature-class evidence
-  # (2026-08-25: every executor-heavy delivery needed 4-6 rounds and every
-  # non-starved resume converged; 3 cut two converging runs short). A per-lane
-  # bound would need runtime-parameterized composition, which the language
-  # deliberately does not have — the flat bound buys the same outcome free.
+  # fresh continuation review over the report and delta, so a blocking fix is
+  # never unreviewed. The bound is a runaway backstop, not a pacing device:
+  # until_bash ends the loop the moment a recheck certifies ready. Since
+  # continuation rechecks and class completion landed (2026-08-27), no converging
+  # delivery needed more than three corrections, and the one run that reached
+  # five never converged: it found another symptom of one class each round. A
+  # per-lane bound would need runtime-parameterized composition, which the
+  # language deliberately does not have — the flat bound buys the same outcome.
   #
   # CI feeds the fix, without waiting: checks run on the pushed commits while
   # review happens, so concluded results usually exist by the time a round
@@ -185,7 +234,7 @@ nodes:
       # accepts only `none`; a replan outcome leaves the PR draft and fails with
       # the canonical report intact instead of spending another correction.
       until_bash: test $recheck.output.action != "correct"
-      max_iterations: 5
+      max_iterations: 3
       fresh_context: true
       nodes:
         # Evidence provisioning, never a gate: this node cannot fail the round
@@ -223,9 +272,17 @@ nodes:
           depends_on: [ci-evidence]
           with:
             work: >-
-              Fix every open Critical and Important finding recorded in
-              $ARTIFACTS_DIR/review/report.md, within the accepted work order
-              below. Read both in full before editing. When a causal finding
+              Judge every open finding recorded in $ARTIFACTS_DIR/review/report.md,
+              Suggestions included, within the accepted work order below. Read
+              both in full before editing. Fix every valid Critical and Important
+              finding, and every Suggestion that is valid by this project's values
+              — a simplification, removed machinery, a corrected claim, a test
+              that now proves its claim. Decline a wrong finding, or a taste call
+              the project's engineering conventions and direction do not back,
+              with the reason; the following review judges it. A finding
+              unrelated to this change is a follow-up, not work for this round:
+              say so and the review files it. Record every disposition — fixed,
+              declined with its reason, or unrelated — in implementation.md. When a causal finding
               records a finite affected-member inventory, the finding is not
               fixed until every affected member is handled and the smallest
               relevant proof passes. Do not cross an explicit boundary to make
@@ -280,6 +337,8 @@ nodes:
             work_order: "$INPUTS.work"
             # Continuation mode owns coverage and skips every specialist,
             # regardless of these conditional-lens bindings.
+            tier: "$classify.output.tier"
+            simplify: "$resolve-scope.output.simplify"
             errors: "$resolve-scope.output.errors"
             docs: "$classify.output.docs"
           depends_on: [gate-correction-green]
@@ -301,12 +360,89 @@ nodes:
       review_action: "$review.output.action"
       correction_action: { from: "$corrections.output.action", if_skipped: null }
 
-  # Correction rounds change the diff after `pr` wrote the description, so
-  # concrete claims in the body can be falsified by the very fixes the review
-  # demanded. One resync, once readiness is certified — never per iteration
-  # (that would be repeated public writes describing diffs the next iteration
-  # falsifies). Skipped when the initial review was already ready: the diff
-  # never changed after the body was written.
+  # Suggestions never block, so a ready verdict can leave valid ones open. One
+  # implementation pass judges them — fix what the project's values back, decline
+  # the rest with a reason — and needs no review round of its own: nothing in it
+  # blocks, and CI on its pushed head is its proof.
+  - id: polish-scope
+    script: polish-scope
+    runtime: bun
+    depends_on: [gate-ready]
+    output_format:
+      type: object
+      properties:
+        polish: { type: boolean }
+      required: [polish]
+
+  - id: polish
+    include: archon-implement
+    depends_on: [polish-scope]
+    when: "$polish-scope.output.polish == true"
+    with:
+      work: >-
+        The review of this pull request is ready, and it left Suggestions open in
+        $ARTIFACTS_DIR/review/report.md. Read it and the accepted work order below
+        in full. Judge each open Suggestion by this project's values: fix one that
+        simplifies, removes machinery, corrects a claim or makes a test prove its
+        claim; decline one that is wrong or a taste call the project's engineering
+        conventions and direction do not back. Record every disposition with its
+        reason in implementation.md. When you changed anything, push it to the
+        branch this run is on, explicitly by name, and record the push target and a
+        read-back of the remote ref. Do not change the PR's draft state or edit the
+        canonical review comment.
+
+        Accepted work order, for scope only — do not reopen it:
+        $INPUTS.work
+
+  - id: gate-polish
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [polish]
+    with:
+      green: "$polish.output.green"
+      red_cause: "$polish.output.red_cause"
+      summary: "$polish.output.summary"
+      stage: "The polish pass"
+
+  # Unrelated work the review proved becomes tracker issues, one per record, each
+  # linking back to this run and the pull request. Off the flip's path: a failed
+  # filing is reported, and never holds a delivered change back.
+  - id: file-discoveries
+    script: file-discoveries
+    runtime: bun
+    depends_on: [gate-ready]
+    with:
+      pr: "$pr.output"
+    output_format:
+      type: object
+      properties:
+        issues: { type: array, items: { type: string } }
+      required: [issues]
+
+  # The final local gate runs only where it is the sole check before the flip: a
+  # fork's CI waits for a maintainer's approval. Otherwise the implementation
+  # already ran the project's gate on this head and CI runs it again.
+  - id: fork
+    script: is-fork
+    runtime: bun
+    depends_on: [gate-ready, gate-polish]
+    trigger_rule: none_failed_min_one_success
+    with:
+      pr: "$pr.output"
+    output_format:
+      type: object
+      properties:
+        fork: { type: boolean }
+      required: [fork]
+
+  # Correction and polish passes change the diff after `pr` wrote the
+  # description, so concrete claims in the body can be falsified by the very
+  # fixes the review demanded. One resync, once readiness is certified — never per
+  # iteration (that would be repeated public writes describing diffs the next
+  # iteration falsifies). Skipped when neither ran: the diff never changed after
+  # the body was written.
   # The live description, read through the selected source: a human may have
   # edited the body since this run wrote it, and a resync that silently reverted
   # that edit would be a write nobody asked for.
@@ -318,8 +454,9 @@ nodes:
     # After the project gate, not beside it: the gates record the red they let
     # through as typed artifacts, and the body must disclose every one of them,
     # so this reads once all of them exist instead of racing the last writer.
-    depends_on: [gate-validated]
-    when: "$review.output.action != 'none'"
+    depends_on: [fork, gate-validated]
+    trigger_rule: none_failed_min_one_success
+    when: "$review.output.action != 'none' || $polish-scope.output.polish == true"
     output_format:
       type: object
       properties:
@@ -351,12 +488,13 @@ nodes:
     depends_on: [sync-pr-body]
     output_format: { type: object }
 
-  # Final local gate, ALWAYS run: the project's own checks via the validate
-  # package. Uniform on every path — and when CI is maintainer-gated (fork
-  # PRs), this is the only validation before the flip.
+  # Final local gate, fork pull requests only: the project's own checks via the
+  # validate package, the one validation before the flip when CI is
+  # maintainer-gated.
   - id: validate
     include: archon-validate
-    depends_on: [gate-ready]
+    depends_on: [fork]
+    when: "$fork.output.fork == true"
 
   # The third gate on the same script, for the same reason: a local gate that
   # refuses every red refuses red the change did not cause, and the base break
@@ -426,13 +564,14 @@ nodes:
             deadline_ms: 300000
           when: $ci-probe.output.state == 'pending'
           depends_on: [ci-probe]
-    depends_on: [gate-validated]
+    depends_on: [fork, gate-validated]
+    trigger_rule: none_failed_min_one_success
 
   # Late-red convergence. Review convergence and CI conclusion race: a
   # branch-introduced failure can conclude after the last recheck, the wait
   # exits on any non-pending state, and flip-ready's only moves are flip or
   # terminal failure. The pass below is the bounded route between them:
-  # classify, correct, re-review, re-await. It sits after the wait because
+  # classify, correct, re-await. It sits after the wait because
   # loop completion is computed externally (see await-checks) and a DAG has
   # no back-edges.
   - id: ci-verdict
@@ -445,88 +584,49 @@ nodes:
     depends_on: [await-checks]
     output_format: *ci_state
 
-  # One round, expressed natively: max_iterations bounds the pass, and the
-  # loop converges only on a `none` verdict. The terminal result carries both
-  # that reviewed verdict and the correction's red classification so the DAG
-  # can distinguish an introduced failure from red that requires an outside
-  # action. Entered only on concluded red; every other state skips the pass.
-  - id: ci-corrections
+  # One correction pass, entered only on concluded red. No review follows it: the
+  # re-await below reads CI on the pushed fix, which is the proof a CI fix needs,
+  # and the red-cause discipline in its brief is what keeps it honest. Every
+  # post-CI-fix review in the pack's history confirmed the fix (21 of 21).
+  - id: ci-fix
+    include: archon-implement
     depends_on: [ci-verdict]
     when: "$ci-verdict.output.state == 'red'"
-    loop_group:
-      until_bash: test $ci-round-result.output.action = "none"
-      max_iterations: 1
-      nodes:
-        - id: ci-fix
-          include: archon-implement
-          with:
-            work: >-
-              CI concluded non-green after the review converged. The failing
-              checks:
+    with:
+      work: >-
+        CI concluded non-green after the review converged. The failing
+        checks:
 
-              $ci-verdict.output.detail
+        $ci-verdict.output.detail
 
-              The same red-cause discipline as every round applies. A concluded
-              CI failure this branch's changes introduced is this pass's work:
-              fix it at the cause and push the correction to the branch this
-              run is on, explicitly by name. Red on a check this branch cannot
-              have caused is classified with evidence — red_cause inherited or
-              environment, with the summary naming the proof — never chased and
-              never "fixed" by weakening a test. Do not change the PR's draft
-              state or edit the canonical review comment; the following review
-              owns that public verdict.
+        The same red-cause discipline as every round applies. A concluded
+        CI failure this branch's changes introduced is this pass's work:
+        fix it at the cause and push the correction to the branch this
+        run is on, explicitly by name. Red on a check this branch cannot
+        have caused is classified with evidence — red_cause inherited or
+        environment, with the summary naming the proof — never chased and
+        never "fixed" by weakening a test. Do not change the PR's draft
+        state or edit the canonical review comment.
 
-              Accepted work order, for scope only — do not reopen it:
-              $INPUTS.work
+        Accepted work order, for scope only — do not reopen it:
+        $INPUTS.work
 
-        # The same gate, same script, fourth consumer: introduced-and-unfixed
-        # or unexplained red refuses loudly; inherited or environment red
-        # passes with its caveat recorded and routes to the explicit action
-        # wait below.
-        - id: gate-ci-fix
-          script: gate-green
-          runtime: bun
-          # Every gate that passes red leaves the cause as its own typed artifact;
-          # readers find them by type under nodes/, never through one shared file.
-          output_type: green-gate
-          output_format: *green_gate
-          depends_on: [ci-fix]
-          with:
-            green: "$ci-fix.output.green"
-            red_cause: "$ci-fix.output.red_cause"
-            summary: "$ci-fix.output.summary"
-            stage: "The CI correction"
-
-        # Never an unreviewed final fix — the corrections loop's rule holds
-        # for this pass too.
-        - id: ci-recheck
-          include: archon-review
-          with:
-            scope: "$pr.output"
-            prior_report: "$ARTIFACTS_DIR/review/report.md"
-            work_order: "$INPUTS.work"
-            errors: "$resolve-scope.output.errors"
-            docs: "$classify.output.docs"
-          depends_on: [gate-ci-fix]
-
-        # The loop's output is its last node's, and the tail below needs both
-        # the recheck's action and the fix's red cause, which live on two
-        # producers. This joins them; both values were certified where they
-        # were produced.
-        - id: ci-round-result
-          script: ci-round-result
-          runtime: bun
-          with:
-            action: "$ci-recheck.output.action"
-            red_cause: "$ci-fix.output.red_cause"
-          depends_on: [ci-recheck]
-          # Shape only: which actions exist is synthesize's enum, certified there.
-          output_format:
-            type: object
-            properties:
-              action: { type: string }
-              red_cause: { type: string }
-            required: [action, red_cause]
+  # The same gate, same script, fourth consumer: introduced-and-unfixed or
+  # unexplained red refuses loudly; inherited or environment red passes with its
+  # caveat recorded and routes to the explicit action wait below.
+  - id: gate-ci-fix
+    script: gate-green
+    runtime: bun
+    # Every gate that passes red leaves the cause as its own typed artifact;
+    # readers find them by type under nodes/, never through one shared file.
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [ci-fix]
+    with:
+      green: "$ci-fix.output.green"
+      red_cause: "$ci-fix.output.red_cause"
+      summary: "$ci-fix.output.summary"
+      stage: "The CI correction"
 
   # The re-wait after a pushed correction: same probe, webhook wake-up,
   # five-minute deadline fallback, and ceiling as await-checks. On an inherited
@@ -552,7 +652,7 @@ nodes:
             deadline_ms: 300000
           when: $fix-ci-probe.output.state == 'pending'
           depends_on: [fix-ci-probe]
-    depends_on: [ci-corrections]
+    depends_on: [gate-ci-fix]
 
   # Late red that the branch did not introduce needs a person, not another
   # autonomous correction. Preserve the draft PR and the recorded refusal,
@@ -560,10 +660,10 @@ nodes:
   - id: ci-attention-route
     script: ci-attention-route
     runtime: bun
-    depends_on: [ci-verdict, ci-corrections, await-fix-checks]
+    depends_on: [ci-verdict, gate-ci-fix, await-fix-checks]
     trigger_rule: none_failed_min_one_success
     with:
-      red_cause: { from: "$ci-corrections.output.red_cause", if_skipped: "" }
+      red_cause: { from: "$gate-ci-fix.output.red_cause", if_skipped: "" }
     output_format:
       type: object
       properties:

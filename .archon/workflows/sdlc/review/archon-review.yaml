@@ -1,9 +1,11 @@
 name: archon-review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
-  verdict. On the first round, code, seams, simplify, and tests always run; errors are
-  selected for failure-path changes and docs only for shipped-doc changes. Reviews a PR when given one, otherwise the
-  working diff. Every round also holds the change to the accepted contract: each
+  verdict. On the first round, seams always runs. A full-tier round adds code and
+  tests; a focused round (a low-risk change) adds one general reviewer instead. The
+  simplify pass runs unless the caller already ran it before the PR opened; errors
+  is selected for failure-path changes and docs only for shipped-doc changes.
+  Reviews a PR when given one, otherwise the working diff. Every round also holds the change to the accepted contract: each
   stated acceptance item, invariant, and steering constraint is met with cited
   evidence or raised as a blocking finding.
   Advisory and read-only: it judges, it never edits. Given the
@@ -42,6 +44,16 @@ inputs:
   errors:
     default: false
     description: Enable the silent-failure lens on a full review.
+  tier:
+    default: "full"
+    description: >-
+      full — code, seams and tests lenses; focused — seams plus one general
+      reviewer, for a change that engages none of the risks the lenses scale on.
+  simplify:
+    default: "true"
+    description: >-
+      Run the simplify pass as a lens. Delivery sets false: it runs the same pass
+      on the implementation before the pull request opens.
   docs:
     default: "auto"
     description: >-
@@ -83,6 +95,7 @@ nodes:
   - id: scope
     command: review-scope
     context: fresh
+    mutates_checkout: false
     depends_on: [mode]
     output_format:
       type: object
@@ -94,50 +107,67 @@ nodes:
         pr: { type: object }
       required: [docs, pr]
 
-  # ── Default-on lenses ─────────────────────────────────────────────
-  - id: code
-    command: review-code
-    context: fresh
-    depends_on: [scope]
-    when: "$mode.output.continuation == false"
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
-
+  # ── Lenses ────────────────────────────────────────────────────────
+  # Every reviewer is read-only by the engine's check, not only by its prompt:
+  # lenses run in parallel in one checkout, so a reviewer that edits it can
+  # mislead the others. Seams runs on every round: it has found the most
+  # Critical findings and raised the fewest wrong blockers.
   - id: seams
     command: review-seams
     context: fresh
+    mutates_checkout: false
     depends_on: [scope]
     when: "$mode.output.continuation == false"
     retry:
       max_attempts: 2
       delay_ms: 20000
 
-  # Structure is judged on every change, never selected for one. The lens this
-  # replaces was gated behind a suggestions-only charter and measured zero yield —
-  # which measured the demotion, not the concern.
-  - id: simplify
-    command: review-simplify
+  - id: code
+    command: review-code
     context: fresh
+    mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false"
+    when: "$mode.output.continuation == false && $INPUTS.tier == 'full'"
     retry:
       max_attempts: 2
       delay_ms: 20000
 
-  # ── Default-on and conditional lenses ─────────────────────────────
   - id: tests
     command: review-tests
     context: fresh
+    mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false"
+    when: "$mode.output.continuation == false && $INPUTS.tier == 'full'"
     retry:
       max_attempts: 2
       delay_ms: 20000
+
+  # A low-risk change gets one general reviewer in place of code and tests.
+  - id: focused
+    command: review-focused
+    context: fresh
+    mutates_checkout: false
+    depends_on: [scope]
+    when: "$mode.output.continuation == false && $INPUTS.tier == 'focused'"
+    retry:
+      max_attempts: 2
+      delay_ms: 20000
+
+  # Structure is judged on every change, never selected for one. The charter lives
+  # in its own workflow so delivery can run the same pass before the PR opens,
+  # when a smaller shape is still cheap; that caller turns this lens off.
+  - id: simplify
+    include: archon-simplify
+    with:
+      stage: review
+      work_order: "$INPUTS.work_order"
+    depends_on: [scope]
+    when: "$mode.output.continuation == false && $INPUTS.simplify == 'true'"
 
   - id: errors
     command: review-errors
     context: fresh
+    mutates_checkout: false
     depends_on: [scope]
     when: "$mode.output.continuation == false && $INPUTS.errors == 'true'"
     retry:
@@ -147,6 +177,7 @@ nodes:
   - id: docs
     command: review-docs
     context: fresh
+    mutates_checkout: false
     depends_on: [scope]
     when: "$mode.output.continuation == false && $INPUTS.docs == 'true' || $mode.output.continuation == false && $INPUTS.docs == 'auto' && $scope.output.docs == true"
     retry:
@@ -159,7 +190,7 @@ nodes:
   # mode/scope preflight: synthesize separately requires scope to have succeeded.
   - id: review-complete
     bash: "true"
-    depends_on: [code, seams, simplify, tests, errors, docs]
+    depends_on: [seams, code, tests, focused, simplify, errors, docs]
     trigger_rule: all_done
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill
@@ -186,6 +217,7 @@ nodes:
   - id: synthesize
     command: review-synthesize
     context: fresh
+    mutates_checkout: false
     output_type: review-report
     depends_on: [scope, review-complete]
     output_format: &review_verdict
