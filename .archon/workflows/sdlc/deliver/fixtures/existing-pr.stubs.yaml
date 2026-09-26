@@ -23,7 +23,7 @@ review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
 review__code: "1 finding (Important)"
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__synthesize:
   ready: false
@@ -69,11 +69,16 @@ ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/42" }
 outcome: { pr_url: "https://github.com/example/repo/pull/42", summary: "https://github.com/example/repo/pull/42" }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no new failure paths"
     docs: "stub: no doc-facing changes"
+polish-scope: '{"polish":false}'
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: completed
   inputs:

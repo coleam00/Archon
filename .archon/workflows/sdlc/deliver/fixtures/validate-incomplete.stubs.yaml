@@ -15,12 +15,14 @@ impl__assert-changed: "3 files changed"
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 9, url: "https://github.com/example/repo/pull/9", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-resolve-scope: '{"errors":"false"}'
+resolve-scope: '{"errors":"false","simplify":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
@@ -28,7 +30,7 @@ review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }
 review__code: "0 findings"
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__synthesize:
   ready: true
@@ -41,6 +43,9 @@ review__publish:
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 validate__discover: { checks: [{ name: "lint", argv: ["bun", "-e", "console.log('lint passed')"] }, { name: "tests", argv: ["archon-fixture-command-that-does-not-exist"] }], quarantine: [], notes: "stub: the project's checks" }
+polish-scope: '{"polish":false}'
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: failed
   fail-node: gate-validated

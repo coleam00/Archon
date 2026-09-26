@@ -8,6 +8,11 @@
  *
  * The docs lens is deliberately absent. It reads the classifier's verdict directly,
  * because it has no operator override to merge over.
+ *
+ * `simplify` is always `'false'`: delivery ran the simplify pass before the pull
+ * request opened, so review must not run it again. It travels from here because a
+ * composed workflow's `when:` can only compare a bound input against a node's
+ * output — a literal bound at the include would leave nothing to compare.
  */
 
 import { emit, refuse, text } from '../../.shared/io.ts';
@@ -22,9 +27,9 @@ const forced = text(process.env.INPUTS_ERRORS);
 const judged = text(process.env.INPUTS_C_ERRORS);
 
 if (isVerdict(forced)) {
-  emit({ errors: forced });
+  emit({ errors: forced, simplify: 'false' });
 } else if (!isVerdict(judged)) {
   refuse(`resolve-review-scope: classifier returned an invalid errors verdict: '${judged}'`);
 } else {
-  emit({ errors: judged });
+  emit({ errors: judged, simplify: 'false' });
 }

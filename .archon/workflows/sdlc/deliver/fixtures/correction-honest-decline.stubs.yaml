@@ -21,12 +21,14 @@ impl__assert-changed: "3 files changed"
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-resolve-scope: '{"errors":"false"}'
+resolve-scope: '{"errors":"false","simplify":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
@@ -34,7 +36,7 @@ review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
 review__code: "1 finding (Important)"
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__synthesize:
   ready: false
@@ -68,14 +70,15 @@ recheck__publish:
   findings_summary: "stub: no open Critical/Important"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/7" }
-publish-pr-body: {}
-sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
 validate__run: { status: red, summary: "stub: a check in the project gate failed" }
 validate__classify:
   red_cause: inherited
   summary: "stub: the same inherited lint break, still red on the base"
 ci-probe: '{"state":"pending","detail":"stub: 1 check still running"}'
+polish-scope: '{"polish":false}'
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: paused
   reached: [fix__assert-changed, gate-correction-green, recheck__synthesize, gate-ready, gate-validated, ci-probe]

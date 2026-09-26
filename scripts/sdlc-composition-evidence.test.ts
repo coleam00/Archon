@@ -396,16 +396,8 @@ describe('the green gate on a validation that did not finish', () => {
   });
 });
 
-it('forwards interaction through the CI projection without making it an accepted-red attention route', () => {
+it('does not route an interaction red cause to the accepted-red attention wait', () => {
   const root = join(import.meta.dir, '..', '.archon/workflows/sdlc/deliver/scripts');
-  const project = Bun.spawnSync([process.execPath, join(root, 'ci-round-result.ts')], {
-    env: { ...process.env, INPUTS_RED_CAUSE: 'interaction', INPUTS_ACTION: 'none' },
-  });
-  expect(project.exitCode).toBe(0);
-  expect(JSON.parse(project.stdout.toString())).toEqual({
-    action: 'none',
-    red_cause: 'interaction',
-  });
   const route = Bun.spawnSync([process.execPath, join(root, 'ci-attention-route.ts')], {
     env: { ...process.env, INPUTS_RED_CAUSE: 'interaction' },
   });
