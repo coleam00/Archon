@@ -32515,6 +32515,62 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(store.getState().status).toBe('paused');
   });
 
+  it("#3532: each pause persists the paused iteration's own session, so fresh_context: false continues it", async () => {
+    const workflow = ready(gateTerminatedLoopGroupWorkflow());
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'draft 1' };
+      yield { type: 'result', sessionId: 'iteration-1-session' };
+    });
+    const firstStore = createEscalationStore('run-escalation-session');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(firstStore),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('run-escalation-session'),
+      })
+    );
+
+    // Iteration 1 starts fresh, and its pause stores the session it just produced.
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    const firstPause = firstStore.getState().metadata.approval as ApprovalContext;
+    expect(firstPause).toMatchObject({ iteration: 1, sessionId: 'iteration-1-session' });
+    expect(firstPause.sessionProvider).toEqual(expect.any(String));
+
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'draft 2' };
+      yield { type: 'result', sessionId: 'iteration-2-session' };
+    });
+    const revise = { decision: 'revise', text: 'tighten it' };
+    const secondStore = createEscalationStore('run-escalation-session');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(secondStore),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('run-escalation-session', {
+          metadata: { approval: firstPause },
+        }),
+        priorCompletedNodes: new Map<string, PersistedNodeOutput>([
+          ['grp.work', { output: 'draft 1' }],
+          ['grp.check', { output: JSON.stringify(revise), structuredOutput: revise }],
+        ]),
+      })
+    );
+
+    // Iteration 2 resumes iteration 1's session, and the next pause advances the
+    // cursor to iteration 2's session instead of re-storing iteration 1's.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('iteration-1-session');
+    expect(secondStore.getState().metadata.approval).toMatchObject({
+      iteration: 2,
+      sessionId: 'iteration-2-session',
+    });
+  });
+
   it('escalates a terminal wait and completes it from the persisted deadline on resume', async () => {
     const store = createEscalationStore('run-wait-escalation');
     const deps = createMockDeps(store);
