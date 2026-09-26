@@ -8,7 +8,7 @@ scope:
   pr: {}
 code: "0 findings"
 seams: "0 findings"
-simplify: "0 findings"
+simplify__simplify: { findings: false }
 tests: "0 findings"
 docs: "0 findings"
 review-complete: "settled"
@@ -24,4 +24,4 @@ publish:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fixture:
   expect: completed
-  reached: [code, seams, simplify, tests, docs]
+  reached: [code, seams, simplify__simplify, tests, docs]

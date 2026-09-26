@@ -34,6 +34,7 @@ test('tallies lens attribution across runs', async () => {
     JSON.stringify([
       { id: 'R1', severity: 'Critical', sources: ['seams'], claim: 'c', status: 'fixed' },
       { id: 'R2', severity: 'Important', sources: ['docs'], claim: 'd', status: 'disproved' },
+      { id: 'R3', severity: 'Important', sources: ['errors'], claim: 'e', status: 'declined' },
     ])
   );
 
@@ -57,7 +58,9 @@ test('tallies lens attribution across runs', async () => {
     blocking: 0,
     disproved: 1,
   });
-  expect(formatReport(files, tallies, unreadable)).toContain('2 review(s), 4 finding(s)');
+  // So is one the owner declined with a reason synthesis accepted.
+  expect(tallies.find(t => t.lens === 'errors')).toMatchObject({ blocking: 0, disproved: 1 });
+  expect(formatReport(files, tallies, unreadable)).toContain('2 review(s), 5 finding(s)');
 });
 
 test('reports an unreadable findings file instead of dropping it', async () => {

@@ -11,19 +11,21 @@ gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summar
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
+  tier: full
   errors: false
   docs: true
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: changed shipped docs need impact review"
-resolve-scope: '{"errors":"false"}'
+resolve-scope: '{"errors":"false","simplify":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__docs: "0 findings"
 review__review-complete: "settled"
@@ -52,6 +54,9 @@ ci-verdict: '{"state":"concluded","detail":"no checks configured on this reposit
 ci-attention-route: '{"attention":false,"red_cause":""}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
+polish-scope: '{"polish":false}'
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: completed
-  reached: [review__code, review__seams, review__simplify, review__tests, review__docs]
+  reached: [review__code, review__seams, review__tests, review__docs]

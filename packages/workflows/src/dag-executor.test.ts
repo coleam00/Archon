@@ -32825,10 +32825,21 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     });
     const workflow = resolveWorkflow({ ...loaded.workflow, nodes });
     const activeNodeIds = new Set(['ci-attention', 'flip-ready', 'outcome']);
+    // One persisted value stands in for every completed ancestor. Resume re-checks an
+    // include's `when:` even for a cached descendant, so the value carries every field
+    // a conditional include reads, set so each one was active: the pre-PR simplify
+    // findings, review's simplify lens, the polish pass, fork validation, and the CI fix.
+    // An include the condition turned off could not also have completed.
     const inheritedRoute = {
       number: 3115,
       attention: true,
       red_cause: 'inherited',
+      findings: true,
+      polish: true,
+      fork: true,
+      simplify: 'true',
+      continuation: false,
+      state: 'red',
     };
     const inheritedRouteText = JSON.stringify(inheritedRoute);
     const completedBeforeAttention = new Map<string, PersistedNodeOutput>(

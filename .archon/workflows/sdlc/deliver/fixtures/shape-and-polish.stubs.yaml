@@ -1,4 +1,7 @@
-# Dry-run fixture: the initial review is ready, so the correction loop stays
+# Dry-run fixture: the pre-PR simplify pass finds a smaller shape, so the owner
+# adopts it before the pull request opens; the review is ready but leaves
+# Suggestions open, so one polish pass judges them without another review round,
+# and the description is resynced because the diff changed after it was written.
 # skipped and gate-ready binds the review verdict directly (the corrections
 # binding takes its if_skipped default). The pull request's head is in its own
 # repository, so the final local validation is skipped: its nodes carry no stub,
@@ -19,7 +22,14 @@ review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
 review__seams: "0 findings"
-shape__simplify: { findings: false }
+shape__simplify: { findings: true }
+reshape__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: adopted the smaller shape; declined one taste finding with its reason"
+reshape__assert-changed: "1 file changed"
+gate-reshape: '{"gate":"green","red_cause":"","stage":"The structure correction","summary":""}'
 review__tests: "0 findings"
 review__review-complete: "settled"
 review__synthesize:
@@ -47,12 +57,23 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false","simplify":"false"}'
-polish-scope: '{"polish":false}'
+polish-scope: '{"polish":true}'
+polish__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: fixed two Suggestions, declined one with its reason"
+polish__assert-changed: "2 files changed"
+gate-polish: '{"gate":"green","red_cause":"","stage":"The polish pass","summary":""}'
+read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/2" }
+sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
+publish-pr-body: {}
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":false}'
 fixture:
   expect: completed
   # The review round is handed the verified PR record, not a bare number: the
   # comment its publish node writes must land on that exact pull request.
+  reached: [reshape__implement, gate-reshape, pr__publish, polish__implement, gate-polish, publish-pr-body]
   resolved-text-contains:
     review__scope: '"path":"example/repo"'

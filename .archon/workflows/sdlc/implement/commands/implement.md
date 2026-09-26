@@ -17,7 +17,7 @@ Either may be empty. If both are, there is no work — say so and stop.
 Whichever carries it, the work may be:
 
 - **a plan** — a path to a plan file (read it completely) or an inline plan; execute its tasks in dependency order
-- **review findings** — fix every Critical and Important finding; if you can prove a finding invalid, record that proof in your report instead of "fixing" it
+- **review findings** — judge every finding, Suggestions included, by this project's values, then give each one disposition in your report: **fixed**; **declined** with the reason, when the finding is wrong or a taste call the project's engineering conventions and direction do not back; or **unrelated**, when it has nothing to do with this change and belongs in its own issue. Every valid Critical and Important finding is fixed. A defect that touches the change is fixed now, not deferred
 - **a CI failure** — reproduce it, fix the cause, prove the fix
 - **an existing pull request** — findings for, or a request to repair, a pull request named by number; this run must already be on its branch (see below)
 - **a description** — a plain statement of what to build or change
@@ -37,7 +37,7 @@ This run must already be on that pull request's branch, or for a pull request fr
 ## How to work
 
 1. Make the project runnable first: if dependencies are missing, install them with the project's own package manager in locked mode. Never update a lockfile.
-2. Ground yourself before editing: read the files the work names, plus their direct callers and tests. If the repository has an `engineering.md` (at the root or in a config directory such as `.archon/`), read it before writing code — it states the conventions your change is judged against. Live code beats the work item's assumptions — when they conflict, follow the code and record the deviation in your report.
+2. Ground yourself before editing: read the files the work names, plus their direct callers and tests. If the repository has an `engineering.md` or a direction document (at the root or in a config directory such as `.archon/`), read them before writing code — they state the conventions and direction your change is judged against, and the values you judge review findings by. Live code beats the work item's assumptions — when they conflict, follow the code and record the deviation in your report.
 3. Reproduce bugs before fixing them whenever reasonably possible; otherwise record the concrete evidence you fixed against.
 4. Prefer the simplest change that solves the actual problem. If the path grows complicated, stop and reconsider the approach instead of pushing through. Existing code is evidence of what the system does, not proof that it is simple or correct: leave the path you touched simpler than you found it — split a function that outgrew itself, delete machinery your change superseded, make an implicit seam explicit. That work is cheap while you are already in the file and expensive as a separate run later, and every future reader, human or agent, pays for complexity left behind. Step 10 bounds it to the path you are already changing.
 5. Write focused tests that prove the changed behavior — for a bug, a regression test that fails before the fix and passes after, when practical. No coverage theater.
@@ -49,11 +49,11 @@ This run must already be on that pull request's branch, or for a pull request fr
 11. Enforce invariants with the project's own strongest tools. Where the project is typed, express meaningful constraints in the type system rather than in comments or runtime convention, and avoid escape hatches such as `any` or unchecked casts when a sound type is practical.
 12. When the change touches agent or LLM behavior, let the model interpret and the code validate: never reconstruct intent from free prose with regexes or keyword matching — validate resolved arguments, permissions, and invariants at the tool boundary instead.
 
-## Preserve proved adjacent work
+## Preserve proved unrelated work
 
-Do not expand the requested change to fix adjacent defects or drift. When you prove useful work outside the accepted scope, preserve it without prescribing a solution: create `$ARTIFACTS_DIR/discoveries/implement.json` as a JSON array. Each record contains only `title`, `claim`, `evidence` (an array of concrete `file:line` facts or command results), `relation` (`adjacent` or `scope_conflict`), and `source_node` (`implement`). A scope conflict means the requested outcome appears to require crossing an explicit boundary; do not cross it yourself.
+Fix what touches the change — a defect on the path you changed, one your change makes reachable or visible, a claim your change makes false — in this change. Do not widen it into work unrelated to the change. When you prove unrelated work, preserve it without prescribing a solution: create `$ARTIFACTS_DIR/discoveries/implement.json` as a JSON array. Each record contains only `title`, `claim`, `evidence` (an array of concrete `file:line` facts or command results), `relation` (`unrelated` or `scope_conflict`), and `source_node` (`implement`). A scope conflict means the requested outcome appears to require crossing an explicit boundary; do not cross it yourself.
 
-Write no file when there is no proved discovery. Never add speculative filler, append to another node's file, modify a forge issue, or let an adjacent discovery change `green`. Later review owns validation and consolidation; your raw file remains evidence if that stage never runs.
+Write no file when there is no proved discovery. Never add speculative filler, append to another node's file, modify a forge issue, or let an unrelated discovery change `green`. Later review owns validation and consolidation; your raw file remains evidence if that stage never runs.
 
 ## Not your job
 
