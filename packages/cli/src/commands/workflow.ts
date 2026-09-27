@@ -105,6 +105,8 @@ import {
 import type { RequirementBearingWorkflow } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { formatDeprecationNotice } from '@archon/workflows/deprecation';
+import type { WorkflowEvent } from '@archon/workflows/logger';
+import { formatToolInputBrief } from '@archon/workflows/utils/tool-formatter';
 import {
   dryRunWorkflow,
   formatDryRunTrace,
@@ -1071,6 +1073,19 @@ export async function maybePrintTierNotice(
  */
 type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
 
+/**
+ * The wording of a node's progress lines. A foreground run renders them from emitter
+ * events and `workflow logs --format text` from transcript rows; both call these so a
+ * run reads the same whichever way it is watched.
+ */
+const nodeLine = {
+  started: (name: string, detail = ''): string => `[${name}] Started${detail}`,
+  completed: (name: string, durationMs?: number): string =>
+    `[${name}] Completed${durationMs === undefined ? '' : ` (${formatDuration(durationMs)})`}`,
+  failed: (name: string, error: string): string => `[${name}] Failed: ${error}`,
+  skipped: (name: string, why: string): string => `[${name}] Skipped (${why})`,
+};
+
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
 function renderWorkflowEvent(
   event: WorkflowEmitterEvent,
@@ -1087,22 +1102,20 @@ function renderWorkflowEvent(
         const tierPart = event.tier !== undefined ? ` ← ${event.tier}` : '';
         suffix = `  (${event.provider}/${event.model}${tierPart})`;
       }
-      process.stderr.write(`[${event.nodeName}] Started${suffix}\n`);
+      process.stderr.write(`${nodeLine.started(event.nodeName, suffix)}\n`);
       break;
     }
     case 'node_completed':
-      process.stderr.write(
-        `[${event.nodeName}] Completed${event.duration === undefined ? '' : ` (${formatDuration(event.duration)})`}\n`
-      );
+      process.stderr.write(`${nodeLine.completed(event.nodeName, event.duration)}\n`);
       break;
     case 'node_failed':
-      process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
+      process.stderr.write(`${nodeLine.failed(event.nodeName, event.error)}\n`);
       break;
     case 'node_skipped':
-      process.stderr.write(`[${event.nodeName}] Skipped (${formatSkipCause(event.cause)})\n`);
+      process.stderr.write(`${nodeLine.skipped(event.nodeName, formatSkipCause(event.cause))}\n`);
       break;
     case 'node_skipped_prior_success':
-      process.stderr.write(`[${event.nodeName}] Skipped (prior_success)\n`);
+      process.stderr.write(`${nodeLine.skipped(event.nodeName, 'prior_success')}\n`);
       break;
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
@@ -4175,10 +4188,136 @@ export async function workflowWaitCommand(
 const TRANSCRIPT_POLL_INTERVAL_MS = 500;
 const TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
 
+/** How `workflow logs` prints a transcript: its exact JSONL, or rendered for a human. */
+export type TranscriptFormat = 'jsonl' | 'text';
+
 interface TranscriptReadState {
   offset: number;
   decoder: TextDecoder;
   hasContent: boolean;
+  output: TranscriptOutput;
+}
+
+/** Where decoded transcript text goes. `end` flushes anything held back at a line boundary. */
+interface TranscriptOutput {
+  write(text: string): Promise<void>;
+  end(): Promise<void>;
+}
+
+/** Longest line a tool call renders to; a Codex tool name can be a whole shell script. */
+const TRANSCRIPT_TOOL_LINE_MAX = 160;
+
+function indentLines(text: string, prefix: string): string {
+  return text
+    .replace(/\n+$/, '')
+    .split('\n')
+    .map(line => (line.length > 0 ? `${prefix}${line}` : line))
+    .join('\n');
+}
+
+function oneLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
+}
+
+/**
+ * One transcript row as the text `workflow logs --format text` prints, or `undefined` for a
+ * row that renders nothing. Node lines share their wording with the foreground renderer.
+ * `tool` and `assistant` rows record no node, and parallel nodes interleave, so they are
+ * indented under whatever ran rather than attributed to a guessed node.
+ */
+function formatTranscriptRow(row: WorkflowEvent): string | undefined {
+  const step = row.step ?? '?';
+  switch (row.type) {
+    case 'workflow_start':
+      return `[workflow] Started ${row.workflow_name ?? ''}`.trimEnd();
+    case 'workflow_resume':
+      return `[workflow] Resumed ${row.workflow_name ?? ''}`.trimEnd();
+    case 'workflow_complete':
+      return '[workflow] Completed';
+    case 'workflow_error':
+      return `[workflow] Failed: ${row.error ?? ''}`;
+    case 'node_start':
+      return nodeLine.started(step);
+    case 'node_complete':
+      return nodeLine.completed(step, row.duration_ms);
+    case 'node_error':
+      return nodeLine.failed(step, row.error ?? '');
+    case 'node_skipped':
+      return nodeLine.skipped(
+        step,
+        row.cause ? formatSkipCause(row.cause) : (row.content ?? 'skipped')
+      );
+    case 'node_suspended':
+      return `[${step}] Waiting (${row.content ?? 'wait'})`;
+    case 'gate_decision':
+      return `[${step}] Gate: ${row.decision ?? ''}${row.content ? ` (${row.content})` : ''}`;
+    case 'assistant':
+      return row.content ? indentLines(row.content, '  ') : undefined;
+    case 'tool': {
+      const name = row.tool_name ?? '?';
+      const brief = row.tool_input ? formatToolInputBrief(name, row.tool_input) : null;
+      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    }
+    case 'exec_output': {
+      const lines = [`[${step}] Output (exit ${String(row.exit_code ?? '?')})`];
+      if (row.stdout_tail) lines.push(indentLines(row.stdout_tail, '  '));
+      if (row.stderr_tail) lines.push('  stderr:', indentLines(row.stderr_tail, '    '));
+      return lines.join('\n');
+    }
+    // Liveness bookkeeping and a historical row: nothing a reader of the run needs.
+    case 'watchdog_reset':
+    case 'validation':
+      return undefined;
+    default: {
+      // A new row type fails to compile here until it is decided above. At runtime a
+      // type this build does not know (an older or newer transcript) renders nothing.
+      const unknownType: never = row.type;
+      getLog().debug({ type: String(unknownType) }, 'cli.workflow_logs_row_unrendered');
+      return undefined;
+    }
+  }
+}
+
+/**
+ * A JSONL line rendered for a human. A line that is not a JSON object, or a row type this
+ * build does not know (older transcripts hold `step_start`, newer engines may add more),
+ * renders nothing: the text view is a reading aid, and the JSONL default keeps every row.
+ */
+function renderTranscriptLine(line: string): string | undefined {
+  if (line.trim().length === 0) return undefined;
+  let row: unknown;
+  try {
+    row = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return undefined;
+  return formatTranscriptRow(row as WorkflowEvent);
+}
+
+function transcriptOutput(format: TranscriptFormat): TranscriptOutput {
+  if (format === 'jsonl') {
+    return { write: writeStdout, end: (): Promise<void> => Promise.resolve() };
+  }
+  // A read can end mid-row while the run is still appending, so only whole lines render.
+  let partial = '';
+  const render = async (lines: string[]): Promise<void> => {
+    const rendered = lines.flatMap(line => renderTranscriptLine(line) ?? []);
+    if (rendered.length > 0) await writeStdout(`${rendered.join('\n')}\n`);
+  };
+  return {
+    async write(text: string): Promise<void> {
+      const lines = (partial + text).split('\n');
+      partial = lines.pop() ?? '';
+      await render(lines);
+    },
+    async end(): Promise<void> {
+      const last = partial;
+      partial = '';
+      await render([last]);
+    },
+  };
 }
 
 async function drainTranscript(
@@ -4209,7 +4348,7 @@ async function drainTranscript(
       state.offset += bytesRead;
       state.hasContent = true;
       const text = state.decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
-      if (text.length > 0) await writeStdout(text);
+      if (text.length > 0) await state.output.write(text);
     }
     return true;
   } finally {
@@ -4219,7 +4358,8 @@ async function drainTranscript(
 
 async function finishTranscriptDecode(state: TranscriptReadState): Promise<void> {
   const text = state.decoder.decode();
-  if (text.length > 0) await writeStdout(text);
+  if (text.length > 0) await state.output.write(text);
+  await state.output.end();
 }
 
 function transcriptUnavailableMessage(
@@ -4235,11 +4375,12 @@ function transcriptUnavailableMessage(
     : `Transcript is not available yet for ${run.id}. Use --follow to wait for it: ${transcriptPath}`;
 }
 
-/** Print or follow one run's append-only JSONL transcript without mutating the run. */
+/** Print or follow one run's append-only JSONL transcript, verbatim or as text, without mutating the run. */
 export async function workflowLogsCommand(
   runId: string,
   follow: boolean,
-  cwd?: string
+  cwd?: string,
+  format: TranscriptFormat = 'jsonl'
 ): Promise<number> {
   let resolvedId = runId;
   try {
@@ -4260,6 +4401,7 @@ export async function workflowLogsCommand(
       offset: 0,
       decoder: new TextDecoder(),
       hasContent: false,
+      output: transcriptOutput(format),
     };
 
     if (!follow) {

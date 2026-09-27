@@ -3250,9 +3250,10 @@ Print the current JSONL transcript, or follow it through completion:
 ```bash
 archon workflow logs {workflow-id}
 archon workflow logs {workflow-id} --follow
+archon workflow logs {workflow-id} --follow --format text   # the same rows, readable
 ```
 
-Each line is a JSON event (step start, AI response, tool call, retained subprocess output,
+Each line of the default output is a JSON event (step start, AI response, tool call, retained subprocess output,
 etc.). `archon workflow get {workflow-id}` also prints the resolved local transcript path.
 
 ---

@@ -6488,6 +6488,100 @@ describe('workflowLogsCommand', () => {
     expect(workflowDb.resumeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('renders every transcript row kind as text and skips rows it cannot render', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const rows = [
+      { type: 'workflow_start', workflow_name: 'fix-issue', content: 'fix #1' },
+      { type: 'node_start', step: 'plan', content: 'plan-cmd' },
+      { type: 'assistant', content: 'Reading the issue.\n\nThen planning.' },
+      { type: 'tool', tool_name: 'Bash', tool_input: { command: 'git   status\n--short' } },
+      { type: 'tool', tool_name: '/bin/zsh -lc "ls\n-la"', tool_input: {} },
+      { type: 'watchdog_reset', step: 'plan', chunk_type: 'assistant', chunk_count: 3 },
+      { type: 'step_start', step: 'legacy' },
+      { type: 'node_complete', step: 'plan', content: 'plan-cmd', duration_ms: 1234 },
+      {
+        type: 'exec_output',
+        step: 'lint',
+        content: '<bash>',
+        exit_code: 2,
+        stdout_tail: 'ok\n',
+        stderr_tail: 'bad\nworse\n',
+      },
+      { type: 'node_error', step: 'lint', error: 'exit 2' },
+      {
+        type: 'node_skipped',
+        step: 'docs',
+        content: 'when_condition',
+        cause: { kind: 'condition', expr: "$x == 'y'" },
+      },
+      { type: 'node_skipped', step: 'old', content: 'when_condition' },
+      { type: 'node_suspended', step: 'review-gate', content: 'approval' },
+      { type: 'gate_decision', step: 'review-gate', decision: 'approve', content: 'looks good' },
+      { type: 'workflow_resume', workflow_name: 'fix-issue' },
+      { type: 'workflow_error', error: 'lint failed' },
+      { type: 'workflow_complete' },
+    ];
+    writeFileSync(
+      transcriptPath,
+      `${rows.map(row => JSON.stringify(row)).join('\n')}\nnot json\n[1,2]\n`
+    );
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('failed'));
+
+    expect(await workflowLogsCommand(run('failed').id, false, undefined, 'text')).toBe(0);
+    expect(stdoutText()).toBe(
+      [
+        '[workflow] Started fix-issue',
+        '[plan] Started',
+        '  Reading the issue.',
+        '',
+        '  Then planning.',
+        '  tool: Bash git status --short',
+        '  tool: /bin/zsh -lc "ls -la"',
+        '[plan] Completed (1.2s)',
+        '[lint] Output (exit 2)',
+        '  ok',
+        '  stderr:',
+        '    bad',
+        '    worse',
+        '[lint] Failed: exit 2',
+        "[docs] Skipped (condition: $x == 'y')",
+        '[old] Skipped (when_condition)',
+        '[review-gate] Waiting (approval)',
+        '[review-gate] Gate: approve (looks good)',
+        '[workflow] Resumed fix-issue',
+        '[workflow] Failed: lint failed',
+        '[workflow] Completed',
+        '',
+      ].join('\n')
+    );
+    expect(stderrText()).toBe('');
+  });
+
+  it('follows as text, rendering a row only once it is whole', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const nodeRow = JSON.stringify({ type: 'node_start', step: 'build' });
+    const splitAt = 10;
+    writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({ type: 'workflow_start', workflow_name: 'wf' })}\n${nodeRow.slice(0, splitAt)}`
+    );
+    let stdoutAfterFirstDrain = '';
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(run('running'))
+      .mockImplementationOnce(() => {
+        stdoutAfterFirstDrain = stdoutText();
+        appendFileSync(
+          transcriptPath,
+          `${nodeRow.slice(splitAt)}\n${JSON.stringify({ type: 'workflow_complete' })}\n`
+        );
+        return Promise.resolve(run('completed'));
+      });
+
+    expect(await workflowLogsCommand(run('running').id, true, undefined, 'text')).toBe(0);
+    expect(stdoutAfterFirstDrain).toBe('[workflow] Started wf\n');
+    expect(stdoutText()).toBe('[workflow] Started wf\n[build] Started\n[workflow] Completed\n');
+  });
+
   it('fails if the transcript shrinks behind the current offset', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     writeFileSync(transcriptPath, `${JSON.stringify({ type: 'workflow_start' })}\n`);

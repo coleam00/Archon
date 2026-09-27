@@ -815,12 +815,22 @@ async function main(): Promise<number> {
           case 'logs': {
             const logsRunId = positionals[2];
             if (!logsRunId || positionals[3] !== undefined) {
-              return await fail(false, 'Usage: archon workflow logs <run-id> [--follow]');
+              return await fail(
+                false,
+                'Usage: archon workflow logs <run-id> [--follow] [--format jsonl|text]'
+              );
             }
             if (jsonFlag) {
               return await fail(
                 false,
-                'Error: workflow logs already emits JSONL; --json is not supported.'
+                'Error: workflow logs already emits JSONL; --json is not supported. Use --format text to read it as text.'
+              );
+            }
+            const logsFormat = (values.format as string | undefined) ?? 'jsonl';
+            if (logsFormat !== 'jsonl' && logsFormat !== 'text') {
+              return await fail(
+                false,
+                `Error: --format must be 'jsonl' or 'text', got '${logsFormat}'.`
               );
             }
             if (values.events) {
@@ -829,7 +839,12 @@ async function main(): Promise<number> {
                 'Error: --events applies to workflow status/get, not workflow logs.'
               );
             }
-            return await workflowLogsCommand(logsRunId, Boolean(values.follow), effectiveCwd);
+            return await workflowLogsCommand(
+              logsRunId,
+              Boolean(values.follow),
+              effectiveCwd,
+              logsFormat
+            );
           }
 
           case 'wait': {

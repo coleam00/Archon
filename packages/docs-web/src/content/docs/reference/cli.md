@@ -645,6 +645,7 @@ Print the run's existing JSONL transcript, or follow it as rows are appended:
 ```bash
 archon workflow logs <run-id>
 archon workflow logs <run-id> --follow
+archon workflow logs <run-id> --follow --format text
 ```
 
 Without `--follow`, the command copies the snapshot that exists at invocation time to
@@ -669,6 +670,16 @@ written before this line type have `assistant` lines (`content`) and `tool` line
 (`tool_name`, `tool_input`) instead, with no step, call id or output. `--json` is invalid because the output is
 already JSONL and a live stream cannot satisfy the CLI's one-document JSON contract;
 `--events` is also limited to `workflow status/get`.
+
+`--format text` reads the same transcript, with the same snapshot and follow behaviour,
+and prints it for a person instead: workflow start, resume, completion and failure; node
+start, completion with its duration, failure and skip with its cause; gate waits and
+decisions; assistant text; one line per tool call; and each subprocess's retained output
+with its exit code. Assistant text and tool calls are indented rather than labelled with
+a node, because those rows do not record one and parallel nodes interleave. Rows the
+text view does not render (watchdog renewals, historical rows, row types newer than the
+CLI, or a line that is not JSON) are left out; `--format jsonl`, the default, keeps every
+row.
 
 A missing or empty snapshot exits `1`; for a live run the diagnostic points to
 `--follow`. Follow mode waits while the run is live, performs a final read after a
@@ -1181,6 +1192,7 @@ archon version
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
+| `--format <jsonl\|text>` | For `workflow logs`: `jsonl` (default) prints the exact transcript; `text` renders it as progress lines for a person. |
 | `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |
 | `--help`, `-h` | Show help message |
 
