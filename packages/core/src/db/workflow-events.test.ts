@@ -43,6 +43,7 @@ import {
   listWorkflowEvents,
   listRecentEvents,
   listActiveWorkflowNodeIds,
+  listNodeLifecycleEvents,
   getDagResumeSnapshot,
 } from './workflow-events';
 
@@ -349,6 +350,55 @@ describe('workflow-events', () => {
       mockQuery.mockRejectedValueOnce(new Error('connection refused'));
 
       await expect(listActiveWorkflowNodeIds(['run-a'])).rejects.toThrow('connection refused');
+    });
+  });
+
+  describe('listNodeLifecycleEvents', () => {
+    test('groups node lifecycle rows by run in one query, with an entry for every run', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { workflow_run_id: 'run-a', step_name: 'plan', event_type: 'node_started', data: '{}' },
+          {
+            workflow_run_id: 'run-a',
+            step_name: 'plan',
+            event_type: 'node_completed',
+            data: '{"node_output":"done"}',
+          },
+          { workflow_run_id: 'run-b', step_name: 'build', event_type: 'node_failed', data: {} },
+        ])
+      );
+
+      const result = await listNodeLifecycleEvents(['run-a', 'run-b', 'run-c']);
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
+        ),
+        [
+          'run-a',
+          'run-b',
+          'run-c',
+          'node_started',
+          'node_suspended',
+          'node_completed',
+          'node_failed',
+          'node_skipped',
+          'node_skipped_prior_success',
+        ]
+      );
+      expect([...result.keys()]).toEqual(['run-a', 'run-b', 'run-c']);
+      expect(result.get('run-a')?.map(row => [row.event_type, row.data])).toEqual([
+        ['node_started', {}],
+        ['node_completed', { node_output: 'done' }],
+      ]);
+      expect(result.get('run-b')).toHaveLength(1);
+      expect(result.get('run-c')).toEqual([]);
+    });
+
+    test('returns an empty map without querying for an empty run list', async () => {
+      expect(await listNodeLifecycleEvents([])).toEqual(new Map());
+      expect(mockQuery).not.toHaveBeenCalled();
     });
   });
 

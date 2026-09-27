@@ -403,6 +403,33 @@ export async function listActiveWorkflowNodeIds(
   return new Map([...activeByRun].map(([runId, activeNodeIds]) => [runId, [...activeNodeIds]]));
 }
 
+/**
+ * Node lifecycle rows, data included, for several runs in one query: each run's rows in
+ * lifecycle order, and an entry (possibly empty) for every requested run. This is the
+ * input `buildNodeSummaries` folds, so a run list can report per-node state without one
+ * query per run; high-volume rows such as `tool_*` never leave the database.
+ */
+export async function listNodeLifecycleEvents(
+  workflowRunIds: readonly string[]
+): Promise<Map<string, WorkflowEventRow[]>> {
+  const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
+  if (workflowRunIds.length === 0) return byRun;
+
+  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
+  const eventPlaceholders = NODE_LIFECYCLE_EVENT_TYPES.map(
+    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
+  );
+  const result = await pool.query<WorkflowEventRow>(
+    `SELECT * FROM remote_agent_workflow_events
+     WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
+       AND event_type IN (${eventPlaceholders.join(', ')})
+     ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+    [...workflowRunIds, ...NODE_LIFECYCLE_EVENT_TYPES]
+  );
+  for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
+  return byRun;
+}
+
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
   const result = await pool.query<{
     step_name: string | null;

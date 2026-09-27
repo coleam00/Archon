@@ -874,6 +874,7 @@ async function main(): Promise<number> {
               status: values.status as string | undefined,
               limit,
               open: values.open as boolean | undefined,
+              verbose: values.verbose as boolean | undefined,
             });
             break;
           }

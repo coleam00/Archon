@@ -133,6 +133,7 @@ import {
   isScheduledWorkflowResume,
   readRunStopReason,
   skipCauseSchema,
+  runAttention,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
@@ -140,8 +141,10 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ContinuationMode,
+  RunAttention,
   SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
+import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from '@archon/workflows/schemas/terminal-record';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   isTerminalRunStatus,
@@ -3845,6 +3848,49 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   return [...summaries.values()];
 }
 
+/** A node in the run's declared graph that no lifecycle event has reached yet. */
+export interface PendingNodeSummary {
+  nodeId: string;
+  state: 'pending';
+}
+
+export type RunNodeSummary = NodeSummary | PendingNodeSummary;
+
+/**
+ * Per-node state for `workflow runs --json --verbose`: every node the run declared in
+ * its `terminal_graph`, in declared order and `pending` until an event reaches it,
+ * folded with `buildNodeSummaries`. A node that ran but is not declared (a loop body
+ * such as `candidates.step`) follows the declared ones in first-event order — the same
+ * ordering `buildTerminalRecord` gives finished runs. A run without a recorded graph
+ * reports only the nodes its events reached.
+ */
+export function buildRunNodes(
+  run: Pick<WorkflowRun, 'metadata'>,
+  events: WorkflowEventRow[]
+): RunNodeSummary[] {
+  const nodes = new Map<string, RunNodeSummary>();
+  const graph = runGraphSchema.safeParse(run.metadata[RUN_GRAPH_METADATA_KEY]);
+  if (graph.success)
+    for (const nodeId of graph.data.node_ids) nodes.set(nodeId, { nodeId, state: 'pending' });
+  for (const summary of buildNodeSummaries(events)) nodes.set(summary.nodeId, summary);
+  return [...nodes.values()];
+}
+
+/**
+ * `workflow runs --json --verbose` adds `nodes` and `attention` to each run. Node
+ * events for every listed run come from one query, filtered to node lifecycle rows.
+ */
+async function withRunDetail<
+  Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
+>(runs: Run[]): Promise<(Run & { nodes: RunNodeSummary[]; attention: RunAttention | null })[]> {
+  const eventsByRun = await workflowEventsDb.listNodeLifecycleEvents(runs.map(run => run.id));
+  return runs.map(run => ({
+    ...run,
+    nodes: buildRunNodes(run, eventsByRun.get(run.id) ?? []),
+    attention: runAttention(run),
+  }));
+}
+
 /**
  * Fetch a run's events for `--verbose` rendering. A failed event query must not
  * abort the command (the run summary itself is still useful), but it must NOT be
@@ -4676,10 +4722,18 @@ function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
  * way `workflow run` does, then lists that project's recent runs of every
  * status. `--all` drops the project scope (lists across all projects);
  * `--status` filters to one status; `--limit` caps the count (default 20).
+ * `--json --verbose` adds each run's `nodes` and `attention` (see `withRunDetail`).
  */
 export async function workflowRunsCommand(
   cwd: string,
-  opts: { json?: boolean; all?: boolean; status?: string; limit?: number; open?: boolean } = {}
+  opts: {
+    json?: boolean;
+    all?: boolean;
+    status?: string;
+    limit?: number;
+    open?: boolean;
+    verbose?: boolean;
+  } = {}
 ): Promise<void> {
   // Open-work inbox (#2747): terminal failed runs nothing has adopted or
   // superseded — the operator's "what ended with work on the table" query.
@@ -4706,7 +4760,11 @@ export async function workflowRunsCommand(
       limit: opts.limit ?? 20,
     });
     if (opts.json) {
-      await writeJsonLine({ runs, total: runs.length, scopeFallback: !opts.all && !codebase });
+      await writeJsonLine({
+        runs: opts.verbose ? await withRunDetail(runs) : runs,
+        total: runs.length,
+        scopeFallback: !opts.all && !codebase,
+      });
       return;
     }
     if (runs.length === 0) {
@@ -4782,7 +4840,20 @@ export async function workflowRunsCommand(
   const scopeFallback = !opts.all && !codebase;
 
   if (opts.json) {
-    await writeJsonLine({ ...result, scopeFallback });
+    if (!opts.verbose) {
+      await writeJsonLine({ ...result, scopeFallback });
+      return;
+    }
+    let runs;
+    try {
+      runs = await withRunDetail(result.runs);
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, cwd }, 'cli.workflow_runs_node_events_failed');
+      await writeJsonLine({ ok: false, error: `Failed to read node events: ${err.message}` });
+      return;
+    }
+    await writeJsonLine({ ...result, runs, scopeFallback });
     return;
   }
 

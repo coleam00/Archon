@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
-import { buildNodeSummaries } from './workflow';
+import { buildNodeSummaries, buildRunNodes } from './workflow';
 
 function event(
   id: string,
@@ -251,5 +251,48 @@ describe('buildNodeSummaries durations', () => {
       ])
     );
     expect(summary?.durationMs).toBe(7_200_000);
+  });
+});
+
+describe('buildRunNodes', () => {
+  const graph = { terminal_graph: { node_ids: ['plan', 'implement', 'review'] } };
+
+  it('lists every declared node in declared order, pending until an event reaches it', () => {
+    const nodes = buildRunNodes({ metadata: graph }, [
+      event('implement-started', 'node_started', 'implement', '2026-09-27T10:00:05.000Z'),
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:00.000Z'),
+      event('plan-completed', 'node_completed', 'plan', '2026-09-27T10:00:04.000Z'),
+    ]);
+
+    expect(nodes.map(node => [node.nodeId, node.state])).toEqual([
+      ['plan', 'completed'],
+      ['implement', 'running'],
+      ['review', 'pending'],
+    ]);
+    expect(nodes[2]).toEqual({ nodeId: 'review', state: 'pending' });
+  });
+
+  it('appends a node that ran without being declared after the declared ones', () => {
+    const nodes = buildRunNodes({ metadata: graph }, [
+      event('loop-body', 'node_started', 'plan.step', '2026-09-27T10:00:00.000Z'),
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:01.000Z'),
+    ]);
+
+    expect(nodes.map(node => [node.nodeId, node.state])).toEqual([
+      ['plan', 'running'],
+      ['implement', 'pending'],
+      ['review', 'pending'],
+      ['plan.step', 'running'],
+    ]);
+  });
+
+  it('reports only the folded nodes when the run recorded no graph', () => {
+    const nodes = buildRunNodes({ metadata: {} }, [
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:00.000Z'),
+    ]);
+
+    expect(nodes).toEqual([
+      { nodeId: 'plan', state: 'running', startedAt: '2026-09-27T10:00:00.000Z' },
+    ]);
   });
 });
