@@ -1075,8 +1075,9 @@ type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
 
 /**
  * The wording of a node's progress lines. A foreground run renders them from emitter
- * events and `workflow logs --format text` from transcript rows; both call these so a
- * run reads the same whichever way it is watched.
+ * events and `workflow logs --format text` from transcript rows; both call these so the
+ * lines are worded alike. The label differs: the foreground names a command node by its
+ * command, the transcript by its node id, which is all its failure and skip rows record.
  */
 const nodeLine = {
   started: (name: string, detail = ''): string => `[${name}] Started${detail}`,
@@ -4220,6 +4221,11 @@ function oneLine(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
 }
 
+/** Compile-time check only: a new transcript row type must be decided in `formatTranscriptRow`. */
+function rowTypeDecided(_type: never): void {
+  // Nothing to do at runtime.
+}
+
 /**
  * One transcript row as the text `workflow logs --format text` prints, or `undefined` for a
  * row that renders nothing. Node lines share their wording with the foreground renderer.
@@ -4238,7 +4244,11 @@ function formatTranscriptRow(row: WorkflowEvent): string | undefined {
     case 'workflow_error':
       return `[workflow] Failed: ${row.error ?? ''}`;
     case 'node_start':
-      return nodeLine.started(step);
+      // `content` is the command a command node runs, or a `<inline>`-style kind marker.
+      return nodeLine.started(
+        step,
+        row.content && !row.content.startsWith('<') ? ` (${row.content})` : ''
+      );
     case 'node_complete':
       return nodeLine.completed(step, row.duration_ms);
     case 'node_error':
@@ -4250,8 +4260,14 @@ function formatTranscriptRow(row: WorkflowEvent): string | undefined {
       );
     case 'node_suspended':
       return `[${step}] Waiting (${row.content ?? 'wait'})`;
-    case 'gate_decision':
-      return `[${step}] Gate: ${row.decision ?? ''}${row.content ? ` (${row.content})` : ''}`;
+    case 'gate_decision': {
+      // The comment is the operator's verbatim text and may span lines.
+      const decision = `[${step}] Gate: ${row.decision ?? ''}`;
+      if (!row.content) return decision;
+      return row.content.includes('\n')
+        ? `${decision}\n${indentLines(row.content, '  ')}`
+        : `${decision} (${row.content})`;
+    }
     case 'assistant':
       return row.content ? indentLines(row.content, '  ') : undefined;
     case 'tool': {
@@ -4269,13 +4285,11 @@ function formatTranscriptRow(row: WorkflowEvent): string | undefined {
     case 'watchdog_reset':
     case 'validation':
       return undefined;
-    default: {
-      // A new row type fails to compile here until it is decided above. At runtime a
-      // type this build does not know (an older or newer transcript) renders nothing.
-      const unknownType: never = row.type;
-      getLog().debug({ type: String(unknownType) }, 'cli.workflow_logs_row_unrendered');
+    default:
+      // At runtime a type this build does not know (an older or newer transcript)
+      // renders nothing.
+      rowTypeDecided(row.type);
       return undefined;
-    }
   }
 }
 

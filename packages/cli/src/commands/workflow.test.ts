@@ -6493,6 +6493,7 @@ describe('workflowLogsCommand', () => {
     const rows = [
       { type: 'workflow_start', workflow_name: 'fix-issue', content: 'fix #1' },
       { type: 'node_start', step: 'plan', content: 'plan-cmd' },
+      { type: 'node_start', step: 'lint', content: '<bash>' },
       { type: 'assistant', content: 'Reading the issue.\n\nThen planning.' },
       { type: 'tool', tool_name: 'Bash', tool_input: { command: 'git   status\n--short' } },
       { type: 'tool', tool_name: '/bin/zsh -lc "ls\n-la"', tool_input: {} },
@@ -6517,6 +6518,12 @@ describe('workflowLogsCommand', () => {
       { type: 'node_skipped', step: 'old', content: 'when_condition' },
       { type: 'node_suspended', step: 'review-gate', content: 'approval' },
       { type: 'gate_decision', step: 'review-gate', decision: 'approve', content: 'looks good' },
+      {
+        type: 'gate_decision',
+        step: 'review-gate',
+        decision: 'reject',
+        content: 'two things:\nfix the test',
+      },
       { type: 'workflow_resume', workflow_name: 'fix-issue' },
       { type: 'workflow_error', error: 'lint failed' },
       { type: 'workflow_complete' },
@@ -6531,7 +6538,8 @@ describe('workflowLogsCommand', () => {
     expect(stdoutText()).toBe(
       [
         '[workflow] Started fix-issue',
-        '[plan] Started',
+        '[plan] Started (plan-cmd)',
+        '[lint] Started',
         '  Reading the issue.',
         '',
         '  Then planning.',
@@ -6548,6 +6556,9 @@ describe('workflowLogsCommand', () => {
         '[old] Skipped (when_condition)',
         '[review-gate] Waiting (approval)',
         '[review-gate] Gate: approve (looks good)',
+        '[review-gate] Gate: reject',
+        '  two things:',
+        '  fix the test',
         '[workflow] Resumed fix-issue',
         '[workflow] Failed: lint failed',
         '[workflow] Completed',

@@ -675,7 +675,8 @@ already JSONL and a live stream cannot satisfy the CLI's one-document JSON contr
 and prints it for a person instead: workflow start, resume, completion and failure; node
 start, completion with its duration, failure and skip with its cause; gate waits and
 decisions; assistant text; one line per tool call; and each subprocess's retained output
-with its exit code. Assistant text and tool calls are indented rather than labelled with
+with its exit code. Each node is named by its node id, and a command node's start line
+also names its command. Assistant text and tool calls are indented rather than labelled with
 a node, because those rows do not record one and parallel nodes interleave. Rows the
 text view does not render (watchdog renewals, historical rows, row types newer than the
 CLI, or a line that is not JSON) are left out; `--format jsonl`, the default, keeps every
