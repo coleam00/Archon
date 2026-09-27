@@ -4844,16 +4844,9 @@ export async function workflowRunsCommand(
       await writeJsonLine({ ...result, scopeFallback });
       return;
     }
-    let runs;
-    try {
-      runs = await withRunDetail(result.runs);
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, cwd }, 'cli.workflow_runs_node_events_failed');
-      await writeJsonLine({ ok: false, error: `Failed to read node events: ${err.message}` });
-      return;
-    }
-    await writeJsonLine({ ...result, runs, scopeFallback });
+    // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
+    // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
+    await writeJsonLine({ ...result, runs: await withRunDetail(result.runs), scopeFallback });
     return;
   }
 

@@ -396,6 +396,14 @@ describe('workflow-events', () => {
       expect(result.get('run-c')).toEqual([]);
     });
 
+    test('throws wrapped error on query failure', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('connection lost'));
+
+      await expect(listNodeLifecycleEvents(['run-a'])).rejects.toThrow(
+        'Failed to list node lifecycle events: connection lost'
+      );
+    });
+
     test('returns an empty map without querying for an empty run list', async () => {
       expect(await listNodeLifecycleEvents([])).toEqual(new Map());
       expect(mockQuery).not.toHaveBeenCalled();

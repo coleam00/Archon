@@ -419,15 +419,20 @@ export async function listNodeLifecycleEvents(
   const eventPlaceholders = NODE_LIFECYCLE_EVENT_TYPES.map(
     (_, index) => `$${String(workflowRunIds.length + index + 1)}`
   );
-  const result = await pool.query<WorkflowEventRow>(
-    `SELECT * FROM remote_agent_workflow_events
-     WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
-       AND event_type IN (${eventPlaceholders.join(', ')})
-     ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-    [...workflowRunIds, ...NODE_LIFECYCLE_EVENT_TYPES]
-  );
-  for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
-  return byRun;
+  try {
+    const result = await pool.query<WorkflowEventRow>(
+      `SELECT * FROM remote_agent_workflow_events
+       WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
+         AND event_type IN (${eventPlaceholders.join(', ')})
+       ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+      [...workflowRunIds, ...NODE_LIFECYCLE_EVENT_TYPES]
+    );
+    for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
+    return byRun;
+  } catch (error) {
+    getLog().error({ err: error as Error }, 'db.node_lifecycle_events_list_failed');
+    throw new Error(`Failed to list node lifecycle events: ${(error as Error).message}`);
+  }
 }
 
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {

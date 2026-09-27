@@ -572,6 +572,7 @@ mock.module('@archon/core/db/workflows', () => ({
   resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
   listWorkflowRuns: mock(() => Promise.resolve([])),
   listDashboardRuns: mockListDashboardRuns,
+  findOpenWorkRuns: mock(() => Promise.resolve([])),
   deleteOldWorkflowRuns: mock(() => Promise.resolve({ count: 0 })),
 }));
 
@@ -7248,16 +7249,30 @@ describe('workflowRunsCommand', () => {
       });
     });
 
-    it('emits {ok:false} rather than runs without nodes when the events query fails', async () => {
+    it('fails rather than emit runs without nodes when the events query fails', async () => {
       const eventsSpy = await listOnce();
       eventsSpy.mockRejectedValueOnce(new Error('database is locked'));
 
-      await workflowRunsCommand('/test/path', { json: true, verbose: true });
+      await expect(
+        workflowRunsCommand('/test/path', { json: true, verbose: true })
+      ).rejects.toThrow('database is locked');
+      expect(stdoutSpy).not.toHaveBeenCalled();
+    });
 
-      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toEqual({
-        ok: false,
-        error: 'Failed to read node events: database is locked',
-      });
+    it('fails the --open inbox the same way when the events query fails', async () => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const eventsDb = await import('@archon/core/db/workflow-events');
+      (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+        { id: 'run-open', status: 'failed', metadata: {}, completed_at: null },
+      ]);
+      (eventsDb.listNodeLifecycleEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
+        new Error('database is locked')
+      );
+
+      await expect(
+        workflowRunsCommand('/test/path', { json: true, verbose: true, open: true })
+      ).rejects.toThrow('database is locked');
+      expect(stdoutSpy).not.toHaveBeenCalled();
     });
 
     it('leaves --json without --verbose byte-identical and reads no events', async () => {
