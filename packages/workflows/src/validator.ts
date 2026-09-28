@@ -666,13 +666,28 @@ export async function validateWorkflowResources(
       const mcpPath = isAbsolute(node.mcp) ? node.mcp : resolve(cwd, node.mcp);
 
       if (!(await fileExists(mcpPath))) {
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'mcp',
-          message: `MCP config file not found: '${node.mcp}'`,
-          hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
-        });
+        // A `when:`-gated node may deliberately depend on an optional config file (e.g.
+        // the ntfy notify pattern), but the runtime loader still fails the node if it
+        // executes without the file — so a missing file is only an error when the node
+        // is unconditional.
+        const isGated = typeof node.when === 'string';
+        if (isGated) {
+          issues.push({
+            level: 'warning',
+            nodeId: node.id,
+            field: 'mcp',
+            message: `MCP config file not found: '${node.mcp}'`,
+            hint: `This node runs only when its \`when:\` condition is true, and fails if it runs without the file. To enable it, create ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
+          });
+        } else {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'mcp',
+            message: `MCP config file not found: '${node.mcp}'`,
+            hint: `Create the file at ${mcpPath} with MCP server definitions (JSON format). Example:\n  {"server-name": {"command": "npx", "args": ["-y", "@package/name"], "env": {}}}`,
+          });
+        }
       } else {
         // File exists — check it's valid JSON
         try {

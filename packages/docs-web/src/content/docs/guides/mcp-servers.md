@@ -398,8 +398,10 @@ bun run cli workflow run archon-smart-pr-review "Review PR #123"
   `allowed_tools` / `denied_tools` restrictions are still ignored by Codex.
 - **Haiku model** — Tool search (lazy loading for many tools) is not supported on
   Haiku. You'll see a warning. Consider using Sonnet or Opus for MCP nodes.
-- **No load-time validation** — The MCP config file is read at execution time, not
-  when the workflow YAML is loaded. A typo in the path won't surface until the node runs.
+- **Validation is opt-in** — The MCP config file is read at execution time, not
+  when the workflow YAML is loaded. Run `archon validate workflows` to catch a wrong
+  path or invalid JSON before a run. A missing file is an error, or a warning when the
+  node has a `when:` condition, since an optional config such as ntfy may be absent.
 - **No inline config** — MCP configs must be in a separate JSON file, not inline in YAML.
   This is intentional — it keeps secrets out of version-controlled workflow files.
 
