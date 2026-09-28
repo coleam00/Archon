@@ -109,6 +109,7 @@ export function ConsoleApp(): ReactElement {
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
             <Route path="p/:projectId/chat" element={<ChatPage />} />
+            <Route path="p/:projectId/chat/:conversationId" element={<ChatPage />} />
             <Route path="p/:projectId/r/:runId" element={<RunDetailPage />} />
           </Routes>
         </main>

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from 'react';
 import { Link } from 'react-router';
 import { LiveDot } from './LiveDot';
 import { OriginBadge } from './OriginBadge';
-import type { Run } from '../primitives/run';
+import { runMessageConversationId, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { runStatusLabel, statusTextClass } from '../lib/run-status';
@@ -39,6 +39,9 @@ export function RunDetailHeader({
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
   const canOpenIde = !isDocker && run.workingPath !== null && run.workingPath !== '';
+  // Deep-link target for the "from chat →" link: the platform id of the
+  // conversation holding this run's messages (see runMessageConversationId).
+  const fromChatId = runMessageConversationId(run);
 
   const copyRunId = async (): Promise<void> => {
     try {
@@ -143,16 +146,24 @@ export function RunDetailHeader({
         ) : null}
       </div>
 
-      {/* Provenance sub-row: the input that started this run. `w-full` forces its
-          own line in the flex-wrap header.
-          TODO(#1882): add a "from chat →" link back to the originating
-          conversation once the console chat route supports deep-linking. */}
+      {/* Provenance sub-row: the input that started this run, with a link back
+          to the conversation holding this run's messages (#1882). `w-full`
+          forces its own line in the flex-wrap header. */}
       {run.userMessage !== '' ? (
         <div className="flex w-full min-w-0 items-baseline gap-2 text-[12px]">
           <span className="shrink-0 font-mono text-text-tertiary">input</span>
           <span className="truncate font-mono text-text-secondary" title={run.userMessage}>
             {run.userMessage}
           </span>
+          {fromChatId !== null && projectId !== undefined ? (
+            <Link
+              to={`/console/p/${projectId}/chat/${fromChatId}`}
+              className="shrink-0 font-mono text-[11px] text-text-tertiary transition-colors hover:text-text-primary"
+              title="Open the conversation this run's messages live in"
+            >
+              from chat →
+            </Link>
+          ) : null}
         </div>
       ) : null}
     </header>

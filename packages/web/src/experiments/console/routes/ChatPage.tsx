@@ -13,7 +13,7 @@ import { K } from '../store/keys';
 import * as skill from '../skills';
 import type { Project } from '../primitives/project';
 import type { Message } from '../primitives/message';
-import type { ConversationSummary } from '../primitives/conversation';
+import { pickActiveConversationId, type ConversationSummary } from '../primitives/conversation';
 
 // While a turn is active, refetch messages on this cadence so streamed replies
 // still surface if a per-conversation SSE event is dropped (cross-origin
@@ -41,7 +41,10 @@ const NEAR_BOTTOM_PX = 120;
  * shared MessageItem/ToolCallItem cards inside a StreamContextProvider.
  */
 export function ChatPage(): ReactElement {
-  const { projectId } = useParams<{ projectId: string }>();
+  const { projectId, conversationId: deepLinkId } = useParams<{
+    projectId: string;
+    conversationId?: string;
+  }>();
 
   const { data: project } = useEntity<Project | null>(
     projectId !== undefined ? K.project(projectId) : 'noop:no-project',
@@ -53,13 +56,17 @@ export function ChatPage(): ReactElement {
     () => (projectId !== undefined ? skill.listConversations(projectId) : Promise.resolve([]))
   );
 
-  // Active conversation: most-recent web conversation, else null until first send.
-  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  // Active conversation: an explicit deep-link id (run-detail "from chat →")
+  // always wins — pickActiveConversationId explains why it is not validated
+  // against the list. Otherwise keep the pre-deep-link behavior: the
+  // most-recent web conversation, held in state so a refetch that reorders the
+  // list can't jump mid-session, else null until first send.
+  const [fallbackConvId, setFallbackConvId] = useState<string | null>(null);
   useEffect(() => {
-    if (activeConvId !== null) return;
-    const web = (conversations ?? []).find(c => c.platformType === 'web');
-    if (web !== undefined) setActiveConvId(web.id);
-  }, [conversations, activeConvId]);
+    if (deepLinkId !== undefined || fallbackConvId !== null) return;
+    setFallbackConvId(pickActiveConversationId(conversations, undefined));
+  }, [conversations, deepLinkId, fallbackConvId]);
+  const activeConvId = deepLinkId ?? fallbackConvId;
 
   const { data: messages, error: messagesError } = useEntity<Message[]>(
     activeConvId !== null ? K.messages(activeConvId) : 'noop:no-conv',
@@ -160,7 +167,7 @@ export function ChatPage(): ReactElement {
       try {
         if (activeConvId === null) {
           const conv = await skill.createConversation(projectId, text);
-          setActiveConvId(conv.conversationId);
+          setFallbackConvId(conv.conversationId);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
           // createConversation is JSON-only — files can't ride the first message.
