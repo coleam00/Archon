@@ -669,6 +669,7 @@ nodes:
 | Claude-SDK hooks | ❌ | Claude-specific format |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern), and structurally-corrupt JSON (trailing commas, single quotes, truncated tails) via repair. The parsed output is then **validated against the schema**; on a miss the executor re-asks (prompt + the schema errors) up to **3×**, and only then **fails** the node (it no longer degrades silently to a warning). Not SDK-enforced like Claude/Codex. |
 | Cost limits (`maxBudgetUsd`) | ❌ | tracked in result chunk, not enforced |
+| Typed failure class | ⚠️ (transient only) | An error Pi's SDK judges retryable (timeout, dropped connection, overload, rate limit) that outlasts Pi's own `retry` budget is reported as `transient`, so the node retries. Pi does not tell rate limits apart, so they get the standard retry budget rather than the longer rate-limit one. Other errors are classified from their message. |
 | Fallback model | ❌ | not native in Pi |
 | Sandbox | ❌ | not native in Pi |
 

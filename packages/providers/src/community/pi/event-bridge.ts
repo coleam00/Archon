@@ -1,6 +1,10 @@
 import { createLogger } from '@archon/paths';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
-import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
+import {
+  isRetryableAssistantError,
+  type AssistantMessage,
+  type Usage,
+} from '@earendil-works/pi-ai';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 
@@ -203,7 +207,7 @@ function sumPromptUsage(
  * Usage and cost are summed over all assistant messages plus `sideCalls`, the usage of
  * model calls that added no message (see sumPromptUsage); stopReason, model and error
  * come from the last assistant message. When the agent ended in error, surfaces it as
- * `isError: true`.
+ * `isError: true`, and as a typed `transient` failure when Pi judges the error retryable.
  */
 export function buildResultChunk(
   messages: readonly unknown[],
@@ -222,6 +226,14 @@ export function buildResultChunk(
 
   const tokens = sumPromptUsage(assistants, sideCalls);
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
+  // Pi's own classifier, the one its auto-retry uses, so Archon never re-reads the
+  // vendor's error text. With Pi's auto-retry on, its retry budget is already spent by
+  // now, and a later node attempt may still clear the failure. Pi exposes only
+  // retryable-or-not, so a rate limit is reported as transient too. A non-retryable error
+  // stays untyped: reporting `unknown` would override the executor's text fallback, which
+  // can still recognise an auth or exhausted-quota message as fatal.
+  const transientEvidence =
+    last.errorMessage && isRetryableAssistantError(last) ? last.errorMessage : undefined;
 
   const chunk: MessageChunk = {
     type: 'result',
@@ -235,11 +247,13 @@ export function buildResultChunk(
       ? {
           isError: true,
           errorSubtype: last.stopReason,
-          // Surfacing errorMessage in errors[] is what makes the executor's
-          // transient-error classifier (which pattern-matches on the thrown
-          // message) able to retry Pi-side 429/overload failures.
+          // errors[] carries the vendor text for operators and for the executor's
+          // fallback classifier, which still decides retry for an untyped failure.
           ...(last.errorMessage ? { errors: [last.errorMessage] } : {}),
         }
+      : {}),
+    ...(transientEvidence
+      ? { failure: { class: 'transient' as const, evidence: transientEvidence } }
       : {}),
   };
   if (isError) {

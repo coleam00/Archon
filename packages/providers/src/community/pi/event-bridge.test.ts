@@ -6,6 +6,8 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type { StopReason, Usage } from '@earendil-works/pi-ai';
 
+import { runProviderConformance } from '@archon/provider-contract/conformance';
+
 import type { MessageChunk } from '../../types';
 import {
   AsyncQueue,
@@ -251,6 +253,43 @@ describe('buildResultChunk', () => {
     if (chunk.type === 'result') {
       expect(chunk.isError).toBe(true);
     }
+  });
+
+  test('reports an error Pi judges retryable as a typed transient failure', () => {
+    const chunk = buildResultChunk([
+      {
+        role: 'assistant',
+        usage,
+        stopReason: 'error',
+        errorMessage: 'The operation timed out.',
+        content: [],
+      },
+    ]);
+    expect(chunk).toMatchObject({
+      type: 'result',
+      failure: { class: 'transient', evidence: 'The operation timed out.' },
+      // The untyped fields stay until every reader reads `failure`.
+      isError: true,
+      errorSubtype: 'error',
+      errors: ['The operation timed out.'],
+    });
+  });
+
+  test('leaves an error Pi judges non-retryable untyped for the executor fallback', () => {
+    for (const errorMessage of ['auth', 'insufficient_quota']) {
+      const chunk = buildResultChunk([
+        { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
+      ]);
+      expect(chunk).toMatchObject({ type: 'result', isError: true, errors: [errorMessage] });
+      expect(chunk).not.toHaveProperty('failure');
+    }
+  });
+
+  test('never reports an aborted turn as a typed failure', () => {
+    const chunk = buildResultChunk([
+      { role: 'assistant', usage, stopReason: 'aborted', errorMessage: 'timed out', content: [] },
+    ]);
+    expect(chunk).not.toHaveProperty('failure');
   });
 
   test('outcome comes from the last assistant message, usage from all of them', () => {
@@ -1296,5 +1335,62 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     expect(result.tokens?.input).toBe(150 + 90000 + 20000 + 300);
     expect(result.tokens?.output).toBe(4000 + 400 + 400 + 30);
     expect(result.cost).toBeCloseTo(0.15 + 0.09 + 0.02 + 0.3, 10);
+  });
+});
+
+describe('Pi failure classes conform to the provider contract', () => {
+  /** One bridged prompt whose final assistant message failed with `errorMessage`. */
+  function failedTurn(errorMessage: string): () => AsyncIterable<unknown> {
+    const messages = [
+      {
+        role: 'assistant',
+        content: [],
+        stopReason: 'error',
+        errorMessage,
+        usage: {
+          input: 1,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    ];
+    return () => {
+      let listener: ((event: AgentSessionEvent) => void) | undefined;
+      const session = {
+        sessionId: 'session-failure',
+        subscribe: (fn: (event: AgentSessionEvent) => void) => {
+          listener = fn;
+          return () => {};
+        },
+        prompt: async () => {
+          listener?.({
+            type: 'agent_end',
+            willRetry: false,
+            messages,
+          } as unknown as AgentSessionEvent);
+        },
+        abort: async () => {},
+        dispose: () => {},
+      } as unknown as AgentSession;
+      return bridgeSession(session, 'prompt');
+    };
+  }
+
+  test('a timeout that outlasts the retries Pi makes itself reports transient', async () => {
+    expect(
+      await runProviderConformance({
+        failureCases: [
+          {
+            name: 'operation timeout',
+            expected: 'transient',
+            run: failedTurn('The operation timed out.'),
+          },
+          { name: 'request timeout', expected: 'transient', run: failedTurn('Request timed out') },
+        ],
+      })
+    ).toEqual([]);
   });
 });
