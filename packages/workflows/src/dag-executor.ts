@@ -2842,30 +2842,21 @@ async function executeNodeInternal(
     }
 
     // Stream ended with background tasks still live: the SDK subprocess died or
-    // the idle timeout fired mid-wait. The tasks' artifacts may be missing —
-    // record the incompleteness (surfaced on the node_completed event) and warn
-    // loudly instead of silently completing (#2083). Cancellation is exempt:
-    // the node returns 'failed — Cancelled by user' and the warning would be noise.
+    // the idle timeout fired mid-wait, so the tasks' artifacts may be missing (#2083).
+    // Record them for the audit trail. The operator hears about it once, from the
+    // node's failure: a stream that produced output and never settled fails the node
+    // and names these tasks (see unsettledTurnError).
     if (backgroundTasks.hasLiveTasks()) {
       backgroundTasksIncomplete = backgroundTasks.ids();
-      const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
       getLog().warn(
         {
           nodeId: node.id,
           taskIds: backgroundTasksIncomplete,
           idleTimedOut: nodeIdleTimedOut,
-          cancelled,
+          cancelled: nodeAbortController.signal.aborted && !nodeIdleTimedOut,
         },
         'dag.node_stream_ended_with_live_background_tasks'
       );
-      if (!cancelled) {
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `⚠️ Node \`${node.id}\`: the provider stream ended with ${String(backgroundTasksIncomplete.length)} background agent task(s) still running (${backgroundTasksIncomplete.join(', ')}). Their output may be missing — treat this node's artifacts as potentially incomplete.`,
-          nodeContext
-        );
-      }
     }
   };
 
@@ -6497,34 +6488,22 @@ async function executeLoopNode(
           foldIterationUsage();
 
           // Stream ended with background tasks still live (idle timeout mid-wait or
-          // subprocess death): their artifacts may be missing — record the
-          // incompleteness (surfaced on the node_completed event) and warn loudly
-          // instead of silently continuing (#2083). Cancellation is exempt from the
-          // user-facing warning (the mid-stream check above returns the node as
-          // failed with its own message just below), but still recorded in the
-          // union — the audit trail should not depend on why the stream ended.
+          // subprocess death): their artifacts may be missing (#2083). Record them for
+          // the audit trail whatever ended the stream; the operator hears about it
+          // once, from the iteration's unsettled failure, which names these tasks.
           if (backgroundTasks.hasLiveTasks()) {
             const danglingTaskIds = backgroundTasks.ids();
             for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
-            const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;
             getLog().warn(
               {
                 nodeId: node.id,
                 iteration: i,
                 taskIds: danglingTaskIds,
                 idleTimedOut: iterationIdleTimedOut,
-                cancelled,
+                cancelled: iterationAbortController.signal.aborted && !iterationIdleTimedOut,
               },
               'loop_node.iteration_stream_ended_with_live_background_tasks'
             );
-            if (!cancelled) {
-              await safeSendMessage(
-                platform,
-                conversationId,
-                `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(danglingTaskIds.length)} background agent task(s) still running (${danglingTaskIds.join(', ')}). Their output may be missing.`,
-                msgContext
-              );
-            }
           }
         } catch (error) {
           foldIterationUsage();
@@ -6664,6 +6643,28 @@ async function executeLoopNode(
             backgroundTasks.ids()
           );
           getLog().error({ nodeId: node.id, iteration: i }, 'loop_node.iteration_unsettled');
+          getWorkflowEventEmitter().emit({
+            type: 'loop_iteration_failed',
+            runId: workflowRun.id,
+            nodeId: node.id,
+            iteration: i,
+            error: unsettledError,
+          });
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'loop_iteration_failed',
+              step_name: stepName,
+              data: {
+                iteration: i,
+                error: unsettledError,
+                duration: Date.now() - iterationStart,
+                nodeId: node.id,
+              },
+            })
+            .catch((evtErr: Error) => {
+              logEventStoreError(evtErr, i);
+            });
           const failureKind: NodeFailureKind = iterationIdleTimedOut ? 'timeout' : 'unknown';
           if (await tryIterationTransientRetry({ failureKind, error: unsettledError }, iterRetry)) {
             continue iterationAttempt;

@@ -171,9 +171,12 @@ const TEST_MODEL = { model: 'test/mock-model' };
  * Drain a turn. A turn that completes must end with `settled`; it is checked here and
  * dropped, so each test asserts only the chunks it is about.
  */
-async function consume(
-  generator: AsyncGenerator<unknown>
-): Promise<{ chunks: unknown[]; error?: Error }> {
+async function consume(generator: AsyncGenerator<unknown>): Promise<{
+  chunks: unknown[];
+  error?: Error;
+  /** The typed failure a failed turn ended in. */
+  failure?: { class: string; evidence: string };
+}> {
   const chunks: unknown[] = [];
   try {
     for await (const chunk of generator) chunks.push(chunk);
@@ -181,7 +184,14 @@ async function consume(
     return { chunks, error: error as Error };
   }
   expect(chunks.at(-1)).toEqual({ type: 'settled' });
-  return { chunks: chunks.slice(0, -1) };
+  const result = chunks.find(
+    (c): c is { type: 'result'; failure?: { class: string; evidence: string } } =>
+      typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'result'
+  );
+  return {
+    chunks: chunks.slice(0, -1),
+    ...(result?.failure !== undefined ? { failure: result.failure } : {}),
+  };
 }
 
 async function createTempProjectDir(): Promise<string> {
@@ -377,14 +387,17 @@ describe('OpencodeProvider', () => {
       // answered, matching the hang scenario from issue #3332.
     ];
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
     );
 
-    expect(chunks).toEqual([{ type: 'assistant', content: 'partial answer' }]);
-    expect(error).toBeInstanceOf(Error);
-    expect(error?.message).toContain('perm-1');
-    expect(error?.message).toContain('bash');
+    expect(chunks).toEqual([
+      { type: 'assistant', content: 'partial answer' },
+      expect.objectContaining({ type: 'result', isError: true }),
+    ]);
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('perm-1');
+    expect(failure?.evidence).toContain('bash');
   });
 
   test('permission.asked for a different session is ignored', async () => {
@@ -433,7 +446,7 @@ describe('OpencodeProvider', () => {
       // No session.idle for either child session follows.
     ];
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig: {
@@ -446,9 +459,9 @@ describe('OpencodeProvider', () => {
       })
     );
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error?.message).toContain('perm-2');
-    expect(error?.message).toContain('edit');
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('perm-2');
+    expect(failure?.evidence).toContain('edit');
     expect(runtime.client.session.abort).toHaveBeenCalled();
   });
 
@@ -561,8 +574,28 @@ describe('OpencodeProvider', () => {
   test('conforms to the provider contract', async () => {
     const cwd = await createTempProjectDir();
     const violations = await runProviderConformance({
-      // OpenCode reports no typed failure classes yet; its turns must still settle.
-      failureCases: [],
+      // OpenCode exposes no structured failure class here: every failure is `unknown`.
+      failureCases: [
+        {
+          name: 'session error',
+          expected: 'unknown',
+          evidence: 'upstream request failed',
+          run: () => {
+            scriptedEvents = [
+              {
+                type: 'session.error',
+                properties: {
+                  sessionID: 'session-1',
+                  error: { name: 'APIError', data: { message: 'upstream request failed' } },
+                },
+              },
+            ];
+            return new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+              assistantConfig: TEST_MODEL,
+            });
+          },
+        },
+      ],
       turns: [
         {
           name: 'single session',
@@ -1119,14 +1152,15 @@ describe('OpencodeProvider', () => {
     });
     runtimeQueue.push(runtime);
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
         assistantConfig: TEST_MODEL,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('OpenCode auth: 401 unauthorized api key');
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.evidence).toContain('OpenCode auth: 401 unauthorized api key');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
     expect(mockLogger.info).not.toHaveBeenCalledWith(expect.any(Object), 'opencode.retrying_query');
   });
@@ -1286,14 +1320,15 @@ describe('OpencodeProvider', () => {
   test('embedded runtime does not retry non-port startup errors', async () => {
     startupErrors.push(new Error('OpenCode binary missing'));
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('no retry startup', '/tmp', undefined, {
         assistantConfig: TEST_MODEL,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('OpenCode binary missing');
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.evidence).toContain('OpenCode binary missing');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(
       expect.any(Object),
@@ -1620,15 +1655,16 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
     expect(mockCreateOpencode).not.toHaveBeenCalled();
   });
@@ -1659,14 +1695,14 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(await readFile(join(agentsDir, 'custom-agent.md'), 'utf8')).toBe('# user content\n');
     expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
     expect(mockCreateOpencode).not.toHaveBeenCalled();
@@ -1707,14 +1743,14 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(runtime.client.instance.dispose).not.toHaveBeenCalled();
     expect(callOrder).toEqual([]);
     expect(mockCreateOpencode).not.toHaveBeenCalled();
@@ -1736,15 +1772,16 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
     expect(mockCreateOpencode).not.toHaveBeenCalled();
   });
@@ -1853,16 +1890,17 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error).toBeDefined();
-    expect(error?.message).toContain(
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain(
       "Invalid OpenCode agent model ref for 'bad-agent': 'invalid-no-slash-format'"
     );
   });

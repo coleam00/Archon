@@ -14,6 +14,7 @@ import { OPENCODE_CAPABILITIES } from './capabilities';
 import { parseModelRef, parseOpencodeConfig } from './config';
 import { classifyOpencodeError, enrichOpencodeError } from './errors';
 import { materializeAgents } from './agent-fs';
+import { unknownFailureResult } from '../../shared/failure';
 import { streamMultiAgentOpencodeSession } from './multi-agent';
 import {
   acquireEmbeddedRuntime,
@@ -47,7 +48,36 @@ export class OpencodeProvider implements IAgentProvider {
     this.retryBaseDelayMs = options?.retryBaseDelayMs ?? RETRY_BASE_DELAY_MS;
   }
 
+  /**
+   * One call is one turn. A failure, including one thrown while setting the turn up,
+   * ends in a `result` carrying a typed `failure`, then `settled`: OpenCode reports
+   * no structured failure class, so every failure is `unknown` with its text as
+   * evidence. Only cancellation throws.
+   */
   async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    let resultReported = false;
+    try {
+      for await (const chunk of this.streamTurn(prompt, cwd, resumeSessionId, requestOptions)) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
+      }
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted === true) throw error;
+      const err = error as Error;
+      // The turn already reported its one result; a later error does not change it.
+      if (resultReported) getLog().error({ err }, 'opencode.error_after_result');
+      else yield unknownFailureResult('opencode_query_failed', err.message);
+    }
+    // Nothing more runs for this turn once its stream has ended.
+    yield { type: 'settled' };
+  }
+
+  private async *streamTurn(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
@@ -150,8 +180,6 @@ export class OpencodeProvider implements IAgentProvider {
             ),
             resumedOutcome(resumeSessionId, false)
           );
-          // The stream returns once every agent's session went idle: nothing more runs.
-          yield { type: 'settled' };
           return;
         }
 
@@ -178,8 +206,6 @@ export class OpencodeProvider implements IAgentProvider {
           ),
           resumedOutcome(resumeSessionId, resumed)
         );
-        // The stream returns at the session's idle event: nothing more runs.
-        yield { type: 'settled' };
         return;
       } catch (error) {
         const errorClass = classifyOpencodeError(

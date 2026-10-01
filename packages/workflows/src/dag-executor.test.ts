@@ -7304,7 +7304,8 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
         String(c[1])
       );
-      expect(sent.some(m => m.includes('output may be missing'))).toBe(true);
+      // One message per incident: the node failure names the tasks; no separate warning.
+      expect(sent.some(m => m.includes('output may be missing'))).toBe(false);
     });
 
     it('suppresses the incompleteness warning when the node is genuinely cancelled with live tasks', async () => {
@@ -8091,6 +8092,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         'Loop iteration 1 failed: the provider stream ended without signalling that its turn settled. Its work may be incomplete.'
       );
       expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+      // Like any failed iteration, it is recorded as one.
+      expect(
+        persistedEvents(store).some(
+          event => event.event_type === 'loop_iteration_failed' && event.data?.iteration === 1
+        )
+      ).toBe(true);
     });
 
     it('does not double-count cost when an iteration sees two results (background-task wait, #2083)', async () => {
@@ -8266,11 +8273,6 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completedEvent).toBeDefined();
       const data = (completedEvent![0] as { data: Record<string, unknown> }).data;
       expect(data.background_tasks_incomplete).toEqual(['t-a', 't-b']);
-      // Each incomplete iteration also warned the user
-      const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
-        String(c[1])
-      );
-      expect(sent.filter(m => m.includes('output may be missing')).length).toBe(2);
     });
 
     it('omits background_tasks_incomplete from node_completed when every iteration drains cleanly', async () => {

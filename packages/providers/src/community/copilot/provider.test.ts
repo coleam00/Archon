@@ -398,7 +398,7 @@ describe('CopilotProvider.sendQuery', () => {
 
   test('conforms to the provider contract', async () => {
     /** One Copilot turn driven by a fake session that streams, then resolves or errors. */
-    function turn(events: SessionEvent[]): () => AsyncIterable<unknown> {
+    function turn(events: SessionEvent[], rejection?: Error): () => AsyncIterable<unknown> {
       return async function* () {
         const session = makeFakeSession('sess-conformance');
         nextCreateSessionResult = session;
@@ -406,23 +406,33 @@ describe('CopilotProvider.sendQuery', () => {
         const first = gen.next();
         await new Promise(resolve => setTimeout(resolve, 5));
         for (const event of events) session.fire(event);
-        session.resolveSend(undefined);
+        if (rejection) session.rejectSend(rejection);
+        else session.resolveSend(undefined);
         const head = await first;
         if (!head.done) yield head.value;
         yield* gen;
       };
     }
     const violations = await runProviderConformance({
-      // Copilot reports no typed failure classes yet; its turns must still settle.
-      failureCases: [],
+      // Copilot exposes no structured failure class: every failure is `unknown`.
+      failureCases: [
+        {
+          name: 'session error',
+          expected: 'unknown',
+          evidence: 'upstream failed',
+          run: turn([evt('session.error', { message: 'upstream failed' })]),
+        },
+        {
+          name: 'sendAndWait rejection',
+          expected: 'unknown',
+          evidence: 'kaboom',
+          run: turn([], new Error('kaboom')),
+        },
+      ],
       turns: [
         {
           name: 'completed turn',
           run: turn([evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' })]),
-        },
-        {
-          name: 'session error',
-          run: turn([evt('session.error', { message: 'upstream failed' })]),
         },
       ],
     });
@@ -590,7 +600,7 @@ describe('CopilotProvider.sendQuery', () => {
     expect(lastClientOpts?.useLoggedInUser).toBe(true);
   });
 
-  test('sendAndWait rejection propagates as thrown error', async () => {
+  test('a sendAndWait rejection ends the turn in a typed failure, then settled', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
@@ -600,13 +610,11 @@ describe('CopilotProvider.sendQuery', () => {
     await new Promise(resolve => setTimeout(resolve, 5));
     session.rejectSend(new Error('kaboom'));
 
-    await expect(
-      (async () => {
-        await first;
-        for await (const _ of gen) {
-          /* drain */
-        }
-      })()
-    ).rejects.toThrow('kaboom');
+    const head = await first;
+    const chunks = [...(head.done ? [] : [head.value]), ...(await collect(gen))];
+    const result = chunks.find(c => c.type === 'result');
+    expect(result).toMatchObject({ type: 'result', isError: true, failure: { class: 'unknown' } });
+    expect((result as { failure?: { evidence: string } }).failure?.evidence).toContain('kaboom');
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
   });
 });
