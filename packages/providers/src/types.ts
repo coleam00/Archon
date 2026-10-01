@@ -312,9 +312,9 @@ export type MessageChunk =
   // Claude SDK v0.3.209+): the FULL set of live background tasks, emitted
   // whenever membership changes. Level signal with REPLACE semantics — consumers
   // swap their set for each payload (an empty array means no background work is
-  // running). The dag-executor gates node completion on this: a `result` chunk
-  // that arrives while the set is non-empty must not tear down the stream, or
-  // the SDK subprocess (and the tasks' pending artifacts) get killed (#2083).
+  // running). Node completion is gated on `settled`, not on this set; the
+  // dag-executor uses it to name the tasks still live when a stream ends without
+  // settling (#2083).
   | {
       type: 'background_tasks';
       tasks: { taskId: string; taskType: string; description: string }[];

@@ -120,6 +120,7 @@ mock.module('@github/copilot-sdk', () => ({
 }));
 
 // Provider imports AFTER mocks are installed.
+import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { CopilotProvider, resetCopilotSingleton } from './provider';
 
 function evt<T extends SessionEvent['type']>(type: T, data: unknown): SessionEvent {
@@ -393,6 +394,39 @@ describe('CopilotProvider.sendQuery', () => {
     ) as { sessionId?: string; tokens?: { input: number; output: number } } | undefined;
     expect(result?.sessionId).toBe('sess-42');
     expect(result?.tokens).toEqual({ input: 10, output: 3 });
+  });
+
+  test('conforms to the provider contract', async () => {
+    /** One Copilot turn driven by a fake session that streams, then resolves or errors. */
+    function turn(events: SessionEvent[]): () => AsyncIterable<unknown> {
+      return async function* () {
+        const session = makeFakeSession('sess-conformance');
+        nextCreateSessionResult = session;
+        const gen = new CopilotProvider().sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+        const first = gen.next();
+        await new Promise(resolve => setTimeout(resolve, 5));
+        for (const event of events) session.fire(event);
+        session.resolveSend(undefined);
+        const head = await first;
+        if (!head.done) yield head.value;
+        yield* gen;
+      };
+    }
+    const violations = await runProviderConformance({
+      // Copilot reports no typed failure classes yet; its turns must still settle.
+      failureCases: [],
+      turns: [
+        {
+          name: 'completed turn',
+          run: turn([evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' })]),
+        },
+        {
+          name: 'session error',
+          run: turn([evt('session.error', { message: 'upstream failed' })]),
+        },
+      ],
+    });
+    expect(violations).toEqual([]);
   });
 
   test('abort signal triggers session.abort', async () => {

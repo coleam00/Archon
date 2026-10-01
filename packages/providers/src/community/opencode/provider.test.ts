@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { runProviderConformance } from '@archon/provider-contract/conformance';
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -166,16 +167,21 @@ import type { NodeConfig } from '../../types';
 /** Default model for tests — satisfies the model-or-agent validation */
 const TEST_MODEL = { model: 'test/mock-model' };
 
+/**
+ * Drain a turn. A turn that completes must end with `settled`; it is checked here and
+ * dropped, so each test asserts only the chunks it is about.
+ */
 async function consume(
   generator: AsyncGenerator<unknown>
 ): Promise<{ chunks: unknown[]; error?: Error }> {
   const chunks: unknown[] = [];
   try {
     for await (const chunk of generator) chunks.push(chunk);
-    return { chunks };
   } catch (error) {
     return { chunks, error: error as Error };
   }
+  expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  return { chunks: chunks.slice(0, -1) };
 }
 
 async function createTempProjectDir(): Promise<string> {
@@ -550,6 +556,51 @@ describe('OpencodeProvider', () => {
       ])
     );
     expect(chunks).toContainEqual({ type: 'result' });
+  });
+
+  test('conforms to the provider contract', async () => {
+    const cwd = await createTempProjectDir();
+    const violations = await runProviderConformance({
+      // OpenCode reports no typed failure classes yet; its turns must still settle.
+      failureCases: [],
+      turns: [
+        {
+          name: 'single session',
+          run: () => {
+            scriptedEvents = [
+              {
+                type: 'message.part.updated',
+                properties: { delta: 'Hello', part: { sessionID: 'session-1', type: 'text' } },
+              },
+              { type: 'session.idle', properties: { sessionID: 'session-1' } },
+            ];
+            return new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+              assistantConfig: TEST_MODEL,
+            });
+          },
+        },
+        {
+          name: 'multi-agent',
+          run: () => {
+            const sessionIds = ['scout-session'];
+            runtimeQueue.push(
+              makeRuntime({
+                sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+              })
+            );
+            scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'scout-session' } }];
+            return new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+              assistantConfig: TEST_MODEL,
+              nodeConfig: {
+                nodeId: 'research',
+                agents: { scout: { description: 'Scout', prompt: 'Explore' } },
+              },
+            });
+          },
+        },
+      ],
+    });
+    expect(violations).toEqual([]);
   });
 
   test('multi-agent usage keeps cache from the sub-agent that reported it', async () => {

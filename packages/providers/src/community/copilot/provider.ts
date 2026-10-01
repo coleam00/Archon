@@ -599,5 +599,7 @@ export class CopilotProvider implements IAgentProvider {
         log.debug({ err: stopErr }, 'copilot.client_stop_threw');
       }
     }
+    // sendAndWait resolved and the bridge emitted the turn's result: nothing more runs.
+    yield { type: 'settled' };
   }
 }

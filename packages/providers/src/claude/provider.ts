@@ -1571,9 +1571,23 @@ export class ClaudeProvider implements IAgentProvider {
       );
       // The turn already reported its one result; an error while the subprocess
       // shut down afterwards does not change that outcome.
-      if (!resultReported) yield failureResultChunk(failure);
+      if (!resultReported) {
+        resultReported = true;
+        yield failureResultChunk(failure);
+      }
     } finally {
       requestOptions?.abortSignal?.removeEventListener('abort', onAbort);
+    }
+    // The SDK ends every turn with a result. A stream that closed without one, and
+    // without an error, is a failed turn: say so rather than settle a turn that
+    // never reported its outcome.
+    if (!resultReported) {
+      getLog().error('claude.stream_ended_without_result');
+      const noResult = failureResultChunk(
+        failureOf('unknown', 'Claude Code ended the turn without a result')
+      );
+      noResult.errorSubtype = 'stream_ended_without_result';
+      yield noResult;
     }
     yield { type: 'settled' };
   }

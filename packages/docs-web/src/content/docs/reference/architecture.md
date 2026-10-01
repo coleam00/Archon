@@ -358,6 +358,9 @@ export type MessageChunk =
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
   | { type: 'tool_result'; toolName: string; toolOutput: string; toolCallId?: string }
+  // The turn is over and nothing more runs for it: always the last chunk, after the
+  // final result. The executor finishes a node on it, not on `result`.
+  | { type: 'settled' }
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 ```
 
@@ -400,6 +403,8 @@ export class YourAssistantProvider implements IAgentProvider {
 
     // Yield session ID for persistence
     yield { type: 'result', sessionId: session.id };
+    // Nothing more runs for this turn
+    yield { type: 'settled' };
   }
 
   getType(): string {
@@ -501,8 +506,11 @@ for await (const msg of query({ prompt, options })) {
     }
   } else if (msg.type === 'result') {
     yield { type: 'result', sessionId: msg.session_id };
+  } else if (msg.type === 'system' && msg.subtype === 'session_state_changed' && msg.state === 'idle') {
+    break; // turn over, background agents drained
   }
 }
+yield { type: 'settled' };
 ```
 
 **Codex SDK** (`packages/providers/src/codex/provider.ts`):
@@ -533,6 +541,7 @@ for await (const event of result.events) {
     break; // CRITICAL: Exit loop on turn completion
   }
 }
+yield { type: 'settled' };
 ```
 
 ### Error Handling

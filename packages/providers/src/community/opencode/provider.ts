@@ -150,6 +150,8 @@ export class OpencodeProvider implements IAgentProvider {
             ),
             resumedOutcome(resumeSessionId, false)
           );
+          // The stream returns once every agent's session went idle: nothing more runs.
+          yield { type: 'settled' };
           return;
         }
 
@@ -176,6 +178,8 @@ export class OpencodeProvider implements IAgentProvider {
           ),
           resumedOutcome(resumeSessionId, resumed)
         );
+        // The stream returns at the session's idle event: nothing more runs.
+        yield { type: 'settled' };
         return;
       } catch (error) {
         const errorClass = classifyOpencodeError(

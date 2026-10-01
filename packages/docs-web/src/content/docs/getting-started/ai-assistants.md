@@ -76,6 +76,8 @@ The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the n
 
 **Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
 
+**CLI version:** Archon asks the Claude Code CLI for its session-state events (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) and finishes a node when the session goes idle after its final result. This is verified with Claude Code 2.1.282, the CLI the bundled SDK ships. A configured binary that does not emit those events still works when its process exits after the turn. If its process hangs instead, the node fails at the idle timeout, saying that the provider never signalled that its turn settled.
+
 **Typical paths by install method:**
 
 | Install method | Typical executable path |

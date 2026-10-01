@@ -1,3 +1,4 @@
+import { settlingProvider } from './test-settling-provider';
 import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { NodeEventWriteError } from './node-event-write';
@@ -378,7 +379,7 @@ type MockWorkflowDeps<TStore extends IWorkflowStore> = Omit<
   'store' | 'getAgentProvider' | 'loadConfig'
 > & {
   store: TStore;
-  getAgentProvider: typeof mockGetAgentProviderDag;
+  getAgentProvider: WorkflowDeps['getAgentProvider'];
   loadConfig: Mock<WorkflowDeps['loadConfig']>;
 };
 
@@ -388,7 +389,8 @@ function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
   const store = storeOverride ?? createMockStore();
   return {
     store: store as TStore,
-    getAgentProvider: mockGetAgentProviderDag,
+    // Mock providers settle like real ones; see settlingProvider.
+    getAgentProvider: provider => settlingProvider(mockGetAgentProviderDag(provider)),
     loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => ({
       assistant: 'claude' as const,
       commands: {},
@@ -7264,14 +7266,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed!.data.cost_usd).toBe(0.3);
       // Clean drain → no incompleteness recorded
       expect(completed!.data.background_tasks_incomplete).toBeUndefined();
-      // The wait was announced to the user once
-      const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
-        String(c[1])
-      );
-      expect(sent.some(m => m.includes('background agent task(s) still running'))).toBe(true);
     });
 
-    it('records background_tasks_incomplete and warns when the stream ends with live tasks', async () => {
+    it('fails the node, naming the live tasks, when the stream dies before settling', async () => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield {
           type: 'background_tasks',
@@ -7279,16 +7276,31 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         };
         yield { type: 'assistant', content: 'partial work' };
         yield { type: 'result', sessionId: 'sid' };
-        // Generator ends without the set draining (subprocess death analog)
+        // Generator ends without the set draining or settling (subprocess death analog)
       });
 
       const store = createMockStore();
       const platform = createMockPlatform();
-      await runSingleNode(store, platform, 'bg-incomplete-run');
+      await executeDagWorkflow(
+        dagOptions({
+          // The raw mock: no settled, as when the subprocess dies.
+          deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
+          platform,
+          conversationId: 'conv-bg-tasks',
+          cwd: testDir,
+          workflow: {
+            name: 'bg-task-test',
+            nodes: [{ id: 'step1', kind: 'agent', source: { kind: 'command', name: 'step1' } }],
+          },
+          workflowRun: makeWorkflowRun('bg-incomplete-run'),
+        })
+      );
 
-      const completed = findCompletedEvent(store);
-      expect(completed).toBeDefined();
-      expect(completed!.data.background_tasks_incomplete).toEqual(['t-orphan']);
+      expect(findCompletedEvent(store)).toBeUndefined();
+      const failed = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'step1'
+      );
+      expect(failed?.data?.error).toContain('Background agent task(s) still running: t-orphan.');
       const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(c =>
         String(c[1])
       );
@@ -8038,6 +8050,47 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(store.completeWorkflowRun).toHaveBeenCalled();
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
       expect(settledReached).toBe(false);
+    });
+
+    it('fails an iteration whose stream ends after its result without settling — #3524', async () => {
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'assistant', content: 'Done. <promise>COMPLETE</promise>' };
+        yield { type: 'result', sessionId: 'loop-sid' };
+      });
+
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-loop-unsettled',
+            nodes: [
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                  until: 'COMPLETE',
+                  max_iterations: 3,
+                },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('loop-unsettled-run'),
+        })
+      );
+
+      const failed = persistedEvents(store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'my-loop'
+      );
+      expect(failed?.data?.failure_kind).toBe('unknown');
+      expect(failed?.data?.error).toBe(
+        'Loop iteration 1 failed: the provider stream ended without signalling that its turn settled. Its work may be incomplete.'
+      );
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
     });
 
     it('does not double-count cost when an iteration sees two results (background-task wait, #2083)', async () => {
@@ -14473,10 +14526,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(errMsg).toContain('timed out');
   });
 
-  it('idle-timeout WITH output produces node_completed and sends warning, not node_failed', async () => {
-    // The "subprocess hung after AI finished" path must still complete the node, not fail it.
-    // Note: no `result` event — the generator yields content then hangs, so idle timeout fires
-    // before the generator exits. This is the "subprocess hung without sending result" case.
+  it('fails a node whose provider idles out after output without settling — #3524', async () => {
+    // The subprocess hung after the AI wrote output, so the provider never said its
+    // turn was over. That is not a finished node.
     mockSendQueryDag.mockImplementation(async function* (
       _prompt: string,
       _cwd: string,
@@ -14491,13 +14543,12 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     });
 
     const store = createMockStore();
-    const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
 
     await executeDagWorkflow(
       dagOptions({
-        deps: mockDeps,
+        // The raw mock: a provider that breaks the settle contract.
+        deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
         platform,
         cwd: testDir,
         workflow: {
@@ -14512,23 +14563,41 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
             },
           ],
         },
-        workflowRun,
+        workflowRun: makeWorkflowRun(),
       })
     );
 
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const nodeFailedEvents = eventCalls.filter(
-      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(failed?.data?.failure_kind).toBe('timeout');
+    expect(failed?.data?.error).toContain('before the provider signalled that its turn settled');
+    expect(persistedEvents(store).some(event => event.event_type === 'node_completed')).toBe(false);
+  });
+
+  it('fails a node whose provider stream ends after its result without settling — #3524', async () => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'assistant', content: 'Here is the analysis result.' };
+      yield { type: 'result', sessionId: 'sid' };
+    });
+
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: { ...createMockDeps(store), getAgentProvider: mockGetAgentProviderDag },
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'unsettled-stream',
+          nodes: [{ id: 'step1', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
     );
-    expect(nodeFailedEvents.length).toBe(0);
-    const nodeCompletedEvents = eventCalls.filter(
-      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_completed'
+
+    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(failed?.data?.failure_kind).toBe('unknown');
+    expect(failed?.data?.error).toBe(
+      "Node 'step1' failed: the provider stream ended without signalling that its turn settled. Its work may be incomplete."
     );
-    expect(nodeCompletedEvents.length).toBeGreaterThan(0);
-    const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
-      (c: unknown[]) => c[1] as string
-    );
-    expect(sentMessages.some(m => m.includes('completed via idle timeout'))).toBe(true);
   });
 
   it('fails the run when a node specifies an unknown provider (defense-in-depth at execution time)', async () => {
@@ -29623,6 +29692,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
               seen.push({ provider, options: queryOptions });
               yield { type: 'assistant', content: 'ok' };
               yield { type: 'result', sessionId: `sid-${String(seen.length)}` };
+              yield { type: 'settled' };
             }
           ),
           getType: (): string => provider,
@@ -30255,11 +30325,11 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
       getAgentProvider: mock<WorkflowDeps['getAgentProvider']>(
         (provider): ReturnType<WorkflowDeps['getAgentProvider']> => {
           seen.push(provider);
-          return {
+          return settlingProvider({
             sendQuery: mockSendQueryDag,
             getType: (): string => provider,
             getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
-          };
+          });
         }
       ),
       loadConfig: mock<WorkflowDeps['loadConfig']>(async _cwd => minimalConfig),
