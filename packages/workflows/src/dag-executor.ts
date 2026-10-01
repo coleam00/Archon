@@ -75,7 +75,8 @@ import {
   getProviderCapabilities,
   getRegisteredProviders,
   isRegisteredProvider,
-  findRequiredPropertyGaps,
+  findStrictSchemaIssues,
+  type StrictSchemaIssue,
   validateStructuredOutput,
 } from '@archon/providers';
 import type {
@@ -10443,26 +10444,21 @@ function pluginsUnsupportedMessage(nodes: readonly PluginIncompatibleNode[]): st
 }
 
 /**
- * A single `output_format` schema whose declared `properties` keys are not fully
- * covered by its `required` array on a provider that enforces OpenAI strict mode
+ * A single `output_format` issue on a provider that enforces OpenAI strict mode
  * (Codex). Reported by {@link collectStrictSchemaViolations} before any node runs.
  */
-export interface StrictSchemaViolation {
+export type StrictSchemaViolation = StrictSchemaIssue & {
   /** The resolved provider that enforces the rule */
   provider: string;
   /** The node whose output_format violates the rule */
   nodeId: string;
-  /** Dotted path from the schema root, e.g. "output_format.properties.status" */
-  schemaPath: string;
-  /** Property keys declared in `properties` but absent from `required` */
-  missing: string[];
-}
+};
 
 /**
  * Collect output_format schema violations for providers that enforce the OpenAI
- * strict-mode required-coverage rule (`requiresAllPropertiesRequired`). Walks
- * every provider-invoking node (including loop_group bodies) and reports every
- * object schema node whose declared properties aren't fully listed in required.
+ * strict-mode object-schema rules (`requiresAllPropertiesRequired`). Walks every
+ * provider-invoking node (including loop_group bodies) and reports every object
+ * schema node that omits properties or does not list every property in required.
  *
  * A node pinned to a non-enforcing provider (e.g. `provider: claude`) is skipped
  * even when the workflow-level provider would enforce — that's the intended
@@ -10478,11 +10474,11 @@ export function collectStrictSchemaViolations(
     if (!isRegisteredProvider(provider)) return;
     if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) return;
     // Only nodes whose output_format is enforced by the engine — gate/loop_group
-    // schemas are inert even when present, so their gaps cost nothing.
+    // schemas are inert even when present, so their issues cost nothing.
     if (!isOutputFormatEnforced(node)) return;
     if (node.output_format === undefined) return;
-    for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
-      violations.push({ provider, nodeId: node.id, ...gap });
+    for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
+      violations.push({ provider, nodeId: node.id, ...issue });
     }
   });
   return violations;
@@ -11017,18 +11013,27 @@ export async function executeDagWorkflow(
 
   // Strict-schema preflight: before ANY node runs, reject a workflow whose AI
   // nodes would send a schema that a strict provider will reject at the first
-  // turn (OpenAI/Codex requires every key in properties to also appear in
-  // required). Container scoping is irrelevant — this fires on host too, and it
+  // turn (OpenAI/Codex requires explicit object properties and complete required
+  // coverage). Container scoping is irrelevant — this fires on host too, and it
   // protects the setup costs a first-turn 400 would otherwise burn.
   {
     const violations = collectStrictSchemaViolations(workflow.nodes, workflowProvider, aiProfile);
     if (violations.length > 0) {
       const [first] = violations;
       const more = violations.length > 1 ? ` (+${violations.length - 1} more)` : '';
-      throw new Error(
+      const location =
         `output_format schema strict-mode violation: workflow '${workflow.name}', ` +
-          `node '${first.nodeId}', ${first.schemaPath} declares ` +
-          `${first.missing.join(', ')} not in 'required'${more}. ` +
+        `node '${first.nodeId}', ${first.schemaPath}`;
+      if (first.kind === 'missing-properties') {
+        throw new Error(
+          `${location} is an object schema without 'properties'${more}. ` +
+            `Provider '${first.provider}' (OpenAI strict mode) rejects it. ` +
+            'Declare the object properties and list every property in required; ' +
+            'use a nullable object (e.g. type: ["object","null"]) when the value may be absent.'
+        );
+      }
+      throw new Error(
+        `${location} declares ${first.missing.join(', ')} not in 'required'${more}. ` +
           `Provider '${first.provider}' (OpenAI strict mode) rejects it. ` +
           'List every property in required; express optionality in-type ' +
           '(e.g. a ["string","null"] union or an enum sentinel).'

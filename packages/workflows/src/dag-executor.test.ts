@@ -28051,9 +28051,37 @@ describe('collectStrictSchemaViolations', () => {
       'codex'
     );
     expect(violations).toHaveLength(1);
-    expect(violations[0].provider).toBe('codex');
-    expect(violations[0].nodeId).toBe('a');
-    expect(violations[0].missing).toEqual(['note']);
+    expect(violations[0]).toEqual({
+      kind: 'missing-required',
+      provider: 'codex',
+      nodeId: 'a',
+      schemaPath: 'output_format',
+      missing: ['note'],
+    });
+  });
+
+  it('flags a nested bare object with its exact schema path', () => {
+    const violations = collectStrictSchemaViolations(
+      [
+        agentNode('scope', {
+          output_format: {
+            type: 'object',
+            properties: { pr: { type: 'object' } },
+            required: ['pr'],
+          },
+        }),
+      ],
+      'codex'
+    );
+
+    expect(violations).toEqual([
+      {
+        kind: 'missing-properties',
+        provider: 'codex',
+        nodeId: 'scope',
+        schemaPath: 'output_format.properties.pr',
+      },
+    ]);
   });
 
   it('is empty under Claude workflow-level provider', () => {
@@ -28155,6 +28183,51 @@ describe('collectStrictSchemaViolations', () => {
   it('skips node without output_format entirely', () => {
     const violations = collectStrictSchemaViolations([agentNode('a')], 'codex');
     expect(violations).toEqual([]);
+  });
+});
+
+describe('executeDagWorkflow -- strict-schema preflight', () => {
+  it('rejects a Codex bare object before sending any query', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-strict-schema-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+
+    try {
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(),
+            cwd: testDir,
+            workflow: {
+              name: 'strict-schema-preflight',
+              nodes: [
+                {
+                  id: 'scope',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'Declare the review scope.' },
+                  output_format: {
+                    type: 'object',
+                    properties: { pr: { type: 'object' } },
+                    required: ['pr'],
+                  },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun('strict-schema-preflight'),
+            workflowProvider: 'codex',
+            config: { ...minimalConfig, assistant: 'codex' },
+          })
+        )
+      ).rejects.toThrow(
+        /node 'scope', output_format\.properties\.pr is an object schema without 'properties'.*Provider 'codex'/
+      );
+      expect(mockSendQueryDag).not.toHaveBeenCalled();
+    } finally {
+      await removeTempTree(testDir);
+    }
   });
 });
 

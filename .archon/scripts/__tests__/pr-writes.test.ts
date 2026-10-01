@@ -333,18 +333,25 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   });
 
   it('publishes nothing for a working-diff review and still reports the verdict', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_PR: '{}' } });
+    const result = publishReview({ inputs: { ...report, INPUTS_PR: 'null' } });
     expect(result.code).toBe(0);
     expect(result.gh).toEqual([]);
     expect(result.forge).toEqual([]);
     expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
   });
 
+  it('still accepts a legacy empty-object working-diff declaration', () => {
+    const result = publishReview({ inputs: { ...report, INPUTS_PR: '{}' } });
+    expect(result.code).toBe(0);
+    expect(result.gh).toEqual([]);
+    expect(result.forge).toEqual([]);
+  });
+
   // Delivery hands the review its verified record as the scope. The scope agent's
   // declaration is then a restatement, not the authority: a wrong or empty one must
   // not move the comment or silently skip it.
   it.each([
-    ['declares no pull request', '{}'],
+    ['declares no pull request', 'null'],
     ['names another pull request', JSON.stringify({ ...PR, number: 43 })],
   ])('refuses when delivery recorded the target and the scope %s', (_label, declared) => {
     const result = publishReview({
