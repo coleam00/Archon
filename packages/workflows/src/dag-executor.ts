@@ -4583,6 +4583,7 @@ async function executeLoopGroupNode(
       status: 'failed',
       error: result.error,
       ...(result.failureKind !== undefined ? { failureKind: result.failureKind } : {}),
+      ...(result.providerFailure !== undefined ? { providerFailure: result.providerFailure } : {}),
     };
   } else if (result.state === 'running') {
     const suspensionPoint = result.suspensionPoint;
@@ -5221,11 +5222,17 @@ async function executeLoopGroupBody(
     // (any failed node fails the run) and executeLoopNode (an iteration failure stops
     // the loop). Silently re-running the body would burn AI cost every remaining
     // iteration and bury the root cause under a generic max-iterations error.
-    const failedBodyNodes = iterBodyNodes.flatMap(n => {
+    const failedBodyOutputs = iterBodyNodes.flatMap(n => {
       const o = scopedNodeOutputs.get(n.id);
-      return o?.state === 'failed' ? [`'${n.id}': ${o.error}`] : [];
+      return o?.state === 'failed' ? [{ id: n.id, output: o }] : [];
     });
-    if (failedBodyNodes.length > 0) {
+    if (failedBodyOutputs.length > 0) {
+      const failedBodyNodes = failedBodyOutputs.map(({ id, output }) => `'${id}': ${output.error}`);
+      // A body node's typed provider failure is the group's, unchanged: quota resume
+      // reads it from the group's output, which is all the run sees.
+      const providerFailure = failedBodyOutputs.find(
+        ({ output }) => output.providerFailure !== undefined
+      )?.output.providerFailure;
       const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;
       getLog().warn(
         { nodeId: node.id, iteration: i, failedCount: failedBodyNodes.length },
@@ -5237,6 +5244,7 @@ async function executeLoopGroupBody(
         output: lastIterationOutput,
         error: errorMsg,
         failureKind: 'child_failed',
+        ...(providerFailure !== undefined ? { providerFailure } : {}),
         costUsd: loopTotalCostUsd,
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,

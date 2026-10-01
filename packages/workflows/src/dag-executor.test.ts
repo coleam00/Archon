@@ -14850,6 +14850,46 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     });
   });
 
+  it('schedules the resume when the quota failure comes from a loop-group body node', async () => {
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    mockGetAgentProviderDag.mockReturnValue({
+      sendQuery: quotaExhaustedQuery(resetAt),
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-credit',
+        cwd: testDir,
+        workflow: {
+          name: 'credit-resume-group',
+          nodes: [
+            {
+              id: 'refine',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'draft' } }],
+              },
+            },
+          ] as DagNode[],
+        },
+        workflowRun: makeWorkflowRun('credit-resume-group-run'),
+        config: quotaConfig({}),
+      })
+    );
+
+    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
+    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
+      reason: 'quota',
+      resumeAt: resetAt,
+    });
+  });
+
   it('never schedules a resume from error text that only reads like a quota limit', async () => {
     // Untyped provider errors: the words say "usage limit reached" with a reset
     // epoch inside the deadline, but no provider classified the failure, so nothing
