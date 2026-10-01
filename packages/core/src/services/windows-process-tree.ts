@@ -22,6 +22,13 @@ const COMMAND_TIMEOUT_MS = 30_000;
  */
 const MAX_CONFIRM_ROUNDS = 5;
 
+/**
+ * The longest {@link terminateWindowsProcessTree} runs before it returns or throws: one
+ * listing before `taskkill`, `taskkill` itself, then one listing per confirm round, each
+ * bounded by its command timeout.
+ */
+export const WINDOWS_PROCESS_TREE_STOP_MAX_MS = COMMAND_TIMEOUT_MS * (2 + MAX_CONFIRM_ROUNDS);
+
 export interface WindowsProcessRow {
   readonly pid: number;
   readonly parentPid: number;

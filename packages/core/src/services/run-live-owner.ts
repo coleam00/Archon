@@ -21,7 +21,6 @@ const TERMINATE_READY = 'ready\n';
  * listing with nothing to send (#3516). This bounds only the owner's own shutdown.
  */
 const OWNER_CLOSE_WAIT_MS = 10_000;
-export const RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS = OWNER_CLOSE_WAIT_MS;
 const STARTUP_RECHECK_MS = 50;
 const MAX_MESSAGE_BYTES = 256;
 
