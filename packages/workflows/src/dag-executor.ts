@@ -8889,6 +8889,8 @@ interface ComposeInstanceOutcome {
   output: string;
   structuredOutput?: unknown;
   error?: string;
+  /** The failed instance node's typed provider failure, unchanged. */
+  providerFailure?: ProviderFailure;
   costUsd?: number;
   tokens?: TokenUsage;
 }
@@ -8918,13 +8920,19 @@ async function executeComposeFanOutNode(
     error: string,
     failureKind: NodeFailureKind,
     costUsd?: number,
-    tokens?: TokenUsage
+    tokens?: TokenUsage,
+    providerFailure?: ProviderFailure
   ): Promise<NodeExecutionResult> => {
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },
       finishNodeExecution(
         execution,
-        { status: 'failed', error, failureKind },
+        {
+          status: 'failed',
+          error,
+          failureKind,
+          ...(providerFailure !== undefined ? { providerFailure } : {}),
+        },
         {
           output: { text: '' },
           costUsd,
@@ -9303,10 +9311,14 @@ async function executeComposeFanOutNode(
       await runLayers(instanceCtx);
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
       if (failed.length > 0) {
+        // An instance node's typed provider failure is the instance's, unchanged: quota
+        // resume reads it from the fan-out node's output, which is all the run sees.
+        const providerFailure = failed.find(o => o.providerFailure !== undefined)?.providerFailure;
         const outcome: ComposeInstanceOutcome = {
           status: 'failed',
           output: '',
           error: failed[0].error ?? 'composed instance node failed',
+          ...(providerFailure !== undefined ? { providerFailure } : {}),
           ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
           ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
         };
@@ -9317,6 +9329,7 @@ async function executeComposeFanOutNode(
               status: 'failed',
               error: outcome.error ?? 'composed instance node failed',
               failureKind: 'child_failed',
+              ...(providerFailure !== undefined ? { providerFailure } : {}),
             },
             {
               output: { text: '' },
@@ -9437,7 +9450,8 @@ async function executeComposeFanOutNode(
           (bad.error ? `: ${bad.error}` : ''),
         'child_failed',
         totalCostUsd,
-        totalTokens
+        totalTokens,
+        bad.providerFailure
       );
     }
   }

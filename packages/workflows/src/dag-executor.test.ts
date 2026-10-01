@@ -33756,6 +33756,65 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(JSON.parse(String(wrapper?.data.node_output))).toEqual(['done-a', 'done-b']);
   });
 
+  it('schedules the quota resume when a composed instance node reports quota_exhausted', async () => {
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: test block',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: work',
+        "    prompt: 'work on $INPUTS.item'",
+      ].join('\n')
+    );
+    const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        isError: true,
+        failure: { class: 'quota_exhausted', evidence: "You've hit your session limit", resetAt },
+      };
+    });
+    const store = createMockStore();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-compose',
+        cwd: testDir,
+        workflow: {
+          name: 'compose-parent',
+          nodes: [
+            { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              depends_on: ['list'],
+              with: { item: 'unused' },
+              fan_out: { items: '$list.output', as: 'item', max_parallel: 1, join: 'all_success' },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('compose-quota-run'),
+        config: {
+          ...minimalConfig,
+          workflows: {
+            autoResumeOnQuotaReset: true,
+            quotaMaxAttempts: 1,
+            quotaDeadlineMs: 3_600_000,
+          },
+        },
+      })
+    );
+
+    const failRun = store.failWorkflowRun as Mock<IWorkflowStore['failWorkflowRun']>;
+    expect(failRun.mock.calls[0]?.[2]?.scheduledResume).toMatchObject({
+      reason: 'quota',
+      resumeAt: resetAt,
+    });
+  });
+
   it('refuses runtime composed fan-out resolution after the capture changes', async () => {
     await writeBlock(
       'name: compose-blk\ndescription: original block\nmutates_checkout: false\nnodes:\n  - id: work\n    bash: "echo original"'
