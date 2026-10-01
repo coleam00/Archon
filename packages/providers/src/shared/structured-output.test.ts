@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   augmentPromptForJsonSchema,
   compileOutputSchema,
+  findOpenAiStrictSchemaViolations,
   findRequiredPropertyGaps,
   formatSchemaErrors,
   hasOpenAdditionalProperties,
@@ -561,5 +562,64 @@ describe('findRequiredPropertyGaps', () => {
     expect(findRequiredPropertyGaps(schema, 'output_format')).toEqual([
       { schemaPath: 'output_format', missing: ['f'] },
     ]);
+  });
+});
+
+describe('findOpenAiStrictSchemaViolations', () => {
+  test('reports an object schema with no properties', () => {
+    expect(
+      findOpenAiStrictSchemaViolations({ type: 'object' }, 'output_format.properties.pr')
+    ).toEqual([
+      {
+        kind: 'object_without_properties',
+        schemaPath: 'output_format.properties.pr',
+      },
+    ]);
+  });
+
+  test('reports an object schema with an empty properties map', () => {
+    expect(
+      findOpenAiStrictSchemaViolations(
+        { type: ['object', 'null'], properties: {} },
+        'output_format.properties.pr'
+      )
+    ).toEqual([
+      {
+        kind: 'object_without_properties',
+        schemaPath: 'output_format.properties.pr',
+      },
+    ]);
+  });
+
+  test('reports missing required coverage with its strict-mode reason', () => {
+    expect(
+      findOpenAiStrictSchemaViolations(
+        {
+          type: 'object',
+          properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
+          required: ['ready'],
+        },
+        'output_format'
+      )
+    ).toEqual([
+      {
+        kind: 'missing_required_properties',
+        schemaPath: 'output_format',
+        missing: ['note'],
+      },
+    ]);
+  });
+
+  test('accepts a nullable object whose properties are all required', () => {
+    expect(
+      findOpenAiStrictSchemaViolations(
+        {
+          type: ['object', 'null'],
+          properties: { number: { type: 'integer' } },
+          required: ['number'],
+        },
+        'output_format.properties.pr'
+      )
+    ).toEqual([]);
   });
 });

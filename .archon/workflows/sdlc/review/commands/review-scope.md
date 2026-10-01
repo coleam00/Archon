@@ -66,4 +66,4 @@ Write `$ARTIFACTS_DIR/review/scope.md` containing:
 Confirm `$ARTIFACTS_DIR/review/scope.md` exists, names the accepted contract's source, has all three of its Acceptance, Invariants, and Steering subsections, names the head SHA, and that the diff commands in it actually produce output in this checkout. Then declare:
 
 - `docs`: the boolean selected above.
-- `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `{}`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.
+- `pr`: the qualified pull request this round reviews, as `{"repo": {"host": ..., "path": "owner/repo"}, "number": N}` — the same identity scope.md records. For a working-diff target, `null`. The node that publishes the review report writes to this record and to nothing else, so a wrong or guessed identity would put the report on the wrong pull request.

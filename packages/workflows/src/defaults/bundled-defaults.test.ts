@@ -28,7 +28,7 @@ import {
   isWaitNode,
 } from '../schemas';
 import {
-  findRequiredPropertyGaps,
+  findOpenAiStrictSchemaViolations,
   getProviderCapabilities,
   isRegisteredProvider,
   registerBuiltinProviders,
@@ -437,7 +437,21 @@ describe('bundled-defaults', () => {
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
       expect(scope.output_format).toEqual({
         type: 'object',
-        properties: { docs: { type: 'boolean' }, pr: { type: 'object' } },
+        properties: {
+          docs: { type: 'boolean' },
+          pr: {
+            type: ['object', 'null'],
+            properties: {
+              repo: {
+                type: 'object',
+                properties: { host: { type: 'string' }, path: { type: 'string' } },
+                required: ['host', 'path'],
+              },
+              number: { type: 'integer' },
+            },
+            required: ['repo', 'number'],
+          },
+        },
         required: ['docs', 'pr'],
       });
       expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
@@ -578,12 +592,12 @@ describe('bundled-defaults', () => {
 
     // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this
     // same bundled set with a prose exemption rule for pinned providers. The engine now
-    // owns the rule (launch preflight + `archon validate workflows`), and this test is
+    // owns the rules (launch preflight + `archon validate workflows`), and this test is
     // the CI backstop proving the shipped set stays clean. Scan under a Codex default
     // profile: an unpinned node routes to the install's default assistant, so an install
     // pinned to Codex is the reachable strict case. A node explicitly pinned to a
     // non-enforcing provider (Claude) is the documented opt-out and is skipped.
-    it('every bundled workflow satisfies Codex strict-mode required coverage', () => {
+    it('every bundled provider-facing schema satisfies Codex strict mode', () => {
       const violations: string[] = [];
 
       type WalkNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
@@ -613,9 +627,14 @@ describe('bundled-defaults', () => {
             if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) continue;
           }
           // provider === undefined routes to the install default, scanned as Codex.
-          for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+          for (const violation of findOpenAiStrictSchemaViolations(
+            node.output_format,
+            'output_format'
+          )) {
             violations.push(
-              `${name}:${node.id} ${gap.schemaPath} missing ${gap.missing.join(', ')}`
+              violation.kind === 'object_without_properties'
+                ? `${name}:${node.id} ${violation.schemaPath} object schema has no properties`
+                : `${name}:${node.id} ${violation.schemaPath} missing ${violation.missing.join(', ')}`
             );
           }
         }

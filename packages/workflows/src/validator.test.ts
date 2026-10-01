@@ -1598,11 +1598,17 @@ describe('validateWorkflowResources — output_format compiles', () => {
   });
 });
 
-describe('validateWorkflowResources — strict-schema required coverage (#2945)', () => {
+describe('validateWorkflowResources — OpenAI strict schemas (#2945, #3558)', () => {
   const looseSchema = {
     type: 'object',
     properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
     required: ['ready'],
+  };
+
+  const schemaWithBareNestedObject = {
+    type: 'object',
+    properties: { pr: { type: 'object' } },
+    required: ['pr'],
   };
 
   function makeAgent(id: string, extra: Partial<DagNode> = {}): DagNode {
@@ -1623,6 +1629,20 @@ describe('validateWorkflowResources — strict-schema required coverage (#2945)'
     expect(errs[0].nodeId).toBe('plan');
     expect(errs[0].message).toContain('note');
     expect(errs[0].message).toContain('required');
+  });
+
+  test('Codex-routed agent node with a bare nested object reports its schema path', async () => {
+    const workflow = makeWorkflow('test', [
+      makeAgent('scope', { output_format: schemaWithBareNestedObject }),
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].nodeId).toBe('scope');
+    expect(errors[0].message).toContain('object schema has no properties');
+    expect(errors[0].message).toContain('output_format.properties.pr');
   });
 
   test('Claude-routed same schema reports nothing', async () => {

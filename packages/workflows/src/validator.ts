@@ -30,8 +30,8 @@ import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
   compileOutputSchema,
+  findOpenAiStrictSchemaViolations,
   findInstalledSkillNames,
-  findRequiredPropertyGaps,
   getProviderCapabilities,
   isRegisteredProvider,
   skillSearchRoots,
@@ -525,12 +525,11 @@ export async function validateWorkflowResources(
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
-    // --- Strict-schema required coverage (#2945) ---
-    // A schema whose declared properties are not fully covered by 'required' is
-    // rejected by a provider that enforces OpenAI strict mode (Codex) at the
-    // first turn with HTTP 400 invalid_json_schema. Report it at validation time
-    // so `archon validate workflows` catches it before a live run burns setup
-    // costs. The set of provider-invoking kinds is the same one the launch
+    // --- Strict schema (#2945, #3558) ---
+    // OpenAI strict mode rejects an object with no properties or with properties
+    // not fully covered by 'required'. Report it at validation time so `archon
+    // validate workflows` catches it before a live run burns setup costs. The
+    // set of provider-invoking kinds is the same one the launch
     // preflight uses: every node kind that both enforces output_format
     // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
     // loop; not exec/bash/script, and not a wait's engine-injected schema).
@@ -542,13 +541,24 @@ export async function validateWorkflowResources(
       node.output_format !== undefined &&
       providerCaps?.requiresAllPropertiesRequired
     ) {
-      for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+      for (const violation of findOpenAiStrictSchemaViolations(
+        node.output_format,
+        'output_format'
+      )) {
+        const problem =
+          violation.kind === 'object_without_properties'
+            ? `object schema has no properties at '${violation.schemaPath}'`
+            : `declares properties not in 'required' at '${violation.schemaPath}': ${violation.missing.join(', ')}`;
+        const hint =
+          violation.kind === 'object_without_properties'
+            ? 'Declare the object properties, or use null when the object is absent.'
+            : 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").';
         issues.push({
           level: 'error',
           nodeId: node.id,
           field: 'output_format',
-          message: `Node '${node.id}' declares properties not in 'required' at '${gap.schemaPath}': ${gap.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
-          hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
+          message: `Node '${node.id}' ${problem}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+          hint,
         });
       }
     }

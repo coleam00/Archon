@@ -27532,6 +27532,12 @@ describe('collectStrictSchemaViolations', () => {
     required: ['ready'],
   };
 
+  const schemaWithBareNestedObject = {
+    type: 'object',
+    properties: { pr: { type: 'object' } },
+    required: ['pr'],
+  };
+
   it('flags an agent under Codex workflow-level provider with loose schema', () => {
     const violations = collectStrictSchemaViolations(
       [agentNode('a', { output_format: looseSchema })],
@@ -27540,7 +27546,26 @@ describe('collectStrictSchemaViolations', () => {
     expect(violations).toHaveLength(1);
     expect(violations[0].provider).toBe('codex');
     expect(violations[0].nodeId).toBe('a');
-    expect(violations[0].missing).toEqual(['note']);
+    expect(violations[0]).toMatchObject({
+      kind: 'missing_required_properties',
+      missing: ['note'],
+    });
+  });
+
+  it('flags a nested object with no properties under Codex', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('scope', { output_format: schemaWithBareNestedObject })],
+      'codex'
+    );
+
+    expect(violations).toEqual([
+      {
+        kind: 'object_without_properties',
+        provider: 'codex',
+        nodeId: 'scope',
+        schemaPath: 'output_format.properties.pr',
+      },
+    ]);
   });
 
   it('is empty under Claude workflow-level provider', () => {

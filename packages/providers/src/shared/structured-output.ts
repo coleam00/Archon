@@ -168,10 +168,11 @@ function isObjectSchemaNode(node: Record<string, unknown>): boolean {
  * Callers that want to warn the author before silently dropping those semantics
  * can detect the case up front with {@link hasOpenAdditionalProperties}.
  *
- * Scope: only `additionalProperties` is injected. The other strict-mode rule
- * (every key in `properties` must appear in `required`) is intentionally NOT
- * enforced here — forcing it would silently turn optional fields into required
- * ones. See issue #1843.
+ * Scope: only `additionalProperties` is injected. Other strict-mode object
+ * rules are intentionally NOT repaired here: inventing properties would invent
+ * a contract, and filling `required` would silently turn optional fields into
+ * required ones. The launch preflight reports both instead. See issues #1843
+ * and #3558.
  */
 export function normalizeJsonSchemaForOpenAiStrict(
   schema: Record<string, unknown>
@@ -232,7 +233,7 @@ export function hasOpenAdditionalProperties(schema: unknown): boolean {
   return Object.values(node).some(hasOpenAdditionalProperties);
 }
 
-// ─── Strict-mode required-coverage detection ──────────────────────────────────
+// ─── OpenAI strict-mode schema detection ──────────────────────────────────────
 
 /**
  * A single object schema node whose `properties` keys are not fully covered by
@@ -246,49 +247,81 @@ export interface RequiredPropertyGap {
   missing: string[];
 }
 
+/** A schema shape OpenAI's Structured Outputs strict mode rejects. */
+export type OpenAiStrictSchemaViolation =
+  | ({ kind: 'missing_required_properties' } & RequiredPropertyGap)
+  | { kind: 'object_without_properties'; schemaPath: string };
+
+/**
+ * Find every OpenAI strict-mode violation at any depth in a schema.
+ *
+ * Strict object schemas must declare at least one property, and every declared
+ * property must appear in `required`. `basePath` is prepended to every result so
+ * callers get meaningful schema-root-relative locations.
+ */
+export function findOpenAiStrictSchemaViolations(
+  schema: unknown,
+  basePath: string
+): OpenAiStrictSchemaViolation[] {
+  return collectStrictSchemaViolations(schema, basePath);
+}
+
 /**
  * Find every object schema node, at any depth, whose `properties` keys are not
- * fully covered by its `required` array. Only object nodes with a `properties`
- * map are checked (OpenAI strict-mode's target).
+ * fully covered by its `required` array.
  *
  * `basePath` is prepended to every gap path so callers get meaningful
  * schema-root-relative locations (e.g. pass `'output_format'`).
+ * This focused view remains available to callers that only need required
+ * coverage; strict-provider validation uses {@link findOpenAiStrictSchemaViolations}.
  */
 export function findRequiredPropertyGaps(schema: unknown, basePath: string): RequiredPropertyGap[] {
-  return collectGaps(schema, basePath);
+  return findOpenAiStrictSchemaViolations(schema, basePath).flatMap(violation =>
+    violation.kind === 'missing_required_properties'
+      ? [{ schemaPath: violation.schemaPath, missing: violation.missing }]
+      : []
+  );
 }
 
-function collectGaps(
+function collectStrictSchemaViolations(
   schema: unknown,
   path: string,
-  out: RequiredPropertyGap[] = []
-): RequiredPropertyGap[] {
+  out: OpenAiStrictSchemaViolation[] = []
+): OpenAiStrictSchemaViolation[] {
   if (schema === null || typeof schema !== 'object') return out;
   if (Array.isArray(schema)) {
-    schema.forEach((item, i) => collectGaps(item, `${path}[${i}]`, out));
+    schema.forEach((item, i) => collectStrictSchemaViolations(item, `${path}[${i}]`, out));
     return out;
   }
   const record = schema as Record<string, unknown>;
   const properties = record.properties;
-  if (properties !== null && typeof properties === 'object' && !Array.isArray(properties)) {
+  const hasPropertiesMap =
+    properties !== null && typeof properties === 'object' && !Array.isArray(properties);
+  if (isObjectSchemaNode(record) && (!hasPropertiesMap || Object.keys(properties).length === 0)) {
+    out.push({ kind: 'object_without_properties', schemaPath: path });
+  } else if (hasPropertiesMap) {
     const required = new Set(Array.isArray(record.required) ? (record.required as string[]) : []);
     const missing = Object.keys(properties).filter(key => !required.has(key));
-    if (missing.length > 0) out.push({ schemaPath: path, missing });
+    if (missing.length > 0) {
+      out.push({ kind: 'missing_required_properties', schemaPath: path, missing });
+    }
   }
 
   const collectSchema = (key: string): void => {
-    if (key in record) collectGaps(record[key], `${path}.${key}`, out);
+    if (key in record) collectStrictSchemaViolations(record[key], `${path}.${key}`, out);
   };
   const collectSchemaArray = (key: string): void => {
     const schemas = record[key];
     if (!Array.isArray(schemas)) return;
-    schemas.forEach((item, index) => collectGaps(item, `${path}.${key}[${index}]`, out));
+    schemas.forEach((item, index) =>
+      collectStrictSchemaViolations(item, `${path}.${key}[${index}]`, out)
+    );
   };
   const collectSchemaMap = (key: string): void => {
     const schemas = record[key];
     if (schemas === null || typeof schemas !== 'object' || Array.isArray(schemas)) return;
     for (const [name, subschema] of Object.entries(schemas)) {
-      collectGaps(subschema, `${path}.${key}.${name}`, out);
+      collectStrictSchemaViolations(subschema, `${path}.${key}.${name}`, out);
     }
   };
 

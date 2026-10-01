@@ -48,7 +48,9 @@ export {
   compileOutputSchema,
   validateStructuredOutput,
   formatSchemaErrors,
+  findOpenAiStrictSchemaViolations,
   findRequiredPropertyGaps,
+  type OpenAiStrictSchemaViolation,
   type RequiredPropertyGap,
   type StructuredValidationResult,
 } from './shared/structured-output';
