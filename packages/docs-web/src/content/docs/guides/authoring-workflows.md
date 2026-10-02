@@ -801,7 +801,7 @@ Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...
 
 ### One Retry Layer
 
-The node retry is the only retry Archon adds, except that OpenCode retries a rate-limited, crashed or missing-agent query up to three times inside one attempt. Every other provider makes one attempt per call and reports a typed failure; the engine decides whether to try again:
+The node retry is the only retry Archon adds. Every provider makes one attempt per call and reports a typed failure; the engine decides whether to try again:
 
 ```
 Node retry (dag-executor)  — AI nodes: default 2 retries, 3 s base backoff;

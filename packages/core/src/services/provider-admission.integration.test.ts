@@ -229,28 +229,6 @@ describe('provider admission wrapper', () => {
     expect(await holderCount()).toBe(0);
   });
 
-  test('releaseDuring frees the slot for another attempt during backoff', async () => {
-    await writeCaps({ [PROVIDER]: 1 });
-    const other = gated();
-    let duringBackoff = -1;
-    scripts.set('a', async function* (options) {
-      yield { type: 'assistant', content: 'first try failed' };
-      await options?.admission?.releaseDuring(async () => {
-        duringBackoff = await holderCount();
-        const run = drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('other', '/tmp'));
-        await other.started;
-        other.release();
-        await run;
-      });
-      yield { type: 'result' };
-    });
-    scripts.set('other', other.script);
-    await drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('a', '/tmp'));
-    expect(duringBackoff).toBe(0);
-    expect(calls).toHaveLength(2);
-    expect(await holderCount()).toBe(0);
-  });
-
   test('lowering the cap blocks new admissions and never revokes live holders', async () => {
     await writeCaps({ [PROVIDER]: 2 });
     const a = gated();

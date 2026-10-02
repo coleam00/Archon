@@ -1,36 +1,16 @@
 import type { ProviderFailureClass } from '@archon/provider-contract';
 
-// Prose patterns exclude bare HTTP codes; exact structured statusCode fields
-// and SDK error discriminators are classified separately below.
-const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', 'overloaded'];
-const CRASH_PATTERNS = [
-  'server disconnected',
-  'disposed',
-  'econnreset',
-  'socket hang up',
-  'connection terminated',
-  'process terminated',
-];
-const AGENT_NOT_FOUND_PATTERNS = [
-  'agent not found',
-  'unknown agent',
-  'invalid agent',
-  'no agent named',
-];
-
-export type RetryableErrorClass =
-  | 'rate_limit'
-  | 'auth'
-  | 'crash'
-  | 'agent_not_found'
-  | 'unknown'
-  | 'aborted';
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function classifyStructuredError(error: unknown): 'auth' | 'rate_limit' | undefined {
+/**
+ * The failure class OpenCode's structured signals support: the SDK's `ProviderAuthError`
+ * discriminator or an exact HTTP status field, on the error or its `cause`. Everything
+ * else is `unknown`; the message text never sets a class, because a vendor rewording
+ * must not change what the engine retries.
+ */
+export function opencodeFailureClass(error: unknown): ProviderFailureClass {
   const candidates = [error];
   if (error instanceof Error) candidates.push(error.cause);
 
@@ -46,10 +26,10 @@ function classifyStructuredError(error: unknown): 'auth' | 'rate_limit' | undefi
           ? data.statusCode
           : undefined;
     if (statusCode === 401 || statusCode === 403) return 'auth';
-    if (statusCode === 429) return 'rate_limit';
+    if (statusCode === 429) return 'rate_limited';
   }
 
-  return undefined;
+  return 'unknown';
 }
 
 export function errorMessage(error: unknown): string {
@@ -59,62 +39,6 @@ export function errorMessage(error: unknown): string {
     if (isRecord(error.data) && typeof error.data.message === 'string') return error.data.message;
   }
   return String(error);
-}
-
-export function classifyOpencodeError(error: unknown, aborted: boolean): RetryableErrorClass {
-  if (aborted) return 'aborted';
-
-  const structuredClass = classifyStructuredError(error);
-  if (structuredClass) return structuredClass;
-
-  const parts: string[] = [];
-  if (error instanceof Error) {
-    parts.push(error.name, error.message);
-  }
-  if (isRecord(error)) {
-    if (typeof error.name === 'string') parts.push(error.name);
-    if (typeof error.message === 'string') parts.push(error.message);
-    if (isRecord(error.data)) {
-      if (typeof error.data.message === 'string') parts.push(error.data.message);
-      if (typeof error.data.responseBody === 'string') parts.push(error.data.responseBody);
-    }
-  }
-
-  const combined = parts.join(' ').toLowerCase();
-  if (RATE_LIMIT_PATTERNS.some(pattern => combined.includes(pattern))) return 'rate_limit';
-  if (CRASH_PATTERNS.some(pattern => combined.includes(pattern))) return 'crash';
-  if (AGENT_NOT_FOUND_PATTERNS.some(pattern => combined.includes(pattern)))
-    return 'agent_not_found';
-  return 'unknown';
-}
-
-/**
- * A failed OpenCode query, carrying the contract failure class its SDK's structured
- * signals support. The retry class named in its message may come from the error text;
- * it drives only the in-provider retry and never becomes the reported class, because a
- * vendor rewording must not change what the engine retries.
- */
-export class OpencodeQueryError extends Error {
-  constructor(
-    message: string,
-    readonly failureClass: ProviderFailureClass
-  ) {
-    super(message);
-  }
-}
-
-export function enrichOpencodeError(error: unknown, errorClass: RetryableErrorClass): Error {
-  if (errorClass === 'aborted') {
-    return new Error('OpenCode query aborted');
-  }
-
-  const structuredClass = classifyStructuredError(error);
-  const err = new OpencodeQueryError(
-    `OpenCode ${errorClass}: ${errorMessage(error)}`,
-    structuredClass === 'rate_limit' ? 'rate_limited' : (structuredClass ?? 'unknown')
-  );
-  if (error instanceof Error) err.cause = error;
-  return err;
 }
 
 /**

@@ -16,7 +16,6 @@ export type {
   CredentialKind,
   CredentialSpec,
   ProviderCredentialCatalog,
-  ProviderAttemptAdmission,
   ProviderAdmissionEvent,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';

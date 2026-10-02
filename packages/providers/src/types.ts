@@ -629,26 +629,6 @@ export interface NodeConfig {
   [key: string]: unknown;
 }
 
-/**
- * Extended options for sendQuery, adding workflow-specific context.
- * The orchestrator path uses base AgentRequestOptions fields only.
- * The workflow path additionally passes nodeConfig and assistantConfig.
- */
-/**
- * The install-wide provider slot held by the current `sendQuery` call. Archon core
- * sets it only when the operator configured a cap for this provider; a provider with
- * no internal retry loop can ignore it, because core already releases the slot when
- * the `sendQuery` stream closes.
- */
-export interface ProviderAttemptAdmission {
-  /**
-   * Release the slot for a provider-internal retry backoff, run `wait`, then wait for
-   * a slot again before the next attempt. Rejects when the request is aborted while
-   * waiting for the slot, leaving no slot held.
-   */
-  releaseDuring(wait: () => Promise<void>): Promise<void>;
-}
-
 /** Typed admission transitions for one capped provider attempt. */
 export interface ProviderAdmissionEvent {
   state: 'waiting' | 'admitted' | 'released';
@@ -659,9 +639,12 @@ export interface ProviderAdmissionEvent {
   capacity: number;
 }
 
+/**
+ * Extended options for sendQuery, adding workflow-specific context.
+ * The orchestrator path uses base AgentRequestOptions fields only.
+ * The workflow path additionally passes nodeConfig and assistantConfig.
+ */
 export interface SendQueryOptions extends AgentRequestOptions {
-  /** Set by Archon core admission; callers do not supply it. */
-  admission?: ProviderAttemptAdmission;
   /** Observer for capped-provider admission transitions (queue visibility, #2817). */
   onAdmission?: (event: ProviderAdmissionEvent) => void;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */

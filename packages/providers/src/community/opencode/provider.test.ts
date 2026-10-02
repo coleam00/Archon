@@ -161,7 +161,7 @@ describe('normalizeTokens', () => {
     ).toEqual({ input: 16, output: 7, cacheRead: 5 });
   });
 });
-import { classifyOpencodeError } from './errors';
+import { opencodeFailureClass } from './errors';
 import type { MessageChunk, NodeConfig } from '../../types';
 
 /** Default model for tests — satisfies the model-or-agent validation */
@@ -575,7 +575,7 @@ describe('OpencodeProvider', () => {
     const cwd = await createTempProjectDir();
     const sessionError = (error: Record<string, unknown>): AsyncGenerator<MessageChunk> => {
       scriptedEvents = [{ type: 'session.error', properties: { sessionID: 'session-1', error } }];
-      return new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+      return new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
         assistantConfig: TEST_MODEL,
       });
     };
@@ -1013,141 +1013,76 @@ describe('OpencodeProvider', () => {
     expect(mockLogger.warn).toHaveBeenCalledTimes(1);
   });
 
-  test('rate limit errors are classified as retryable and retried', async () => {
-    const retryRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        throw new Error('429 rate limit exceeded');
+  // The engine owns retry: a failed query is one attempt, reported once. Each case queues
+  // a healthy second runtime, so a provider that retried would succeed and hide the failure.
+  // The inline agent keeps the agent-not-found case on the path that used to refresh and retry.
+  test.each([
+    ['rate-limit text', new Error('429 rate limit exceeded'), 'unknown'],
+    ['crash text', new Error('socket hang up'), 'unknown'],
+    ['agent-not-found text', new Error("Agent not found: 'archon-reviewer'"), 'unknown'],
+    [
+      'structured 429',
+      Object.assign(new Error('upstream request failed'), {
+        cause: { name: 'APIError', data: { message: 'upstream request failed', statusCode: 429 } },
       }),
-    });
-    const successRuntime = makeRuntime();
-    runtimeQueue.push(retryRuntime, successRuntime);
-    scriptedEvents = [
-      {
-        type: 'session.idle',
-        properties: { sessionID: 'session-1' },
-      },
-    ];
-
-    const { chunks, error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
-        assistantConfig: TEST_MODEL,
-      })
+      'rate_limited',
+    ],
+    [
+      'ProviderAuthError',
+      Object.assign(new Error('provider rejected request'), { name: 'ProviderAuthError' }),
+      'auth',
+    ],
+  ] as const)('%s fails the turn in one attempt', async (_name, thrown, expectedClass) => {
+    runtimeQueue.push(
+      makeRuntime({
+        promptAsync: mock(async () => {
+          throw thrown;
+        }),
+      }),
+      makeRuntime()
     );
-
-    expect(error).toBeUndefined();
-    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
-      'opencode.retrying_query'
-    );
-  });
-
-  test('retry backoff runs inside the admission release, never while the slot is held', async () => {
-    const events: string[] = [];
-    const retryRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        events.push('attempt');
-        throw new Error('429 rate limit exceeded');
-      }),
-    });
-    const successRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        events.push('attempt');
-      }),
-    });
-    runtimeQueue.push(retryRuntime, successRuntime);
     scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-    const admission = {
-      releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
-        events.push('released');
-        await wait();
-        events.push('reacquired');
-      },
-    };
 
-    const { error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+    const cwd = await createTempProjectDir();
+
+    const { chunks, failure } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
-        admission,
+        nodeConfig: {
+          nodeId: 'node-1',
+          agents: { reviewer: { description: 'Review agent', prompt: 'Return review' } },
+        },
       })
     );
 
-    expect(error).toBeUndefined();
-    expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.class).toBe(expectedClass);
+    expect(failure?.evidence).toContain(thrown.message);
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
   });
 
-  test('retries a structured 429 from the single-agent session stream', async () => {
-    const sdkError = {
-      name: 'APIError',
-      data: { message: 'upstream request failed', statusCode: 429, isRetryable: true },
-    };
-    const retryRuntime = makeRuntime({
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          {
-            type: 'session.error',
-            properties: { sessionID: 'session-1', error: sdkError },
-          },
-        ]),
-      })),
-    });
-    const successRuntime = makeRuntime({
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          { type: 'session.idle', properties: { sessionID: 'session-1' } },
-        ]),
-      })),
-    });
-    runtimeQueue.push(retryRuntime, successRuntime);
-
-    const { chunks, error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
-        assistantConfig: TEST_MODEL,
-      })
-    );
-
-    expect(error).toBeUndefined();
-    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
-      'opencode.retrying_query'
-    );
-  });
-
-  test('retries a structured 429 from the multi-agent session stream', async () => {
+  test('a structured 429 from the multi-agent session stream fails the turn in one attempt', async () => {
     const cwd = await createTempProjectDir();
     const sdkError = {
       name: 'APIError',
       data: { message: 'upstream request failed', statusCode: 429, isRetryable: true },
     };
-    const retrySessionIds = ['scout-session', 'reviewer-session'];
-    const retryRuntime = makeRuntime({
-      sessionCreate: mock(async () => ({ data: { id: retrySessionIds.shift() } })),
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          {
-            type: 'session.error',
-            properties: { sessionID: 'scout-session', error: sdkError },
-          },
-        ]),
-      })),
-    });
-    const successSessionIds = ['scout-session', 'reviewer-session'];
-    const successRuntime = makeRuntime({
-      sessionCreate: mock(async () => ({ data: { id: successSessionIds.shift() } })),
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          { type: 'session.idle', properties: { sessionID: 'scout-session' } },
-          { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
-        ]),
-      })),
-    });
-    runtimeQueue.push(retryRuntime, successRuntime);
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    runtimeQueue.push(
+      makeRuntime({
+        sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+        subscribe: mock(async () => ({
+          stream: createEventStream([
+            { type: 'session.error', properties: { sessionID: 'scout-session', error: sdkError } },
+          ]),
+        })),
+      }),
+      makeRuntime()
+    );
 
-    const { error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
+    const { failure } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig: {
           nodeId: 'research',
@@ -1159,36 +1094,9 @@ describe('OpencodeProvider', () => {
       })
     );
 
-    expect(error).toBeUndefined();
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
-      'opencode.retrying_query'
-    );
-  });
-
-  test('a structured auth error is reported as auth and not retried', async () => {
-    const runtime = makeRuntime({
-      promptAsync: mock(async () => {
-        const error = new Error('provider rejected request');
-        error.name = 'ProviderAuthError';
-        throw error;
-      }),
-    });
-    runtimeQueue.push(runtime);
-
-    const { chunks, failure } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
-        assistantConfig: TEST_MODEL,
-      })
-    );
-
-    // Only the failure result precedes `settled`.
-    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
-    expect(failure?.class).toBe('auth');
-    expect(failure?.evidence).toContain('provider rejected request');
+    expect(failure?.class).toBe('rate_limited');
+    expect(failure?.evidence).toContain('upstream request failed');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
-    expect(mockLogger.info).not.toHaveBeenCalledWith(expect.any(Object), 'opencode.retrying_query');
   });
 
   test('abort propagates to the OpenCode session and surfaces aborted error', async () => {
@@ -1213,7 +1121,7 @@ describe('OpencodeProvider', () => {
     const { chunks, error } = await consumption;
 
     expect(chunks).toEqual([]);
-    expect(error?.message).toBe('OpenCode query aborted');
+    expect(error?.message).toStartWith('OpenCode query aborted');
     expect(runtime.client.session.abort).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: '/tmp' },
@@ -1545,43 +1453,6 @@ describe('OpencodeProvider', () => {
       query: { directory: join(cwd, '.archon-opencode', 'node-1') },
     });
     expect(callOrder).toEqual(['dispose', 'prompt']);
-  });
-
-  test('retries once when first attempt fails with agent-not-found for inline agents', async () => {
-    const cwd = await createTempProjectDir();
-    const failingRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        throw new Error("Agent not found: 'archon-reviewer'");
-      }),
-    });
-    const successRuntime = makeRuntime();
-    runtimeQueue.push(failingRuntime, successRuntime);
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-
-    const nodeConfig = {
-      nodeId: 'node-2',
-      agents: {
-        reviewer: {
-          description: 'Review agent',
-          prompt: 'Return review',
-        },
-      },
-    };
-
-    const { chunks, error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
-        assistantConfig: TEST_MODEL,
-        nodeConfig,
-      })
-    );
-
-    expect(error).toBeUndefined();
-    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, sessionCwd: join(cwd, '.archon-opencode', 'node-2') },
-      'opencode.retrying_after_agent_refresh'
-    );
   });
 
   test('agent config with model override injects model into promptAsync body', async () => {
@@ -1932,55 +1803,39 @@ describe('OpencodeProvider', () => {
   });
 });
 
-describe('classifyOpencodeError (#2715)', () => {
-  test('classifies exact structured statuses across top-level, SDK, and wrapped shapes', () => {
+describe('opencodeFailureClass', () => {
+  test('reads exact structured statuses across top-level, SDK, and wrapped shapes', () => {
     const cases = [
       [401, 'auth'],
       [403, 'auth'],
-      [429, 'rate_limit'],
+      [429, 'rate_limited'],
+      [500, 'unknown'],
     ] as const;
 
     for (const [statusCode, expectedClass] of cases) {
-      expect(classifyOpencodeError({ statusCode }, false)).toBe(expectedClass);
+      expect(opencodeFailureClass({ statusCode })).toBe(expectedClass);
 
-      const sdkError = {
-        name: 'APIError',
-        data: { message: 'request failed', statusCode, isRetryable: statusCode === 429 },
-      };
-      expect(classifyOpencodeError(sdkError, false)).toBe(expectedClass);
+      const sdkError = { name: 'APIError', data: { message: 'request failed', statusCode } };
+      expect(opencodeFailureClass(sdkError)).toBe(expectedClass);
 
       const wrappedError = new Error('request failed');
       wrappedError.cause = sdkError;
-      expect(classifyOpencodeError(wrappedError, false)).toBe(expectedClass);
+      expect(opencodeFailureClass(wrappedError)).toBe(expectedClass);
     }
   });
 
-  test('classifies the SDK auth discriminator through Error.cause', () => {
+  test('reads the SDK auth discriminator through Error.cause', () => {
     const authError = new Error('provider rejected request');
     authError.cause = {
       name: 'ProviderAuthError',
       data: { providerID: 'anthropic', message: 'provider rejected request' },
     };
-    expect(classifyOpencodeError(authError, false)).toBe('auth');
+    expect(opencodeFailureClass(authError)).toBe('auth');
   });
 
-  test('does not classify a bare "429" substring as rate_limit (#2509 R11 mirror)', () => {
-    expect(classifyOpencodeError(new Error('connect ECONNREFUSED 127.0.0.1:4291'), false)).not.toBe(
-      'rate_limit'
-    );
-    expect(
-      classifyOpencodeError(
-        new Error('operation timed out after 4293ms while establishing connection'),
-        false
-      )
-    ).not.toBe('rate_limit');
-  });
-
-  test('still classifies genuine rate-limit signals as rate_limit', () => {
-    expect(classifyOpencodeError(new Error('rate limit exceeded'), false)).toBe('rate_limit');
-    expect(classifyOpencodeError(new Error('too many requests, please slow down'), false)).toBe(
-      'rate_limit'
-    );
-    expect(classifyOpencodeError(new Error('server overloaded'), false)).toBe('rate_limit');
+  test('never classifies from the message text', () => {
+    for (const message of ['401 Unauthorized', 'rate limit exceeded', '429 too many requests']) {
+      expect(opencodeFailureClass(new Error(message))).toBe('unknown');
+    }
   });
 });
