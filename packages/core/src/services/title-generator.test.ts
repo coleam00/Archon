@@ -20,7 +20,7 @@ mock.module('../db/conversations', () => ({
 
 // AI client mock — sendQuery returns an AsyncGenerator<MessageChunk>
 const mockSendQuery = mock(async function* (): AsyncGenerator<MessageChunk> {
-  yield { type: 'assistant', content: 'Summarize Project README' };
+  yield { type: 'agent_message_chunk', text: 'Summarize Project README' };
   yield { type: 'result' };
 }) as Mock<
   (
@@ -58,7 +58,7 @@ describe('title-generator', () => {
 
     // Reset to default happy-path behavior
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: 'Summarize Project README' };
+      yield { type: 'agent_message_chunk', text: 'Summarize Project README' };
       yield { type: 'result' };
     });
 
@@ -82,7 +82,7 @@ describe('title-generator', () => {
 
   test('strips surrounding quotes from AI response', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: '"Summarize Project README"' };
+      yield { type: 'agent_message_chunk', text: '"Summarize Project README"' };
       yield { type: 'result' };
     });
 
@@ -93,7 +93,7 @@ describe('title-generator', () => {
 
   test('strips "Title: " prefix from AI response', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: 'Title: Debug Auth Module' };
+      yield { type: 'agent_message_chunk', text: 'Title: Debug Auth Module' };
       yield { type: 'result' };
     });
 
@@ -125,7 +125,7 @@ describe('title-generator', () => {
 
   test('a failed turn falls back instead of titling the conversation with partial text', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: 'Partial Tit' };
+      yield { type: 'agent_message_chunk', text: 'Partial Tit' };
       yield {
         type: 'result',
         isError: true,
@@ -157,7 +157,7 @@ describe('title-generator', () => {
   test('truncates long AI-generated titles to MAX_TITLE_LENGTH', async () => {
     const longTitle = 'A'.repeat(150);
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: longTitle };
+      yield { type: 'agent_message_chunk', text: longTitle };
       yield { type: 'result' };
     });
 
@@ -249,9 +249,9 @@ describe('title-generator', () => {
 
   test('collects text from multiple streaming chunks', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: 'Debug ' };
-      yield { type: 'assistant', content: 'Auth ' };
-      yield { type: 'assistant', content: 'Module' };
+      yield { type: 'agent_message_chunk', text: 'Debug ' };
+      yield { type: 'agent_message_chunk', text: 'Auth ' };
+      yield { type: 'agent_message_chunk', text: 'Module' };
       yield { type: 'result' };
     });
 
@@ -262,7 +262,7 @@ describe('title-generator', () => {
 
   test('strips trailing punctuation from title', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: 'Fix Login Bug.' };
+      yield { type: 'agent_message_chunk', text: 'Fix Login Bug.' };
       yield { type: 'result' };
     });
 
@@ -273,7 +273,7 @@ describe('title-generator', () => {
 
   test('takes only first line of multi-line response', async () => {
     mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
-      yield { type: 'assistant', content: 'Fix Login Bug\nThis is an explanation' };
+      yield { type: 'agent_message_chunk', text: 'Fix Login Bug\nThis is an explanation' };
       yield { type: 'result' };
     });
 

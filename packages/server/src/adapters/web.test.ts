@@ -21,7 +21,6 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { WebAdapter } from './web';
-import { MAX_TOOL_OUTPUT_CHARS } from './web/truncate';
 import type { SSETransport } from './web/transport';
 import type { MessagePersistence } from './web/persistence';
 import type { WorkflowEventBridge } from './web/workflow-bridge';
@@ -45,8 +44,8 @@ function makeAdapter(): {
   } as unknown as SSETransport;
 
   const mockPersistence = {
-    appendToolResult: mock((_id: string, name: string, output: string, duration: number) => {
-      appendToolResultCalls.push([_id, name, output, duration]);
+    appendToolResult: mock((_id: string, toolCallId: string, output: string, duration: number) => {
+      appendToolResultCalls.push([_id, toolCallId, output, duration]);
     }),
     appendToolCall: mock(() => {}),
     appendText: mock(() => {}),
@@ -77,52 +76,50 @@ beforeEach(() => {
   mockLogger.error.mockClear();
 });
 
-describe('WebAdapter.sendStructuredEvent — tool_result output bounding', () => {
-  test('truncates SSE event output when toolOutput exceeds the cap', async () => {
-    const { adapter, emitted } = makeAdapter();
-    const largeOutput = 'x'.repeat(MAX_TOOL_OUTPUT_CHARS + 50_000);
+describe('WebAdapter.sendStructuredEvent — tool results', () => {
+  test('pairs results by id when two tools with the same name run concurrently', async () => {
+    const { adapter, emitted, appendToolResultCalls } = makeAdapter();
 
     await adapter.sendStructuredEvent('conv-1', {
-      type: 'tool_result',
-      toolName: 'bash',
-      toolOutput: largeOutput,
+      type: 'tool_call',
+      toolCallId: 'a',
+      name: 'Bash',
+      rawInput: { command: 'sleep 2' },
     });
-
-    expect(emitted.length).toBe(1);
-    const parsed = JSON.parse(emitted[0]!) as { output: string };
-    expect(parsed.output.length).toBeLessThan(largeOutput.length);
-    expect(parsed.output).toContain('[truncated');
-    expect(parsed.output).toContain('full output preserved on the server');
-  });
-
-  test('passes SSE event output through unchanged when within the cap', async () => {
-    const { adapter, emitted } = makeAdapter();
-    const smallOutput = 'small tool output';
-
     await adapter.sendStructuredEvent('conv-1', {
-      type: 'tool_result',
-      toolName: 'bash',
-      toolOutput: smallOutput,
+      type: 'tool_call',
+      toolCallId: 'b',
+      name: 'Bash',
+      rawInput: { command: 'echo b' },
     });
-
-    expect(emitted.length).toBe(1);
-    const parsed = JSON.parse(emitted[0]!) as { output: string };
-    expect(parsed.output).toBe(smallOutput);
-  });
-
-  test('persists full untruncated output to DB regardless of the SSE cap', async () => {
-    const { adapter, appendToolResultCalls } = makeAdapter();
-    const largeOutput = 'z'.repeat(MAX_TOOL_OUTPUT_CHARS + 50_000);
-
+    // The later call finishes first.
     await adapter.sendStructuredEvent('conv-1', {
-      type: 'tool_result',
-      toolName: 'bash',
-      toolOutput: largeOutput,
+      type: 'tool_call_update',
+      toolCallId: 'b',
+      status: 'completed',
+      output: 'out-b',
+    });
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call_update',
+      toolCallId: 'a',
+      status: 'completed',
+      output: 'out-a',
     });
 
-    expect(appendToolResultCalls.length).toBe(1);
-    // Third argument to appendToolResult is the output — must be the full string
-    expect(appendToolResultCalls[0]![2]).toBe(largeOutput);
+    const results = emitted
+      .map(
+        e => JSON.parse(e) as { type: string; toolCallId?: string; name?: string; output?: string }
+      )
+      .filter(e => e.type === 'tool_result');
+    expect(results).toEqual([
+      expect.objectContaining({ toolCallId: 'b', name: 'Bash', output: 'out-b' }),
+      expect.objectContaining({ toolCallId: 'a', name: 'Bash', output: 'out-a' }),
+    ]);
+    expect(appendToolResultCalls.map(c => [c[1], c[2]])).toEqual([
+      ['b', 'out-b'],
+      ['a', 'out-a'],
+    ]);
+    expect(mockLogger.warn).not.toHaveBeenCalled();
   });
 });
 

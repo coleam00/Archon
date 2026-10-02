@@ -100,7 +100,7 @@ function gated(): {
     script: async function* () {
       try {
         markStarted();
-        yield { type: 'assistant', content: 'working' };
+        yield { type: 'agent_message_chunk', text: 'working' };
         await gate;
         yield { type: 'result' };
       } finally {
@@ -205,8 +205,8 @@ describe('provider admission wrapper', () => {
     const order: string[] = [];
     scripts.set('a', async function* () {
       try {
-        yield { type: 'assistant', content: 'x' };
-        yield { type: 'assistant', content: 'never read' };
+        yield { type: 'agent_message_chunk', text: 'x' };
+        yield { type: 'agent_message_chunk', text: 'never read' };
       } finally {
         order.push(`provider closed, holders=${String(await holderCount())}`);
       }
@@ -220,7 +220,7 @@ describe('provider admission wrapper', () => {
   test('a failing attempt releases its slot and keeps its own error', async () => {
     await writeCaps({ [PROVIDER]: 1 });
     scripts.set('a', async function* () {
-      yield { type: 'assistant', content: 'x' };
+      yield { type: 'agent_message_chunk', text: 'x' };
       throw new Error('provider exploded');
     });
     await expect(drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('a', '/tmp'))).rejects.toThrow(

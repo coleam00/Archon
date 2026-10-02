@@ -107,7 +107,7 @@ const mockHandleCommand = mock<typeof CommandHandler.handleCommand>(() =>
   Promise.resolve({ success: true, message: 'ok' })
 );
 const mockSendQuery = mock<IAgentProvider['sendQuery']>(async function* () {
-  yield { type: 'assistant', content: 'test response' };
+  yield { type: 'agent_message_chunk', text: 'test response' };
   yield { type: 'result', sessionId: 'session-1' };
 });
 const mockGetCodebaseEnvVars = mock(() => Promise.resolve({}));
@@ -3797,7 +3797,7 @@ describe('paused approval gate routing', () => {
     mockSendQuery.mockImplementationOnce(async function* () {
       const tool = inFlightManageRunTool();
       if (tool) sink.push(await tool.handler(input));
-      yield { type: 'assistant', content: 'done' };
+      yield { type: 'agent_message_chunk', text: 'done' };
       yield { type: 'result', sessionId: 'session-1' };
     });
   }
@@ -4129,7 +4129,7 @@ describe('paused approval gate routing', () => {
       if (tool) {
         toolReplies.push(await tool.handler({ action: 'approve', runId: 'run-1', confirm: true }));
       }
-      yield { type: 'assistant', content: 'Approved.' };
+      yield { type: 'agent_message_chunk', text: 'Approved.' };
       throw new Error('provider subprocess exited unexpectedly');
     });
 
@@ -4904,12 +4904,12 @@ describe('stale session ID clearing on error_during_execution', () => {
     // provider regresses, direct-chat users would once again see "Error:
     // success" surfaced via classifyAndFormatError.
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: 'classified' };
-      // Post-fix shape from claude/provider.ts: isError absent, stopReason set.
+      yield { type: 'agent_message_chunk', text: 'classified' };
+      // Post-fix shape from claude/provider.ts: isError absent; stop_sequence maps to end_turn.
       yield {
         type: 'result',
         sessionId: 'sid-ok',
-        stopReason: 'stop_sequence',
+        stopReason: 'end_turn',
       };
     });
     mockTransitionSession.mockResolvedValueOnce(
@@ -4939,13 +4939,13 @@ describe('stale session ID clearing on error_during_execution', () => {
     // path on subtype === 'success' so a non-Claude provider can't surface a
     // spurious error to the user via direct chat.
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: 'classified' };
+      yield { type: 'agent_message_chunk', text: 'classified' };
       yield {
         type: 'result',
         sessionId: 'sid-ok',
         isError: true,
         errorSubtype: 'success',
-        stopReason: 'stop_sequence',
+        stopReason: 'end_turn',
       };
     });
     mockTransitionSession.mockResolvedValueOnce(
@@ -5002,9 +5002,12 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
     });
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: "I'll register the project now.\n\n/register-project " };
-      yield { type: 'assistant', content: 'ExampleProject ' };
-      yield { type: 'assistant', content: '"/.archon/workspaces/owner/repo/source"' };
+      yield {
+        type: 'agent_message_chunk',
+        text: "I'll register the project now.\n\n/register-project ",
+      };
+      yield { type: 'agent_message_chunk', text: 'ExampleProject ' };
+      yield { type: 'agent_message_chunk', text: '"/.archon/workspaces/owner/repo/source"' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5035,9 +5038,12 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       args: ['ExampleProject', '/.archon/workspaces/owner/repo/source'],
     });
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: "I'll register the project now.\n\n/register-project " };
-      yield { type: 'assistant', content: 'ExampleProject ' };
-      yield { type: 'assistant', content: '"/.archon/workspaces/owner/repo/source"' };
+      yield {
+        type: 'agent_message_chunk',
+        text: "I'll register the project now.\n\n/register-project ",
+      };
+      yield { type: 'agent_message_chunk', text: 'ExampleProject ' };
+      yield { type: 'agent_message_chunk', text: '"/.archon/workspaces/owner/repo/source"' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5068,8 +5074,8 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
     );
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: 'Running the workflow now.\n\n/invoke-workflow ' };
-      yield { type: 'assistant', content: 'assist --project my-project' };
+      yield { type: 'agent_message_chunk', text: 'Running the workflow now.\n\n/invoke-workflow ' };
+      yield { type: 'agent_message_chunk', text: 'assist --project my-project' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5087,8 +5093,8 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       Promise.resolve({ workflows: [makeTestWorkflowWithSource({ name: 'assist' })], errors: [] })
     );
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: 'Running the workflow now.\n\n/invoke-workflow ' };
-      yield { type: 'assistant', content: 'assist --project my-project' };
+      yield { type: 'agent_message_chunk', text: 'Running the workflow now.\n\n/invoke-workflow ' };
+      yield { type: 'agent_message_chunk', text: 'assist --project my-project' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5111,10 +5117,10 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     );
     mockSendQuery.mockImplementationOnce(async function* () {
       yield {
-        type: 'assistant',
-        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+        type: 'agent_message_chunk',
+        text: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
       };
-      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'agent_message_chunk', text: '--prompt "synthesized task description"' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5136,10 +5142,10 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
     );
     mockSendQuery.mockImplementationOnce(async function* () {
       yield {
-        type: 'assistant',
-        content: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
+        type: 'agent_message_chunk',
+        text: 'Running assist.\n\n/invoke-workflow assist --project my-project ',
       };
-      yield { type: 'assistant', content: '--prompt "synthesized task description"' };
+      yield { type: 'agent_message_chunk', text: '--prompt "synthesized task description"' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5159,7 +5165,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       args: ['MyApp', '/path/to/app'],
     });
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: '/register-project MyApp /path/to/app' };
+      yield { type: 'agent_message_chunk', text: '/register-project MyApp /path/to/app' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5186,9 +5192,9 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       args: ['Foo', '/path'],
     });
     mockSendQuery.mockImplementationOnce(async function* () {
-      yield { type: 'assistant', content: 'Registering now:\n' };
-      yield { type: 'assistant', content: '/register-project Foo /path\n' };
-      yield { type: 'assistant', content: ' extra trailing' };
+      yield { type: 'agent_message_chunk', text: 'Registering now:\n' };
+      yield { type: 'agent_message_chunk', text: '/register-project Foo /path\n' };
+      yield { type: 'agent_message_chunk', text: ' extra trailing' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
 
@@ -5220,7 +5226,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   beforeEach(() => {
     mockSendQuery.mockReset();
     mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'assistant', content: 'ok' };
+      yield { type: 'agent_message_chunk', text: 'ok' };
       yield { type: 'result', sessionId: 'session-1' };
     });
     mockGetOrCreateConversation.mockReset();
@@ -5785,7 +5791,7 @@ describe('chat turn telemetry', () => {
     mockUpdateConversation.mockClear();
     // Restore the default plain-chat AI response
     mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'assistant', content: 'test response' };
+      yield { type: 'agent_message_chunk', text: 'test response' };
       yield { type: 'result', sessionId: 'session-1' };
     });
   });
@@ -5823,7 +5829,7 @@ describe('chat turn telemetry', () => {
       })
     );
     mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'assistant', content: '/invoke-workflow assist --project my-project' };
+      yield { type: 'agent_message_chunk', text: '/invoke-workflow assist --project my-project' };
       yield { type: 'result', sessionId: 'session-1' };
     });
 
@@ -5844,7 +5850,7 @@ describe('chat turn telemetry', () => {
       Promise.resolve(makeConversation({ codebase_id: null }))
     );
     mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'assistant', content: 'answer' };
+      yield { type: 'agent_message_chunk', text: 'answer' };
       yield {
         type: 'result',
         sessionId: 'session-1',
@@ -5916,7 +5922,7 @@ describe('chat turn telemetry', () => {
       })
     );
     mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'assistant', content: '/invoke-workflow assist --project my-project' };
+      yield { type: 'agent_message_chunk', text: '/invoke-workflow assist --project my-project' };
       yield { type: 'result', sessionId: 'session-1' };
     });
     mockUpdateConversation.mockImplementationOnce(() =>
@@ -5939,7 +5945,7 @@ describe('chat turn telemetry', () => {
         Promise.resolve(makeConversation({ codebase_id: null }))
       );
       mockSendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'partial' };
+        yield { type: 'agent_message_chunk', text: 'partial' };
         throw new Error('provider subprocess exited');
       });
       const platform = makePlatform();
@@ -6215,7 +6221,7 @@ describe('message persistence for non-web platforms', () => {
     mockGetCodebaseEnvVars.mockImplementation(() => Promise.resolve({}));
     mockLoadConfig.mockImplementation(() => Promise.resolve(makeConfig()));
     mockSendQuery.mockImplementation(async function* () {
-      yield { type: 'assistant', content: 'hello back' };
+      yield { type: 'agent_message_chunk', text: 'hello back' };
       yield { type: 'result', sessionId: 'sess-1' };
     });
   });
