@@ -20,19 +20,8 @@ import {
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
-import {
-  isExecNode,
-  isIncludeDirective,
-  isLoopGroupNode,
-  isOutputFormatEnforced,
-  isWaitNode,
-} from '../schemas';
-import {
-  findOpenAiStrictSchemaViolations,
-  getProviderCapabilities,
-  isRegisteredProvider,
-  registerBuiltinProviders,
-} from '@archon/providers';
+import { collectStrictSchemaViolations } from '../dag-executor';
+import { registerBuiltinProviders } from '@archon/providers';
 
 registerBuiltinProviders();
 
@@ -593,60 +582,57 @@ describe('bundled-defaults', () => {
     // Replaces the deleted scripts/output-format-strict.test.ts, which guarded this
     // same bundled set with a prose exemption rule for pinned providers. The engine now
     // owns the rules (launch preflight + `archon validate workflows`), and this test is
-    // the CI backstop proving the shipped set stays clean. Scan under a Codex default
-    // profile: an unpinned node routes to the install's default assistant, so an install
-    // pinned to Codex is the reachable strict case. A node explicitly pinned to a
-    // non-enforcing provider (Claude) is the documented opt-out and is skipped.
+    // the CI backstop proving the shipped set stays clean. It calls the engine's own
+    // walker so provider resolution (node, then loop_group, then workflow) cannot drift
+    // from the runtime check. A workflow with no provider routes to the install's default
+    // assistant, scanned as Codex because an install pinned to Codex is the reachable
+    // strict case. A node pinned to a non-enforcing provider (Claude) is the documented
+    // opt-out and is skipped.
+    const strictViolations = (content: string, name: string): string[] => {
+      const parsed = parseWorkflow(content, `${name}.yaml`);
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+      return collectStrictSchemaViolations(
+        parsed.workflow.nodes,
+        parsed.workflow.provider ?? 'codex'
+      ).map(violation =>
+        violation.kind === 'object_without_properties'
+          ? `${name}:${violation.nodeId} ${violation.schemaPath} object schema has no properties`
+          : `${name}:${violation.nodeId} ${violation.schemaPath} missing ${violation.missing.join(', ')}`
+      );
+    };
+
     it('every bundled provider-facing schema satisfies Codex strict mode', () => {
-      const violations: string[] = [];
-
-      type WalkNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
-
-      const walk = (
-        nodes: readonly WalkNode[],
-        workflowProvider: string | undefined,
-        name: string
-      ): void => {
-        for (const node of nodes) {
-          if (isIncludeDirective(node)) continue;
-          if (isLoopGroupNode(node)) {
-            // Body nodes resolve against the workflow-level provider, not the group's
-            // own `provider` field (mirrors visitProviderInvokingNodes).
-            walk(node.loop_group.nodes, workflowProvider, name);
-            continue;
-          }
-          // exec/bash/script certify local stdout; gate/halt/loop_group schemas are
-          // inert (isOutputFormatEnforced); wait nodes carry an engine-injected
-          // output_format that never reaches a provider. Only agent and loop kinds
-          // both enforce output_format and send the schema to a provider.
-          if (isExecNode(node) || isWaitNode(node) || !isOutputFormatEnforced(node)) continue;
-          if (node.output_format === undefined) continue;
-
-          const provider = 'provider' in node ? node.provider : workflowProvider;
-          if (provider !== undefined && isRegisteredProvider(provider)) {
-            if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) continue;
-          }
-          // provider === undefined routes to the install default, scanned as Codex.
-          for (const violation of findOpenAiStrictSchemaViolations(
-            node.output_format,
-            'output_format'
-          )) {
-            violations.push(
-              violation.kind === 'object_without_properties'
-                ? `${name}:${node.id} ${violation.schemaPath} object schema has no properties`
-                : `${name}:${node.id} ${violation.schemaPath} missing ${violation.missing.join(', ')}`
-            );
-          }
-        }
-      };
-
-      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        const parsed = parseWorkflow(content, `${name}.yaml`);
-        if (parsed.workflow === null) throw new Error(parsed.error.error);
-        walk(parsed.workflow.nodes, parsed.workflow.provider, name);
-      }
+      const violations = Object.entries(BUNDLED_WORKFLOWS).flatMap(([name, content]) =>
+        strictViolations(content, name)
+      );
 
       expect(violations).toEqual([]);
+    });
+
+    it("scans a loop_group body under the group's own provider", () => {
+      const content = `
+name: pinned-group
+description: claude workflow with a codex-pinned loop_group
+provider: claude
+nodes:
+  - id: refine
+    provider: codex
+    loop_group:
+      until: DONE
+      max_iterations: 1
+      nodes:
+        - id: inner
+          prompt: work
+          output_format:
+            type: object
+            properties:
+              pr:
+                type: object
+            required: [pr]
+`;
+      expect(strictViolations(content, 'pinned-group')).toEqual([
+        'pinned-group:inner output_format.properties.pr object schema has no properties',
+      ]);
     });
   });
 
