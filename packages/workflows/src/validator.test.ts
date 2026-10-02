@@ -2,11 +2,13 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, symlink as fsSymlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerPiProvider, clearRegistry } from '@archon/providers';
 
-// Bootstrap provider registry (needed by capability-driven warnings in validator)
+// Bootstrap provider registry (needed by capability-driven checks in validator).
+// Pi supplies a provider whose mcp capability is false.
 clearRegistry();
 registerBuiltinProviders();
+registerPiProvider();
 
 import {
   levenshtein,
@@ -598,6 +600,26 @@ describe('validateWorkflowResources — MCP validation', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
     expect(mcpWarnings).toHaveLength(0);
+  });
+
+  test('MCP on a provider without the capability is an error', async () => {
+    const mcpPath = join(tmpDir, 'good.json');
+    await writeFile(mcpPath, '{"server": {"command": "npx"}}');
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do stuff' },
+          mcp: mcpPath,
+        } as unknown as DagNode,
+      ],
+      'pi'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const error = issues.find(i => i.field === 'mcp' && i.level === 'error');
+    expect(error?.message).toContain("Provider 'pi' cannot load MCP servers");
   });
 });
 
@@ -1393,7 +1415,7 @@ describe('validateWorkflowResources — skills search roots', () => {
     expect(missingSkillIssues(issues)).toHaveLength(0);
   });
 
-  test('Codex warns about unsupported YAML skills without four-root validation', async () => {
+  test('Codex rejects YAML skills without four-root validation', async () => {
     await stageSkill(tmpDir, '.claude', 'claude-only');
     const workflow = makeWorkflow(
       'test',
@@ -1410,9 +1432,9 @@ describe('validateWorkflowResources — skills search roots', () => {
 
     const issues = await validateWorkflowResources(workflow, tmpDir);
     expect(missingSkillIssues(issues)).toHaveLength(0);
-    const warning = issues.find(issue => issue.level === 'warning' && issue.field === 'skills');
-    expect(warning?.message).toContain("not supported by provider 'codex'");
-    expect(warning?.hint).toContain('$skill-name');
+    const error = issues.find(issue => issue.level === 'error' && issue.field === 'skills');
+    expect(error?.message).toContain("Provider 'codex' cannot load named skills");
+    expect(error?.hint).toContain('$skill-name');
   });
 
   test('plugins on a provider without the capability is an error', async () => {
@@ -1460,12 +1482,12 @@ describe('validateWorkflowResources — skills search roots', () => {
     // Claude-specific wording proves the alias-resolved provider drove the
     // check, rather than the workflow-level 'codex' default.
     expect(missing[0].message).toContain('Claude skill');
-    expect(issues.some(issue => issue.message.includes("not supported by provider 'codex'"))).toBe(
+    expect(issues.some(issue => issue.message.includes("Provider 'codex' cannot load"))).toBe(
       false
     );
   });
 
-  test('uses a workflow model alias provider for inherited Codex skill warnings', async () => {
+  test('uses a workflow model alias provider for inherited Codex skill errors', async () => {
     const workflow = {
       ...skillsWorkflow('missing'),
       model: '@codex-workflow',
@@ -1477,9 +1499,9 @@ describe('validateWorkflowResources — skills search roots', () => {
     });
 
     expect(missingSkillIssues(issues)).toHaveLength(0);
-    expect(issues.some(issue => issue.message.includes("not supported by provider 'codex'"))).toBe(
-      true
-    );
+    expect(
+      issues.some(issue => issue.message.includes("Provider 'codex' cannot load named skills"))
+    ).toBe(true);
   });
 
   test('Claude project-only settingSources rejects a user-only skill', async () => {

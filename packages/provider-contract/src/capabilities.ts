@@ -1,8 +1,9 @@
 import { z } from 'zod';
 
 /**
- * Provider capability flags. The dag-executor uses these for capability warnings
- * when a node specifies features the target provider doesn't support.
+ * Provider capability flags. The dag-executor warns when a node specifies a feature
+ * the target provider doesn't support, and fails the run before any spend when a
+ * node names MCP servers, skills or plugins the provider cannot load.
  */
 export const providerCapabilitiesSchema = z.object({
   sessionResume: z.boolean(),
