@@ -21,6 +21,7 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
@@ -301,7 +302,10 @@ export class PiProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     let resultReported = false;
     try {
-      for await (const chunk of this.streamTurn(prompt, cwd, resumeSessionId, requestOptions)) {
+      for await (const chunk of closeOpenToolCalls(
+        this.streamTurn(prompt, cwd, resumeSessionId, requestOptions),
+        { resultEndsTurn: true }
+      )) {
         if (chunk.type === 'result') resultReported = true;
         yield chunk;
       }
@@ -626,7 +630,7 @@ export class PiProvider implements IAgentProvider {
     //    4a. thinkingLevel: Pi's native representation of Archon's `effort` field.
     const { level: thinkingLevel, warning: thinkingWarning } = resolvePiThinkingLevel(nodeConfig);
     if (thinkingWarning) {
-      yield { type: 'system', content: `⚠️ ${thinkingWarning}` };
+      yield { type: 'warning', code: 'pi.thinking_level_ignored', message: thinkingWarning };
     }
 
     //    4b. tools: covers allowed_tools / denied_tools. `undefined` leaves Pi
@@ -642,8 +646,9 @@ export class PiProvider implements IAgentProvider {
     );
     if (unknownTools.length > 0) {
       yield {
-        type: 'system',
-        content: `⚠️ Pi ignored unknown tool names: ${unknownTools.join(', ')}. Pi's built-in tools: read, bash, edit, write, grep, find, ls.`,
+        type: 'warning',
+        code: 'pi.unknown_tools',
+        message: `Pi ignored unknown tool names: ${unknownTools.join(', ')}. Pi's built-in tools: read, bash, edit, write, grep, find, ls.`,
       };
     }
 
@@ -691,8 +696,9 @@ export class PiProvider implements IAgentProvider {
     const { paths: skillPaths, missing: missingSkills } = resolvePiSkills(cwd, nodeConfig?.skills);
     if (missingSkills.length > 0) {
       yield {
-        type: 'system',
-        content: `⚠️ Pi could not resolve skill names: ${missingSkills.join(', ')}. Searched .agents/skills and .claude/skills (project + user-global). Each must be a directory containing SKILL.md.`,
+        type: 'warning',
+        code: 'pi.skills_unresolved',
+        message: `Pi could not resolve skill names: ${missingSkills.join(', ')}. Searched .agents/skills and .claude/skills (project + user-global). Each must be a directory containing SKILL.md.`,
       };
     }
 
@@ -710,8 +716,9 @@ export class PiProvider implements IAgentProvider {
     );
     if (resumeFailed) {
       yield {
-        type: 'system',
-        content: '⚠️ Could not resume Pi session. Starting fresh conversation.',
+        type: 'warning',
+        code: 'pi.resume_failed',
+        message: 'Could not resume Pi session. Starting fresh conversation.',
       };
     }
 
@@ -912,7 +919,7 @@ export class PiProvider implements IAgentProvider {
 
     // Extension models aren't in the static catalog — skip the fallback warning.
     if (modelFallbackMessage && model) {
-      yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
+      yield { type: 'warning', code: 'pi.model_fallback', message: modelFallbackMessage };
     }
 
     // 4e. Extension flag pass-through. Must happen before bindExtensions

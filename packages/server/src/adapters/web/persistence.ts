@@ -1,4 +1,5 @@
 import { createLogger } from '@archon/paths';
+import type { PlatformStructuredEvent } from '@archon/workflows/deps';
 import type { MessageMetadata } from '@archon/core';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 
@@ -9,12 +10,19 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+type ToolCallUpdate = Extract<PlatformStructuredEvent, { type: 'tool_call_update' }>;
+
 interface BufferedToolCall {
+  /** The provider's id for the call; its result is matched on it. Not persisted. */
+  toolCallId: string;
   name: string;
   input: Record<string, unknown>;
   startedAt: number;
   duration?: number;
   output?: string;
+  /** How the call ended, as the provider reported it. */
+  status?: ToolCallUpdate['status'];
+  exitCode?: number;
 }
 
 interface BufferedSegment {
@@ -99,7 +107,7 @@ export class MessagePersistence {
    */
   appendToolCall(
     conversationId: string,
-    tool: { name: string; input: Record<string, unknown> }
+    tool: { toolCallId: string; name: string; input: Record<string, unknown> }
   ): void {
     const buf = this.assistantBuffer.get(conversationId) ?? { segments: [] };
     if (buf.segments.length === 0) {
@@ -113,6 +121,7 @@ export class MessagePersistence {
       prevTool.duration = now - prevTool.startedAt;
     }
     lastSeg.toolCalls.push({
+      toolCallId: tool.toolCallId,
       name: tool.name,
       input: tool.input,
       startedAt: now,
@@ -120,31 +129,36 @@ export class MessagePersistence {
     this.assistantBuffer.set(conversationId, buf);
   }
 
-  /**
-   * Record tool output for a previously buffered tool call.
-   * Matches by name, scanning from the most recent segment to find the last
-   * unresolved tool call (no output yet). This mirrors WorkflowLogs.tsx's
-   * reverse-iteration approach for multi-tool-same-name correctness.
-   */
-  appendToolResult(conversationId: string, name: string, output: string, duration: number): void {
+  /** Record how the buffered tool call with this id ended. */
+  appendToolResult(
+    conversationId: string,
+    toolCallId: string,
+    output: string,
+    duration: number,
+    outcome?: Pick<ToolCallUpdate, 'status' | 'exitCode'>
+  ): void {
     const buf = this.assistantBuffer.get(conversationId);
     if (!buf) {
-      getLog().warn({ conversationId, name }, 'tool_result_dropped_no_buffer');
+      getLog().warn({ conversationId, toolCallId }, 'tool_result_dropped_no_buffer');
       return;
     }
     let matched = false;
     for (let i = buf.segments.length - 1; i >= 0; i--) {
       const seg = buf.segments[i];
-      const tc = [...seg.toolCalls].reverse().find(t => t.name === name && t.output === undefined);
+      const tc = seg.toolCalls.find(t => t.toolCallId === toolCallId && t.output === undefined);
       if (tc) {
         tc.output = output;
         tc.duration = duration;
+        if (outcome) {
+          tc.status = outcome.status;
+          if (outcome.exitCode !== undefined) tc.exitCode = outcome.exitCode;
+        }
         matched = true;
         break;
       }
     }
     if (!matched) {
-      getLog().warn({ conversationId, name }, 'tool_result_no_matching_tool_call');
+      getLog().warn({ conversationId, toolCallId }, 'tool_result_no_matching_tool_call');
     }
   }
 
@@ -252,6 +266,8 @@ export class MessagePersistence {
           input: tc.input,
           duration: tc.duration,
           ...(tc.output !== undefined ? { output: tc.output } : {}),
+          ...(tc.status !== undefined ? { status: tc.status } : {}),
+          ...(tc.exitCode !== undefined ? { exitCode: tc.exitCode } : {}),
         }));
         const metadata = {
           ...toPersistedMessageMetadata(seg.metadata),

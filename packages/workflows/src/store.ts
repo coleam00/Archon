@@ -148,8 +148,8 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_artifact',
   'integration_operation',
   'node_session_resumed',
-  // Phase 2 of #975 — subagent task lifecycle (aggregated from provider
-  // task_started / task_progress / task_notification chunks). Stored
+  // Phase 2 of #975 — subagent task lifecycle (translated from provider
+  // `subtask` and `hook` events). Stored
   // alongside other workflow_events for the timeline view; the SSE bridge
   // fans out task_activity / hook_activity to live Web UI subscribers.
   'task_activity',

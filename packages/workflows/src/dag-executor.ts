@@ -52,7 +52,6 @@ import {
 import { resolveWorkflowName } from './router';
 import type {
   IWorkflowPlatform,
-  WorkflowMessageMetadata,
   WorkflowConfig,
   WorkflowDeps,
   WorkflowCommandSurface,
@@ -139,7 +138,7 @@ import { buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
-import { formatToolCall } from './utils/tool-formatter';
+import { createProviderEventHandler, type ProviderEventHandler } from './provider-events';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -171,9 +170,7 @@ import {
 import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
 import {
   logNodeComplete,
-  logAssistant,
   logExecOutput,
-  logTool,
   logWorkflowComplete,
   logWorkflowError,
   logWorkflowEvent,
@@ -517,26 +514,6 @@ function resolveBindingDirective(
   return wholeRefLogicalValue(producer, ref.nodeId, ref.field);
 }
 
-interface RunningTool {
-  toolName: string;
-  startedAt: number;
-}
-
-function findRunningTool(
-  runningTools: Map<string, RunningTool>,
-  toolName: string,
-  toolCallId: string | undefined
-): [string, RunningTool] | undefined {
-  if (toolCallId) {
-    const tool = runningTools.get(toolCallId);
-    return tool ? [toolCallId, tool] : undefined;
-  }
-
-  return Array.from(runningTools.entries())
-    .reverse()
-    .find(([, tool]) => tool.toolName === toolName);
-}
-
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -553,16 +530,6 @@ function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefined): st
   return lastReset
     ? ` Last watchdog reset: ${new Date(lastReset.at).toISOString()} from chunk type '${lastReset.type}'.`
     : ' No provider chunk reset the watchdog after the stream opened.';
-}
-
-const MCP_FAILURE_PREFIX = 'MCP server connection failed: ';
-
-/** A failed MCP server entry parsed from the SDK message. `segment` is the
- *  original substring (e.g. `"telegram (disconnected)"`) so callers can
- *  reconstruct a filtered message without losing the status detail. */
-export interface McpFailureEntry {
-  name: string;
-  segment: string;
 }
 
 function applyPresetOptions(
@@ -598,27 +565,6 @@ function applyPresetOptions(
     return;
   }
   nodeConfig.effort = preset.effort;
-}
-
-/**
- * Parse the SDK's "MCP server connection failed: a (status), b (status)"
- * message. Best-effort — malformed or prefix-free messages return `[]`.
- * Entries are ordered and deduped by name; the segment of the first
- * occurrence wins.
- */
-export function parseMcpFailureServerNames(message: string): McpFailureEntry[] {
-  if (!message.startsWith(MCP_FAILURE_PREFIX)) return [];
-  const seen = new Set<string>();
-  const entries: McpFailureEntry[] = [];
-  for (const raw of message.slice(MCP_FAILURE_PREFIX.length).split(', ')) {
-    const segment = raw.trim();
-    const name = segment.split(' (')[0]?.trim();
-    if (name && !seen.has(name)) {
-      seen.add(name);
-      entries.push({ name, segment });
-    }
-  }
-  return entries;
 }
 
 /**
@@ -931,41 +877,6 @@ const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
  * (refusal / max_tokens truncation) and fails fast.
  */
 const STRUCTURED_OUTPUT_MAX_REASKS = 3;
-
-/**
- * Tracks live background Agent tasks within one provider stream pass (#2083).
- *
- * Since Claude SDK 0.3.193 the model can delegate work to asynchronous
- * background agents, so a `result` chunk only means "top-level turn done" —
- * NOT "all work done". The stream loops therefore finish on the provider's
- * `settled` chunk, never on a result; stopping at a result would `.return()`
- * the generator chain, tear down the SDK subprocess and kill the tasks.
- *
- * Fed by the provider's `background_tasks` chunk (SDK `background_tasks_changed`,
- * v0.3.209+): a level signal carrying the FULL live set, REPLACE semantics.
- * It does not decide when a node ends. When a stream ends without settling
- * (idle timeout, subprocess death), it names the tasks that were still live so
- * the failure says whose output may be missing.
- */
-function createBackgroundTaskTracker(): {
-  update(tasks: { taskId: string; description: string }[]): void;
-  hasLiveTasks(): boolean;
-  ids(): string[];
-} {
-  const live = new Map<string, string>(); // taskId → description
-  return {
-    update(tasks): void {
-      live.clear();
-      for (const t of tasks) live.set(t.taskId, t.description);
-    },
-    hasLiveTasks(): boolean {
-      return live.size > 0;
-    },
-    ids(): string[] {
-      return [...live.keys()];
-    },
-  };
-}
 
 /**
  * Get effective retry config for a DAG node.
@@ -2267,9 +2178,6 @@ async function executeNodeInternal(
   let lastWatchdogReset: WatchdogReset | undefined;
   let watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
   const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
-  const runningTools = new Map<string, RunningTool>();
-  let anonymousToolSequence = 0;
-  let lastAnonymousToolCallId: string | undefined;
   // Task ids still live when the stream ended abnormally (idle timeout /
   // subprocess death) — recorded on the node_completed event so an incomplete
   // node never masquerades as a clean success (#2083).
@@ -2310,7 +2218,33 @@ async function executeNodeInternal(
     lastWatchdogReset = undefined;
     watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
     backgroundTasksIncomplete = [];
-    const backgroundTasks = createBackgroundTaskTracker();
+    const providerEvents = createProviderEventHandler({
+      store: deps.store,
+      platform,
+      conversationId,
+      messageContext: nodeContext,
+      logDir,
+      runId: workflowRun.id,
+      nodeId: node.id,
+      stepName,
+      configuredMcpServers: configuredMcpNames,
+      onMessageText: async text => {
+        nodeOutputText += text; // ALWAYS capture for $node_id.output
+        if (streamingMode === 'stream') {
+          await safeSendMessage(platform, conversationId, text, nodeContext);
+        } else {
+          batchMessages.push(text);
+        }
+      },
+      // A warning goes out at once (a Pi extension's review URL must reach the user
+      // before the node blocks), so the batched reply before it goes out first. A
+      // structured-output node is left alone: its batch is replaced by the parsed output.
+      beforeWarning: async () => {
+        if (batchMessages.length === 0 || nodeOptions?.outputFormat) return;
+        await safeSendMessage(platform, conversationId, batchMessages.join('\n\n'), nodeContext);
+        batchMessages.length = 0;
+      },
+    });
     for await (const msg of withIdleTimeout(
       aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
@@ -2381,182 +2315,7 @@ async function executeNodeInternal(
         }
       }
 
-      if (msg.type === 'assistant' && msg.content) {
-        nodeOutputText += msg.content; // ALWAYS capture for $node_id.output
-        if (streamingMode === 'stream' || msg.flush) {
-          // `flush` chunks (e.g. Pi notify() emitting a plannotator review URL)
-          // must reach the user before the node blocks. Drain any queued batch
-          // content first so order is preserved.
-          if (streamingMode === 'batch' && batchMessages.length > 0) {
-            await safeSendMessage(
-              platform,
-              conversationId,
-              batchMessages.join('\n\n'),
-              nodeContext
-            );
-            batchMessages.length = 0;
-          }
-          await safeSendMessage(platform, conversationId, msg.content, nodeContext);
-        } else {
-          batchMessages.push(msg.content);
-        }
-        await logAssistant(logDir, workflowRun.id, msg.content);
-      } else if (msg.type === 'tool' && msg.toolName) {
-        const now = Date.now();
-        const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
-
-        // Providers without stable IDs report sequential tool calls. Preserve their
-        // legacy boundary while allowing identified calls to overlap.
-        const previousTool = lastAnonymousToolCallId
-          ? runningTools.get(lastAnonymousToolCallId)
-          : undefined;
-        if (previousTool && lastAnonymousToolCallId !== undefined) {
-          getWorkflowEventEmitter().emit({
-            type: 'tool_completed',
-            runId: workflowRun.id,
-            toolName: previousTool.toolName,
-            stepName: node.id,
-            durationMs: now - previousTool.startedAt,
-            toolCallId: lastAnonymousToolCallId,
-            toolOutcome: 'unknown',
-          });
-          deps.store
-            .createWorkflowEvent({
-              workflow_run_id: workflowRun.id,
-              event_type: 'tool_completed',
-              step_name: stepName,
-              data: {
-                tool_name: previousTool.toolName,
-                duration_ms: now - previousTool.startedAt,
-                tool_call_id: lastAnonymousToolCallId,
-                tool_outcome: 'unknown',
-              },
-            })
-            .catch((err: Error) => {
-              getLog().error(
-                { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
-                'workflow_event_persist_failed'
-              );
-            });
-          runningTools.delete(lastAnonymousToolCallId);
-        }
-        runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
-        if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
-
-        // Emit tool_started for the current tool (fire-and-forget)
-        getWorkflowEventEmitter().emit({
-          type: 'tool_started',
-          runId: workflowRun.id,
-          toolName: msg.toolName,
-          stepName: node.id,
-          toolCallId,
-        });
-
-        if (streamingMode === 'stream') {
-          const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
-          await safeSendMessage(platform, conversationId, toolMsg, nodeContext, {
-            category: 'tool_call_formatted',
-          } as WorkflowMessageMetadata);
-
-          // Send structured event to adapters that support it (Web UI)
-          if (platform.sendStructuredEvent) {
-            await platform.sendStructuredEvent(conversationId, msg);
-          }
-        }
-        await logTool(logDir, workflowRun.id, msg.toolName, msg.toolInput ?? {});
-
-        // Persist tool_called event for ALL adapters (fire-and-forget)
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'tool_called',
-            step_name: stepName,
-            data: {
-              tool_name: msg.toolName,
-              tool_input: msg.toolInput ?? {},
-              tool_call_id: toolCallId,
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'tool_called' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'tool_result' && msg.toolName) {
-        const now = Date.now();
-        const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
-        if (completedTool) {
-          const [completedToolCallId, tool] = completedTool;
-          getWorkflowEventEmitter().emit({
-            type: 'tool_completed',
-            runId: workflowRun.id,
-            toolName: tool.toolName,
-            stepName: node.id,
-            durationMs: now - tool.startedAt,
-            toolCallId: completedToolCallId,
-            ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
-            ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
-          });
-          deps.store
-            .createWorkflowEvent({
-              workflow_run_id: workflowRun.id,
-              event_type: 'tool_completed',
-              step_name: stepName,
-              data: {
-                tool_name: tool.toolName,
-                duration_ms: now - tool.startedAt,
-                tool_call_id: completedToolCallId,
-                ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
-                ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
-              },
-            })
-            .catch((err: Error) => {
-              getLog().error(
-                { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
-                'workflow_event_persist_failed'
-              );
-            });
-          runningTools.delete(completedToolCallId);
-          if (completedToolCallId === lastAnonymousToolCallId) {
-            lastAnonymousToolCallId = undefined;
-          }
-        }
-        if (streamingMode === 'stream' && platform.sendStructuredEvent) {
-          await platform.sendStructuredEvent(conversationId, msg);
-        }
-      } else if (msg.type === 'result') {
-        // A terminal result closes every outstanding lifecycle.
-        for (const [toolCallId, prevTool] of runningTools) {
-          getWorkflowEventEmitter().emit({
-            type: 'tool_completed',
-            runId: workflowRun.id,
-            toolName: prevTool.toolName,
-            stepName: node.id,
-            durationMs: Date.now() - prevTool.startedAt,
-            toolCallId,
-            toolOutcome: 'unknown',
-          });
-          deps.store
-            .createWorkflowEvent({
-              workflow_run_id: workflowRun.id,
-              event_type: 'tool_completed',
-              step_name: stepName,
-              data: {
-                tool_name: prevTool.toolName,
-                duration_ms: Date.now() - prevTool.startedAt,
-                tool_call_id: toolCallId,
-                tool_outcome: 'unknown',
-              },
-            })
-            .catch((err: Error) => {
-              getLog().error(
-                { err, workflowRunId: workflowRun.id, eventType: 'tool_completed' },
-                'workflow_event_persist_failed'
-              );
-            });
-          runningTools.delete(toolCallId);
-        }
+      if (msg.type === 'result') {
         if (msg.sessionId) newSessionId = msg.sessionId;
         if (msg.resumed !== undefined) nodeResumed = msg.resumed;
         if (msg.tokens !== undefined) {
@@ -2619,243 +2378,23 @@ async function executeNodeInternal(
         // A result is not the end of the node: work the turn started may still run,
         // and a later result can follow (its fields overwrite the captures above —
         // correct, since SDK cost/usage are session-cumulative). The node finishes on
-        // `settled` below. The wait is bounded by the idle timeout; task_progress
-        // chunks reset it.
+        // `settled` below. The wait is bounded by the idle timeout; every event
+        // (subtask progress, a hidden task's `state_update`) resets it.
       } else if (msg.type === 'settled') {
         streamSettled = true;
         break; // The provider says the turn is over and nothing more runs for it.
-      } else if (msg.type === 'background_tasks') {
-        // Level signal (REPLACE semantics): swap the live set for the payload.
-        backgroundTasks.update(msg.tasks);
-      } else if (msg.type === 'system' && msg.content) {
-        // Providers yield system chunks for user-actionable issues (missing env
-        // vars, Haiku+MCP, structured output failures, etc.). MCP-failure
-        // chunks need filtering: user-level plugin MCPs inherited from
-        // `~/.claude/` (e.g. `telegram`) routinely fail to connect inside the
-        // headless subprocess and aren't actionable for the workflow author.
-        // Other warnings (⚠️) are always actionable and surface verbatim.
-        if (msg.content.startsWith(MCP_FAILURE_PREFIX)) {
-          const failedEntries = parseMcpFailureServerNames(msg.content);
-          const workflowFailures = failedEntries.filter(e => configuredMcpNames.has(e.name));
-          const pluginFailures = failedEntries.filter(e => !configuredMcpNames.has(e.name));
-
-          if (workflowFailures.length > 0) {
-            const filteredMsg = `${MCP_FAILURE_PREFIX}${workflowFailures.map(e => e.segment).join(', ')}`;
-            getLog().warn(
-              { nodeId: node.id, systemContent: filteredMsg },
-              'dag.provider_warning_forwarded'
-            );
-            const delivered = await safeSendMessage(
-              platform,
-              conversationId,
-              filteredMsg,
-              nodeContext
-            );
-            if (!delivered) {
-              getLog().error(
-                { nodeId: node.id, workflowRunId: workflowRun.id },
-                'dag.provider_warning_delivery_failed'
-              );
-            }
-          }
-          if (pluginFailures.length > 0) {
-            getLog().debug(
-              { nodeId: node.id, pluginFailures: pluginFailures.map(e => e.name) },
-              'dag.mcp_plugin_connection_suppressed'
-            );
-          }
-        } else if (msg.content.startsWith('⚠️')) {
-          getLog().warn(
-            { nodeId: node.id, systemContent: msg.content },
-            'dag.provider_warning_forwarded'
-          );
-          const delivered = await safeSendMessage(
-            platform,
-            conversationId,
-            msg.content,
-            nodeContext
-          );
-          if (!delivered) {
-            getLog().error(
-              { nodeId: node.id, workflowRunId: workflowRun.id },
-              'dag.provider_warning_delivery_failed'
-            );
-          }
-        } else {
-          getLog().debug(
-            { nodeId: node.id, systemContent: msg.content },
-            'dag.system_message_unhandled'
-          );
-        }
-      } else if (msg.type === 'task_started') {
-        // Subagent task spawned inside this node (Claude Task tool or
-        // inline sub-agent). Forward as a task_activity emitter event so
-        // the Web UI can render it as an expandable sub-item under the
-        // parent node in the run detail view.
-        getWorkflowEventEmitter().emit({
-          type: 'task_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          taskId: msg.taskId,
-          activity: 'started',
-          ...(msg.description !== undefined ? { description: msg.description } : {}),
-          ...(msg.taskType !== undefined ? { taskType: msg.taskType } : {}),
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'task_activity',
-            step_name: stepName,
-            data: {
-              task_id: msg.taskId,
-              activity: 'started',
-              ...(msg.description !== undefined ? { description: msg.description } : {}),
-              ...(msg.taskType !== undefined ? { task_type: msg.taskType } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'task_progress') {
-        getWorkflowEventEmitter().emit({
-          type: 'task_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          taskId: msg.taskId,
-          activity: 'progress',
-          ...(msg.description !== undefined ? { description: msg.description } : {}),
-          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-          ...(msg.lastToolName !== undefined ? { lastToolName: msg.lastToolName } : {}),
-        });
-        // task_progress fires every ~30s while a subagent is running. Persist
-        // it for the timeline view but don't log — the volume would dominate.
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'task_activity',
-            step_name: stepName,
-            data: {
-              task_id: msg.taskId,
-              activity: 'progress',
-              ...(msg.description !== undefined ? { description: msg.description } : {}),
-              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-              ...(msg.lastToolName !== undefined ? { last_tool_name: msg.lastToolName } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'task_notification') {
-        getWorkflowEventEmitter().emit({
-          type: 'task_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          taskId: msg.taskId,
-          activity: msg.status,
-          ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-          ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-          ...(msg.outputFile ? { outputFile: msg.outputFile } : {}),
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'task_activity',
-            step_name: stepName,
-            data: {
-              task_id: msg.taskId,
-              activity: msg.status,
-              ...(msg.summary !== undefined ? { summary: msg.summary } : {}),
-              ...(msg.usage !== undefined ? { usage: msg.usage } : {}),
-              // Where the settled task wrote its output — the artifact trail
-              // for delegated work (#2083).
-              ...(msg.outputFile ? { output_file: msg.outputFile } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'task_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'hook_started') {
-        getWorkflowEventEmitter().emit({
-          type: 'hook_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          hookId: msg.hookId,
-          hookName: msg.hookName,
-          hookEvent: msg.hookEvent,
-          activity: 'started',
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'hook_activity',
-            step_name: stepName,
-            data: {
-              hook_id: msg.hookId,
-              hook_name: msg.hookName,
-              hook_event: msg.hookEvent,
-              activity: 'started',
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
-      } else if (msg.type === 'hook_response') {
-        getWorkflowEventEmitter().emit({
-          type: 'hook_activity',
-          runId: workflowRun.id,
-          nodeId: node.id,
-          hookId: msg.hookId,
-          hookName: msg.hookName,
-          hookEvent: msg.hookEvent,
-          activity: 'response',
-          outcome: msg.outcome,
-          ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
-        });
-        deps.store
-          .createWorkflowEvent({
-            workflow_run_id: workflowRun.id,
-            event_type: 'hook_activity',
-            step_name: stepName,
-            data: {
-              hook_id: msg.hookId,
-              hook_name: msg.hookName,
-              hook_event: msg.hookEvent,
-              activity: 'response',
-              outcome: msg.outcome,
-              ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
-            },
-          })
-          .catch((err: Error) => {
-            getLog().error(
-              { err, workflowRunId: workflowRun.id, eventType: 'hook_activity' },
-              'workflow_event_persist_failed'
-            );
-          });
+      } else {
+        await providerEvents.handle(msg);
       }
-      // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
     }
 
-    // Stream ended with background tasks still live: the SDK subprocess died or
-    // the idle timeout fired mid-wait, so the tasks' artifacts may be missing (#2083).
+    // Stream ended with subtasks still live: the SDK subprocess died or the idle
+    // timeout fired mid-wait, so the tasks' artifacts may be missing (#2083).
     // Record them for the audit trail. The operator hears about it once, from the
     // node's failure: a stream that produced output and never settled fails the node
     // and names these tasks (see unsettledTurnError).
-    if (backgroundTasks.hasLiveTasks()) {
-      backgroundTasksIncomplete = backgroundTasks.ids();
+    if (providerEvents.liveSubtaskIds().length > 0) {
+      backgroundTasksIncomplete = providerEvents.liveSubtaskIds();
       getLog().warn(
         {
           nodeId: node.id,
@@ -3580,9 +3119,7 @@ function unsettledTurnError(
       ? `timed out after ${String(idleTimeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(lastWatchdogReset)}`
       : 'the provider stream ended without signalling that its turn settled.';
   const tasks =
-    liveTaskIds.length > 0
-      ? ` Background agent task(s) still running: ${liveTaskIds.join(', ')}.`
-      : '';
+    liveTaskIds.length > 0 ? ` Subtask(s) still running: ${liveTaskIds.join(', ')}.` : '';
   return `${cause}${tasks} Its work may be incomplete.`;
 }
 
@@ -6054,13 +5591,34 @@ async function executeLoopNode(
       // message); undefined when the stream ends for any other reason.
       let streamStopStatus: string | undefined;
 
-      // Background-task gate (#2083) — see createBackgroundTaskTracker. When the
-      // set is non-empty at result time this iteration keeps consuming, so a
-      // single iteration can now observe MULTIPLE result chunks. SDK cost/usage
-      // are session-cumulative, so the per-result `+=` accumulation used before
-      // would double-count: capture last-seen values (overwrite semantics) and
-      // fold them into the loop totals once, after the stream ends.
-      let backgroundTasks = createBackgroundTaskTracker();
+      // One provider-event handler per attempt (see provider-events.ts): it owns the
+      // attempt's tool and subtask state. A result is not the end of an iteration, so a
+      // single iteration can observe MULTIPLE result chunks. SDK cost/usage are
+      // session-cumulative, so the per-result `+=` accumulation used before would
+      // double-count: capture last-seen values (overwrite semantics) and fold them into
+      // the loop totals once, after the stream ends.
+      const createIterationProviderEvents = (): ProviderEventHandler =>
+        createProviderEventHandler({
+          store: deps.store,
+          platform,
+          conversationId,
+          messageContext: msgContext,
+          logDir,
+          runId: workflowRun.id,
+          nodeId: node.id,
+          stepName,
+          // A loop node takes no `mcp:` file, so no MCP failure is the workflow's own.
+          configuredMcpServers: new Set(),
+          onMessageText: async text => {
+            fullOutput += text;
+            const cleaned = stripCompletionTags(text, loop.until);
+            cleanOutput += cleaned;
+            if (platform.getStreamingMode() === 'stream' && cleaned) {
+              await safeSendMessage(platform, conversationId, cleaned, msgContext);
+            }
+          },
+        });
+      let providerEvents = createIterationProviderEvents();
       let iterationCost: number | undefined;
       let iterationTokens: TokenUsage | undefined;
       let iterationNumTurns: number | undefined;
@@ -6112,7 +5670,7 @@ async function executeLoopNode(
         streamStopStatus = undefined;
         attemptStructured = undefined;
         iterationAbortController = new AbortController();
-        backgroundTasks = createBackgroundTaskTracker();
+        providerEvents = createIterationProviderEvents();
         lastStreamStatusCheckAt = Date.now();
         iterationCost = undefined;
         iterationTokens = undefined;
@@ -6166,10 +5724,6 @@ async function executeLoopNode(
             reaskAttempt === 0 ? resumeSessionId : undefined,
             iterationOptions
           );
-          const runningTools = new Map<string, RunningTool>();
-          let anonymousToolSequence = 0;
-          let lastAnonymousToolCallId: string | undefined;
-
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
           for await (const msg of withIdleTimeout(
@@ -6234,43 +5788,7 @@ async function executeLoopNode(
               }
             }
 
-            if (msg.type === 'assistant') {
-              fullOutput += msg.content;
-              const cleaned = stripCompletionTags(msg.content, loop.until);
-              cleanOutput += cleaned;
-              if (platform.getStreamingMode() === 'stream' && cleaned) {
-                await safeSendMessage(platform, conversationId, cleaned, msgContext);
-              }
-              await logAssistant(logDir, workflowRun.id, msg.content);
-            } else if (msg.type === 'result') {
-              // A terminal result closes every outstanding lifecycle.
-              for (const [toolCallId, prevTool] of runningTools) {
-                getWorkflowEventEmitter().emit({
-                  type: 'tool_completed',
-                  runId: workflowRun.id,
-                  toolName: prevTool.toolName,
-                  stepName: node.id,
-                  durationMs: Date.now() - prevTool.startedAt,
-                  toolCallId,
-                  toolOutcome: 'unknown',
-                });
-                deps.store
-                  .createWorkflowEvent({
-                    workflow_run_id: workflowRun.id,
-                    event_type: 'tool_completed',
-                    step_name: stepName,
-                    data: {
-                      tool_name: prevTool.toolName,
-                      duration_ms: Date.now() - prevTool.startedAt,
-                      tool_call_id: toolCallId,
-                      tool_outcome: 'unknown',
-                    },
-                  })
-                  .catch((err: Error) => {
-                    logEventStoreError(err, i);
-                  });
-                runningTools.delete(toolCallId);
-              }
+            if (msg.type === 'result') {
               // Session threading follows attempt 0 ONLY (#2563). A reask deliberately
               // runs in a throwaway session so an invalid turn is not carried forward as
               // context — which makes that session the wrong thing to thread the NEXT
@@ -6364,136 +5882,9 @@ async function executeLoopNode(
             } else if (msg.type === 'settled') {
               iterationSettled = true;
               break; // The provider says the turn is over and nothing more runs for it.
-            } else if (msg.type === 'background_tasks') {
-              // Level signal (REPLACE semantics): swap the live set for the payload.
-              backgroundTasks.update(msg.tasks);
-            } else if (msg.type === 'tool' && msg.toolName) {
-              const now = Date.now();
-              const toolCallId = msg.toolCallId ?? `anonymous-${String(++anonymousToolSequence)}`;
-
-              // Providers without stable IDs report sequential tool calls. Preserve their
-              // legacy boundary while allowing identified calls to overlap.
-              const previousTool = lastAnonymousToolCallId
-                ? runningTools.get(lastAnonymousToolCallId)
-                : undefined;
-              if (previousTool && lastAnonymousToolCallId !== undefined) {
-                getWorkflowEventEmitter().emit({
-                  type: 'tool_completed',
-                  runId: workflowRun.id,
-                  toolName: previousTool.toolName,
-                  stepName: node.id,
-                  durationMs: now - previousTool.startedAt,
-                  toolCallId: lastAnonymousToolCallId,
-                  toolOutcome: 'unknown',
-                });
-                deps.store
-                  .createWorkflowEvent({
-                    workflow_run_id: workflowRun.id,
-                    event_type: 'tool_completed',
-                    step_name: stepName,
-                    data: {
-                      tool_name: previousTool.toolName,
-                      duration_ms: now - previousTool.startedAt,
-                      tool_call_id: lastAnonymousToolCallId,
-                      tool_outcome: 'unknown',
-                    },
-                  })
-                  .catch((err: Error) => {
-                    logEventStoreError(err, i);
-                  });
-                runningTools.delete(lastAnonymousToolCallId);
-              }
-              runningTools.set(toolCallId, { toolName: msg.toolName, startedAt: now });
-              if (!msg.toolCallId) lastAnonymousToolCallId = toolCallId;
-
-              // Emit tool_started for the current tool (fire-and-forget)
-              getWorkflowEventEmitter().emit({
-                type: 'tool_started',
-                runId: workflowRun.id,
-                toolName: msg.toolName,
-                stepName: node.id,
-                toolCallId,
-              });
-
-              if (platform.getStreamingMode() === 'stream') {
-                const toolMsg = formatToolCall(msg.toolName, msg.toolInput);
-                if (toolMsg) {
-                  await safeSendMessage(platform, conversationId, toolMsg, msgContext, {
-                    category: 'tool_call_formatted',
-                  } as WorkflowMessageMetadata);
-                }
-                if (platform.sendStructuredEvent) {
-                  await platform.sendStructuredEvent(conversationId, msg);
-                }
-              }
-
-              const toolInput: Record<string, unknown> = msg.toolInput
-                ? Object.fromEntries(
-                    Object.entries(msg.toolInput).map(([k, v]) =>
-                      typeof v === 'string' && v.length > 500
-                        ? [k, v.slice(0, 500) + '...']
-                        : [k, v]
-                    )
-                  )
-                : {};
-              await logTool(logDir, workflowRun.id, msg.toolName, toolInput);
-
-              // Persist tool_called event
-              deps.store
-                .createWorkflowEvent({
-                  workflow_run_id: workflowRun.id,
-                  event_type: 'tool_called',
-                  step_name: stepName,
-                  data: {
-                    tool_name: msg.toolName,
-                    tool_input: toolInput,
-                    tool_call_id: toolCallId,
-                  },
-                })
-                .catch((err: Error) => {
-                  logEventStoreError(err, i);
-                });
-            } else if (msg.type === 'tool_result' && msg.toolName) {
-              const now = Date.now();
-              const completedTool = findRunningTool(runningTools, msg.toolName, msg.toolCallId);
-              if (completedTool) {
-                const [completedToolCallId, tool] = completedTool;
-                getWorkflowEventEmitter().emit({
-                  type: 'tool_completed',
-                  runId: workflowRun.id,
-                  toolName: tool.toolName,
-                  stepName: node.id,
-                  durationMs: now - tool.startedAt,
-                  toolCallId: completedToolCallId,
-                  ...(msg.toolOutcome !== undefined ? { toolOutcome: msg.toolOutcome } : {}),
-                  ...(msg.exitCode !== undefined ? { exitCode: msg.exitCode } : {}),
-                });
-                deps.store
-                  .createWorkflowEvent({
-                    workflow_run_id: workflowRun.id,
-                    event_type: 'tool_completed',
-                    step_name: stepName,
-                    data: {
-                      tool_name: tool.toolName,
-                      duration_ms: now - tool.startedAt,
-                      tool_call_id: completedToolCallId,
-                      ...(msg.toolOutcome !== undefined ? { tool_outcome: msg.toolOutcome } : {}),
-                      ...(msg.exitCode !== undefined ? { exit_code: msg.exitCode } : {}),
-                    },
-                  })
-                  .catch((err: Error) => {
-                    logEventStoreError(err, i);
-                  });
-                runningTools.delete(completedToolCallId);
-                if (completedToolCallId === lastAnonymousToolCallId) {
-                  lastAnonymousToolCallId = undefined;
-                }
-              }
-              if (platform.sendStructuredEvent) {
-                await platform.sendStructuredEvent(conversationId, msg);
-              }
+            } else {
+              await providerEvents.handle(msg);
             }
-            // rate_limit chunks: already log.warn'd in claude.ts; not surfaced to SSE per design
           }
           foldIterationUsage();
 
@@ -6501,8 +5892,8 @@ async function executeLoopNode(
           // subprocess death): their artifacts may be missing (#2083). Record them for
           // the audit trail whatever ended the stream; the operator hears about it
           // once, from the iteration's unsettled failure, which names these tasks.
-          if (backgroundTasks.hasLiveTasks()) {
-            const danglingTaskIds = backgroundTasks.ids();
+          const danglingTaskIds = providerEvents.liveSubtaskIds();
+          if (danglingTaskIds.length > 0) {
             for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
             getLog().warn(
               {
@@ -6650,7 +6041,7 @@ async function executeLoopNode(
           const unsettledError = unsettledTurnError(
             iterationIdleTimedOut ? (node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) : undefined,
             lastWatchdogReset,
-            backgroundTasks.ids()
+            providerEvents.liveSubtaskIds()
           );
           getLog().error({ nodeId: node.id, iteration: i }, 'loop_node.iteration_unsettled');
           getWorkflowEventEmitter().emit({

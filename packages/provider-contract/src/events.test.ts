@@ -5,6 +5,7 @@ import {
   providerChunkSchema,
   providerEventSchema,
   TOOL_OUTPUT_MAX_CHARS,
+  toolCallDisplayName,
   truncateToolOutput,
   type ProviderEvent,
 } from './events';
@@ -161,5 +162,13 @@ describe('truncateToolOutput', () => {
       ...truncateToolOutput('y'.repeat(TOOL_OUTPUT_MAX_CHARS * 2)),
     };
     expect(providerEventSchema.safeParse(update).success).toBe(true);
+  });
+});
+
+describe('toolCallDisplayName', () => {
+  test('shows the title when there is one, else the name', () => {
+    expect(toolCallDisplayName({ name: 'command_execution', title: 'bun test' })).toBe('bun test');
+    expect(toolCallDisplayName({ name: 'Read' })).toBe('Read');
+    expect(toolCallDisplayName({ name: 'web_search', title: '' })).toBe('web_search');
   });
 });

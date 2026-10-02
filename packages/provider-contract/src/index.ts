@@ -36,6 +36,7 @@ export {
   toolCallSchema,
   toolCallStatusSchema,
   toolCallUpdateSchema,
+  toolCallDisplayName,
   truncateToolOutput,
   warningSchema,
   type ProviderChunk,

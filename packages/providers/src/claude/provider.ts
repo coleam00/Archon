@@ -33,22 +33,33 @@ import {
   type Options,
   type HookCallback,
   type HookCallbackMatcher,
+  type McpServerStatus,
+  type PostToolUseFailureHookInput,
+  type PostToolUseHookInput,
   type SDKAssistantMessageError,
   type SDKRateLimitInfo,
   type SDKResultMessage,
   type SDKStartupFailureReason,
+  type SDKStatusMessage,
   type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
   IAgentProvider,
   SendQueryOptions,
   MessageChunk,
+  ProviderEvent,
+  ProviderWarning,
   ResultChunk,
   TokenUsage,
   ProviderCapabilities,
   NodeConfig,
 } from '../types';
-import type { ProviderFailure, ProviderFailureClass } from '@archon/provider-contract';
+import {
+  truncateToolOutput,
+  type ProviderFailure,
+  type ProviderFailureClass,
+  type ProviderStopReason,
+} from '@archon/provider-contract';
 import { parseClaudeConfig } from './config';
 import { CLAUDE_CAPABILITIES } from './capabilities';
 import { buildContainerSpawn } from './container-spawn';
@@ -63,6 +74,7 @@ import {
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+import { closeOpenToolCalls } from '../shared/tool-calls';
 import { ClassifiedProviderError } from '../shared/failure';
 import {
   buildClaudePluginSettings,
@@ -108,8 +120,9 @@ export type ClaudeEffortsAreComplete = AssertNever<
  * Content block type for assistant messages
  */
 interface ContentBlock {
-  type: 'text' | 'tool_use';
+  type: 'text' | 'thinking' | 'tool_use';
   text?: string;
+  thinking?: string;
   name?: string;
   input?: Record<string, unknown>;
   id?: string;
@@ -594,17 +607,6 @@ export function buildSDKHooksFromYAML(
   return sdkHooks;
 }
 
-// ─── Provider Warning Type ───────────────────────────────────────────────
-
-/**
- * Structured provider warning. Providers collect these during translation;
- * callers convert them to system chunks before streaming starts.
- */
-interface ProviderWarning {
-  code: string;
-  message: string;
-}
-
 // ─── NodeConfig → SDK Options Translation ──────────────────────────────────
 
 /** A non-empty nodeId marks a workflow node, the declared-only capability path. */
@@ -616,7 +618,7 @@ function isWorkflowNode(nodeConfig: NodeConfig | undefined): nodeConfig is NodeC
  * Translate nodeConfig into Claude SDK-specific options.
  * Called inside sendQuery when nodeConfig is present. A non-empty nodeId marks
  * the workflow path; partial non-workflow configs keep ambient SDK behavior.
- * Returns structured warnings that the caller should yield as system chunks.
+ * Returns structured warnings that the caller yields as `warning` events.
  */
 async function applyNodeConfig(
   options: Options,
@@ -695,7 +697,7 @@ async function applyNodeConfig(
           'claude.declared_skills_unresolved'
         );
         warnings.push({
-          code: 'claude_skills_unresolved',
+          code: 'claude.skills_unresolved',
           message: `Claude skill${missing.length === 1 ? '' : 's'} not found on disk: ${missing.join(', ')}. This is expected for Claude's built-in skills and for plugin-qualified names (plugin:skill), which the SDK resolves itself; a plugin's skill loads only when the node also names that plugin under plugins:. If you meant an installed skill, check the name — an unknown name is ignored rather than loaded.`,
         });
       }
@@ -756,7 +758,7 @@ async function applyNodeConfig(
       const uniqueVars = [...new Set(missingVars)];
       getLog().warn({ missingVars: uniqueVars }, 'claude.mcp_env_vars_missing');
       warnings.push({
-        code: 'mcp_env_vars_missing',
+        code: 'claude.mcp_env_vars_missing',
         message: `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings — MCP servers may fail to authenticate.`,
       });
     }
@@ -764,7 +766,7 @@ async function applyNodeConfig(
     if (options.model?.toLowerCase().includes('haiku')) {
       getLog().warn({ model: options.model }, 'claude.mcp_haiku_tool_search_unsupported');
       warnings.push({
-        code: 'mcp_haiku_tool_search',
+        code: 'claude.mcp_haiku_tool_search',
         message:
           'Using Haiku model with MCP servers — tool search (lazy loading for many tools) is not supported on Haiku. Consider using Sonnet or Opus.',
       });
@@ -860,12 +862,7 @@ async function applyNodeConfig(
 // ─── Base Options Builder ────────────────────────────────────────────────
 
 /** Queued tool result from SDK hooks, consumed during stream normalization. */
-interface ToolResultEntry {
-  toolName: string;
-  toolOutput: string;
-  toolCallId?: string;
-  toolOutcome: 'success' | 'error' | 'interrupted';
-}
+type ToolResultEntry = Extract<ProviderEvent, { type: 'tool_call_update' }>;
 
 /** Bun-runnable JS extensions. `.ts`/`.tsx`/`.jsx` are excluded — the SDK has
  * never shipped those as entry points, so accepting them would only widen the
@@ -1016,22 +1013,17 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
     PostToolUse: [
       {
         hooks: [
-          (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
+          (async (input: PostToolUseHookInput): Promise<{ continue: true }> => {
             try {
-              const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
-              const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
-              const toolResponse = (input as { tool_response?: unknown }).tool_response;
-              const output =
-                typeof toolResponse === 'string'
-                  ? toolResponse
-                  : JSON.stringify(toolResponse ?? '');
-              const maxLen = 10_000;
-              toolResultQueue.push({
-                toolName,
-                toolOutput: output.length > maxLen ? output.slice(0, maxLen) + '...' : output,
-                ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
-                toolOutcome: 'success',
-              });
+              const response = input.tool_response;
+              const text = typeof response === 'string' ? response : JSON.stringify(response ?? '');
+              const update: ToolResultEntry = {
+                type: 'tool_call_update',
+                toolCallId: input.tool_use_id,
+                status: 'completed',
+                ...truncateToolOutput(text),
+              };
+              toolResultQueue.push(update);
             } catch (e) {
               getLog().error({ err: e, input }, 'claude.post_tool_use_hook_error');
             }
@@ -1043,23 +1035,15 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
     PostToolUseFailure: [
       {
         hooks: [
-          (async (input: Record<string, unknown>): Promise<{ continue: true }> => {
+          (async (input: PostToolUseFailureHookInput): Promise<{ continue: true }> => {
             try {
-              const toolName = (input as { tool_name?: string }).tool_name ?? 'unknown';
-              const toolUseId = (input as { tool_use_id?: string }).tool_use_id;
-              const rawError = (input as { error?: string }).error;
-              if (rawError === undefined) {
-                getLog().debug({ input }, 'claude.post_tool_use_failure_no_error_field');
-              }
-              const errorText = rawError ?? 'tool failed';
-              const isInterrupt = (input as { is_interrupt?: boolean }).is_interrupt === true;
-              const prefix = isInterrupt ? '⚠️ Interrupted' : '❌ Error';
-              toolResultQueue.push({
-                toolName,
-                toolOutput: `${prefix}: ${errorText}`,
-                ...(toolUseId !== undefined ? { toolCallId: toolUseId } : {}),
-                toolOutcome: isInterrupt ? 'interrupted' : 'error',
-              });
+              const update: ToolResultEntry = {
+                type: 'tool_call_update',
+                toolCallId: input.tool_use_id,
+                status: input.is_interrupt === true ? 'cancelled' : 'failed',
+                ...truncateToolOutput(input.error),
+              };
+              toolResultQueue.push(update);
             } catch (e) {
               getLog().error({ err: e, input }, 'claude.post_tool_use_failure_hook_error');
             }
@@ -1072,6 +1056,43 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
 }
 
 // ─── Stream Normalizer ───────────────────────────────────────────────────
+
+/** A content block of a `user` message; only `tool_result` blocks are read. */
+interface ToolResultBlock {
+  type: string;
+  tool_use_id: string;
+  is_error?: boolean;
+  content?: string | { type: string; text?: string }[];
+}
+
+/** The text of a `tool_result` block's content. */
+function toolResultText(content: ToolResultBlock['content']): string {
+  if (typeof content === 'string') return content;
+  return (content ?? [])
+    .filter(part => part.type === 'text' && part.text)
+    .map(part => part.text)
+    .join('\n');
+}
+
+/** The result's stop reason in ACP's names; `undefined` for a native reason ACP has no name for. */
+function claudeStopReason(resultMsg: SDKResultMessage): ProviderStopReason | undefined {
+  if (resultMsg.subtype === 'error_max_turns') return 'max_turn_requests';
+  switch (resultMsg.stop_reason) {
+    case 'end_turn':
+    case 'stop_sequence':
+      return 'end_turn';
+    case 'max_tokens':
+      return 'max_tokens';
+    case 'refusal':
+      return 'refusal';
+    default:
+      // ACP has no name for it (e.g. `pause_turn`); the native value stays in the log.
+      if (resultMsg.stop_reason) {
+        getLog().debug({ stopReason: resultMsg.stop_reason }, 'claude.stop_reason_unmapped');
+      }
+      return undefined;
+  }
+}
 
 /**
  * Normalize raw Claude SDK events into Archon MessageChunks.
@@ -1096,21 +1117,25 @@ async function* streamClaudeMessages(
   // Progress frames carry no visibility marker, so retain the start decision
   // for the lifetime of this query and suppress the complete hidden lifecycle.
   const hiddenTaskIds = new Set<string>();
+  // Tasks announced as subtasks. Their notification closes them even when it is marked
+  // ambient, so a subtask the reader saw start never stays open.
+  const visibleTaskIds = new Set<string>();
+  // Tool calls yielded and not yet closed. The PostToolUse hooks close most of them with
+  // their output; a call no hook reports (a permission denial) closes from the
+  // `tool_result` block the CLI sends back to the model. Whichever arrives first closes
+  // the call, and a hook result for a call that is not open is dropped, so a call is
+  // never closed twice or closed without a start.
+  const openToolIds = new Set<string>();
+  function* drainHookResults(): Generator<MessageChunk> {
+    for (const update of toolResultQueue.splice(0)) {
+      if (openToolIds.delete(update.toolCallId)) yield update;
+      else getLog().debug({ toolCallId: update.toolCallId }, 'claude.tool_result_not_open');
+    }
+  }
 
   for await (const msg of events) {
     // Drain tool results captured by hooks before processing the next event
-    while (toolResultQueue.length > 0) {
-      const tr = toolResultQueue.shift();
-      if (tr) {
-        yield {
-          type: 'tool_result',
-          toolName: tr.toolName,
-          toolOutput: tr.toolOutput,
-          ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
-          toolOutcome: tr.toolOutcome,
-        };
-      }
-    }
+    yield* drainHookResults();
 
     const event = msg as { type: string };
 
@@ -1142,20 +1167,35 @@ async function* streamClaudeMessages(
 
       for (const block of content) {
         if (block.type === 'text' && block.text) {
-          yield { type: 'assistant', content: block.text };
-        } else if (block.type === 'tool_use' && block.name) {
-          yield {
-            type: 'tool',
-            toolName: block.name,
-            toolInput: block.input ?? {},
-            ...(block.id !== undefined ? { toolCallId: block.id } : {}),
+          yield { type: 'agent_message_chunk', text: block.text };
+        } else if (block.type === 'thinking' && block.thinking) {
+          yield { type: 'agent_thought_chunk', text: block.thinking };
+        } else if (block.type === 'tool_use' && block.name && block.id) {
+          const call: ProviderEvent = {
+            type: 'tool_call',
+            toolCallId: block.id,
+            name: block.name,
+            rawInput: block.input ?? {},
           };
+          openToolIds.add(block.id);
+          yield call;
         }
+      }
+    } else if (event.type === 'user') {
+      const content = (msg as { message?: { content?: unknown } }).message?.content;
+      for (const block of Array.isArray(content) ? (content as ToolResultBlock[]) : []) {
+        if (block.type !== 'tool_result' || !openToolIds.delete(block.tool_use_id)) continue;
+        yield {
+          type: 'tool_call_update',
+          toolCallId: block.tool_use_id,
+          status: block.is_error === true ? 'failed' : 'completed',
+          ...truncateToolOutput(toolResultText(block.content)),
+        };
       }
     } else if (event.type === 'system') {
       const sysMsg = msg as {
         subtype?: string;
-        mcp_servers?: { name: string; status: string }[];
+        mcp_servers?: Pick<McpServerStatus, 'name' | 'status' | 'error'>[];
         // Subagent task lifecycle (Claude SDK v0.2.89+)
         task_id?: string;
         tool_use_id?: string;
@@ -1169,10 +1209,10 @@ async function* streamClaudeMessages(
         output_file?: string;
         skip_transcript?: boolean;
         ambient?: boolean;
-        // Background-task set (Claude SDK v0.3.209+ `background_tasks_changed`)
-        tasks?: { task_id: string; task_type: string; description: string; ambient?: boolean }[];
         // Session state (CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS)
         state?: string;
+        // Compaction (`status` and `compact_boundary`)
+        compact_metadata?: { trigger: 'manual' | 'auto'; pre_tokens: number; post_tokens?: number };
         // Hook lifecycle (Claude SDK v0.2.89+)
         hook_id?: string;
         hook_name?: string;
@@ -1187,12 +1227,31 @@ async function* streamClaudeMessages(
         // rather than waiting for the subprocess to exit, which can hang (#854).
         if (sysMsg.state === 'idle' && resultSeen) break;
         getLog().debug({ state: sysMsg.state, resultSeen }, 'claude.session_state_changed');
-      } else if (subtype === 'init' && sysMsg.mcp_servers) {
-        const failed = sysMsg.mcp_servers.filter(s => s.status !== 'connected');
-        if (failed.length > 0) {
-          const names = failed.map(s => `${s.name} (${s.status})`).join(', ');
-          yield { type: 'system', content: `MCP server connection failed: ${names}` };
+        if (sysMsg.state === 'running' || sysMsg.state === 'requires_action') {
+          yield { type: 'state_update', state: sysMsg.state };
         }
+      } else if (subtype === 'init' && sysMsg.mcp_servers) {
+        for (const server of sysMsg.mcp_servers) {
+          const status: ProviderEvent = {
+            type: 'mcp_server_status',
+            server: server.name,
+            status: server.status === 'needs-auth' ? 'needs_auth' : server.status,
+          };
+          if (server.error !== undefined) status.error = server.error;
+          yield status;
+        }
+      } else if (subtype === 'status' && (msg as SDKStatusMessage).status === 'compacting') {
+        yield { type: 'compaction', phase: 'started' };
+      } else if (subtype === 'compact_boundary' && sysMsg.compact_metadata) {
+        const meta = sysMsg.compact_metadata;
+        const compaction: ProviderEvent = {
+          type: 'compaction',
+          phase: 'completed',
+          trigger: meta.trigger,
+          tokensBefore: meta.pre_tokens,
+        };
+        if (meta.post_tokens !== undefined) compaction.tokensAfter = meta.post_tokens;
+        yield compaction;
       } else if (subtype === 'task_started' && sysMsg.task_id) {
         // Ambient / housekeeping tasks (SDK v0.3.247+ signals them directly;
         // older emitters use skip_transcript) are SDK-internal — they bloat
@@ -1206,37 +1265,44 @@ async function* streamClaudeMessages(
             'claude.task_started_housekeeping_suppressed'
           );
         } else {
-          yield {
-            type: 'task_started',
+          const started: ProviderEvent = {
+            type: 'subtask',
             taskId: sysMsg.task_id,
-            description: sysMsg.description ?? '',
-            ...(sysMsg.task_type !== undefined ? { taskType: sysMsg.task_type } : {}),
-            ...(sysMsg.prompt !== undefined ? { prompt: sysMsg.prompt } : {}),
-            ...(sysMsg.tool_use_id !== undefined ? { toolUseId: sysMsg.tool_use_id } : {}),
+            status: 'started',
           };
+          if (sysMsg.description !== undefined) started.description = sysMsg.description;
+          if (sysMsg.task_type !== undefined) started.taskType = sysMsg.task_type;
+          if (sysMsg.tool_use_id !== undefined) started.parentToolCallId = sysMsg.tool_use_id;
+          visibleTaskIds.add(sysMsg.task_id);
+          yield started;
         }
       } else if (subtype === 'task_progress' && sysMsg.task_id) {
         if (hiddenTaskIds.has(sysMsg.task_id)) {
           // The SDK emits task_progress roughly every 30s to prove the
-          // subprocess is alive. Preserve that deadlock-timer signal without
+          // subprocess is alive. Preserve that idle-watchdog signal without
           // recreating the hidden task in persistence or the Web UI.
-          yield { type: 'system', content: '' };
+          yield { type: 'state_update', state: 'running' };
           continue;
         }
-        yield {
-          type: 'task_progress',
+        const progress: ProviderEvent = {
+          type: 'subtask',
           taskId: sysMsg.task_id,
-          description: sysMsg.description ?? '',
-          ...(sysMsg.summary !== undefined ? { summary: sysMsg.summary } : {}),
-          ...(sysMsg.usage !== undefined ? { usage: sysMsg.usage } : {}),
-          ...(sysMsg.last_tool_name !== undefined ? { lastToolName: sysMsg.last_tool_name } : {}),
-          ...(sysMsg.tool_use_id !== undefined ? { toolUseId: sysMsg.tool_use_id } : {}),
+          status: 'running',
         };
+        if (sysMsg.description !== undefined) progress.description = sysMsg.description;
+        if (sysMsg.summary !== undefined) progress.summary = sysMsg.summary;
+        if (sysMsg.usage !== undefined) progress.usage = sysMsg.usage;
+        if (sysMsg.last_tool_name !== undefined) progress.lastToolName = sysMsg.last_tool_name;
+        if (sysMsg.tool_use_id !== undefined) progress.parentToolCallId = sysMsg.tool_use_id;
+        yield progress;
       } else if (subtype === 'task_notification' && sysMsg.task_id) {
-        if (sysMsg.ambient === true || sysMsg.skip_transcript === true) {
-          hiddenTaskIds.add(sysMsg.task_id);
-        }
-        if (hiddenTaskIds.has(sysMsg.task_id)) {
+        const announced = visibleTaskIds.delete(sysMsg.task_id);
+        if (
+          !announced &&
+          (hiddenTaskIds.has(sysMsg.task_id) ||
+            sysMsg.ambient === true ||
+            sysMsg.skip_transcript === true)
+        ) {
           getLog().debug(
             { taskId: sysMsg.task_id, taskType: sysMsg.task_type },
             'claude.task_notification_housekeeping_suppressed'
@@ -1245,60 +1311,48 @@ async function* streamClaudeMessages(
         }
         const status = sysMsg.status;
         if (status !== 'completed' && status !== 'failed' && status !== 'stopped') {
+          // Still close the subtask: an unknown terminal status must not leave it open.
           getLog().warn(
             { taskId: sysMsg.task_id, status },
             'claude.task_notification_unknown_status'
           );
-          // Fall through with raw status to avoid dropping the event entirely
         }
-        yield {
-          type: 'task_notification',
+        const ended: ProviderEvent = {
+          type: 'subtask',
           taskId: sysMsg.task_id,
           status:
             status === 'completed' || status === 'failed' || status === 'stopped'
               ? status
               : 'stopped',
-          summary: sysMsg.summary ?? '',
-          outputFile: sysMsg.output_file ?? '',
-          ...(sysMsg.usage !== undefined ? { usage: sysMsg.usage } : {}),
-          ...(sysMsg.tool_use_id !== undefined ? { toolUseId: sysMsg.tool_use_id } : {}),
         };
-      } else if (subtype === 'background_tasks_changed') {
-        // Level signal: the FULL set of live background tasks after a membership
-        // change (REPLACE semantics — see the MessageChunk variant docs). An
-        // empty `tasks` array is meaningful ("all drained") and MUST be
-        // forwarded, so no `&& sysMsg.tasks` guard here.
-        const tasks = Array.isArray(sysMsg.tasks)
-          ? sysMsg.tasks.filter(task => task.ambient !== true)
-          : [];
-        yield {
-          type: 'background_tasks',
-          tasks: tasks.map(t => ({
-            taskId: t.task_id,
-            taskType: t.task_type,
-            description: t.description,
-          })),
-        };
+        if (sysMsg.summary !== undefined) ended.summary = sysMsg.summary;
+        if (sysMsg.output_file) ended.outputFile = sysMsg.output_file;
+        if (sysMsg.usage !== undefined) ended.usage = sysMsg.usage;
+        if (sysMsg.tool_use_id !== undefined) ended.parentToolCallId = sysMsg.tool_use_id;
+        yield ended;
       } else if (subtype === 'hook_started' && sysMsg.hook_id) {
         yield {
-          type: 'hook_started',
+          type: 'hook',
           hookId: sysMsg.hook_id,
           hookName: sysMsg.hook_name ?? '',
           hookEvent: sysMsg.hook_event ?? '',
+          status: 'started',
         };
       } else if (subtype === 'hook_response' && sysMsg.hook_id) {
-        const outcome = sysMsg.outcome;
-        yield {
-          type: 'hook_response',
+        const hook: ProviderEvent = {
+          type: 'hook',
           hookId: sysMsg.hook_id,
           hookName: sysMsg.hook_name ?? '',
           hookEvent: sysMsg.hook_event ?? '',
-          outcome:
-            outcome === 'success' || outcome === 'error' || outcome === 'cancelled'
-              ? outcome
-              : 'error',
-          ...(sysMsg.exit_code !== undefined ? { exitCode: sysMsg.exit_code } : {}),
+          status:
+            sysMsg.outcome === 'success'
+              ? 'succeeded'
+              : sysMsg.outcome === 'cancelled'
+                ? 'cancelled'
+                : 'failed',
         };
+        if (sysMsg.exit_code !== undefined) hook.exitCode = sysMsg.exit_code;
+        yield hook;
       } else {
         getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
       }
@@ -1306,7 +1360,8 @@ async function* streamClaudeMessages(
       const rateLimitMsg = msg as { rate_limit_info?: SDKRateLimitInfo };
       getLog().warn({ rateLimitInfo: rateLimitMsg.rate_limit_info }, 'claude.rate_limit_event');
       lastRateLimit = rateLimitMsg.rate_limit_info;
-      yield { type: 'rate_limit', rateLimitInfo: rateLimitMsg.rate_limit_info ?? {} };
+      // The turn is waiting, not stalled: keep the idle watchdog from firing.
+      yield { type: 'state_update', state: 'running' };
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
       // The SDK's cost and per-model totals are cumulative for the session; report
@@ -1355,7 +1410,7 @@ async function* streamClaudeMessages(
           { sessionId: resultMsg.session_id, errorCode: syntheticError.code },
           'claude.synthetic_error_not_confirmed'
         );
-        yield { type: 'assistant', content: syntheticError.text };
+        if (syntheticError.text) yield { type: 'agent_message_chunk', text: syntheticError.text };
       }
 
       // SDKResultSuccess declares `is_error: boolean` (not literal false). When a
@@ -1435,7 +1490,8 @@ async function* streamClaudeMessages(
         result.errors = isRealError && sdkErrors?.length ? sdkErrors : [failure.evidence];
       }
       if (spend.costUsd !== undefined) result.cost = spend.costUsd;
-      if (resultMsg.stop_reason != null) result.stopReason = resultMsg.stop_reason;
+      const stopReason = claudeStopReason(resultMsg);
+      if (stopReason !== undefined) result.stopReason = stopReason;
       if (resultMsg.num_turns !== undefined) result.numTurns = resultMsg.num_turns;
       if (resolvedModelId) result.resolvedModel = { id: resolvedModelId };
       resultSeen = true;
@@ -1446,18 +1502,7 @@ async function* streamClaudeMessages(
   }
 
   // Drain any remaining tool results after the stream ends
-  while (toolResultQueue.length > 0) {
-    const tr = toolResultQueue.shift();
-    if (tr) {
-      yield {
-        type: 'tool_result',
-        toolName: tr.toolName,
-        toolOutput: tr.toolOutput,
-        ...(tr.toolCallId !== undefined ? { toolCallId: tr.toolCallId } : {}),
-        toolOutcome: tr.toolOutcome,
-      };
-    }
-  }
+  yield* drainHookResults();
 
   // Stream ended after a synthetic error message with no terminal result to
   // confirm or contradict it. A dangling synthetic error is a failure — the
@@ -1528,6 +1573,8 @@ export class ClaudeProvider implements IAgentProvider {
       requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
     }
     let resultReported = false;
+    // Subtasks started and not yet ended; they are closed before `settled`.
+    const openSubtaskIds = new Set<string>();
 
     try {
       if (requestOptions?.abortSignal?.aborted) {
@@ -1593,7 +1640,7 @@ export class ClaudeProvider implements IAgentProvider {
             )
         );
         for (const warning of nodeConfigWarnings) {
-          yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
+          yield { type: 'warning', ...warning };
         }
       }
 
@@ -1641,10 +1688,18 @@ export class ClaudeProvider implements IAgentProvider {
       // the result stream means the prior session was restored. Hence `true`
       // whenever a resume was requested.
       for await (const chunk of withResumedOutcome(
-        streamClaudeMessages(events, toolResultQueue, sessionSpend.baselineFor(resumeSessionId)),
+        closeOpenToolCalls(
+          streamClaudeMessages(events, toolResultQueue, sessionSpend.baselineFor(resumeSessionId)),
+          // A result can arrive while background agents still run their tools.
+          { resultEndsTurn: false }
+        ),
         resumedOutcome(resumeSessionId, true)
       )) {
         if (chunk.type === 'result') resultReported = true;
+        else if (chunk.type === 'subtask') {
+          if (chunk.status === 'started') openSubtaskIds.add(chunk.taskId);
+          else if (chunk.status !== 'running') openSubtaskIds.delete(chunk.taskId);
+        }
         yield chunk;
       }
     } catch (error) {
@@ -1682,6 +1737,15 @@ export class ClaudeProvider implements IAgentProvider {
       );
       noResult.errorSubtype = 'stream_ended_without_result';
       yield noResult;
+    }
+    // A task the SDK never reported finished (killed with its subprocess, or the stream
+    // closed first) is over once the turn settles; the contract has no open subtask at
+    // `settled`.
+    if (openSubtaskIds.size > 0) {
+      getLog().warn({ taskIds: [...openSubtaskIds] }, 'claude.subtasks_stopped_at_settle');
+      for (const taskId of openSubtaskIds) {
+        yield { type: 'subtask', taskId, status: 'stopped' };
+      }
     }
     yield { type: 'settled' };
   }

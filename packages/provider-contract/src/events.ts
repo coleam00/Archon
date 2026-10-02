@@ -44,6 +44,14 @@ export const toolCallSchema = z.object({
 });
 
 /**
+ * What a reader shows for a tool call: its title when the provider gives one (a Codex
+ * command), else its name. An empty title falls back too, so a call is never shown blank.
+ */
+export function toolCallDisplayName(call: { name: string; title?: string }): string {
+  return call.title || call.name;
+}
+
+/**
  * Longest `tool_call_update.output` the contract accepts, in Unicode code points: the unit
  * JSON Schema's `maxLength` counts, so a provider validating against the published schema
  * and the engine's parse agree.

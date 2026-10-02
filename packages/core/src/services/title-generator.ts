@@ -67,8 +67,8 @@ export async function generateAndSetTitle(
     };
 
     for await (const chunk of client.sendQuery(titlePrompt, cwd, undefined, options)) {
-      if (chunk.type === 'assistant') {
-        generatedTitle += chunk.content;
+      if (chunk.type === 'agent_message_chunk') {
+        generatedTitle += chunk.text;
       } else if (chunk.type === 'result' && chunk.failure !== undefined) {
         // A failed turn is a failed title, not an empty one: take the failure path below.
         throw new Error(`title turn failed (${chunk.failure.class}): ${chunk.failure.evidence}`);

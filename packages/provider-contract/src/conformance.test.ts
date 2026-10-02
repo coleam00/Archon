@@ -14,22 +14,23 @@ function turn(...chunks: unknown[]): () => AsyncIterable<unknown> {
   };
 }
 
+const failedTurnEnd = [
+  { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } },
+  { type: 'settled' },
+];
+
 const conforming: ProviderFailureCase = {
   name: 'expired key',
   expected: 'auth',
   evidence: 'HTTP 401',
-  run: turn(
-    { type: 'assistant', content: 'partial' },
-    { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } },
-    { type: 'settled' }
-  ),
+  run: turn({ type: 'agent_message_chunk', text: 'partial' }, ...failedTurnEnd),
 };
 
 const settlingTurn: ProviderTurnCase = {
   name: 'background work',
   run: turn(
     { type: 'result' },
-    { type: 'background_tasks', tasks: [] },
+    { type: 'state_update', state: 'running' },
     { type: 'result' },
     { type: 'settled' }
   ),
@@ -361,5 +362,17 @@ describe('event vocabulary conformance', () => {
     expect(
       await runProviderConformance({ failureCases: [conforming], turns: [], toolTurn: unsettled })
     ).toContain('tool turn: expected one settled, got 0');
+  });
+
+  test('every fixture, not only the tool turn, must speak the vocabulary', async () => {
+    const legacy = { type: 'assistant', content: 'hi' };
+    const violations = await runProviderConformance({
+      failureCases: [{ ...conforming, run: turn(legacy, ...failedTurnEnd) }],
+      turns: [{ name: 'plain turn', run: turn(legacy, { type: 'result' }, { type: 'settled' }) }],
+    });
+    expect(violations).toEqual([
+      expect.stringContaining('plain turn: rule 1, chunk 0 (type "assistant")'),
+      expect.stringContaining('expired key: rule 1, chunk 0 (type "assistant")'),
+    ]);
   });
 });

@@ -220,26 +220,23 @@ describe('OpencodeProvider', () => {
     tempDirs.clear();
   });
 
-  test('basic text streaming yields assistant chunks', async () => {
+  test('a part-update stream yields one chunk per text or reasoning part, once it ends', async () => {
+    const update = (part: Record<string, unknown>, delta?: string): OpencodeEvent => ({
+      type: 'message.part.updated',
+      properties: { part: { sessionID: 'session-1', ...part }, ...(delta ? { delta } : {}) },
+    });
+    const reasoning = { id: 'r1', type: 'reasoning' };
+    const text = { id: 't1', type: 'text' };
     scriptedEvents = [
-      {
-        type: 'message.part.updated',
-        properties: {
-          delta: 'Hello',
-          part: { sessionID: 'session-1', type: 'text' },
-        },
-      },
-      {
-        type: 'message.part.updated',
-        properties: {
-          delta: ' world',
-          part: { sessionID: 'session-1', type: 'text' },
-        },
-      },
-      {
-        type: 'session.idle',
-        properties: { sessionID: 'session-1' },
-      },
+      update(reasoning, 'Let me '),
+      update(reasoning, 'think'),
+      update({ ...reasoning, text: 'Let me think', time: { start: 1, end: 2 } }),
+      update(text, 'Hello'),
+      update(text, ' world'),
+      update({ ...text, text: 'Hello world', time: { start: 3, end: 4 } }),
+      // A late update of a finished part is not emitted again.
+      update({ ...text, text: 'Hello world', time: { start: 3, end: 4 } }),
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
     ];
 
     const { chunks, error } = await consume(
@@ -248,13 +245,37 @@ describe('OpencodeProvider', () => {
 
     expect(error).toBeUndefined();
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'Hello' },
-      { type: 'assistant', content: ' world' },
+      { type: 'agent_thought_chunk', text: 'Let me think' },
+      { type: 'agent_message_chunk', text: 'Hello world' },
       { type: 'result', sessionId: 'session-1' },
     ]);
   });
 
-  test('tool events normalize into tool and tool_result chunks', async () => {
+  test('a text part that never ends is emitted whole at session.idle', async () => {
+    scriptedEvents = [
+      {
+        type: 'message.part.updated',
+        properties: { delta: 'Hello', part: { id: 't1', sessionID: 'session-1', type: 'text' } },
+      },
+      {
+        type: 'message.part.updated',
+        properties: { delta: ' world', part: { id: 't1', sessionID: 'session-1', type: 'text' } },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([
+      { type: 'agent_message_chunk', text: 'Hello world' },
+      { type: 'result', sessionId: 'session-1' },
+    ]);
+  });
+
+  test('tool part updates map to one tool_call and one tool_call_update', async () => {
     scriptedEvents = [
       {
         type: 'message.part.updated',
@@ -299,24 +320,18 @@ describe('OpencodeProvider', () => {
 
     expect(error).toBeUndefined();
     expect(chunks).toEqual([
+      { type: 'tool_call', toolCallId: 'tool-1', name: 'read', rawInput: { path: '/tmp/file.ts' } },
       {
-        type: 'tool',
-        toolName: 'read',
-        toolInput: { path: '/tmp/file.ts' },
+        type: 'tool_call_update',
         toolCallId: 'tool-1',
-      },
-      {
-        type: 'tool_result',
-        toolName: 'read',
-        toolOutput: 'file contents',
-        toolCallId: 'tool-1',
-        toolOutcome: 'success',
+        status: 'completed',
+        output: 'file contents',
       },
       { type: 'result', sessionId: 'session-1' },
     ]);
   });
 
-  test('tool errors preserve a structured error outcome', async () => {
+  test('a tool part in error closes the call as failed', async () => {
     scriptedEvents = [
       {
         type: 'message.part.updated',
@@ -350,10 +365,11 @@ describe('OpencodeProvider', () => {
     );
 
     expect(error).toBeUndefined();
-    expect(chunks[1]).toMatchObject({
-      type: 'tool_result',
+    expect(chunks[1]).toEqual({
+      type: 'tool_call_update',
       toolCallId: 'tool-error',
-      toolOutcome: 'error',
+      status: 'failed',
+      output: 'command failed',
     });
   });
 
@@ -362,8 +378,14 @@ describe('OpencodeProvider', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { sessionID: 'session-1', type: 'text' },
-          delta: 'partial answer',
+          part: {
+            id: 't1',
+            sessionID: 'session-1',
+            type: 'text',
+            // Unfinished: no time.end. The failure still delivers it.
+            text: 'partial answer',
+            time: { start: 1 },
+          },
         },
       },
       {
@@ -392,7 +414,7 @@ describe('OpencodeProvider', () => {
     );
 
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'partial answer' },
+      { type: 'agent_message_chunk', text: 'partial answer' },
       expect.objectContaining({ type: 'result', isError: true }),
     ]);
     expect(failure?.class).toBe('unknown');
@@ -405,8 +427,14 @@ describe('OpencodeProvider', () => {
       {
         type: 'message.part.updated',
         properties: {
-          part: { sessionID: 'session-1', type: 'text' },
-          delta: 'partial answer',
+          part: {
+            id: 't1',
+            sessionID: 'session-1',
+            type: 'text',
+            // Unfinished: no time.end. The failure still delivers it.
+            text: 'partial answer',
+            time: { start: 1 },
+          },
         },
       },
       // The stream closes here: no session.idle, no session.error.
@@ -417,7 +445,7 @@ describe('OpencodeProvider', () => {
     );
 
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'partial answer' },
+      { type: 'agent_message_chunk', text: 'partial answer' },
       expect.objectContaining({ type: 'result', isError: true }),
     ]);
     expect(failure?.class).toBe('unknown');
@@ -580,19 +608,74 @@ describe('OpencodeProvider', () => {
     expect(error).toBeUndefined();
     expect(chunks).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({
-          type: 'tool_result',
+        { type: 'tool_call', toolCallId: 'scout:call-1', name: 'read' },
+        {
+          type: 'tool_call_update',
           toolCallId: 'scout:call-1',
-          toolOutcome: 'success',
-        }),
-        expect.objectContaining({
-          type: 'tool_result',
+          status: 'completed',
+          output: 'contents',
+        },
+        { type: 'tool_call', toolCallId: 'reviewer:call-1', name: 'bash' },
+        {
+          type: 'tool_call_update',
           toolCallId: 'reviewer:call-1',
-          toolOutcome: 'error',
-        }),
+          status: 'failed',
+          output: 'command failed',
+        },
       ])
     );
     expect(chunks).toContainEqual({ type: 'result' });
+  });
+
+  /** Two tool parts; the second is still running when the session goes idle. */
+  const toolTurnEvents: OpencodeEvent[] = [
+    ['tool-1', 'read', { status: 'completed', input: { path: 'a' }, output: 'A' }],
+    ['tool-2', 'bash', { status: 'running', input: { command: 'sleep 60' } }],
+  ].map(([callID, tool, state]) => ({
+    type: 'message.part.updated',
+    properties: { part: { sessionID: 'session-1', type: 'tool', callID, tool, state } },
+  }));
+
+  test('a tool still running when the session goes idle closes as cancelled before the result', async () => {
+    scriptedEvents = [
+      ...toolTurnEvents,
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks, error } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(error).toBeUndefined();
+    expect(chunks).toEqual([
+      { type: 'tool_call', toolCallId: 'tool-1', name: 'read', rawInput: { path: 'a' } },
+      { type: 'tool_call_update', toolCallId: 'tool-1', status: 'completed', output: 'A' },
+      { type: 'tool_call', toolCallId: 'tool-2', name: 'bash', rawInput: { command: 'sleep 60' } },
+      { type: 'tool_call_update', toolCallId: 'tool-2', status: 'cancelled' },
+      { type: 'result', sessionId: 'session-1' },
+    ]);
+  });
+
+  test.each<[string, string | undefined]>([
+    ['stop', 'end_turn'],
+    ['length', 'max_tokens'],
+    ['tool-calls', undefined],
+  ])('finish %s maps to stop reason %s', async (finish, stopReason) => {
+    scriptedEvents = [
+      {
+        type: 'message.updated',
+        properties: { info: { id: 'm1', role: 'assistant', sessionID: 'session-1', finish } },
+      },
+      { type: 'session.idle', properties: { sessionID: 'session-1' } },
+    ];
+
+    const { chunks } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(chunks).toEqual([
+      { type: 'result', sessionId: 'session-1', ...(stopReason ? { stopReason } : {}) },
+    ]);
   });
 
   test('conforms to the provider contract', async () => {
@@ -652,7 +735,10 @@ describe('OpencodeProvider', () => {
             scriptedEvents = [
               {
                 type: 'message.part.updated',
-                properties: { delta: 'Hello', part: { sessionID: 'session-1', type: 'text' } },
+                properties: {
+                  delta: 'Hello',
+                  part: { id: 't1', sessionID: 'session-1', type: 'text' },
+                },
               },
               { type: 'session.idle', properties: { sessionID: 'session-1' } },
             ];
@@ -681,6 +767,18 @@ describe('OpencodeProvider', () => {
           },
         },
       ],
+      toolTurn: {
+        name: 'tool turn',
+        run: () => {
+          scriptedEvents = [
+            ...toolTurnEvents,
+            { type: 'session.idle', properties: { sessionID: 'session-1' } },
+          ];
+          return new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+            assistantConfig: TEST_MODEL,
+          });
+        },
+      },
     });
     expect(violations).toEqual([]);
   });
@@ -870,7 +968,7 @@ describe('OpencodeProvider', () => {
           cost: 0.42,
         },
         cost: 0.42,
-        stopReason: 'stop',
+        stopReason: 'end_turn',
         resolvedModel: { id: 'claude-sonnet' },
       },
     ]);
@@ -903,8 +1001,9 @@ describe('OpencodeProvider', () => {
     expect(runtime.client.session.create).toHaveBeenCalledWith({ query: { directory: '/tmp' } });
     expect(chunks).toEqual([
       {
-        type: 'system',
-        content: '⚠️ Could not resume OpenCode session. Starting fresh conversation.',
+        type: 'warning',
+        code: 'opencode.resume_failed',
+        message: 'Could not resume OpenCode session. Starting fresh conversation.',
       },
       // A requested resume that fell back to a fresh session is reported as cold.
       { type: 'result', sessionId: 'fresh-session', resumed: false },

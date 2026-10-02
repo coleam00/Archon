@@ -36,6 +36,7 @@ mock.module('@anthropic-ai/claude-agent-sdk', () => ({
   query: mockQuery,
 }));
 
+import { TOOL_OUTPUT_MAX_CHARS, type ProviderStopReason } from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
@@ -204,7 +205,7 @@ describe('ClaudeProvider', () => {
       }
 
       expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Hello, world!' });
+      expect(chunks[0]).toEqual({ type: 'agent_message_chunk', text: 'Hello, world!' });
     });
 
     test('yields tool events from tool_use blocks', async () => {
@@ -215,6 +216,7 @@ describe('ClaudeProvider', () => {
             content: [
               {
                 type: 'tool_use',
+                id: 'toolu_1',
                 name: 'Bash',
                 input: { command: 'npm test' },
               },
@@ -228,12 +230,41 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: 'Bash',
-        toolInput: { command: 'npm test' },
+      // No hook reported the result, so the stream's end closes the call as cancelled.
+      expect(chunks).toEqual([
+        {
+          type: 'tool_call',
+          toolCallId: 'toolu_1',
+          name: 'Bash',
+          rawInput: { command: 'npm test' },
+        },
+        { type: 'tool_call_update', toolCallId: 'toolu_1', status: 'cancelled' },
+      ]);
+    });
+
+    test('yields agent_thought_chunk from a thinking block', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'assistant',
+          message: {
+            content: [
+              { type: 'thinking', thinking: 'The tests import the mock first.' },
+              { type: 'thinking', thinking: '' },
+              { type: 'text', text: 'Done.' },
+            ],
+          },
+        };
       });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        { type: 'agent_thought_chunk', text: 'The tests import the mock first.' },
+        { type: 'agent_message_chunk', text: 'Done.' },
+      ]);
     });
 
     test('yields result event with session ID', async () => {
@@ -551,7 +582,110 @@ describe('ClaudeProvider', () => {
       expect(chunks[0]).not.toHaveProperty('stopReason');
     });
 
-    test('yields rate_limit chunk and logs warn on rate_limit_event with info', async () => {
+    test.each<[string, string, ProviderStopReason | undefined]>([
+      ['success', 'end_turn', 'end_turn'],
+      ['success', 'stop_sequence', 'end_turn'],
+      ['success', 'max_tokens', 'max_tokens'],
+      ['success', 'refusal', 'refusal'],
+      ['error_max_turns', 'tool_use', 'max_turn_requests'],
+      ['success', 'pause_turn', undefined],
+    ])(
+      'maps subtype %s with stop_reason %s to the stop reason %s',
+      async (subtype, stopReason, expected) => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'result', subtype, session_id: 'sid', stop_reason: stopReason };
+        });
+
+        const results = [];
+        for await (const chunk of client.sendQuery('test', '/workspace')) {
+          if (chunk.type === 'result') results.push(chunk);
+        }
+
+        expect(results).toHaveLength(1);
+        expect(results[0].stopReason).toBe(expected);
+        if (expected === undefined) expect(results[0]).not.toHaveProperty('stopReason');
+      }
+    );
+
+    test('reports every MCP server from init, connected ones included', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          mcp_servers: [
+            { name: 'github', status: 'connected' },
+            { name: 'linear', status: 'needs-auth' },
+            { name: 'broken', status: 'failed', error: 'spawn ENOENT' },
+          ],
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        { type: 'mcp_server_status', server: 'github', status: 'connected' },
+        { type: 'mcp_server_status', server: 'linear', status: 'needs_auth' },
+        { type: 'mcp_server_status', server: 'broken', status: 'failed', error: 'spawn ENOENT' },
+      ]);
+    });
+
+    test('reports compaction when it starts and when its boundary lands', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'system', subtype: 'status', status: 'compacting' };
+        yield {
+          type: 'system',
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'auto', pre_tokens: 180000, post_tokens: 24000 },
+        };
+        yield {
+          type: 'system',
+          subtype: 'compact_boundary',
+          compact_metadata: { trigger: 'manual', pre_tokens: 90000 },
+        };
+        // A status that is not compaction yields nothing.
+        yield { type: 'system', subtype: 'status', status: null };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        { type: 'compaction', phase: 'started' },
+        {
+          type: 'compaction',
+          phase: 'completed',
+          trigger: 'auto',
+          tokensBefore: 180000,
+          tokensAfter: 24000,
+        },
+        { type: 'compaction', phase: 'completed', trigger: 'manual', tokensBefore: 90000 },
+      ]);
+    });
+
+    test('reports session state running and requires_action, never idle', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+        yield { type: 'system', subtype: 'session_state_changed', state: 'requires_action' };
+        yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        { type: 'state_update', state: 'running' },
+        { type: 'state_update', state: 'requires_action' },
+      ]);
+    });
+
+    test('a rate_limit_event renews the watchdog and logs a warning', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
           type: 'rate_limit_event',
@@ -564,29 +698,11 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'rate_limit',
-        rateLimitInfo: { requests_remaining: 0, retry_after_ms: 5000 },
-      });
+      expect(chunks).toEqual([{ type: 'state_update', state: 'running' }]);
       expect(mockLogger.warn).toHaveBeenCalledWith(
         { rateLimitInfo: { requests_remaining: 0, retry_after_ms: 5000 } },
         'claude.rate_limit_event'
       );
-    });
-
-    test('yields rate_limit chunk with empty object when rate_limit_info absent', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'rate_limit_event' };
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        if (!isTurnEnd(chunk)) chunks.push(chunk);
-      }
-
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'rate_limit', rateLimitInfo: {} });
     });
 
     test('yields result without structuredOutput when SDK result has no structured_output', async () => {
@@ -614,7 +730,7 @@ describe('ClaudeProvider', () => {
           message: {
             content: [
               { type: 'text', text: 'I will run a command.' },
-              { type: 'tool_use', name: 'Bash', input: { command: 'ls' } },
+              { type: 'tool_use', id: 'toolu_ls', name: 'Bash', input: { command: 'ls' } },
               { type: 'text', text: 'Command completed.' },
             ],
           },
@@ -626,10 +742,11 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toHaveLength(3);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'I will run a command.' });
-      expect(chunks[1]).toEqual({ type: 'tool', toolName: 'Bash', toolInput: { command: 'ls' } });
-      expect(chunks[2]).toEqual({ type: 'assistant', content: 'Command completed.' });
+      expect(chunks.slice(0, 3)).toEqual([
+        { type: 'agent_message_chunk', text: 'I will run a command.' },
+        { type: 'tool_call', toolCallId: 'toolu_ls', name: 'Bash', rawInput: { command: 'ls' } },
+        { type: 'agent_message_chunk', text: 'Command completed.' },
+      ]);
     });
 
     test('passes correct options to SDK', async () => {
@@ -752,13 +869,41 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'task_started',
-        taskId: 't-1',
-        description: 'Investigating the bug',
-        taskType: 'general-purpose',
+      expect(chunks).toEqual([
+        {
+          type: 'subtask',
+          taskId: 't-1',
+          status: 'started',
+          description: 'Investigating the bug',
+          taskType: 'general-purpose',
+        },
+        // The SDK never reported it finished, so it closes before the turn settles.
+        { type: 'subtask', taskId: 't-1', status: 'stopped' },
+      ]);
+    });
+
+    test('closes an announced subtask whose notification is marked ambient', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'system', subtype: 'task_started', task_id: 't-1', description: 'Research' };
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-1',
+          status: 'completed',
+          summary: 'Done',
+          ambient: true,
+        };
       });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        { type: 'subtask', taskId: 't-1', status: 'started', description: 'Research' },
+        { type: 'subtask', taskId: 't-1', status: 'completed', summary: 'Done' },
+      ]);
     });
 
     test('hides a skip_transcript task lifecycle while preserving its idle heartbeat', async () => {
@@ -790,7 +935,7 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toEqual([{ type: 'system', content: '' }]);
+      expect(chunks).toEqual([{ type: 'state_update', state: 'running' }]);
     });
 
     test('hides an ambient task lifecycle while preserving its idle heartbeat', async () => {
@@ -822,7 +967,7 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toEqual([{ type: 'system', content: '' }]);
+      expect(chunks).toEqual([{ type: 'state_update', state: 'running' }]);
     });
 
     test('yields task_progress with summary + usage + lastToolName', async () => {
@@ -845,8 +990,9 @@ describe('ClaudeProvider', () => {
 
       expect(chunks).toEqual([
         {
-          type: 'task_progress',
+          type: 'subtask',
           taskId: 't-1',
+          status: 'running',
           description: 'Working on auth',
           summary: 'Reading auth module',
           usage: { total_tokens: 1234, tool_uses: 3, duration_ms: 28000 },
@@ -874,7 +1020,7 @@ describe('ClaudeProvider', () => {
 
       expect(chunks).toEqual([
         {
-          type: 'task_notification',
+          type: 'subtask',
           taskId: 't-1',
           status: 'completed',
           summary: 'Plan ready',
@@ -900,7 +1046,7 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks[0]).toMatchObject({ type: 'task_notification', status: 'failed' });
+      expect(chunks[0]).toMatchObject({ type: 'subtask', status: 'failed' });
     });
 
     test('drops housekeeping task_notification when SDK sets ambient', async () => {
@@ -943,98 +1089,6 @@ describe('ClaudeProvider', () => {
       expect(chunks).toHaveLength(0);
     });
 
-    // --- #2083 — background-task liveness (SDK 0.3.209 background_tasks_changed) ---
-
-    test('yields background_tasks chunk from SDK background_tasks_changed', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: 'system',
-          subtype: 'background_tasks_changed',
-          tasks: [
-            { task_id: 't-1', task_type: 'local_agent', description: 'Research problem A' },
-            { task_id: 't-2', task_type: 'local_agent', description: 'Research problem B' },
-          ],
-        };
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        if (!isTurnEnd(chunk)) chunks.push(chunk);
-      }
-
-      expect(chunks).toEqual([
-        {
-          type: 'background_tasks',
-          tasks: [
-            { taskId: 't-1', taskType: 'local_agent', description: 'Research problem A' },
-            { taskId: 't-2', taskType: 'local_agent', description: 'Research problem B' },
-          ],
-        },
-      ]);
-    });
-
-    test('forwards an EMPTY background_tasks_changed set (drain signal)', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        if (!isTurnEnd(chunk)) chunks.push(chunk);
-      }
-
-      // An empty set means "all background work drained" — it must be forwarded,
-      // not dropped, or the executor's wait gate would never release.
-      expect(chunks).toEqual([{ type: 'background_tasks', tasks: [] }]);
-    });
-
-    test('filters ambient entries from background task replacement sets', async () => {
-      mockQuery.mockImplementation(async function* () {
-        yield {
-          type: 'system',
-          subtype: 'background_tasks_changed',
-          tasks: [
-            {
-              task_id: 't-user',
-              task_type: 'local_agent',
-              description: 'Research problem',
-            },
-            {
-              task_id: 't-ambient',
-              task_type: 'live_update_watcher',
-              description: 'Watch for updates',
-              ambient: true,
-            },
-          ],
-        };
-        yield {
-          type: 'system',
-          subtype: 'background_tasks_changed',
-          tasks: [
-            {
-              task_id: 't-ambient',
-              task_type: 'live_update_watcher',
-              description: 'Watch for updates',
-              ambient: true,
-            },
-          ],
-        };
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace')) {
-        if (!isTurnEnd(chunk)) chunks.push(chunk);
-      }
-
-      expect(chunks).toEqual([
-        {
-          type: 'background_tasks',
-          tasks: [{ taskId: 't-user', taskType: 'local_agent', description: 'Research problem' }],
-        },
-        { type: 'background_tasks', tasks: [] },
-      ]);
-    });
-
     test('settles only when the session goes idle, not at a result while background work runs', async () => {
       // Recorded shape (CLI 2.1.282): a result arrives while a background agent runs,
       // a second result follows once it drains, and only then does the session go idle.
@@ -1068,14 +1122,8 @@ describe('ClaudeProvider', () => {
         types.push(chunk.type);
       }
 
-      expect(types).toEqual([
-        'result',
-        'background_tasks',
-        'task_notification',
-        'background_tasks',
-        'result',
-        'settled',
-      ]);
+      // background_tasks_changed has no vocabulary event; the subtask carries its end.
+      expect(types).toEqual(['state_update', 'result', 'subtask', 'result', 'settled']);
       expect(readAfterIdle).toBe(false);
       // The CLI emits its session-state events only when asked.
       const options = (mockQuery.mock.calls[0][0] as { options: { env: Record<string, string> } })
@@ -1095,7 +1143,7 @@ describe('ClaudeProvider', () => {
         types.push(chunk.type);
       }
 
-      expect(types).toEqual(['assistant', 'result', 'settled']);
+      expect(types).toEqual(['agent_message_chunk', 'result', 'settled']);
     });
 
     test('yields hook_started chunk from SDK system message', async () => {
@@ -1116,10 +1164,11 @@ describe('ClaudeProvider', () => {
 
       expect(chunks).toEqual([
         {
-          type: 'hook_started',
+          type: 'hook',
           hookId: 'h-1',
           hookName: 'Bash',
           hookEvent: 'PreToolUse',
+          status: 'started',
         },
       ]);
     });
@@ -1144,11 +1193,11 @@ describe('ClaudeProvider', () => {
 
       expect(chunks).toEqual([
         {
-          type: 'hook_response',
+          type: 'hook',
           hookId: 'h-1',
           hookName: 'Bash',
           hookEvent: 'PreToolUse',
-          outcome: 'success',
+          status: 'succeeded',
           exitCode: 0,
         },
       ]);
@@ -1172,11 +1221,11 @@ describe('ClaudeProvider', () => {
       }
 
       expect(chunks[0]).toEqual({
-        type: 'hook_response',
+        type: 'hook',
         hookId: 'h-2',
         hookName: 'Edit',
         hookEvent: 'PreToolUse',
-        outcome: 'error',
+        status: 'failed',
       });
       expect(chunks[0]).not.toHaveProperty('exitCode');
     });
@@ -1211,10 +1260,10 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks.map(c => c.type)).toEqual([
-        'task_started',
-        'task_progress',
-        'task_notification',
+      expect(chunks.map(c => (c.type === 'subtask' ? c.status : c.type))).toEqual([
+        'started',
+        'running',
+        'completed',
       ]);
     });
 
@@ -1312,17 +1361,18 @@ describe('ClaudeProvider', () => {
 
       expect(chunks).toEqual([
         {
-          type: 'hook_started',
+          type: 'hook',
           hookId: 'h-1',
           hookName: 'Bash',
           hookEvent: 'PreToolUse',
+          status: 'started',
         },
         {
-          type: 'hook_response',
+          type: 'hook',
           hookId: 'h-1',
           hookName: 'Bash',
           hookEvent: 'PreToolUse',
-          outcome: 'error',
+          status: 'failed',
           exitCode: 2,
         },
       ]);
@@ -1355,17 +1405,18 @@ describe('ClaudeProvider', () => {
 
       expect(chunks).toEqual([
         {
-          type: 'hook_started',
+          type: 'hook',
           hookId: 'h-2',
           hookName: 'Edit',
           hookEvent: 'PostToolUse',
+          status: 'started',
         },
         {
-          type: 'hook_response',
+          type: 'hook',
           hookId: 'h-2',
           hookName: 'Edit',
           hookEvent: 'PostToolUse',
-          outcome: 'success',
+          status: 'succeeded',
           exitCode: 0,
         },
       ]);
@@ -1399,7 +1450,7 @@ describe('ClaudeProvider', () => {
       // The hook_progress frame is intentionally not surfaced: Archon
       // registers only synchronous hooks, and the hooks guide documents
       // the carve-out. Only the assistant message reaches the stream.
-      expect(chunks).toEqual([{ type: 'assistant', content: 'Real response' }]);
+      expect(chunks).toEqual([{ type: 'agent_message_chunk', text: 'Real response' }]);
     });
 
     test('handles tool_use with empty input', async () => {
@@ -1407,7 +1458,7 @@ describe('ClaudeProvider', () => {
         yield {
           type: 'assistant',
           message: {
-            content: [{ type: 'tool_use', name: 'SomeTool', input: undefined }],
+            content: [{ type: 'tool_use', id: 'toolu_x', name: 'SomeTool', input: undefined }],
           },
         };
       });
@@ -1417,11 +1468,11 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toHaveLength(1);
       expect(chunks[0]).toEqual({
-        type: 'tool',
-        toolName: 'SomeTool',
-        toolInput: {},
+        type: 'tool_call',
+        toolCallId: 'toolu_x',
+        name: 'SomeTool',
+        rawInput: {},
       });
     });
 
@@ -1444,8 +1495,7 @@ describe('ClaudeProvider', () => {
       }
 
       // Only the assistant message should be yielded
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Real response' });
+      expect(chunks).toEqual([{ type: 'agent_message_chunk', text: 'Real response' }]);
     });
 
     test('subprocess env passes through all process.env keys (no allowlist filtering)', async () => {
@@ -2071,8 +2121,7 @@ describe('ClaudeProvider', () => {
       }
 
       // Empty text should be filtered out
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({ type: 'assistant', content: 'Real content' });
+      expect(chunks).toEqual([{ type: 'agent_message_chunk', text: 'Real content' }]);
     });
   });
 });
@@ -2191,11 +2240,21 @@ describe('sendQuery decomposition behaviors', () => {
     mockLogger.debug.mockClear();
   });
 
-  test('PostToolUse hooks preserve success, failure, and interruption outcomes', async () => {
+  test('PostToolUse hooks close each call as completed, failed or cancelled', async () => {
     mockQuery.mockImplementation(async function* (args) {
       const successHook = args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0];
       const failureHook = args.options?.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
       const hookOptions = { signal: new AbortController().signal };
+      yield {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'success-id', name: 'Read', input: {} },
+            { type: 'tool_use', id: 'error-id', name: 'Bash', input: {} },
+            { type: 'tool_use', id: 'interrupt-id', name: 'Agent', input: {} },
+          ],
+        },
+      };
       await successHook?.(
         { tool_name: 'Read', tool_use_id: 'success-id', tool_response: 'ok' } as never,
         'success-id',
@@ -2213,7 +2272,7 @@ describe('sendQuery decomposition behaviors', () => {
       );
       await failureHook?.(
         {
-          tool_name: 'Task',
+          tool_name: 'Agent',
           tool_use_id: 'interrupt-id',
           error: 'stopped',
           is_interrupt: true,
@@ -2224,37 +2283,64 @@ describe('sendQuery decomposition behaviors', () => {
       yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };
     });
 
-    const chunks = [];
-    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+    const updates = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) {
+      if (chunk.type === 'tool_call_update') updates.push(chunk);
+    }
 
-    expect(chunks.slice(0, 3)).toEqual([
+    // The provider's own updates, so the stream's end has nothing left to cancel.
+    expect(updates).toEqual([
+      { type: 'tool_call_update', toolCallId: 'success-id', status: 'completed', output: 'ok' },
+      { type: 'tool_call_update', toolCallId: 'error-id', status: 'failed', output: 'exit 1' },
       {
-        type: 'tool_result',
-        toolName: 'Read',
-        toolOutput: 'ok',
-        toolCallId: 'success-id',
-        toolOutcome: 'success',
-      },
-      {
-        type: 'tool_result',
-        toolName: 'Bash',
-        toolOutput: '❌ Error: exit 1',
-        toolCallId: 'error-id',
-        toolOutcome: 'error',
-      },
-      {
-        type: 'tool_result',
-        toolName: 'Task',
-        toolOutput: '⚠️ Interrupted: stopped',
+        type: 'tool_call_update',
         toolCallId: 'interrupt-id',
-        toolOutcome: 'interrupted',
+        status: 'cancelled',
+        output: 'stopped',
+      },
+    ]);
+  });
+
+  test('PostToolUse caps long tool output and marks it truncated', async () => {
+    mockQuery.mockImplementation(async function* (args) {
+      const successHook = args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'big-id', name: 'Read', input: {} }] },
+      };
+      await successHook?.(
+        {
+          tool_name: 'Read',
+          tool_use_id: 'big-id',
+          tool_response: 'x'.repeat(TOOL_OUTPUT_MAX_CHARS + 10),
+        } as never,
+        'big-id',
+        { signal: new AbortController().signal }
+      );
+    });
+
+    const updates = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) {
+      if (chunk.type === 'tool_call_update') updates.push(chunk);
+    }
+
+    expect(updates).toEqual([
+      {
+        type: 'tool_call_update',
+        toolCallId: 'big-id',
+        status: 'completed',
+        output: 'x'.repeat(TOOL_OUTPUT_MAX_CHARS),
+        outputTruncated: true,
       },
     ]);
   });
 
   test('terminal tool result queue drain preserves hook outcome', async () => {
     mockQuery.mockImplementation(async function* (args) {
-      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'done' }] } };
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'late-id', name: 'Read', input: {} }] },
+      };
       const successHook = args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0];
       await successHook?.(
         { tool_name: 'Read', tool_use_id: 'late-id', tool_response: 'ok' } as never,
@@ -2267,12 +2353,87 @@ describe('sendQuery decomposition behaviors', () => {
     for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
 
     expect(chunks).toContainEqual({
-      type: 'tool_result',
-      toolName: 'Read',
-      toolOutput: 'ok',
+      type: 'tool_call_update',
       toolCallId: 'late-id',
-      toolOutcome: 'success',
+      status: 'completed',
+      output: 'ok',
     });
+  });
+
+  test('a tool call no hook reports closes from its tool_result block', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'denied-id', name: 'Bash', input: {} }] },
+      };
+      yield {
+        type: 'user',
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'denied-id',
+              is_error: true,
+              content: [{ type: 'text', text: 'Permission denied' }],
+            },
+          ],
+        },
+      };
+      yield { type: 'result', subtype: 'success', is_error: false, session_id: 's' };
+    });
+
+    const chunks = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
+
+    const updates = chunks.filter(chunk => chunk.type === 'tool_call_update');
+    expect(updates).toEqual([
+      {
+        type: 'tool_call_update',
+        toolCallId: 'denied-id',
+        status: 'failed',
+        output: 'Permission denied',
+      },
+    ]);
+    expect(chunks.findIndex(chunk => chunk.type === 'tool_call_update')).toBeLessThan(
+      chunks.findIndex(chunk => chunk.type === 'result')
+    );
+  });
+
+  test('a hook result closes its call once, and the later tool_result block is ignored', async () => {
+    mockQuery.mockImplementation(async function* (args) {
+      yield {
+        type: 'assistant',
+        message: { content: [{ type: 'tool_use', id: 'read-id', name: 'Read', input: {} }] },
+      };
+      const successHook = args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0];
+      await successHook?.(
+        { tool_name: 'Read', tool_use_id: 'read-id', tool_response: 'file body' } as never,
+        'read-id',
+        { signal: new AbortController().signal }
+      );
+      // A hook result for a call this stream never started is not a tool call of this turn.
+      await successHook?.(
+        { tool_name: 'Read', tool_use_id: 'stray-id', tool_response: 'x' } as never,
+        'stray-id',
+        { signal: new AbortController().signal }
+      );
+      yield {
+        type: 'user',
+        message: {
+          content: [{ type: 'tool_result', tool_use_id: 'read-id', content: 'file body' }],
+        },
+      };
+      yield { type: 'result', subtype: 'success', is_error: false, session_id: 's' };
+    });
+
+    const updates = [];
+    for await (const chunk of client.sendQuery('test', '/workspace')) {
+      if (chunk.type === 'tool_call_update') updates.push(chunk);
+    }
+
+    expect(updates).toEqual([
+      { type: 'tool_call_update', toolCallId: 'read-id', status: 'completed', output: 'file body' },
+    ]);
   });
 
   test('PostToolUse hook handles circular reference without crashing', async () => {
@@ -2305,7 +2466,7 @@ describe('sendQuery decomposition behaviors', () => {
     }
 
     // The assistant message should still come through
-    expect(chunks.some(c => c.type === 'assistant')).toBe(true);
+    expect(chunks.some(c => c.type === 'agent_message_chunk')).toBe(true);
     // The error should be logged
     expect(mockLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({ err: expect.any(Error) }),
@@ -2366,7 +2527,7 @@ describe('sendQuery decomposition behaviors', () => {
     expect(chunks[0]).toMatchObject({
       type: 'result',
       sessionId: 'sid-stop-seq',
-      stopReason: 'stop_sequence',
+      stopReason: 'end_turn',
     });
     expect(chunks[0]).not.toHaveProperty('isError');
     expect(chunks[0]).not.toHaveProperty('errorSubtype');
@@ -2559,17 +2720,23 @@ describe('sendQuery decomposition behaviors', () => {
         yield { type: 'result', session_id: 'sid' };
       });
 
-      const chunks: string[] = [];
+      const warnings = [];
       for await (const chunk of client.sendQuery('test', workflowCwd, undefined, {
         nodeConfig: { nodeId: 'builtin-skill', skills: ['dataviz'] },
       })) {
-        if (chunk.type === 'system') chunks.push(chunk.content ?? '');
+        if (chunk.type === 'warning') warnings.push(chunk);
       }
 
       expect(mockQuery).toHaveBeenCalled();
       const callArgs = mockQuery.mock.calls[0]![0] as { options: Options };
       expect(callArgs.options.skills).toEqual(['dataviz']);
-      expect(chunks.join('\n')).toContain('built-in');
+      expect(warnings).toEqual([
+        {
+          type: 'warning',
+          code: 'claude.skills_unresolved',
+          message: expect.stringContaining('built-in'),
+        },
+      ]);
     });
 
     test('names only the unreachable skill when a built-in is declared alongside it', async () => {
@@ -3057,7 +3224,7 @@ describe('typed failures (#1797, #3524)', () => {
     expect(result.isError).toBe(true);
     expect(result.failure).toEqual({ class: expected, evidence: text });
     // The error prose is never output.
-    expect(stream.chunks.filter(c => c.type === 'assistant')).toHaveLength(0);
+    expect(stream.chunks.filter(c => c.type === 'agent_message_chunk')).toHaveLength(0);
     // The provider makes one SDK call; retry belongs to the engine.
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
@@ -3249,7 +3416,7 @@ describe('typed failures (#1797, #3524)', () => {
       class: 'quota_exhausted',
       evidence: 'Credit balance is too low',
     });
-    expect(stream.chunks.filter(c => c.type === 'assistant')).toHaveLength(0);
+    expect(stream.chunks.filter(c => c.type === 'agent_message_chunk')).toHaveLength(0);
     expect(mockQuery).toHaveBeenCalledTimes(1);
   });
 
@@ -3377,6 +3544,34 @@ describe('typed failures (#1797, #3524)', () => {
     expect(stream.chunks.filter(c => c.type === 'result')).toHaveLength(0);
   });
 
+  test('an aborted stream closes its open tool calls before the abort propagates', async () => {
+    const abortController = new AbortController();
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'assistant',
+        message: {
+          content: [
+            { type: 'tool_use', id: 'toolu_a', name: 'Bash', input: { command: 'sleep 60' } },
+            { type: 'tool_use', id: 'toolu_b', name: 'Read', input: {} },
+          ],
+        },
+      };
+      abortController.abort();
+      throw sdkThrown('Claude Code process aborted by user', { errorClass: 'aborted' });
+    });
+
+    const stream = await collect(
+      client.sendQuery('test', '/workspace', undefined, { abortSignal: abortController.signal })
+    );
+    expect(stream.error?.message).toBe('Query aborted');
+    expect(stream.chunks.map(c => [c.type, c.toolCallId, c.status])).toEqual([
+      ['tool_call', 'toolu_a', undefined],
+      ['tool_call', 'toolu_b', undefined],
+      ['tool_call_update', 'toolu_a', 'cancelled'],
+      ['tool_call_update', 'toolu_b', 'cancelled'],
+    ]);
+  });
+
   test('a stream that ends without a result reports a failure before it settles', async () => {
     mockQuery.mockImplementation(async function* () {
       yield { type: 'assistant', message: { content: [{ type: 'text', text: 'partial' }] } };
@@ -3389,7 +3584,7 @@ describe('typed failures (#1797, #3524)', () => {
       class: 'unknown',
       evidence: 'Claude Code ended the turn without a result',
     });
-    expect(stream.chunks.map(c => c.type)).toEqual(['assistant', 'result', 'settled']);
+    expect(stream.chunks.map(c => c.type)).toEqual(['agent_message_chunk', 'result', 'settled']);
   });
 
   test('an error after the turn reported its result does not add a second result', async () => {
@@ -3437,7 +3632,7 @@ describe('typed failures (#1797, #3524)', () => {
 
     const stream = await collect(client.sendQuery('test', '/workspace'));
     expect(
-      stream.chunks.some(c => typeof c.content === 'string' && c.content.includes('Not logged in'))
+      stream.chunks.some(c => typeof c.text === 'string' && c.text.includes('Not logged in'))
     ).toBe(true);
     const result = onlyResult(stream);
     expect(result).not.toHaveProperty('isError');
@@ -3494,7 +3689,7 @@ describe('typed failures (#1797, #3524)', () => {
     });
 
     const stream = await collect(client.sendQuery('test', '/workspace'));
-    expect(stream.chunks.some(c => c.content === 'partial output before truncation')).toBe(true);
+    expect(stream.chunks.some(c => c.text === 'partial output before truncation')).toBe(true);
     expect(onlyResult(stream)).not.toHaveProperty('failure');
   });
 
@@ -3510,9 +3705,7 @@ describe('typed failures (#1797, #3524)', () => {
     });
 
     const stream = await collect(client.sendQuery('test', '/workspace'));
-    expect(stream.chunks.some(c => c.type === 'assistant' && c.content === 'Upstream hiccup')).toBe(
-      true
-    );
+    expect(stream.chunks).toContainEqual({ type: 'agent_message_chunk', text: 'Upstream hiccup' });
     expect(onlyResult(stream)).not.toHaveProperty('failure');
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ errorCode: 'server_error' }),
@@ -3556,6 +3749,13 @@ describe('typed failures (#1797, #3524)', () => {
         {
           name: 'CLI without session-state events',
           run: turn([{ type: 'result', subtype: 'success', is_error: false, session_id: 's' }]),
+        },
+        {
+          name: 'subtask the SDK never reports finished',
+          run: turn([
+            { type: 'system', subtype: 'task_started', task_id: 't', description: 'bg' },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
+          ]),
         },
       ],
       failureCases: [
@@ -3630,7 +3830,63 @@ describe('typed failures (#1797, #3524)', () => {
           evidence: 'something unexpected',
           run: turn(new Error('something unexpected')),
         },
+        {
+          name: 'workflow node with a plugin it does not name',
+          expected: 'misconfigured',
+          evidence: 'synced@claude-ai',
+          run: () => {
+            mockQuery.mockImplementation(async function* () {
+              yield {
+                type: 'system',
+                subtype: 'init',
+                session_id: 's',
+                plugins: [{ name: 'synced', path: '/s', source: 'synced@claude-ai' }],
+              };
+              yield { type: 'result', subtype: 'success', is_error: false, session_id: 's' };
+            });
+            return client.sendQuery('test', '/workspace', undefined, {
+              nodeConfig: { nodeId: 'closed-node' },
+            });
+          },
+        },
       ],
+      toolTurn: {
+        name: 'tool turn with an interrupted call',
+        run: () => {
+          mockQuery.mockImplementation(async function* (args) {
+            const successHook = args.options?.hooks?.PostToolUse?.[0]?.hooks?.[0];
+            const failureHook = args.options?.hooks?.PostToolUseFailure?.[0]?.hooks?.[0];
+            const hookOptions = { signal: new AbortController().signal };
+            yield {
+              type: 'assistant',
+              message: {
+                content: [
+                  { type: 'tool_use', id: 'toolu_read', name: 'Read', input: { path: 'a' } },
+                  { type: 'tool_use', id: 'toolu_bash', name: 'Bash', input: { command: 'sleep' } },
+                ],
+              },
+            };
+            await successHook?.(
+              { tool_name: 'Read', tool_use_id: 'toolu_read', tool_response: 'a' } as never,
+              'toolu_read',
+              hookOptions
+            );
+            await failureHook?.(
+              {
+                tool_name: 'Bash',
+                tool_use_id: 'toolu_bash',
+                error: 'interrupted',
+                is_interrupt: true,
+              } as never,
+              'toolu_bash',
+              hookOptions
+            );
+            yield { type: 'result', subtype: 'success', is_error: false, session_id: 's' };
+            yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+          });
+          return client.sendQuery('test', '/workspace');
+        },
+      },
     });
     expect(violations).toEqual([]);
   });

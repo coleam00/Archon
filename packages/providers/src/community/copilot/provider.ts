@@ -27,6 +27,7 @@ import type {
   IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
+  ProviderWarning,
   SendQueryOptions,
 } from '../../types';
 import { loadMcpConfig } from '../../mcp/config';
@@ -37,6 +38,7 @@ import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } fro
 import { clampEffort } from '@archon/paths/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
+import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
@@ -73,14 +75,6 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 export function resetCopilotSingleton(): void {
   // no-op
-}
-
-// ─── Warning collection ─────────────────────────────────────────────────────
-
-/** Structured provider warning collected during translation; flushed as a system chunk. */
-interface ProviderWarning {
-  code: string;
-  message: string;
 }
 
 // ─── Env + auth ─────────────────────────────────────────────────────────────
@@ -489,7 +483,7 @@ export class CopilotProvider implements IAgentProvider {
     // Flush translation warnings before session creation so the user sees
     // them even if session construction fails.
     for (const w of warnings) {
-      yield { type: 'system', content: `⚠️ ${w.message}` };
+      yield { type: 'warning', ...w };
     }
 
     // Best-effort structured output: Copilot has no native JSON-mode, so we
@@ -579,14 +573,16 @@ export class CopilotProvider implements IAgentProvider {
 
     if (resumeFailed) {
       yield {
-        type: 'system',
-        content: '⚠️ Could not resume Copilot session — starting a fresh conversation.',
+        type: 'warning',
+        code: 'copilot.resume_failed',
+        message: 'Could not resume Copilot session — starting a fresh conversation.',
       };
     } else if (forkedToFresh) {
       yield {
-        type: 'system',
-        content:
-          '⚠️ Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
+        type: 'warning',
+        code: 'copilot.fork_unsupported',
+        message:
+          'Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
       };
     }
 
@@ -607,11 +603,14 @@ export class CopilotProvider implements IAgentProvider {
     );
 
     try {
-      yield* bridgeSession(
-        session,
-        effectivePrompt,
-        requestOptions?.abortSignal,
-        wantsStructured ? outputFormat.schema : undefined
+      yield* closeOpenToolCalls(
+        bridgeSession(
+          session,
+          effectivePrompt,
+          requestOptions?.abortSignal,
+          wantsStructured ? outputFormat.schema : undefined
+        ),
+        { resultEndsTurn: true }
       );
       log.info({ sessionId: session.sessionId }, 'copilot.prompt_completed');
     } catch (err) {

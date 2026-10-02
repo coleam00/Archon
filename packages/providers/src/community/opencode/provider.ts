@@ -23,6 +23,7 @@ import {
 } from './runtime';
 import { resolveSessionId, streamOpencodeSession } from './session';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { closeOpenToolCalls } from '../../shared/tool-calls';
 
 export { parseModelRef } from './config';
 export { resetEmbeddedRuntime } from './runtime';
@@ -50,7 +51,10 @@ export class OpencodeProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     let resultReported = false;
     try {
-      for await (const chunk of this.streamTurn(prompt, cwd, resumeSessionId, requestOptions)) {
+      for await (const chunk of closeOpenToolCalls(
+        this.streamTurn(prompt, cwd, resumeSessionId, requestOptions),
+        { resultEndsTurn: true }
+      )) {
         if (chunk.type === 'result') resultReported = true;
         yield chunk;
       }
@@ -152,8 +156,9 @@ export class OpencodeProvider implements IAgentProvider {
       const { sessionId, resumed } = await resolveSessionId(client, sessionCwd, resumeSessionId);
       if (resumeSessionId && !resumed) {
         yield {
-          type: 'system',
-          content: '⚠️ Could not resume OpenCode session. Starting fresh conversation.',
+          type: 'warning',
+          code: 'opencode.resume_failed',
+          message: 'Could not resume OpenCode session. Starting fresh conversation.',
         };
       }
 

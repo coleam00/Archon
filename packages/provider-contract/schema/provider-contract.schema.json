@@ -108,7 +108,7 @@
           "type": "number"
         },
         "stopReason": {
-          "type": "string"
+          "$ref": "#/$defs/ProviderStopReason"
         },
         "numTurns": {
           "type": "number"
@@ -611,7 +611,7 @@
               "type": "number"
             },
             "stopReason": {
-              "type": "string"
+              "$ref": "#/$defs/ProviderStopReason"
             },
             "numTurns": {
               "type": "number"
