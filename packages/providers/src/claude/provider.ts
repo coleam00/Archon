@@ -1057,6 +1057,23 @@ function buildToolCaptureHooks(toolResultQueue: ToolResultEntry[]): Options['hoo
 
 // ─── Stream Normalizer ───────────────────────────────────────────────────
 
+/** A content block of a `user` message; only `tool_result` blocks are read. */
+interface ToolResultBlock {
+  type: string;
+  tool_use_id: string;
+  is_error?: boolean;
+  content?: string | { type: string; text?: string }[];
+}
+
+/** The text of a `tool_result` block's content. */
+function toolResultText(content: ToolResultBlock['content']): string {
+  if (typeof content === 'string') return content;
+  return (content ?? [])
+    .filter(part => part.type === 'text' && part.text)
+    .map(part => part.text)
+    .join('\n');
+}
+
 /** The result's stop reason in ACP's names; `undefined` for a native reason ACP has no name for. */
 function claudeStopReason(resultMsg: SDKResultMessage): ProviderStopReason | undefined {
   if (resultMsg.subtype === 'error_max_turns') return 'max_turn_requests';
@@ -1096,10 +1113,22 @@ async function* streamClaudeMessages(
   // Progress frames carry no visibility marker, so retain the start decision
   // for the lifetime of this query and suppress the complete hidden lifecycle.
   const hiddenTaskIds = new Set<string>();
+  // Tool calls yielded and not yet closed. The PostToolUse hooks close most of them with
+  // their output; a call no hook reports (a permission denial) closes from the
+  // `tool_result` block the CLI sends back to the model. Whichever arrives first closes
+  // the call, and a hook result for a call that is not open is dropped, so a call is
+  // never closed twice or closed without a start.
+  const openToolIds = new Set<string>();
+  function* drainHookResults(): Generator<MessageChunk> {
+    for (const update of toolResultQueue.splice(0)) {
+      if (openToolIds.delete(update.toolCallId)) yield update;
+      else getLog().debug({ toolCallId: update.toolCallId }, 'claude.tool_result_not_open');
+    }
+  }
 
   for await (const msg of events) {
     // Drain tool results captured by hooks before processing the next event
-    yield* toolResultQueue.splice(0);
+    yield* drainHookResults();
 
     const event = msg as { type: string };
 
@@ -1141,8 +1170,20 @@ async function* streamClaudeMessages(
             name: block.name,
             rawInput: block.input ?? {},
           };
+          openToolIds.add(block.id);
           yield call;
         }
+      }
+    } else if (event.type === 'user') {
+      const content = (msg as { message?: { content?: unknown } }).message?.content;
+      for (const block of Array.isArray(content) ? (content as ToolResultBlock[]) : []) {
+        if (block.type !== 'tool_result' || !openToolIds.delete(block.tool_use_id)) continue;
+        yield {
+          type: 'tool_call_update',
+          toolCallId: block.tool_use_id,
+          status: block.is_error === true ? 'failed' : 'completed',
+          ...truncateToolOutput(toolResultText(block.content)),
+        };
       }
     } else if (event.type === 'system') {
       const sysMsg = msg as {
@@ -1448,7 +1489,7 @@ async function* streamClaudeMessages(
   }
 
   // Drain any remaining tool results after the stream ends
-  yield* toolResultQueue.splice(0);
+  yield* drainHookResults();
 
   // Stream ended after a synthetic error message with no terminal result to
   // confirm or contradict it. A dangling synthetic error is a failure — the

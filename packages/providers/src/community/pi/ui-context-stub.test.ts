@@ -7,15 +7,17 @@ import { createArchonUIBridge, createArchonUIContext } from './ui-context-stub';
 describe('createArchonUIBridge', () => {
   test('drops notifications when no emitter is set', () => {
     const bridge = createArchonUIBridge();
-    expect(() => bridge.emit({ type: 'system', content: 'x' })).not.toThrow();
+    expect(() =>
+      bridge.emit({ type: 'warning', code: 'pi.extension_notify', message: 'x' })
+    ).not.toThrow();
   });
 
   test('forwards notifications to the configured emitter', () => {
     const bridge = createArchonUIBridge();
     const chunks: MessageChunk[] = [];
     bridge.setEmitter(c => chunks.push(c));
-    bridge.emit({ type: 'system', content: 'hello' });
-    expect(chunks).toEqual([{ type: 'system', content: 'hello' }]);
+    bridge.emit({ type: 'warning', code: 'pi.extension_notify', message: 'hello' });
+    expect(chunks).toEqual([{ type: 'warning', code: 'pi.extension_notify', message: 'hello' }]);
   });
 
   test('detaches emitter when cleared (bridgeSession cleanup path)', () => {
@@ -23,16 +25,12 @@ describe('createArchonUIBridge', () => {
     const chunks: MessageChunk[] = [];
     bridge.setEmitter(c => chunks.push(c));
     bridge.setEmitter(undefined);
-    bridge.emit({ type: 'system', content: 'late' });
+    bridge.emit({ type: 'warning', code: 'pi.extension_notify', message: 'late' });
     expect(chunks).toEqual([]);
   });
 });
 
 describe('createArchonUIContext', () => {
-  function assistantContent(chunk: MessageChunk | undefined): string | undefined {
-    return chunk?.type === 'assistant' ? chunk.content : undefined;
-  }
-
   function mk() {
     const bridge = createArchonUIBridge();
     const chunks: MessageChunk[] = [];
@@ -41,30 +39,20 @@ describe('createArchonUIContext', () => {
     return { ui, chunks };
   }
 
-  test('notify("info") forwards as assistant chunk with info glyph and flush:true (captured in nodeOutput, surfaces before node blocks)', () => {
-    const { ui, chunks } = mk();
-    ui.notify('Remote session. Open: http://host:8080/', 'info');
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0]).toEqual({
-      type: 'assistant',
-      content: '\n[pi extension ℹ️] Remote session. Open: http://host:8080/\n',
-      flush: true,
-    });
-  });
-
-  test('notify defaults to info when type omitted', () => {
-    const { ui, chunks } = mk();
-    ui.notify('bare message');
-    expect(assistantContent(chunks[0])).toBe('\n[pi extension ℹ️] bare message\n');
-  });
-
-  test('notify("warning") and notify("error") use distinct glyphs', () => {
-    const { ui, chunks } = mk();
-    ui.notify('soft', 'warning');
-    ui.notify('hard', 'error');
-    expect(assistantContent(chunks[0])).toBe('\n[pi extension ⚠️] soft\n');
-    expect(assistantContent(chunks[1])).toBe('\n[pi extension ❌] hard\n');
-  });
+  test.each(['info', 'warning', 'error', undefined] as const)(
+    'notify(%p) forwards the message as a pi.extension_notify warning',
+    level => {
+      const { ui, chunks } = mk();
+      ui.notify('Remote session. Open: http://host:8080/', level);
+      expect(chunks).toEqual([
+        {
+          type: 'warning',
+          code: 'pi.extension_notify',
+          message: 'Remote session. Open: http://host:8080/',
+        },
+      ]);
+    }
+  );
 
   test('select resolves to undefined (no operator to answer)', async () => {
     const { ui } = mk();

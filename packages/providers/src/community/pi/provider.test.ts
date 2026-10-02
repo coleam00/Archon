@@ -1373,7 +1373,7 @@ describe('PiProvider', () => {
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-proc');
   });
 
-  test('coalesces text_delta events into a single assistant chunk (#1814)', async () => {
+  test('coalesces text_delta events into a single agent_message_chunk (#1814)', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
       {
@@ -1431,13 +1431,13 @@ describe('PiProvider', () => {
     // (flushed before the terminal result) so downstream consumers don't see
     // fragmented "Hello\n\n world" output — see #1814.
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'Hello world' },
-      expect.objectContaining({ type: 'result', stopReason: 'stop' }),
+      { type: 'agent_message_chunk', text: 'Hello world' },
+      expect.objectContaining({ type: 'result', stopReason: 'end_turn' }),
       { type: 'settled' },
     ]);
   });
 
-  test('yields tool + tool_result chunks for tool_execution events', async () => {
+  test('yields tool_call + tool_call_update for tool_execution events', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
       {
@@ -1485,22 +1485,22 @@ describe('PiProvider', () => {
     );
     expect(chunks.length).toBe(4);
     expect(chunks[3]).toEqual({ type: 'settled' });
-    expect(chunks[0]).toMatchObject({
-      type: 'tool',
-      toolName: 'read',
-      toolInput: { path: '/x' },
+    expect(chunks[0]).toEqual({
+      type: 'tool_call',
       toolCallId: 'call-1',
+      name: 'read',
+      rawInput: { path: '/x' },
     });
-    expect(chunks[1]).toMatchObject({
-      type: 'tool_result',
-      toolName: 'read',
-      toolOutput: 'contents',
+    expect(chunks[1]).toEqual({
+      type: 'tool_call_update',
       toolCallId: 'call-1',
+      status: 'completed',
+      output: 'contents',
     });
     expect(chunks[2]).toMatchObject({ type: 'result' });
   });
 
-  test('resumeSessionId not found → fresh session + system warning', async () => {
+  test('resumeSessionId not found → fresh session + pi.resume_failed warning', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     mockSessionList.mockImplementationOnce(async () => []);
     resetScript([
@@ -1539,12 +1539,14 @@ describe('PiProvider', () => {
     expect(mockSessionList).toHaveBeenCalled();
     expect(mockSessionCreate).toHaveBeenCalledWith('/tmp');
     expect(mockSessionOpen).not.toHaveBeenCalled();
-    // Resume failure surfaces as a system warning
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    // Resume failure surfaces as a warning
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(true);
+    expect(
+      warnings.some(c => c.code === 'pi.resume_failed' && c.message.includes('Could not resume'))
+    ).toBe(true);
     // ...and as resumed:false on the result chunk so the executor can surface it.
     expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
       resumed: false,
@@ -1592,11 +1594,13 @@ describe('PiProvider', () => {
     expect(mockSessionForkFrom).not.toHaveBeenCalled();
     expect(mockSessionCreate).not.toHaveBeenCalled();
     // No resume_failed warning
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(false);
+    expect(
+      warnings.some(c => c.code === 'pi.resume_failed' && c.message.includes('Could not resume'))
+    ).toBe(false);
     // A warm resume reports resumed:true on the result chunk.
     expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
       resumed: true,
@@ -1762,7 +1766,7 @@ describe('PiProvider', () => {
     expect(callArgs.noTools).toBe('builtin');
   });
 
-  test('unknown tool names yield system warning', async () => {
+  test('unknown tool names yield a pi.unknown_tools warning', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -1773,11 +1777,13 @@ describe('PiProvider', () => {
       })
     );
 
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('WebFetch'))).toBe(true);
+    expect(
+      warnings.some(c => c.code === 'pi.unknown_tools' && c.message.includes('WebFetch'))
+    ).toBe(true);
   });
 
   test('denied_tools alone starts from full built-in set', async () => {
@@ -2180,7 +2186,7 @@ describe('PiProvider', () => {
     expect(loaderArgs?.noExtensions).toBe(true);
   });
 
-  test('nodeConfig.skills with unknown name yields system warning, does not abort', async () => {
+  test('nodeConfig.skills with unknown name yields a warning, does not abort', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -2191,11 +2197,15 @@ describe('PiProvider', () => {
       })
     );
     expect(error).toBeUndefined();
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('definitely-does-not-exist'))).toBe(true);
+    expect(
+      warnings.some(
+        c => c.code === 'pi.skills_unresolved' && c.message.includes('definitely-does-not-exist')
+      )
+    ).toBe(true);
 
     // DefaultResourceLoader instantiated without additionalSkillPaths (all missing)
     const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
@@ -2248,6 +2258,36 @@ describe('PiProvider', () => {
       end.messages[0].errorMessage = '429 Too Many Requests: rate limit exceeded';
       return events;
     };
+    // Pi aborts mid-tool: `bash` started and never ended before the agent loop stopped.
+    const interruptedToolTurn = (): FakeEvent[] => {
+      const [agentEnd] = scriptedAgentEnd();
+      if (agentEnd.type !== 'agent_end') throw new Error('scriptedAgentEnd changed shape');
+      return [
+        {
+          type: 'tool_execution_start',
+          toolCallId: 'read-1',
+          toolName: 'read',
+          args: { path: '/x' },
+        },
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'read-1',
+          toolName: 'read',
+          result: 'contents',
+          isError: false,
+        },
+        {
+          type: 'tool_execution_start',
+          toolCallId: 'bash-1',
+          toolName: 'bash',
+          args: { command: 'sleep 60' },
+        },
+        {
+          ...agentEnd,
+          messages: agentEnd.messages.map(m => ({ ...m, stopReason: 'aborted' }) as typeof m),
+        },
+      ];
+    };
     const violations = await runProviderConformance({
       turns: [
         {
@@ -2260,6 +2300,15 @@ describe('PiProvider', () => {
           },
         },
       ],
+      toolTurn: {
+        name: 'interrupted tool turn',
+        run: () => {
+          resetScript(interruptedToolTurn());
+          return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+            model: 'google/gemini-2.5-pro',
+          });
+        },
+      },
       failureCases: [
         {
           name: 'errored turn',
@@ -2364,7 +2413,7 @@ describe('PiProvider', () => {
     expect(mockAbort).toHaveBeenCalled();
   });
 
-  test('modelFallbackMessage yields a system chunk before the agent runs', async () => {
+  test('modelFallbackMessage yields a pi.model_fallback warning before the agent runs', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     mockCreateAgentSession.mockImplementationOnce(
       async (): Promise<CreateAgentSessionResult> =>
@@ -2377,11 +2426,15 @@ describe('PiProvider', () => {
         model: 'google/gemini-2.5-pro',
       })
     );
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('sonnet-5 not available'))).toBe(true);
+    expect(
+      warnings.some(
+        c => c.code === 'pi.model_fallback' && c.message.includes('sonnet-5 not available')
+      )
+    ).toBe(true);
   });
 
   // ─── structured output (best-effort JSON via prompt engineering) ──────

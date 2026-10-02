@@ -179,7 +179,7 @@ describe('CopilotProvider hardening', () => {
     const gen = p.sendQuery('hi', '/repo', undefined, { model: '  gpt-5-mini  ' });
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'ok' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'ok' }));
     session.resolveSend(undefined);
     await firstNext;
     await collect(gen);
@@ -199,7 +199,7 @@ describe('CopilotProvider hardening', () => {
     });
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'ok' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'ok' }));
     session.resolveSend(undefined);
     await firstNext;
     await collect(gen);
@@ -232,17 +232,9 @@ describe('CopilotProvider hardening', () => {
     expect(error).toBeUndefined();
     // The fallback content reached the consumer as an assistant chunk —
     // either via the safety-net path or the streaming path.
-    expect(chunks).toContainEqual(
-      expect.objectContaining({ type: 'assistant', content: 'FALLBACK' })
-    );
-    // The session-error must NOT produce a system warning when fallback
-    // content was delivered.
-    expect(chunks).not.toContainEqual(
-      expect.objectContaining({
-        type: 'system',
-        content: expect.stringContaining('some transient error'),
-      })
-    );
+    expect(chunks).toContainEqual({ type: 'agent_message_chunk', text: 'FALLBACK' });
+    // The session-error must NOT produce a warning when fallback content was delivered.
+    expect(chunks).not.toContainEqual(expect.objectContaining({ type: 'warning' }));
   });
 
   test('cleanup failure in disconnect does not mask the primary result', async () => {
@@ -256,7 +248,7 @@ describe('CopilotProvider hardening', () => {
     const gen = p.sendQuery('hi', '/repo', undefined, { model: 'gpt-5' });
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hello' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'hello' }));
     session.resolveSend(undefined);
     await firstNext;
     const { chunks, error } = await collect(gen);

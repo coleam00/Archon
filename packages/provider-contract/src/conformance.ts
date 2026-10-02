@@ -255,8 +255,8 @@ export async function runProviderConformance(suite: ProviderConformanceSuite): P
     ...(await checkFailureClasses(suite.failureCases)),
     // A failed turn settles too.
     ...(await checkSettled([...suite.turns, ...toolTurns, ...suite.failureCases])),
-    // Rule 1 extends to every fixture once every provider emits the vocabulary (#3569, PR B).
-    ...(await checkEventVocabulary(toolTurns)),
+    // Every fixture streams the vocabulary, a failed turn included.
+    ...(await checkEventVocabulary([...suite.turns, ...toolTurns, ...suite.failureCases])),
     ...(suite.toolTurn ? await checkToolTurnShape(suite.toolTurn) : []),
   ];
 }

@@ -347,6 +347,10 @@ export async function* streamOpencodeSession(
     // (the embedded server died or dropped the connection) is a failed turn, not an
     // empty success.
     throw new Error(`OpenCode event stream ended before session.idle (session: ${sessionId})`);
+  } catch (error) {
+    // Preserve partial output: a part still open when the turn fails reaches the user.
+    yield* textBlocks.drain();
+    throw error;
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();

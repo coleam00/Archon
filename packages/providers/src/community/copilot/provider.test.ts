@@ -172,7 +172,7 @@ describe('CopilotProvider.sendQuery', () => {
 
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'hi' }));
     session.resolveSend(undefined);
     await firstNext;
     await collect(gen);
@@ -194,7 +194,7 @@ describe('CopilotProvider.sendQuery', () => {
     const firstNext = gen.next();
     // Give the async chain a tick so createSession resolves.
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'hi' }));
     session.resolveSend(undefined);
     const chunks = [(await firstNext).value, ...(await collect(gen))];
 
@@ -313,10 +313,11 @@ describe('CopilotProvider.sendQuery', () => {
 
     expect(resumeSessionSpy).toHaveBeenCalledTimes(1);
     expect(createSessionSpy).toHaveBeenCalledTimes(1);
-    const systemChunk = chunks.find(
-      c => c && typeof c === 'object' && 'type' in c && c.type === 'system'
-    ) as { content: string } | undefined;
-    expect(systemChunk?.content).toContain('Could not resume');
+    expect(chunks).toContainEqual({
+      type: 'warning',
+      code: 'copilot.resume_failed',
+      message: expect.stringContaining('Could not resume'),
+    });
   });
 
   test('forkSession=true with resumeSessionId creates fresh session (SDK has no fork)', async () => {
@@ -336,10 +337,11 @@ describe('CopilotProvider.sendQuery', () => {
     // resumeSession MUST NOT be called — we fork to fresh instead.
     expect(resumeSessionSpy).not.toHaveBeenCalled();
     expect(createSessionSpy).toHaveBeenCalledTimes(1);
-    const systemChunk = chunks.find(
-      c => c && typeof c === 'object' && 'type' in c && c.type === 'system'
-    ) as { content: string } | undefined;
-    expect(systemChunk?.content).toContain('does not support session forking');
+    expect(chunks).toContainEqual({
+      type: 'warning',
+      code: 'copilot.fork_unsupported',
+      message: expect.stringContaining('does not support session forking'),
+    });
   });
 
   test('resumeSessionId without forkSession resumes in place (node-to-node continuation)', async () => {
@@ -396,6 +398,39 @@ describe('CopilotProvider.sendQuery', () => {
     expect(result?.tokens).toEqual({ input: 10, output: 3 });
   });
 
+  /** Two tools start; only the first completes before the turn ends. */
+  const toolTurnEvents = [
+    evt('tool.execution_start', { toolCallId: 'c1', toolName: 'read', arguments: { path: 'a' } }),
+    evt('tool.execution_start', {
+      toolCallId: 'c2',
+      toolName: 'bash',
+      arguments: { cmd: 'sleep' },
+    }),
+    evt('tool.execution_complete', { toolCallId: 'c1', success: true, result: { content: 'A' } }),
+    evt('assistant.message', { messageId: 'm', content: 'done' }),
+  ];
+
+  test('a tool the turn never completed closes as cancelled before the result', async () => {
+    const session = makeFakeSession('sess-open-tool');
+    nextCreateSessionResult = session;
+    const gen = new CopilotProvider().sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    for (const event of toolTurnEvents) session.fire(event);
+    session.resolveSend(undefined);
+    const chunks = [(await first).value, ...(await collect(gen))];
+
+    expect(chunks).toEqual([
+      { type: 'tool_call', toolCallId: 'c1', name: 'read', rawInput: { path: 'a' } },
+      { type: 'tool_call', toolCallId: 'c2', name: 'bash', rawInput: { cmd: 'sleep' } },
+      { type: 'tool_call_update', toolCallId: 'c1', status: 'completed', output: 'A' },
+      { type: 'agent_message_chunk', text: 'done' },
+      { type: 'tool_call_update', toolCallId: 'c2', status: 'cancelled' },
+      { type: 'result', sessionId: 'sess-open-tool' },
+      { type: 'settled' },
+    ]);
+  });
+
   test('conforms to the provider contract', async () => {
     /** One Copilot turn driven by a fake session that streams, then resolves or errors. */
     function turn(events: SessionEvent[], rejection?: Error): () => AsyncIterable<unknown> {
@@ -443,9 +478,10 @@ describe('CopilotProvider.sendQuery', () => {
       turns: [
         {
           name: 'completed turn',
-          run: turn([evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' })]),
+          run: turn([evt('assistant.message', { messageId: 'm', content: 'hi' })]),
         },
       ],
+      toolTurn: { name: 'tool turn', run: turn(toolTurnEvents) },
     });
     expect(violations).toEqual([]);
   });
