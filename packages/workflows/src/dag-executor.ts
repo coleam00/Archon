@@ -2236,6 +2236,14 @@ async function executeNodeInternal(
           batchMessages.push(text);
         }
       },
+      // A warning goes out at once (a Pi extension's review URL must reach the user
+      // before the node blocks), so the batched reply before it goes out first. A
+      // structured-output node is left alone: its batch is replaced by the parsed output.
+      beforeWarning: async () => {
+        if (batchMessages.length === 0 || nodeOptions?.outputFormat) return;
+        await safeSendMessage(platform, conversationId, batchMessages.join('\n\n'), nodeContext);
+        batchMessages.length = 0;
+      },
     });
     for await (const msg of withIdleTimeout(
       aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),

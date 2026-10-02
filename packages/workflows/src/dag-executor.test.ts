@@ -19285,6 +19285,22 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
 
     expect(mcpMessages(platform)).toEqual(['⚠️ Haiku does not support MCP']);
   });
+
+  it('in batch mode, sends the reply batched before a warning ahead of it', async () => {
+    const platform = await runWithEvents([
+      { type: 'agent_message_chunk', text: 'Plan written.' },
+      { type: 'warning', code: 'pi.extension_notify', message: 'pi extension info: Open URL' },
+    ]);
+
+    const sent = (platform.sendMessage as Mock<typeof platform.sendMessage>).mock.calls.map(
+      c => c[1] as string
+    );
+    const replyAt = sent.indexOf('Plan written.');
+    const warningAt = sent.indexOf('⚠️ pi extension info: Open URL');
+    expect(replyAt).toBeGreaterThanOrEqual(0);
+    expect(warningAt).toBeGreaterThan(replyAt);
+    expect(sent.at(warningAt + 1)).toBe('ok');
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -84,6 +84,11 @@ export interface ProviderEventHandlerDeps {
    * (an agent node batches it; a loop node strips its completion tag).
    */
   onMessageText(text: string): Promise<void>;
+  /**
+   * Runs before a warning is sent. A node that holds back reply text (an agent node in
+   * batch mode) sends it here, so the operator reads the reply in the order it came.
+   */
+  beforeWarning?(): Promise<void>;
 }
 
 export interface ProviderEventHandler {
@@ -119,6 +124,7 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
     logFields: Record<string, unknown>
   ): Promise<void> => {
     getLog().warn({ nodeId, ...logFields }, 'dag.provider_warning_forwarded');
+    await deps.beforeWarning?.();
     const delivered = await safeSendMessage(platform, conversationId, message, messageContext);
     if (!delivered) {
       getLog().error({ nodeId, workflowRunId: runId }, 'dag.provider_warning_delivery_failed');
