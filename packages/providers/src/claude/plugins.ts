@@ -39,7 +39,8 @@ const pluginListSchema = z.array(z.object({ id: z.string().min(1) }));
 export interface PluginListCommand {
   command: string;
   args: string[];
-  cwd: string;
+  /** Host directory to spawn in; undefined for a container run, whose cwd is a path inside the container. */
+  cwd: string | undefined;
   env: NodeJS.ProcessEnv;
 }
 
@@ -87,7 +88,7 @@ export function buildPluginListCommand(input: {
     return {
       command: 'docker',
       args: buildDockerExecCommandArgs(execContext, cwd, env, PLUGIN_LIST_ARGS),
-      cwd,
+      cwd: undefined,
       env: process.env,
     };
   }

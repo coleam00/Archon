@@ -54,6 +54,10 @@ describe('readClaudePluginIds', () => {
     expect(error.message).toContain('config unreadable');
   });
 
+  test('runs without a host cwd, as a container inventory does', async () => {
+    expect(await readClaudePluginIds({ ...fakeCli('[]'), cwd: undefined })).toEqual([]);
+  });
+
   test('output that is not the expected JSON is misconfigured', async () => {
     expect((await failureOf(readClaudePluginIds(fakeCli('not json')))).failureClass).toBe(
       'misconfigured'
@@ -73,6 +77,8 @@ describe('buildPluginListCommand', () => {
       execContext: { kind: 'container', containerId: 'c1', execUser: 'app' },
     });
     expect(cmd.command).toBe('docker');
+    // The cwd goes to `docker exec -w`; the host spawn must not use the container path.
+    expect(cmd.cwd).toBeUndefined();
     expect(cmd.args).toEqual([
       'exec',
       '-i',

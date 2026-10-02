@@ -607,16 +607,17 @@ interface ProviderWarning {
 
 // ─── NodeConfig → SDK Options Translation ──────────────────────────────────
 
+/** A non-empty nodeId marks a workflow node, the declared-only capability path. */
+function isWorkflowNode(nodeConfig: NodeConfig | undefined): nodeConfig is NodeConfig {
+  return typeof nodeConfig?.nodeId === 'string' && nodeConfig.nodeId.trim().length > 0;
+}
+
 /**
  * Translate nodeConfig into Claude SDK-specific options.
  * Called inside sendQuery when nodeConfig is present. A non-empty nodeId marks
  * the workflow path; partial non-workflow configs keep ambient SDK behavior.
  * Returns structured warnings that the caller should yield as system chunks.
  */
-function isWorkflowNode(nodeConfig: NodeConfig | undefined): nodeConfig is NodeConfig {
-  return typeof nodeConfig?.nodeId === 'string' && nodeConfig.nodeId.trim().length > 0;
-}
-
 async function applyNodeConfig(
   options: Options,
   nodeConfig: NodeConfig,

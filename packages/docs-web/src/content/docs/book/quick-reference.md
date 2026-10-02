@@ -145,6 +145,7 @@ All nodes share these base fields:
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
 | `skills` | No | string[] | Declared skill names for this node; Claude omission/`[]` selects none |
+| `plugins` | No | string[] | Plugin ids (`name@marketplace`) this node loads; omission/`[]` loads none. Claude only; other providers fail the run |
 | `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
 
 **Script-specific fields** (required when `script:` is set):
