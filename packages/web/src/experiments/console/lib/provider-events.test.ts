@@ -1,8 +1,10 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import {
   GAP_FETCH_ATTEMPTS,
   createProviderEventStore,
   findProviderEventGap,
+  mergeProviderEventRecords,
   type ProviderEventCursor,
   type ProviderEventRecord,
 } from './provider-events';
@@ -165,5 +167,29 @@ describe('findProviderEventGap', () => {
 
   test('legacy records and contiguous attempts have no gap', () => {
     expect(findProviderEventGap([rec(null, 0), rec(null, 1), rec('a', 0), rec('b', 0)])).toBe(null);
+  });
+});
+
+describe('mergeProviderEventRecords', () => {
+  // The engine orders served records by the same rule (orderProviderEventRecords in
+  // @archon/workflows), which the console cannot import; both run this fixture.
+  test('orders records by the shared ordering fixture', () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        new URL(
+          '../../../../../workflows/src/schemas/provider-event-order.fixture.json',
+          import.meta.url
+        ),
+        'utf-8'
+      )
+    ) as {
+      input: Array<{ attemptId: string | null; seq: number }>;
+      expected: Array<{ attemptId: string | null; seq: number }>;
+    };
+    const merged = mergeProviderEventRecords(
+      [],
+      fixture.input.map(r => rec(r.attemptId, r.seq))
+    );
+    expect(merged.map(r => ({ attemptId: r.attemptId, seq: r.seq }))).toEqual(fixture.expected);
   });
 });

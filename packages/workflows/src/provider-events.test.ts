@@ -9,7 +9,8 @@ import {
   createProviderEventHandler,
   type AttemptEventSequence,
 } from './provider-events';
-import { providerEventEnvelopeSchema } from './schemas/provider-event';
+import { orderProviderEventRecords, providerEventEnvelopeSchema } from './schemas/provider-event';
+import orderFixture from './schemas/provider-event-order.fixture.json';
 import type { IWorkflowStore } from './store';
 
 const trackTempRoot = trackTempRoots();
@@ -127,5 +128,12 @@ describe('createProviderEventHandler', () => {
     });
 
     expect(sent).toEqual(['MCP server connection failed: github (needs_auth): token expired']);
+  });
+});
+
+describe('provider-event record order', () => {
+  // The console runs the same fixture against its own merge (it cannot import this).
+  test('matches the shared ordering fixture', () => {
+    expect(orderProviderEventRecords(orderFixture.input)).toEqual(orderFixture.expected);
   });
 });

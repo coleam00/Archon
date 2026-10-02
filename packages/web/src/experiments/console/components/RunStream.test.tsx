@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { RunStream, pairProviderToolCalls } from './RunStream';
 import type { ProviderEventRecord, RunProviderEvents } from '../lib/provider-events';
 import type { Message } from '../primitives/message';
+import type { NodeTransitionEvent } from '../primitives/event';
 import { StreamContextProvider } from '../lib/stream-context';
 
 function record(
@@ -116,14 +117,14 @@ describe('pairProviderToolCalls', () => {
 });
 
 describe('RunStream tool rendering', () => {
-  const nodeStarted = {
+  const nodeStarted: NodeTransitionEvent = {
     id: 'n1',
     runId: 'r1',
-    kind: 'node_transition' as const,
+    kind: 'node_transition',
     timestamp: '2026-10-02T09:59:59.000Z',
     nodeId: 'implement',
     nodeName: 'implement',
-    transition: 'started' as const,
+    transition: 'started',
     durationMs: null,
     skipReason: null,
     skipExpr: null,
@@ -176,6 +177,38 @@ describe('RunStream tool rendering', () => {
     );
     expect(html).toContain('Grep');
     expect(html).not.toContain('InlineOnly');
+  });
+
+  test('a call with no recorded outcome reads as such once its node finished, not as running', () => {
+    const lostUpdate: RunProviderEvents = new Map([
+      [
+        'implement',
+        [
+          record('implement', 'a1', 0, '2026-10-02T10:00:00.500Z', {
+            type: 'tool_call',
+            toolCallId: 'x',
+            name: 'Grep',
+          }),
+        ],
+      ],
+    ]);
+    const finished: NodeTransitionEvent = { ...nodeStarted, id: 'n2', transition: 'completed' };
+    const html = (events: NodeTransitionEvent[]): string =>
+      renderToStaticMarkup(
+        <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
+          <RunStream
+            messages={[]}
+            events={events}
+            providerEvents={lostUpdate}
+            showToolCalls
+            showSystem={false}
+            selectedNodeId="all"
+          />
+        </StreamContextProvider>
+      );
+
+    expect(html([nodeStarted])).not.toContain('no result recorded');
+    expect(html([nodeStarted, finished])).toContain('no result recorded');
   });
 
   test('falls back to message-inline tools for a run that recorded no tool events', () => {

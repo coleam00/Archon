@@ -230,12 +230,16 @@ export function RunStream({
       });
     }
 
+    const nodeStatus = new Map(nodeRuns.map(r => [r.nodeId, r.status]));
     for (const t of toolCalls.fromProviderEvents) {
+      const status = nodeStatus.get(t.nodeId);
+      const unrecorded =
+        t.call.status === undefined && status !== undefined && status !== 'running';
       entries.push({
         kind: 'tool',
         key: `pt:${t.id}`,
         at: new Date(t.timestamp).getTime(),
-        call: t.call,
+        call: unrecorded ? { ...t.call, outcomeUnrecorded: true } : t.call,
         timestamp: t.timestamp,
         nodeId: t.nodeId,
       });

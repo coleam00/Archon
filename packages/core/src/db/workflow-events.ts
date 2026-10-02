@@ -126,7 +126,16 @@ export async function createWorkflowEvent(data: ObservabilityEventInput): Promis
     await insertWorkflowEvent((sql, params) => pool.query(sql, params), data);
   } catch (error) {
     getLog().error(
-      { err: error as Error, eventType: data.event_type, runId: data.workflow_run_id },
+      {
+        err: error as Error,
+        eventType: data.event_type,
+        runId: data.workflow_run_id,
+        stepName: data.step_name,
+        // A lost provider event leaves a hole in its attempt's `seq`; name it.
+        ...(data.event_type === 'provider_event'
+          ? { attemptId: data.data?.attemptId, seq: data.data?.seq }
+          : {}),
+      },
       'db.workflow_event_create_failed'
     );
     // Fire-and-forget: never throw

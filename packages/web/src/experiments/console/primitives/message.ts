@@ -15,6 +15,11 @@ export interface InlineToolCall {
   durationMs?: number;
   /** How the call ended, when the provider reported it. Older messages have none. */
   status?: 'completed' | 'failed' | 'cancelled';
+  /**
+   * The call's node finished and no outcome was recorded for it (its update row was
+   * lost), so the call is not shown as still running.
+   */
+  outcomeUnrecorded?: true;
   exitCode?: number;
 }
 

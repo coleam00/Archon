@@ -57,7 +57,8 @@ export type ProviderEventQuery =
  * Order records within one node the way they were emitted: attempts in the order they
  * first appear in `records`, and each attempt's events by `seq`. Legacy records (null
  * attempt) group as one attempt. Records of different nodes keep their relative order
- * only through their attempts, so call it per node.
+ * only through their attempts, so call it per node. The console applies the same rule
+ * to live frames; both are held to `provider-event-order.fixture.json`.
  */
 export function orderProviderEventRecords<T extends { attemptId: string | null; seq: number }>(
   records: readonly T[]

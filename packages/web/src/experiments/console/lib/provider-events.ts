@@ -19,10 +19,10 @@ import { requestJson } from './http';
 export type ProviderEventRecord = components['schemas']['ProviderEventRecord'];
 export type ProviderEvent = ProviderEventRecord['event'];
 
-export interface ProviderEventCursor {
-  attemptId: string;
-  seq: number;
-}
+/** Where a node's records stop being contiguous: an attempt and its last held `seq`. */
+export type ProviderEventCursor = Pick<ProviderEventRecord, 'seq'> & {
+  attemptId: NonNullable<ProviderEventRecord['attemptId']>;
+};
 
 /** Fetch one node's records, all of them or those after a cursor. */
 export type ProviderEventFetcher = (
@@ -37,7 +37,9 @@ function recordKey(record: { attemptId: string | null; seq: number }): string {
 
 /**
  * Merge records into a node's ordered list: duplicates dropped, attempts kept in the
- * order they were first seen, each attempt's events by `seq`.
+ * order they were first seen, each attempt's events by `seq`. This is the engine's
+ * `orderProviderEventRecords` rule, which the console cannot import; both are held to
+ * `packages/workflows/src/schemas/provider-event-order.fixture.json`.
  */
 export function mergeProviderEventRecords(
   existing: readonly ProviderEventRecord[],

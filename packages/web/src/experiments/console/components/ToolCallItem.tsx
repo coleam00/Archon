@@ -86,6 +86,11 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
             {call.exitCode !== undefined ? ` (exit ${call.exitCode.toString()})` : ''}
           </span>
         ) : null}
+        {call.outcomeUnrecorded === true ? (
+          <span className="shrink-0 font-mono text-[11.5px] text-text-tertiary">
+            no result recorded
+          </span>
+        ) : null}
         {call.durationMs !== undefined ? (
           <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary">
             {call.durationMs.toString()}ms
