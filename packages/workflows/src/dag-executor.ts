@@ -193,8 +193,6 @@ import {
   RATE_LIMIT_MAX_RETRIES,
   providerFailureKind,
   detectCreditExhaustion,
-  isQuotaExhaustionError,
-  extractQuotaResetAt,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -2147,13 +2145,20 @@ async function executeNodeInternal(
   const failAgentNode = async (
     error: string,
     failureKind: NodeFailureKind,
-    extras: { output?: string } = {}
+    extras: { output?: string; providerFailure?: ProviderFailure } = {}
   ): Promise<NodeExecutionResult> => {
     const result = await recordNodeState(
       { store: deps.store, logDir },
       finishNodeExecution(
         execution,
-        { status: 'failed', error, failureKind },
+        {
+          status: 'failed',
+          error,
+          failureKind,
+          ...(extras.providerFailure !== undefined
+            ? { providerFailure: extras.providerFailure }
+            : {}),
+        },
         {
           output: { text: extras.output ?? '' },
           tokens: nodeTokens,
@@ -2586,17 +2591,14 @@ async function executeNodeInternal(
         nodeResolvedModel = msg.resolvedModel;
         if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
         if (msg.failure !== undefined) {
-          throw providerReportedFailure(`Node '${node.id}'`, msg.failure);
-        }
-        // Fail the node if the SDK reports a cost cap exceeded error
-        if (msg.isError && msg.errorSubtype === 'error_max_budget_usd') {
-          const cap = nodeOptions?.maxBudgetUsd;
-          getLog().warn(
-            { nodeId: node.id, maxBudgetUsd: cap, durationMs: Date.now() - nodeStartTime },
-            'dag.node_budget_cap_exceeded'
-          );
-          throw new Error(
-            `Node '${node.id}' exceeded cost cap${cap !== undefined ? ` of $${cap.toFixed(2)}` : ''}.`
+          throw providerReportedFailure(
+            `Node '${node.id}'`,
+            msg.failure,
+            nodeOptions?.maxBudgetUsd,
+            {
+              nodeId: node.id,
+              durationMs: Date.now() - nodeStartTime,
+            }
           );
         }
         // Fail loudly on any other SDK error result. Previously we broke out of
@@ -3183,7 +3185,11 @@ async function executeNodeInternal(
       : err instanceof NodeFailure
         ? err.kind
         : providerFailureKind(err);
-    return failAgentNode(failureMessage, failureKind);
+    const providerFailure =
+      !cancelled && err instanceof NodeFailure ? err.providerFailure : undefined;
+    return failAgentNode(failureMessage, failureKind, {
+      ...(providerFailure !== undefined ? { providerFailure } : {}),
+    });
   }
   if (result.state === 'failed') {
     return failAgentNode(result.error, result.failureKind, { output: result.output });
@@ -3594,7 +3600,9 @@ class ExecOutputContractError extends Error {}
 class NodeFailure extends Error {
   constructor(
     readonly kind: NodeFailureKind,
-    message: string
+    message: string,
+    /** The provider's typed failure, recorded unchanged on the failed node. */
+    readonly providerFailure?: ProviderFailure
   ) {
     super(message);
   }
@@ -3604,11 +3612,20 @@ class NodeFailure extends Error {
  * A provider's typed failure on its result chunk. The kind comes from the class, so retry
  * never reads the evidence text, which stays in the message for the operator.
  */
-function providerReportedFailure(subject: string, failure: ProviderFailure): NodeFailure {
-  return new NodeFailure(
-    nodeFailureKindOf(failure),
-    `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`
-  );
+function providerReportedFailure(
+  subject: string,
+  failure: ProviderFailure,
+  maxBudgetUsd: number | undefined,
+  logContext: Record<string, unknown>
+): NodeFailure {
+  if (failure.class === 'budget_exceeded') {
+    getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+  }
+  const message =
+    failure.class === 'budget_exceeded'
+      ? `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`
+      : `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
+  return new NodeFailure(nodeFailureKindOf(failure), message, failure);
 }
 
 async function recordExecTimeoutSkip(
@@ -4566,6 +4583,7 @@ async function executeLoopGroupNode(
       status: 'failed',
       error: result.error,
       ...(result.failureKind !== undefined ? { failureKind: result.failureKind } : {}),
+      ...(result.providerFailure !== undefined ? { providerFailure: result.providerFailure } : {}),
     };
   } else if (result.state === 'running') {
     const suspensionPoint = result.suspensionPoint;
@@ -5204,11 +5222,17 @@ async function executeLoopGroupBody(
     // (any failed node fails the run) and executeLoopNode (an iteration failure stops
     // the loop). Silently re-running the body would burn AI cost every remaining
     // iteration and bury the root cause under a generic max-iterations error.
-    const failedBodyNodes = iterBodyNodes.flatMap(n => {
+    const failedBodyOutputs = iterBodyNodes.flatMap(n => {
       const o = scopedNodeOutputs.get(n.id);
-      return o?.state === 'failed' ? [`'${n.id}': ${o.error}`] : [];
+      return o?.state === 'failed' ? [{ id: n.id, output: o }] : [];
     });
-    if (failedBodyNodes.length > 0) {
+    if (failedBodyOutputs.length > 0) {
+      const failedBodyNodes = failedBodyOutputs.map(({ id, output }) => `'${id}': ${output.error}`);
+      // A body node's typed provider failure is the group's, unchanged: quota resume
+      // reads it from the group's output, which is all the run sees.
+      const providerFailure = failedBodyOutputs.find(
+        ({ output }) => output.providerFailure !== undefined
+      )?.output.providerFailure;
       const errorMsg = `Loop-group node '${node.id}' failed at iteration ${String(i)}: ${failedBodyNodes.join('; ')}`;
       getLog().warn(
         { nodeId: node.id, iteration: i, failedCount: failedBodyNodes.length },
@@ -5220,6 +5244,7 @@ async function executeLoopGroupBody(
         output: lastIterationOutput,
         error: errorMsg,
         failureKind: 'child_failed',
+        ...(providerFailure !== undefined ? { providerFailure } : {}),
         costUsd: loopTotalCostUsd,
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
@@ -5689,6 +5714,7 @@ async function executeLoopNode(
     error: string,
     extras: {
       failureKind: NodeFailureKind;
+      providerFailure?: ProviderFailure;
       output?: string;
       costUsd?: number;
       tokens?: TokenUsage;
@@ -5704,7 +5730,14 @@ async function executeLoopNode(
       { store: deps.store, logDir },
       finishNodeExecution(
         execution,
-        { status: 'failed', error, failureKind: extras.failureKind },
+        {
+          status: 'failed',
+          error,
+          failureKind: extras.failureKind,
+          ...(extras.providerFailure !== undefined
+            ? { providerFailure: extras.providerFailure }
+            : {}),
+        },
         {
           output: { text: extras.output ?? '' },
           tokens: extras.tokens,
@@ -6298,7 +6331,9 @@ async function executeLoopNode(
               if (msg.failure !== undefined) {
                 throw providerReportedFailure(
                   `Loop '${node.id}' iteration ${String(i)}`,
-                  msg.failure
+                  msg.failure,
+                  resolvedOptions?.maxBudgetUsd,
+                  { nodeId: node.id, iteration: i }
                 );
               }
               // Fail the iteration loudly on SDK error results. Previously we broke
@@ -6543,6 +6578,9 @@ async function executeLoopNode(
           }
           return await failLoopNode(`Loop iteration ${String(i)} failed: ${err.message}`, {
             failureKind,
+            ...(err instanceof NodeFailure && err.providerFailure !== undefined
+              ? { providerFailure: err.providerFailure }
+              : {}),
             costUsd: loopTotalCostUsd,
             ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
             loopIterations: i,
@@ -8851,6 +8889,8 @@ interface ComposeInstanceOutcome {
   output: string;
   structuredOutput?: unknown;
   error?: string;
+  /** The failed instance node's typed provider failure, unchanged. */
+  providerFailure?: ProviderFailure;
   costUsd?: number;
   tokens?: TokenUsage;
 }
@@ -8880,13 +8920,19 @@ async function executeComposeFanOutNode(
     error: string,
     failureKind: NodeFailureKind,
     costUsd?: number,
-    tokens?: TokenUsage
+    tokens?: TokenUsage,
+    providerFailure?: ProviderFailure
   ): Promise<NodeExecutionResult> => {
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },
       finishNodeExecution(
         execution,
-        { status: 'failed', error, failureKind },
+        {
+          status: 'failed',
+          error,
+          failureKind,
+          ...(providerFailure !== undefined ? { providerFailure } : {}),
+        },
         {
           output: { text: '' },
           costUsd,
@@ -9265,10 +9311,14 @@ async function executeComposeFanOutNode(
       await runLayers(instanceCtx);
       const failed = [...instanceCtx.nodeOutputs.values()].filter(o => o.state === 'failed');
       if (failed.length > 0) {
+        // An instance node's typed provider failure is the instance's, unchanged: quota
+        // resume reads it from the fan-out node's output, which is all the run sees.
+        const providerFailure = failed.find(o => o.providerFailure !== undefined)?.providerFailure;
         const outcome: ComposeInstanceOutcome = {
           status: 'failed',
           output: '',
           error: failed[0].error ?? 'composed instance node failed',
+          ...(providerFailure !== undefined ? { providerFailure } : {}),
           ...(instanceCtx.totalCostUsd !== undefined ? { costUsd: instanceCtx.totalCostUsd } : {}),
           ...(instanceCtx.totalTokens !== undefined ? { tokens: instanceCtx.totalTokens } : {}),
         };
@@ -9279,6 +9329,7 @@ async function executeComposeFanOutNode(
               status: 'failed',
               error: outcome.error ?? 'composed instance node failed',
               failureKind: 'child_failed',
+              ...(providerFailure !== undefined ? { providerFailure } : {}),
             },
             {
               output: { text: '' },
@@ -9399,7 +9450,8 @@ async function executeComposeFanOutNode(
           (bad.error ? `: ${bad.error}` : ''),
         'child_failed',
         totalCostUsd,
-        totalTokens
+        totalTokens,
+        bad.providerFailure
       );
     }
   }
@@ -11790,11 +11842,16 @@ export async function executeDagWorkflow(
     const prior = isScheduledWorkflowResume(workflowRun.metadata?.scheduled_resume)
       ? workflowRun.metadata.scheduled_resume
       : undefined;
+    // Only a provider's typed class says a quota window is spent; the error text never does.
     const quotaFailure = [...runCtx.nodeOutputs.values()].find(
-      (output): output is Extract<NodeOutput, { state: 'failed' }> =>
-        output.state === 'failed' && isQuotaExhaustionError(output.error)
+      (
+        output
+      ): output is Extract<NodeOutput, { state: 'failed' }> & {
+        providerFailure: ProviderFailure;
+      } => output.state === 'failed' && output.providerFailure?.class === 'quota_exhausted'
     );
     if (quotaFailure === undefined) return undefined;
+    const quotaResetAt = quotaFailure.providerFailure.resetAt;
     const now = new Date();
     const maxAttempts = policy.quotaMaxAttempts;
     const attempt = (prior?.attempt ?? 0) + 1;
@@ -11809,7 +11866,7 @@ export async function executeDagWorkflow(
       return undefined;
     }
 
-    let resumeAt = extractQuotaResetAt(quotaFailure.error, now);
+    let resumeAt: Date | null = quotaResetAt !== undefined ? new Date(quotaResetAt) : null;
     if (resumeAt === null || resumeAt.getTime() <= now.getTime()) {
       const fallback = policy.quotaFallbackDelayMs;
       resumeAt = fallback !== undefined ? new Date(now.getTime() + fallback) : null;

@@ -338,6 +338,12 @@ export type MessageChunk =
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 
 /**
+ * The terminal `result` chunk. Providers build it by assignment on a value of this type
+ * rather than from conditional spreads, so a misspelled key fails to compile.
+ */
+export type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
+
+/**
  * System prompt input accepted by all providers. Mirrors the Claude Agent SDK
  * preset-with-append shape so callers can opt into cacheable prefix behavior.
  * Hand-written duplicate of the SDK type — see file-header rule forbidding SDK imports here.

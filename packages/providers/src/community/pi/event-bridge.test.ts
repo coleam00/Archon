@@ -6,7 +6,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type { StopReason, Usage } from '@earendil-works/pi-ai';
 
-import type { MessageChunk } from '../../types';
+import type { MessageChunk, ResultChunk } from '../../types';
 import {
   AsyncQueue,
   bridgeSession,
@@ -163,11 +163,14 @@ describe('buildResultChunk', () => {
     // agent_end with no assistant message in the transcript is anomalous —
     // must surface as an error so the orchestrator doesn't treat a broken
     // session as a clean success.
-    const expected = {
+    const evidence = 'Pi ended the turn without an assistant message';
+    const expected: ResultChunk = {
       type: 'result',
       isError: true,
       errorSubtype: 'missing_assistant_message',
-    } as const;
+      errors: [evidence],
+      failure: { class: 'unknown', evidence },
+    };
     expect(buildResultChunk([])).toEqual(expected);
     expect(buildResultChunk([{ role: 'user', content: [] }])).toEqual(expected);
   });
@@ -225,23 +228,28 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('does not populate errors when errorMessage is absent or empty', () => {
-    // undefined errorMessage
-    const chunk1 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', content: [] },
-    ]);
-    if (chunk1.type === 'result') {
-      expect(chunk1.isError).toBe(true);
-      expect(chunk1.errors).toBeUndefined();
+  test('falls back to the stop reason as evidence when errorMessage is absent or empty', () => {
+    for (const errorMessage of [undefined, '']) {
+      const chunk = buildResultChunk([
+        { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
+      ]);
+      expect(chunk.isError).toBe(true);
+      expect(chunk.failure).toEqual({ class: 'unknown', evidence: 'error' });
+      expect(chunk.errors).toEqual(['error']);
     }
-    // empty string — also falsy, also excluded from errors[]
-    const chunk2 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage: '', content: [] },
+  });
+
+  // Pi has no typed error taxonomy: a failure is `unknown` whatever its words say,
+  // and the words are kept as evidence.
+  test.each([
+    ['429 Too Many Requests: rate limit exceeded'],
+    ['401 Unauthorized: invalid x-api-key'],
+    ["400 invalid_request_error: You're out of extra usage"],
+  ])('an errored turn "%s" reports an unknown failure with the vendor text', errorMessage => {
+    const chunk = buildResultChunk([
+      { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
     ]);
-    if (chunk2.type === 'result') {
-      expect(chunk2.isError).toBe(true);
-      expect(chunk2.errors).toBeUndefined();
-    }
+    expect(chunk.failure).toEqual({ class: 'unknown', evidence: errorMessage });
   });
 
   test('flags isError for stopReason=aborted', () => {

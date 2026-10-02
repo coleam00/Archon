@@ -9,6 +9,7 @@ import {
   type SuspendReason,
 } from './node-state';
 import type { TokenUsage } from '@archon/providers/types';
+import { providerFailureSchema } from '@archon/provider-contract';
 import {
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
@@ -238,6 +239,8 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     retryable: z.literal(false).optional(),
     /** Why the node failed, when the producer knows it (see `nodeFailureKindSchema`). */
     failureKind: nodeFailureKindSchema.optional(),
+    /** The provider's own typed failure, unchanged, when a provider reported one. */
+    providerFailure: providerFailureSchema.optional(),
   }),
   z.object({
     execution: nodeExecutionMetadataSchema.optional(),

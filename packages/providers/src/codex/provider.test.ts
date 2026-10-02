@@ -61,14 +61,27 @@ mock.module('@openai/codex-sdk', () => ({
   Codex: MockCodex,
 }));
 
-import { CodexProvider, classifyCodexError, resetCodexSingleton } from './provider';
+import { runProviderConformance } from '@archon/provider-contract/conformance';
+import { CodexProvider, resetCodexSingleton } from './provider';
+
+/** The typed failure a Codex turn ended in. */
+async function codexFailure(
+  gen: AsyncIterable<MessageChunk>
+): Promise<{ class: string; evidence: string }> {
+  let failure: { class: string; evidence: string } | undefined;
+  for await (const chunk of gen) {
+    if (chunk.type === 'result' && chunk.failure) failure = chunk.failure;
+  }
+  if (!failure) throw new Error('expected the turn to report a typed failure');
+  return failure;
+}
 
 describe('CodexProvider', () => {
   let client: CodexProvider;
 
   beforeEach(() => {
     resetCodexSingleton();
-    client = new CodexProvider({ retryBaseDelayMs: 1 });
+    client = new CodexProvider();
     MockCodex.mockClear();
     mockStartThread.mockClear();
     mockResumeThread.mockClear();
@@ -246,17 +259,18 @@ describe('CodexProvider', () => {
       });
 
       const chunks: MessageChunk[] = [];
-      await expect(
-        (async (): Promise<void> => {
-          for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
-            nodeConfig: { nodeId: 'investigate' },
-          })) {
-            chunks.push(chunk);
-          }
-        })()
-      ).rejects.toThrow('include_instructions');
+      for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
+        nodeConfig: { nodeId: 'investigate' },
+      })) {
+        chunks.push(chunk);
+      }
 
       expect(chunks).toContainEqual({ type: 'assistant', content: 'already emitted' });
+      // The error after output is the turn's failure; the turn is not replayed.
+      expect(chunks.at(-1)).toMatchObject({
+        type: 'result',
+        failure: { class: 'unknown', evidence: expect.stringContaining('include_instructions') },
+      });
       expect(MockCodex).toHaveBeenCalledTimes(1);
       expect(mockLogger.warn).not.toHaveBeenCalledWith(
         expect.anything(),
@@ -267,15 +281,12 @@ describe('CodexProvider', () => {
     test('does not treat unrelated Codex failures as catalog compatibility errors', async () => {
       mockRunStreamed.mockRejectedValue(new Error('authentication failed'));
 
-      expect(
-        (async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
-            nodeConfig: { nodeId: 'investigate' },
-          })) {
-            // consume
-          }
-        })()
-      ).rejects.toThrow('Codex auth error');
+      const failure = await codexFailure(
+        client.sendQuery('test prompt', '/workspace', undefined, {
+          nodeConfig: { nodeId: 'investigate' },
+        })
+      );
+      expect(failure).toEqual({ class: 'unknown', evidence: 'authentication failed' });
       expect(mockLogger.warn).not.toHaveBeenCalledWith(
         expect.anything(),
         'codex.workflow_skill_catalog_suppression_unsupported'
@@ -1132,34 +1143,6 @@ describe('CodexProvider', () => {
       expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
     });
 
-    test('reports resumed:false when a resumed thread retries cold after a transient crash', async () => {
-      // Attempt 0 resumes the thread, then the turn crashes. The retry re-runs on
-      // a fresh startThread (cold), so the produced result must report resumed:false
-      // rather than inheriting the initial resume's success (see CodeRabbit #1842).
-      let callCount = 0;
-      mockRunStreamed.mockImplementation(() => {
-        callCount++;
-        if (callCount === 1) {
-          return Promise.reject(new Error('Codex Exec exited with code 1'));
-        }
-        return Promise.resolve({
-          events: (async function* () {
-            yield { type: 'turn.completed', usage: defaultUsage };
-          })(),
-        });
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test', '/workspace', 'existing-thread')) {
-        chunks.push(chunk);
-      }
-
-      expect(mockResumeThread).toHaveBeenCalled();
-      // The retry path created a fresh thread, dropping the resumed session context.
-      expect(mockStartThread).toHaveBeenCalled();
-      expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: false });
-    });
-
     test('passes model and codex options via assistantConfig to thread options', async () => {
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
@@ -1336,49 +1319,6 @@ describe('CodexProvider', () => {
             additionalProperties: false,
           },
         })
-      );
-    });
-
-    test('passes a per-attempt AbortSignal in TurnOptions when caller provides one', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const controller = new AbortController();
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace', undefined, {
-        abortSignal: controller.signal,
-      })) {
-        chunks.push(chunk);
-      }
-
-      // Signal passed to runStreamed is the per-attempt signal, not the
-      // caller's signal directly. Aborting the caller still propagates via
-      // the forwarding once-listener (covered by separate tests below).
-      const call = mockRunStreamed.mock.calls[0];
-      expect(call[0]).toBe('test prompt');
-      expect(call[1]?.signal).toBeInstanceOf(AbortSignal);
-      expect(call[1]?.signal).not.toBe(controller.signal);
-    });
-
-    test('passes a per-attempt AbortSignal in TurnOptions even when caller provides none', async () => {
-      mockRunStreamed.mockResolvedValue({
-        events: (async function* () {
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-
-      const chunks = [];
-      for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
-      }
-
-      expect(mockRunStreamed).toHaveBeenCalledWith(
-        'test prompt',
-        expect.objectContaining({ signal: expect.any(AbortSignal) })
       );
     });
 
@@ -1612,20 +1552,20 @@ describe('CodexProvider', () => {
       expect(MockCodex).toHaveBeenCalledTimes(1);
     });
 
-    test('wraps per-call Codex constructor failures with provider error context', async () => {
+    test('a per-call Codex constructor failure is an unknown failure', async () => {
       MockCodex.mockImplementationOnce(() => {
         throw new Error('constructor failed');
       });
 
-      const consumeGenerator = async (): Promise<void> => {
-        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+      const consumeGenerator = () =>
+        client.sendQuery('test prompt', '/workspace', undefined, {
           env: { MY_SECRET: 'abc123' },
-        })) {
-          // consume
-        }
-      };
+        });
 
-      await expect(consumeGenerator()).rejects.toThrow('Codex query failed: constructor failed');
+      expect(await codexFailure(consumeGenerator())).toEqual({
+        class: 'unknown',
+        evidence: 'constructor failed',
+      });
     });
 
     test('breaks on turn.completed event', async () => {
@@ -1820,6 +1760,7 @@ describe('CodexProvider', () => {
         isError: true,
         errorSubtype: 'codex_stream_incomplete',
         errors: ["'opus[1m]' model is not supported"],
+        failure: { class: 'unknown', evidence: "'opus[1m]' model is not supported" },
       });
     });
 
@@ -1932,6 +1873,7 @@ describe('CodexProvider', () => {
         isError: true,
         errorSubtype: 'codex_turn_failed',
         errors: ['Rate limit exceeded'],
+        failure: { class: 'unknown', evidence: 'Rate limit exceeded' },
       });
       expect(mockLogger.error).toHaveBeenCalledWith(
         { errorMessage: 'Rate limit exceeded' },
@@ -1958,6 +1900,7 @@ describe('CodexProvider', () => {
         isError: true,
         errorSubtype: 'codex_turn_failed',
         errors: ['Unknown error'],
+        failure: { class: 'unknown', evidence: 'Unknown error' },
       });
       expect(mockLogger.error).toHaveBeenCalledWith(
         { errorMessage: 'Unknown error' },
@@ -1987,20 +1930,23 @@ describe('CodexProvider', () => {
         isError: true,
         errorSubtype: 'codex_stream_incomplete',
         errors: ['Codex stream closed without turn.completed or turn.failed'],
+        failure: {
+          class: 'unknown',
+          evidence: 'Codex stream closed without turn.completed or turn.failed',
+        },
       });
     });
 
-    test('throws on runStreamed error', async () => {
+    test('a runStreamed error is an unknown failure with the vendor text', async () => {
       const networkError = new Error('Network failure');
       mockRunStreamed.mockRejectedValue(networkError);
 
-      const consumeGenerator = async () => {
-        for await (const _ of client.sendQuery('test', '/workspace')) {
-          // consume
-        }
-      };
-
-      await expect(consumeGenerator()).rejects.toThrow('Codex unknown: Network failure');
+      expect(await codexFailure(client.sendQuery('test', '/workspace'))).toEqual({
+        class: 'unknown',
+        evidence: 'Network failure',
+      });
+      // One turn, one SDK call: retry belongs to the engine.
+      expect(mockRunStreamed).toHaveBeenCalledTimes(1);
 
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ err: networkError }),
@@ -2008,40 +1954,27 @@ describe('CodexProvider', () => {
       );
     });
 
-    test('throws actionable model-access message for unavailable configured model', async () => {
+    test('adds actionable model-access advice to the evidence for an unavailable model', async () => {
       mockRunStreamed.mockRejectedValue(new Error('403 Forbidden: model not available'));
 
-      const consumeGenerator = async () => {
-        for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-          model: 'gpt-5.3-codex',
-        })) {
-          // consume
-        }
-      };
-
-      await expect(consumeGenerator()).rejects.toThrow(
-        'Model "gpt-5.3-codex" is not available for your account'
+      const failure = await codexFailure(
+        client.sendQuery('test', '/workspace', undefined, { model: 'gpt-5.3-codex' })
       );
-      await expect(consumeGenerator()).rejects.toThrow('model: gpt-5.6-sol');
+      expect(failure.class).toBe('unknown');
+      expect(failure.evidence).toContain('Model "gpt-5.3-codex" is not available for your account');
+      expect(failure.evidence).toContain('model: gpt-5.6-sol');
+      // The advice never replaces the vendor's own words.
+      expect(failure.evidence).toContain('403 Forbidden: model not available');
     });
 
     test('uses generic dashboard guidance when fallback mapping is unknown', async () => {
       mockRunStreamed.mockRejectedValue(new Error('model not available'));
 
-      const consumeGenerator = async () => {
-        for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-          model: 'o5-pro',
-        })) {
-          // consume
-        }
-      };
-
-      await expect(consumeGenerator()).rejects.toThrow(
-        'Model "o5-pro" is not available for your account'
+      const failure = await codexFailure(
+        client.sendQuery('test', '/workspace', undefined, { model: 'o5-pro' })
       );
-      await expect(consumeGenerator()).rejects.toThrow(
-        'update your model in ~/.archon/config.yaml'
-      );
+      expect(failure.evidence).toContain('Model "o5-pro" is not available for your account');
+      expect(failure.evidence).toContain('update your model in ~/.archon/config.yaml');
     });
 
     test('ignores items without text or command', async () => {
@@ -2209,103 +2142,127 @@ describe('CodexProvider', () => {
       });
     });
 
-    describe('retry behavior', () => {
-      test('classifies exit code errors as crash and retries up to 3 times', async () => {
-        mockRunStreamed.mockRejectedValue(
-          new Error('Codex Exec exited with code 1: stderr output')
-        );
-
-        const consumeGenerator = async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test', '/workspace')) {
-            // consume
-          }
-        };
-
-        await expect(consumeGenerator()).rejects.toThrow(/Codex crash/);
-        // Initial attempt + 3 retries = 4 runStreamed calls
-        expect(mockRunStreamed).toHaveBeenCalledTimes(4);
-      }, 5_000);
-
-      test('recovers from transient crash on retry', async () => {
-        let callCount = 0;
-        mockRunStreamed.mockImplementation(() => {
-          callCount++;
-          if (callCount <= 2) {
-            return Promise.reject(new Error('Codex Exec exited with code 1'));
-          }
-          return Promise.resolve({
-            events: (async function* () {
-              yield {
-                type: 'item.completed',
-                item: { type: 'agent_message', text: 'Recovered!' },
-              };
-              yield { type: 'turn.completed', usage: defaultUsage };
-            })(),
-          });
+    describe('typed failures (#3524)', () => {
+      // The Codex SDK reports every failure as a bare message string, so no failure
+      // can be classified from a structured signal: each is `unknown`, whatever the
+      // words say, and the words are kept as evidence.
+      test.each([
+        [
+          'a turn.failed event',
+          [{ type: 'turn.failed', error: { message: 'stream error: 429 Too Many Requests' } }],
+          'stream error: 429 Too Many Requests',
+        ],
+        [
+          'an error event then stream close',
+          [{ type: 'error', message: 'unauthorized: 401' }],
+          'unauthorized: 401',
+        ],
+      ])('%s reports an unknown failure with the vendor text', async (_label, events, evidence) => {
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield* events;
+          })(),
         });
 
-        const chunks = [];
-        for await (const chunk of client.sendQuery('test', '/workspace')) {
-          chunks.push(chunk);
-        }
-
-        expect(callCount).toBe(3);
-        expect(chunks.some(c => c.type === 'assistant' && c.content === 'Recovered!')).toBe(true);
-      }, 5_000);
-
-      test('retry backoff runs inside the admission release, never while the slot is held', async () => {
-        const events: string[] = [];
-        mockRunStreamed.mockImplementation(() => {
-          events.push('attempt');
-          if (events.filter(e => e === 'attempt').length === 1) {
-            return Promise.reject(new Error('Codex Exec exited with code 1'));
-          }
-          return Promise.resolve({
-            events: (async function* () {
-              yield { type: 'item.completed', item: { type: 'agent_message', text: 'ok' } };
-              yield { type: 'turn.completed', usage: defaultUsage };
-            })(),
-          });
+        expect(await codexFailure(client.sendQuery('test', '/workspace'))).toEqual({
+          class: 'unknown',
+          evidence,
         });
-        const admission = {
-          releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
-            events.push('released');
-            await wait();
-            events.push('reacquired');
-          },
-        };
-
-        for await (const _ of client.sendQuery('test', '/workspace', undefined, { admission })) {
-          // consume
-        }
-
-        expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
-      }, 5_000);
-
-      test('classifies auth errors as fatal (no retry)', async () => {
-        mockRunStreamed.mockRejectedValue(new Error('unauthorized'));
-
-        const consumeGenerator = async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test', '/workspace')) {
-            // consume
-          }
-        };
-
-        await expect(consumeGenerator()).rejects.toThrow(/Codex auth error/);
         expect(mockRunStreamed).toHaveBeenCalledTimes(1);
       });
 
-      test('does not retry unknown errors', async () => {
-        mockRunStreamed.mockRejectedValue(new Error('something unexpected and unclassified'));
+      test('a crashed subprocess is reported once, not retried', async () => {
+        mockRunStreamed.mockRejectedValue(
+          new Error('Codex Exec exited with code 1: Reading prompt from stdin...')
+        );
 
-        const consumeGenerator = async (): Promise<void> => {
-          for await (const _ of client.sendQuery('test', '/workspace')) {
-            // consume
-          }
-        };
+        const chunks: MessageChunk[] = [];
+        for await (const chunk of client.sendQuery('test', '/workspace')) chunks.push(chunk);
 
-        await expect(consumeGenerator()).rejects.toThrow(/Codex unknown/);
+        expect(chunks.filter(c => c.type === 'result')).toHaveLength(1);
+        expect(chunks.at(-1)).toMatchObject({
+          type: 'result',
+          isError: true,
+          failure: {
+            class: 'unknown',
+            evidence: 'Codex Exec exited with code 1: Reading prompt from stdin...',
+          },
+        });
+        expect(mockStartThread).toHaveBeenCalledTimes(1);
         expect(mockRunStreamed).toHaveBeenCalledTimes(1);
+      });
+
+      test('passes the caller abort signal to the turn', async () => {
+        mockRunStreamed.mockResolvedValue({
+          events: (async function* () {
+            yield { type: 'turn.completed', usage: defaultUsage };
+          })(),
+        });
+        const controller = new AbortController();
+
+        for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+          abortSignal: controller.signal,
+        })) {
+          // consume
+        }
+
+        expect(mockRunStreamed.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+      });
+
+      test('a caller abort throws Query aborted rather than reporting a failure', async () => {
+        const controller = new AbortController();
+        mockRunStreamed.mockImplementation(() => {
+          controller.abort();
+          return Promise.reject(new Error('The operation was aborted'));
+        });
+
+        const chunks: MessageChunk[] = [];
+        let error: Error | undefined;
+        try {
+          for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
+            abortSignal: controller.signal,
+          })) {
+            chunks.push(chunk);
+          }
+        } catch (e) {
+          error = e as Error;
+        }
+        expect(error?.message).toBe('Query aborted');
+        expect(chunks.filter(c => c.type === 'result')).toHaveLength(0);
+      });
+
+      test('conforms to the provider contract’s failure-class check', async () => {
+        function turn(run: () => void): () => AsyncIterable<unknown> {
+          return () => {
+            run();
+            return client.sendQuery('test', '/workspace');
+          };
+        }
+        const violations = await runProviderConformance({
+          failureCases: [
+            {
+              name: 'turn.failed',
+              expected: 'unknown',
+              evidence: 'Rate limit exceeded',
+              run: turn(() =>
+                mockRunStreamed.mockResolvedValue({
+                  events: (async function* () {
+                    yield { type: 'turn.failed', error: { message: 'Rate limit exceeded' } };
+                  })(),
+                })
+              ),
+            },
+            {
+              name: 'crashed subprocess',
+              expected: 'unknown',
+              evidence: 'exited with code 1',
+              run: turn(() =>
+                mockRunStreamed.mockRejectedValue(new Error('Codex Exec exited with code 1'))
+              ),
+            },
+          ],
+        });
+        expect(violations).toEqual([]);
       });
     });
 
@@ -2494,7 +2451,7 @@ describe('sendQuery decomposition behaviors', () => {
   let client: CodexProvider;
 
   beforeEach(() => {
-    client = new CodexProvider({ retryBaseDelayMs: 1 });
+    client = new CodexProvider();
     mockStartThread.mockClear();
     mockResumeThread.mockClear();
     mockRunStreamed.mockClear();
@@ -2537,22 +2494,6 @@ describe('sendQuery decomposition behaviors', () => {
     await expect(consumeGenerator()).rejects.toThrow('Query aborted');
   });
 
-  test('enriched error thrown at retry exhaustion, not raw error', async () => {
-    mockRunStreamed.mockRejectedValue(new Error('codex exec crashed'));
-
-    const consumeGenerator = async (): Promise<void> => {
-      for await (const _ of client.sendQuery('test', '/workspace')) {
-        // consume
-      }
-    };
-
-    const thrown = await consumeGenerator().catch((error: unknown) => error);
-    expect(thrown).toBeInstanceOf(Error);
-    if (!(thrown instanceof Error)) throw new Error('Expected consumeGenerator to throw');
-    // Must contain the enriched classification prefix
-    expect(thrown.message).toContain('Codex crash');
-  }, 5_000);
-
   test('todo_list dedup state resets between retry attempts', async () => {
     const todoItem = {
       type: 'todo_list',
@@ -2589,101 +2530,6 @@ describe('sendQuery decomposition behaviors', () => {
     const systemChunks = chunks.filter(c => c.type === 'system');
     expect(systemChunks.length).toBeGreaterThanOrEqual(1);
     expect(systemChunks.some(c => c.type === 'system' && c.content.includes('Task 1'))).toBe(true);
-  }, 5_000);
-
-  // Regression for issue #1266 (crash class A).
-  // Before the fix, buildTurnOptions captured the caller's abortSignal once
-  // before the retry loop, and the same signal object was passed to every
-  // runStreamed attempt. Node.js aborts the spawn-linked signal when a
-  // subprocess crashes, so attempt N's crash left `turnOptions.signal`
-  // already aborted, and attempt N+1 was SIGTERM'd before it could read the
-  // prompt. The fix creates a fresh AbortController per attempt and chains
-  // the caller's signal through a once-listener.
-  test('retry after crash receives a fresh (non-aborted) AbortSignal', async () => {
-    // Capture signals at call-time. Inspecting mockRunStreamed.mock.calls
-    // after the fact reads from a shared turnOptions reference whose .signal
-    // has since been rewritten; that's fine for the implementation (each
-    // spawn() captures the signal at its own call) but misleading here.
-    const signalsAtCallTime: Array<{ signal: AbortSignal; aborted: boolean }> = [];
-    let callCount = 0;
-    mockRunStreamed.mockImplementation((_prompt, opts) => {
-      if (!opts) throw new Error('Expected per-attempt options');
-      const s = opts.signal!;
-      signalsAtCallTime.push({ signal: s, aborted: s.aborted });
-      callCount++;
-      if (callCount === 1) {
-        return Promise.reject(new Error('codex exec crashed'));
-      }
-      return Promise.resolve({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'recovered', id: 'r' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-    });
-
-    const callerController = new AbortController();
-
-    const chunks = [];
-    for await (const chunk of client.sendQuery('test', '/workspace', undefined, {
-      abortSignal: callerController.signal,
-    })) {
-      chunks.push(chunk);
-    }
-
-    expect(mockRunStreamed).toHaveBeenCalledTimes(2);
-    expect(signalsAtCallTime).toHaveLength(2);
-    // Distinct signal objects per attempt.
-    expect(signalsAtCallTime[1].signal).not.toBe(signalsAtCallTime[0].signal);
-    // Attempt 1's signal was NOT aborted at the moment of spawn, even
-    // though attempt 0 crashed. This is the exact property that was
-    // broken in the old implementation.
-    expect(signalsAtCallTime[1].aborted).toBe(false);
-    // Caller signal was never aborted.
-    expect(callerController.signal.aborted).toBe(false);
-  }, 5_000);
-
-  test('caller abort forwards into the active per-attempt signal', async () => {
-    const callerController = new AbortController();
-
-    let capturedSignal: AbortSignal | undefined;
-    mockRunStreamed.mockImplementation((_prompt, opts) => {
-      if (!opts) throw new Error('Expected per-attempt options');
-      capturedSignal = opts.signal;
-      return Promise.resolve({
-        events: (async function* () {
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'partial', id: '1' },
-          };
-          // Caller aborts mid-stream; this must surface on the per-attempt signal.
-          callerController.abort();
-          yield {
-            type: 'item.completed',
-            item: { type: 'agent_message', text: 'should not appear', id: '2' },
-          };
-          yield { type: 'turn.completed', usage: defaultUsage };
-        })(),
-      });
-    });
-
-    const consumeGenerator = async (): Promise<void> => {
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        abortSignal: callerController.signal,
-      })) {
-        // consume
-      }
-    };
-
-    await expect(consumeGenerator()).rejects.toThrow('Query aborted');
-    // The signal observed by runStreamed is the per-attempt one, and it
-    // reflects the caller's abort via the forwarding listener.
-    expect(capturedSignal).toBeDefined();
-    expect(capturedSignal).not.toBe(callerController.signal);
-    expect(capturedSignal?.aborted).toBe(true);
   }, 5_000);
 
   // Regression for issue #1735.
@@ -2727,51 +2573,4 @@ describe('sendQuery decomposition behaviors', () => {
       process.removeListener('uncaughtException', handler);
     }
   }, 5_000);
-});
-
-describe('classifyCodexError (#2509 R7)', () => {
-  // AUTH_PATTERNS is this classifier's sole gate to 'auth', and 'auth' is what
-  // makes classifyAndEnrichCodexError wrap a message as `Codex auth error:` —
-  // the prefix error-formatter.ts trusts unconditionally. A bare "401"/"403"
-  // used to be enough to classify as 'auth', so any mid-turn error whose text
-  // merely contained those digits (a port, a timeout in ms) was misrouted to
-  // "run codex login" and had its retry disabled.
-  test('does not classify a bare "401"/"403" substring as auth', () => {
-    expect(classifyCodexError('connect ECONNREFUSED 127.0.0.1:401')).not.toBe('auth');
-    expect(classifyCodexError('timeout after 401ms')).not.toBe('auth');
-    expect(classifyCodexError('proxy responded with 403')).not.toBe('auth');
-  });
-
-  test('still classifies genuine auth signals as auth', () => {
-    expect(classifyCodexError('Unauthorized')).toBe('auth');
-    expect(classifyCodexError('authentication failed')).toBe('auth');
-    expect(classifyCodexError('invalid token provided')).toBe('auth');
-    expect(classifyCodexError('Your credit balance is too low to access the API')).toBe('auth');
-    // Real-world provider shape: a 401 co-occurring with the word "Unauthorized" —
-    // the word carries the signal, not the digits.
-    expect(classifyCodexError('exceeded retry limit, last status: 401 Unauthorized')).toBe('auth');
-  });
-
-  test('resolves a crash-pattern message carrying a stray digit to the retryable "crash" class, not silently to "unknown" (#2509 R13)', () => {
-    // Not classifying as 'auth' isn't sufficient on its own — shouldRetry =
-    // errorClass === 'rate_limit' || errorClass === 'crash', so a crash-shaped
-    // message must specifically land on 'crash' (retryable), not fall through
-    // to 'unknown' (also non-retryable), or a future reordering of
-    // SUBPROCESS_CRASH_PATTERNS/AUTH_PATTERNS could silently regress retry
-    // eligibility without any test catching it.
-    expect(classifyCodexError('exited with code 401')).toBe('crash');
-  });
-
-  test('does not classify a bare "429" substring as rate_limit (#2509 R11)', () => {
-    expect(classifyCodexError('connect ECONNREFUSED 127.0.0.1:4291')).not.toBe('rate_limit');
-    expect(
-      classifyCodexError('operation timed out after 4293ms while establishing connection')
-    ).not.toBe('rate_limit');
-  });
-
-  test('still classifies genuine rate-limit signals as rate_limit', () => {
-    expect(classifyCodexError('rate limit exceeded')).toBe('rate_limit');
-    expect(classifyCodexError('too many requests, please slow down')).toBe('rate_limit');
-    expect(classifyCodexError('server overloaded')).toBe('rate_limit');
-  });
 });

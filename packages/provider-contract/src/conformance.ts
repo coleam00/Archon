@@ -6,27 +6,35 @@ import { providerFailureSchema, type ProviderFailureClass } from './failure';
  * Each check returns one line per violation, so an empty list means the provider conforms.
  */
 
-/** One way to make the provider fail, and the class it must report for it. */
+/** One way to make the provider fail, the class it must report, and the vendor text it must keep. */
 export interface ProviderFailureCase {
   name: string;
   expected: ProviderFailureClass;
+  /** Vendor text the failure's `evidence` must contain: the class never replaces the evidence. */
+  evidence: string;
   /** Runs one provider turn and yields its stream chunks. */
   run: () => AsyncIterable<unknown>;
 }
 
-function isResultChunk(chunk: unknown): chunk is { type: 'result'; failure?: unknown } {
+function isResultChunk(
+  chunk: unknown
+): chunk is { type: 'result'; failure?: unknown; isError?: unknown } {
   return (
     typeof chunk === 'object' && chunk !== null && (chunk as { type?: unknown }).type === 'result'
   );
 }
 
-/** A failed turn ends in exactly one result whose `failure` parses and carries the expected class. */
+/**
+ * A failed turn ends in exactly one result whose `failure` parses, carries the expected
+ * class and keeps the vendor's evidence, and which still sets `isError` for readers that
+ * do not read `failure` yet.
+ */
 export async function checkFailureClasses(
   cases: readonly ProviderFailureCase[]
 ): Promise<string[]> {
   const violations: string[] = [];
   for (const failureCase of cases) {
-    const results: { failure?: unknown }[] = [];
+    const results: { failure?: unknown; isError?: unknown }[] = [];
     try {
       for await (const chunk of failureCase.run()) {
         if (isResultChunk(chunk)) results.push(chunk);
@@ -41,7 +49,7 @@ export async function checkFailureClasses(
       violations.push(`${failureCase.name}: expected one result, got ${String(results.length)}`);
       continue;
     }
-    const failure = results[0].failure;
+    const { failure, isError } = results[0];
     if (failure === undefined) {
       violations.push(`${failureCase.name}: result carries no failure`);
       continue;
@@ -49,10 +57,20 @@ export async function checkFailureClasses(
     const parsed = providerFailureSchema.safeParse(failure);
     if (!parsed.success) {
       violations.push(`${failureCase.name}: failure is malformed (${parsed.error.message})`);
-    } else if (parsed.data.class !== failureCase.expected) {
+      continue;
+    }
+    if (parsed.data.class !== failureCase.expected) {
       violations.push(
         `${failureCase.name}: reported ${parsed.data.class}, expected ${failureCase.expected}`
       );
+    }
+    if (!parsed.data.evidence.includes(failureCase.evidence)) {
+      violations.push(
+        `${failureCase.name}: evidence does not keep the vendor text "${failureCase.evidence}"`
+      );
+    }
+    if (isError !== true) {
+      violations.push(`${failureCase.name}: a failed result does not set isError`);
     }
   }
   return violations;

@@ -31,8 +31,6 @@ import {
   formatSubprocessFailure,
   retainStreamTail,
   classifyError,
-  isQuotaExhaustionError,
-  extractQuotaResetAt,
   getRetryDelayMs,
   isRateLimitError,
   RATE_LIMIT_PATTERNS,
@@ -1052,7 +1050,6 @@ describe('classifyError', () => {
   it('distinguishes MiniMax plan exhaustion from transient limit/load errors', () => {
     const exhausted = '429 Token Plan usage limit reached: purchase Credits (2056)';
     expect(classifyError(new Error(exhausted))).toBe('FATAL');
-    expect(isQuotaExhaustionError(exhausted)).toBe(true);
     expect(classifyError(new Error('429 Token Plan rate limit reached (2062)'))).toBe('TRANSIENT');
     expect(classifyError(new Error('MiniMax overloaded/high load (2064)'))).toBe('TRANSIENT');
   });
@@ -1074,18 +1071,6 @@ describe('classifyError', () => {
     }
     expect(getRetryDelayMs('transient', 0, 3000)).toBe(3000);
     expect(getRetryDelayMs('transient', 2, 3000)).toBe(12000);
-  });
-
-  it('parses only unambiguous quota reset timestamps', () => {
-    const now = new Date('2026-08-24T10:00:00.000Z');
-    expect(extractQuotaResetAt('usage limit reached|1787569200', now)?.toISOString()).toBe(
-      '2026-08-24T11:00:00.000Z'
-    );
-    expect(extractQuotaResetAt('session limit reached — resets in 2h', now)?.toISOString()).toBe(
-      '2026-08-24T12:00:00.000Z'
-    );
-    expect(extractQuotaResetAt('session limit reached — resets in 2400000001h', now)).toBeNull();
-    expect(extractQuotaResetAt('Token Plan usage limit reached (2056)', now)).toBeNull();
   });
 
   it('session-limit stays FATAL even when the message also matches a TRANSIENT pattern', () => {

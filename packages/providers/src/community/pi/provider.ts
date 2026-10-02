@@ -21,6 +21,7 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { unknownFailureResult } from '../../shared/failure';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -287,7 +288,36 @@ Guidelines:
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
+  /**
+   * One call is one Pi prompt. A failure, including one thrown while setting the
+   * session up, ends in a `result` carrying a typed `failure`, and the engine decides
+   * whether to try again. Cancellation still throws.
+   */
   async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    let resultReported = false;
+    try {
+      for await (const chunk of this.streamTurn(prompt, cwd, resumeSessionId, requestOptions)) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
+      }
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted === true) throw error;
+      const err = error as Error;
+      // The turn already reported its one result; a later error does not change it.
+      if (resultReported) {
+        getLog().error({ err }, 'pi.error_after_result');
+        return;
+      }
+      yield unknownFailureResult('pi_query_failed', err.message);
+    }
+  }
+
+  private async *streamTurn(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,

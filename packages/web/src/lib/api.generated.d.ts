@@ -3519,6 +3519,20 @@ export interface components {
                 | 'child_failed'
                 | 'cancelled'
                 | 'config';
+              providerFailure?: {
+                /** @enum {string} */
+                class:
+                  | 'auth'
+                  | 'quota_exhausted'
+                  | 'budget_exceeded'
+                  | 'rate_limited'
+                  | 'transient'
+                  | 'unknown';
+                retryAfterMs?: number;
+                /** Format: date-time */
+                resetAt?: string;
+                evidence: string;
+              };
             }
           | {
               /** @enum {string} */

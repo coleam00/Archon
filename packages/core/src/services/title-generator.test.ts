@@ -123,6 +123,22 @@ describe('title-generator', () => {
     expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-5', 'Fix the login bug');
   });
 
+  test('a failed turn falls back instead of titling the conversation with partial text', async () => {
+    mockSendQuery.mockImplementation(async function* (): AsyncGenerator<MessageChunk> {
+      yield { type: 'assistant', content: 'Partial Tit' };
+      yield {
+        type: 'result',
+        isError: true,
+        failure: { class: 'transient', evidence: 'Claude Code process exited with code 1' },
+      };
+    });
+
+    await generateAndSetTitle('conv-5b', 'Fix the login bug', 'claude', '/tmp');
+
+    expect(mockUpdateConversationTitle).toHaveBeenCalledTimes(1);
+    expect(mockUpdateConversationTitle).toHaveBeenCalledWith('conv-5b', 'Fix the login bug');
+  });
+
   test('includes workflow name in prompt when provided', async () => {
     await generateAndSetTitle('conv-6', 'Add dark mode', 'claude', '/tmp', 'archon-plan');
 
