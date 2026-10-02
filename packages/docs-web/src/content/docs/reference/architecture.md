@@ -491,6 +491,7 @@ Different SDKs use different event types. Map them to MessageChunk types:
 **Claude Code SDK** (`packages/providers/src/claude/provider.ts`):
 
 ```typescript
+let resultReported = false;
 for await (const msg of query({ prompt, options })) {
   if (msg.type === 'assistant') {
     for (const block of msg.message.content) {
@@ -505,10 +506,20 @@ for await (const msg of query({ prompt, options })) {
       }
     }
   } else if (msg.type === 'result') {
+    resultReported = true;
     yield { type: 'result', sessionId: msg.session_id };
   } else if (msg.type === 'system' && msg.subtype === 'session_state_changed' && msg.state === 'idle') {
     break; // turn over, background agents drained
   }
+}
+if (!resultReported) {
+  // A stream that closed without a result is a failed turn, never an empty success.
+  yield {
+    type: 'result',
+    isError: true,
+    errorSubtype: 'stream_ended_without_result',
+    failure: { class: 'unknown', evidence: 'Claude Code ended the turn without a result' },
+  };
 }
 yield { type: 'settled' };
 ```
