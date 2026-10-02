@@ -534,9 +534,9 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot>;
 
   /**
-   * A run's provider events, one node's or all of them, as served. Within a node the
-   * records come in emission order (attempts in the order they started, each by `seq`);
-   * across nodes, in store order. With `after`, only the records after that cursor.
+   * A run's provider events, one node's or all of them, as served. Records come grouped
+   * by node, and within a node in emission order (attempts in the order they started,
+   * each by `seq`). With `after`, only the node's records after that cursor.
    * Rows written before `provider_event` existed come back translated, with a null
    * `attemptId`. Throws on storage error.
    */

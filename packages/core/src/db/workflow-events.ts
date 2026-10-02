@@ -1,8 +1,8 @@
 /**
  * Database operations for workflow events (lean UI-relevant events).
  *
- * Stores node lifecycle, parallel agent status, artifacts, and errors.
- * Verbose assistant/tool content stays in JSONL logs only.
+ * Stores node lifecycle, parallel agent status, artifacts, errors, and every provider
+ * event in the engine envelope (`provider_event`).
  *
  * Ordinary observability writes are fire-and-forget. Correctness-critical lifecycle
  * writes use `persistWorkflowEvent` and propagate storage failure to their owner.
@@ -18,6 +18,16 @@ import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity'
 import { nodeInvocationKey, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import {
+  orderProviderEventRecords,
+  providerEventEnvelopeSchema,
+  providerEventRecordsAfter,
+  type ProviderEventQuery,
+  type ProviderEventRecord,
+} from '@archon/workflows/schemas/provider-event';
+import { providerEventSchema, type ProviderEvent } from '@archon/provider-contract';
+import { toHydratedTimestamp } from './timestamps';
+import {
+  LEGACY_PROVIDER_EVENT_TYPES,
   NODE_LIFECYCLE_EVENT_TYPES,
   NODE_STATE_EVENT_TYPES,
   type NodeStateEventType,
@@ -180,6 +190,188 @@ export async function listWorkflowEvents(workflowRunId: string): Promise<Workflo
     getLog().error({ err: error as Error, runId: workflowRunId }, 'db.workflow_events_list_failed');
     throw new Error(`Failed to list workflow events: ${(error as Error).message}`);
   }
+}
+
+/** Every row type `listProviderEvents` reads: the envelope and the rows it replaced. */
+export const PROVIDER_EVENT_ROW_TYPES = ['provider_event', ...LEGACY_PROVIDER_EVENT_TYPES] as const;
+
+function dataString(data: Record<string, unknown>, key: string): string | undefined {
+  const value = data[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function dataNumber(data: Record<string, unknown>, key: string): number | undefined {
+  const value = data[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+const LEGACY_TOOL_STATUS: Record<string, 'completed' | 'failed' | 'cancelled'> = {
+  success: 'completed',
+  error: 'failed',
+  interrupted: 'cancelled',
+  unknown: 'cancelled',
+};
+
+const LEGACY_HOOK_STATUS: Record<string, 'succeeded' | 'failed' | 'cancelled'> = {
+  success: 'succeeded',
+  error: 'failed',
+  cancelled: 'cancelled',
+};
+
+const LEGACY_SUBTASK_STATUS: Record<
+  string,
+  'started' | 'running' | 'completed' | 'failed' | 'stopped'
+> = {
+  started: 'started',
+  progress: 'running',
+  completed: 'completed',
+  failed: 'failed',
+  stopped: 'stopped',
+};
+
+/**
+ * The provider event a pre-envelope row recorded, from the keys v0.11.0 wrote. The result
+ * is parsed with the contract schema, so a row missing a required fact (a tool row with
+ * no `tool_call_id`) yields nothing rather than a record the contract forbids.
+ */
+function translateLegacyRow(
+  eventType: string,
+  data: Record<string, unknown>
+): ProviderEvent | undefined {
+  let candidate: unknown;
+  switch (eventType) {
+    case 'tool_called':
+      candidate = {
+        type: 'tool_call',
+        toolCallId: data.tool_call_id,
+        name: data.tool_name,
+        ...(data.tool_input !== undefined ? { rawInput: data.tool_input } : {}),
+      };
+      break;
+    case 'tool_completed': {
+      // A row with no outcome came from a reported tool result, before outcomes existed.
+      const outcome = dataString(data, 'tool_outcome');
+      const exitCode = dataNumber(data, 'exit_code');
+      candidate = {
+        type: 'tool_call_update',
+        toolCallId: data.tool_call_id,
+        status: outcome === undefined ? 'completed' : LEGACY_TOOL_STATUS[outcome],
+        ...(exitCode !== undefined ? { exitCode } : {}),
+      };
+      break;
+    }
+    case 'task_activity': {
+      const activity = dataString(data, 'activity');
+      candidate = {
+        type: 'subtask',
+        taskId: data.task_id,
+        status: activity === undefined ? undefined : LEGACY_SUBTASK_STATUS[activity],
+        ...(data.description !== undefined ? { description: data.description } : {}),
+        ...(data.summary !== undefined ? { summary: data.summary } : {}),
+        ...(data.task_type !== undefined ? { taskType: data.task_type } : {}),
+        ...(data.last_tool_name !== undefined ? { lastToolName: data.last_tool_name } : {}),
+        ...(data.output_file !== undefined ? { outputFile: data.output_file } : {}),
+        ...(data.usage !== undefined ? { usage: data.usage } : {}),
+      };
+      break;
+    }
+    case 'hook_activity': {
+      const outcome = dataString(data, 'outcome');
+      const exitCode = dataNumber(data, 'exit_code');
+      candidate = {
+        type: 'hook',
+        hookId: data.hook_id,
+        hookName: data.hook_name,
+        hookEvent: data.hook_event,
+        status:
+          dataString(data, 'activity') === 'started'
+            ? 'started'
+            : outcome === undefined
+              ? undefined
+              : LEGACY_HOOK_STATUS[outcome],
+        ...(exitCode !== undefined ? { exitCode } : {}),
+      };
+      break;
+    }
+    default:
+      return undefined;
+  }
+  const parsed = providerEventSchema.safeParse(candidate);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * A run's provider events as served (see `IWorkflowStore.listProviderEvents`). Records
+ * come grouped by node, in the order each node first appears, and each node's in
+ * emission order. A row that cannot be read is skipped and logged with its id, so one
+ * bad row cannot blank a run.
+ *
+ * Rows written before the engine recorded envelopes translate with a null `attemptId`
+ * and a `seq` counting that node's legacy rows from 0 in store order, and their
+ * `observedAt` is the row's `created_at` (1-second precision on SQLite).
+ */
+export async function listProviderEvents(
+  workflowRunId: string,
+  query: ProviderEventQuery = {}
+): Promise<ProviderEventRecord[]> {
+  const params: unknown[] = [workflowRunId, ...PROVIDER_EVENT_ROW_TYPES];
+  const typePlaceholders = PROVIDER_EVENT_ROW_TYPES.map((_, i) => `$${String(i + 2)}`).join(', ');
+  let stepClause = '';
+  if (query.stepName !== undefined) {
+    params.push(query.stepName);
+    stepClause = ` AND step_name = $${String(params.length)}`;
+  }
+  let rows: WorkflowEventRow[];
+  try {
+    const result = await pool.query<WorkflowEventRow>(
+      `SELECT * FROM remote_agent_workflow_events
+       WHERE workflow_run_id = $1 AND event_type IN (${typePlaceholders})${stepClause}
+       ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+      params
+    );
+    rows = result.rows.map(parseEventRow);
+  } catch (error) {
+    getLog().error({ err: error as Error, runId: workflowRunId }, 'db.provider_events_list_failed');
+    throw new Error(`Failed to list provider events: ${(error as Error).message}`);
+  }
+
+  const byStep = new Map<string, ProviderEventRecord[]>();
+  const legacySeq = new Map<string, number>();
+  for (const row of rows) {
+    const stepName = row.step_name;
+    let record: ProviderEventRecord | undefined;
+    if (stepName !== null && row.event_type === 'provider_event') {
+      const envelope = providerEventEnvelopeSchema.safeParse(row.data);
+      if (envelope.success) record = { runId: workflowRunId, stepName, ...envelope.data };
+    } else if (stepName !== null) {
+      const event = translateLegacyRow(row.event_type, row.data);
+      if (event !== undefined) {
+        const seq = legacySeq.get(stepName) ?? 0;
+        legacySeq.set(stepName, seq + 1);
+        record = {
+          runId: workflowRunId,
+          stepName,
+          attemptId: null,
+          seq,
+          observedAt: toHydratedTimestamp(row.created_at).toISOString(),
+          event,
+        };
+      }
+    }
+    if (record === undefined) {
+      getLog().warn(
+        { eventId: row.id, runId: workflowRunId, eventType: row.event_type },
+        'db.provider_event_row_unreadable'
+      );
+      continue;
+    }
+    const stepRecords = byStep.get(record.stepName) ?? [];
+    stepRecords.push(record);
+    byStep.set(record.stepName, stepRecords);
+  }
+
+  const ordered = [...byStep.values()].flatMap(records => orderProviderEventRecords(records));
+  return query.after === undefined ? ordered : providerEventRecordsAfter(ordered, query.after);
 }
 
 /**
