@@ -15,7 +15,7 @@ import type {
   CodexProviderDefaults,
 } from '../types';
 import { truncateToolOutput, type ProviderFailureClass } from '@archon/provider-contract';
-import { ClassifiedProviderError, failureResult } from '../shared/failure';
+import { failureClassOfThrown, failureResult } from '../shared/failure';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
@@ -39,6 +39,8 @@ import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
+import type { Turn } from './protocol/v2/Turn';
+import type { TurnError } from './protocol/v2/TurnError';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -557,8 +559,8 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
 }
 
 function* completeTurn(
-  status: string,
-  error: { message: string; codexErrorInfo: unknown; additionalDetails: string | null } | null,
+  status: Turn['status'],
+  error: TurnError | null,
   request: TurnRequest,
   state: {
     threadId: string;
@@ -622,13 +624,10 @@ function withModelAccessAdvice(evidence: string, model: string | undefined): str
  * itself the structured signal: a process failure is what `transient` names.
  */
 function failureClassOfStop(error: unknown): ProviderFailureClass {
-  if (error instanceof ClassifiedProviderError) return error.failureClass;
-  if (error instanceof ConnectionClosedError) {
-    return error.end.kind === 'spawn_failed' && error.end.error.code === 'ENOENT'
-      ? 'misconfigured'
-      : 'transient';
-  }
-  return 'unknown';
+  if (!(error instanceof ConnectionClosedError)) return failureClassOfThrown(error);
+  return error.end.kind === 'spawn_failed' && error.end.error.code === 'ENOENT'
+    ? 'misconfigured'
+    : 'transient';
 }
 
 // ─── Codex Provider ──────────────────────────────────────────────────────
@@ -672,11 +671,14 @@ export class CodexProvider implements IAgentProvider {
       void interrupt.then(() => open.shutdown(SHUTDOWN_GRACE_MS));
     };
 
+    const codexConfig = parseCodexConfig(requestOptions?.assistantConfig ?? {});
+    const model = requestOptions?.model ?? codexConfig.model;
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
+
     try {
       if (abortSignal?.aborted) {
         throw new Error('Query aborted');
       }
-      const codexConfig = parseCodexConfig(requestOptions?.assistantConfig ?? {});
       const providerWarnings: ProviderWarning[] = [];
       let mcpServers: CodexConfig | undefined;
 
@@ -707,7 +709,6 @@ export class CodexProvider implements IAgentProvider {
       // own login in their CODEX_HOME. The ephemeral store keeps the key out of that home.
       const apiKey = env.CODEX_API_KEY || undefined;
       const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
-      const model = requestOptions?.model ?? codexConfig.model;
       const effort = resolveModelReasoningEffort(
         requestOptions?.nodeConfig,
         codexConfig.modelReasoningEffort
@@ -719,7 +720,8 @@ export class CodexProvider implements IAgentProvider {
         env,
         this.spawner
       );
-      abortSignal?.addEventListener('abort', onAbort, { once: true });
+      // An abort while the setup above awaited found no process to stop.
+      if (abortSignal?.aborted) throw new Error('Query aborted');
 
       const stream = streamTurn({
         connection,
@@ -769,7 +771,7 @@ export class CodexProvider implements IAgentProvider {
         const result = failureResult(
           failureClass,
           subtype,
-          withModelAccessAdvice((error as Error).message, requestOptions?.model)
+          withModelAccessAdvice((error as Error).message, model)
         );
         if (threadId) result.sessionId = threadId;
         yield result;

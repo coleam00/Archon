@@ -9,6 +9,7 @@
  * provider reads only the fields it needs from what arrives.
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { delimiter } from 'node:path';
 import { createLogger } from '@archon/paths';
 import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
@@ -59,7 +60,7 @@ export class ConnectionClosedError extends Error {
   }
 }
 
-export function describeEnd(end: ConnectionEnd): string {
+function describeEnd(end: ConnectionEnd): string {
   return end.kind === 'spawn_failed'
     ? `could not start: ${end.error.message}`
     : `exited (${end.signal ? `signal ${end.signal}` : `code ${String(end.code)}`})`;
@@ -79,14 +80,11 @@ export class AppServerConnection {
   private readonly queue: ServerNotification[] = [];
   private wake: (() => void) | undefined;
   private endedWith: ConnectionEnd | undefined;
+  private readonly endSignal = Promise.withResolvers<ConnectionEnd>();
   /** Resolves once the process is gone, however it ended. */
-  readonly ended: Promise<ConnectionEnd>;
-  private markEnded!: (end: ConnectionEnd) => void;
+  readonly ended = this.endSignal.promise;
 
   private constructor(private readonly child: ChildProcessWithoutNullStreams) {
-    this.ended = new Promise(resolve => {
-      this.markEnded = resolve;
-    });
     let buffered = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -124,9 +122,7 @@ export class AppServerConnection {
     const childEnv = { ...env };
     if (binary.pathDirs.length > 0) {
       const key = pathKey(childEnv);
-      childEnv[key] = [...binary.pathDirs, childEnv[key]]
-        .filter(Boolean)
-        .join(process.platform === 'win32' ? ';' : ':');
+      childEnv[key] = [...binary.pathDirs, childEnv[key]].filter(Boolean).join(delimiter);
     }
     const child = spawner(binary.path, ['app-server', ...args], {
       env: childEnv,
@@ -250,6 +246,6 @@ export class AppServerConnection {
     for (const request of this.pending.values()) request.reject(new ConnectionClosedError(end));
     this.pending.clear();
     this.wakeReader();
-    this.markEnded(end);
+    this.endSignal.resolve(end);
   }
 }

@@ -85,9 +85,11 @@ export function classifyTurnError(
  * reset is unknown and the engine's fallback delay applies.
  */
 function exhaustedWindowReset(rateLimits: RateLimitSnapshot | undefined): string | undefined {
-  const resets = [rateLimits?.primary, rateLimits?.secondary]
-    .filter(window => window && window.usedPercent >= 100 && typeof window.resetsAt === 'number')
-    .map(window => (window?.resetsAt ?? 0) * 1000);
+  const resets = [rateLimits?.primary, rateLimits?.secondary].flatMap(window =>
+    window && window.usedPercent >= 100 && typeof window.resetsAt === 'number'
+      ? [window.resetsAt * 1000]
+      : []
+  );
   if (resets.length === 0) return undefined;
   const resetAt = new Date(Math.max(...resets));
   return Number.isFinite(resetAt.getTime()) ? resetAt.toISOString() : undefined;

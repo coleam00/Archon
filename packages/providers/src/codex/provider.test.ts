@@ -756,6 +756,20 @@ describe('CodexProvider', () => {
       expect(process0.signals).toEqual([]);
     });
 
+    test('an abort while the turn is being set up stops the process before any turn starts', async () => {
+      const controller = new AbortController();
+      const server = createFakeAppServer();
+      const spawner = ((...args: Parameters<typeof server>) => {
+        controller.abort();
+        return server(...args);
+      }) as typeof server;
+      await expect(
+        run(new CodexProvider(spawner), { abortSignal: controller.signal })
+      ).rejects.toThrow('Query aborted');
+      expect(server.processes[0].methods).not.toContain('turn/start');
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
+
     test('an abort before the turn starts throws without spawning', async () => {
       const { provider, server } = providerWith();
       const controller = new AbortController();
