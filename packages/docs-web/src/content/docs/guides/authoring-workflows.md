@@ -783,7 +783,13 @@ Archon sorts a failed AI attempt into one of three buckets before deciding wheth
 | **TRANSIENT** | `transient`, `rate_limited` (rate limits get a longer retry budget and backoff) | Yes |
 | **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
-Claude classifies from its SDK's error codes, HTTP status and process-exit fields. The Codex SDK and Pi report failures only as message strings, so every Codex and Pi failure is `unknown`: set `on_error: all` on a node that should retry them. Engine-detected failures (an idle timeout, an empty response) and errors from providers that do not report a typed class yet are still classified from their text.
+Every built-in provider reports a typed class:
+
+- **Claude** reports every class, from its SDK's error codes, HTTP status and process-exit fields.
+- **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
+- **Codex, Pi and Copilot** expose failures only as message strings, so every failure they report is `unknown`.
+
+Set `on_error: all` on a node that should retry `unknown` failures. Only failures the engine detects itself, such as an idle timeout or an empty response, are classified from their text.
 
 ### Retry Notifications
 
@@ -795,7 +801,7 @@ Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...
 
 ### One Retry Layer
 
-The node retry is the only retry Archon adds. Claude, Codex and Pi make one attempt per call and report a typed failure; the engine decides whether to try again:
+The node retry is the only retry Archon adds, except that OpenCode retries a rate-limited, crashed or missing-agent query up to three times inside one attempt. Every other provider makes one attempt per call and reports a typed failure; the engine decides whether to try again:
 
 ```
 Node retry (dag-executor)  — AI nodes: default 2 retries, 3 s base backoff;
