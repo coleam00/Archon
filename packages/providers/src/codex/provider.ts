@@ -209,9 +209,7 @@ function isModelAccessError(errorMessage: string): boolean {
   const m = errorMessage.toLowerCase();
   const hasModel = m.includes('model');
   const hasAvailabilitySignal =
-    m.includes('not available') ||
-    m.includes('not found') ||
-    m.includes('access denied');
+    m.includes('not available') || m.includes('not found') || m.includes('access denied');
   return hasModel && hasAvailabilitySignal;
 }
 
@@ -406,8 +404,12 @@ function tokenUsageOf(last: TokenUsageBreakdown): TokenUsage {
 
 /** A string at `value[key]`, or undefined: responses are read narrowly, not trusted whole. */
 function idAt(value: unknown, key: 'thread' | 'turn'): string | undefined {
-  const nested = typeof value === 'object' && value !== null ? (value as Record<string, unknown>)[key] : undefined;
-  const id = typeof nested === 'object' && nested !== null ? (nested as { id?: unknown }).id : undefined;
+  const nested =
+    typeof value === 'object' && value !== null
+      ? (value as Record<string, unknown>)[key]
+      : undefined;
+  const id =
+    typeof nested === 'object' && nested !== null ? (nested as { id?: unknown }).id : undefined;
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
@@ -590,10 +592,7 @@ function* completeTurn(
   } else if (status === 'failed' && error) {
     const { failureClass, resetAt } = classifyTurnError(error.codexErrorInfo, state.rateLimits);
     const vendorText = [error.message, error.additionalDetails].filter(Boolean).join('\n');
-    getLog().error(
-      { failureClass, codexErrorInfo: error.codexErrorInfo },
-      'codex.turn_failed'
-    );
+    getLog().error({ failureClass, codexErrorInfo: error.codexErrorInfo }, 'codex.turn_failed');
     result = failureResult(
       failureClass,
       'codex_turn_failed',
@@ -613,7 +612,9 @@ function* completeTurn(
 }
 
 function withModelAccessAdvice(evidence: string, model: string | undefined): string {
-  return isModelAccessError(evidence) ? `${buildModelAccessMessage(model)}\n\n${evidence}` : evidence;
+  return isModelAccessError(evidence)
+    ? `${buildModelAccessMessage(model)}\n\n${evidence}`
+    : evidence;
 }
 
 /**
@@ -763,7 +764,8 @@ export class CodexProvider implements IAgentProvider {
       getLog().error({ err: error, resultReported }, 'query_error');
       if (!resultReported) {
         const failureClass = failureClassOfStop(error);
-        const subtype = error instanceof JsonRpcError ? 'codex_request_failed' : 'codex_query_failed';
+        const subtype =
+          error instanceof JsonRpcError ? 'codex_request_failed' : 'codex_query_failed';
         const result = failureResult(
           failureClass,
           subtype,

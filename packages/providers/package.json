@@ -56,6 +56,12 @@
       "src/codex/provider.test.ts"
     ],
     [
+      "src/codex/turn-error.test.ts"
+    ],
+    [
+      "src/codex/app-server.test.ts"
+    ],
+    [
       "src/registry.test.ts"
     ],
     [

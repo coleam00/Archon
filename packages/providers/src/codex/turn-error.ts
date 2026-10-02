@@ -10,7 +10,11 @@ import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 
 type StringVariant = Extract<CodexErrorInfo, string>;
 type ObjectVariant = Exclude<CodexErrorInfo, string>;
-type ObjectVariantKey = ObjectVariant extends infer V ? (V extends object ? keyof V : never) : never;
+type ObjectVariantKey = ObjectVariant extends infer V
+  ? V extends object
+    ? keyof V
+    : never
+  : never;
 
 const CLASS_BY_VARIANT: Partial<Record<StringVariant, ProviderFailureClass>> = {
   unauthorized: 'auth',

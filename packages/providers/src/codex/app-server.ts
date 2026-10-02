@@ -124,9 +124,9 @@ export class AppServerConnection {
     const childEnv = { ...env };
     if (binary.pathDirs.length > 0) {
       const key = pathKey(childEnv);
-      childEnv[key] = [...binary.pathDirs, childEnv[key]].filter(Boolean).join(
-        process.platform === 'win32' ? ';' : ':'
-      );
+      childEnv[key] = [...binary.pathDirs, childEnv[key]]
+        .filter(Boolean)
+        .join(process.platform === 'win32' ? ';' : ':');
     }
     const child = spawner(binary.path, ['app-server', ...args], {
       env: childEnv,
