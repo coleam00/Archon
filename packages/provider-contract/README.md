@@ -11,6 +11,8 @@ During a turn a provider streams `ProviderEvent`s (`src/events.ts`): message and
 - Tool output is capped at `TOOL_OUTPUT_MAX_CHARS` code points, the unit JSON Schema's `maxLength` counts. The provider truncates with `truncateToolOutput`, which sets `outputTruncated` when it cuts.
 - A warning carries a provider-namespaced `code`, such as `claude.node_config_ignored`. Readers branch on the code, never on the message.
 
+The engine records every event a workflow node receives exactly as the provider yielded it, inside an envelope with the node attempt and an emission sequence number, in the run's JSONL log and in its database, and serves the same object from `GET /api/workflows/runs/{runId}/provider-events`. What a provider puts in an event is what operators and API readers see, so the cap and the codes above are the only shaping it gets.
+
 Every turn, successful or failed, ends with one `{ type: 'settled' }` chunk after its final `result`. A `result` can arrive while work the turn started is still running, so the engine finishes a node on `settled`, not on `result`.
 
 `schema/provider-contract.schema.json` is generated from `src/` by `src/scripts/generate-schema.ts`. Run `bun run generate:provider-contract-schema` from the repository root after changing a schema; `bun run validate` fails while the file is stale.

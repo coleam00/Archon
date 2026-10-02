@@ -217,6 +217,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     persistWorkflowEvent: mock(async () => {}),
     persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
     findResumableRun: mock(async () => null),
+    listProviderEvents: mock(async () => []),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),

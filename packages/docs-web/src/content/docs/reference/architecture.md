@@ -341,6 +341,18 @@ yield { type: 'result', sessionId: 'session-1', stopReason: 'end_turn' };
 yield { type: 'settled' };
 ```
 
+### How the engine records provider events
+
+The engine keeps each event a workflow node's provider yields as the provider built it. `packages/workflows/src/provider-events.ts` wraps it in an envelope, `{attemptId, seq, observedAt, event}`, and records that envelope three ways:
+
+- a `provider_event` line in the run's JSONL log, framed by the log's `workflow_id`, `ts` and `step`;
+- a `provider_event` row in `remote_agent_workflow_events`, with the node's persisted step name in `step_name` and the envelope in `data`;
+- a `provider_event` emitter event, which the Web adapter sends to the run's conversation stream as an SSE `workflow_provider_event` frame.
+
+`attemptId` is the node attempt's id. `seq` counts the attempt's events from 0, across a structured-output reask and across a loop node's iterations. Store writes are not awaited, so a reader orders a node's events by attempt, then by `seq`, rather than by row order.
+
+Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(runId, {stepName?, after?})` returns each node's records in emission order, and `after: {attemptId, seq}` returns only what follows. The database store also translates rows written before envelopes existed (`tool_called`, `tool_completed`, `task_activity`, `hook_activity`) into the same vocabulary, with a null `attemptId`. `GET /api/workflows/runs/{runId}/provider-events` serves those records, and the console loads each node's records once, then appends live frames.
+
 ### Implementation Guide
 
 **1. Create provider file:** `packages/providers/src/your-assistant/provider.ts`
@@ -1024,10 +1036,10 @@ const mode = platform.getStreamingMode();
 if (mode === 'stream') {
   // Send each chunk immediately
   for await (const msg of aiClient.sendQuery(...)) {
-    if (msg.type === 'assistant' && msg.content) {
-      await platform.sendMessage(conversationId, msg.content);
-    } else if (msg.type === 'tool' && msg.toolName) {
-      const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+    if (msg.type === 'agent_message_chunk') {
+      await platform.sendMessage(conversationId, msg.text);
+    } else if (msg.type === 'tool_call') {
+      const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
       await platform.sendMessage(conversationId, toolMessage);
     }
   }
@@ -1036,8 +1048,8 @@ if (mode === 'stream') {
   const assistantMessages: string[] = [];
 
   for await (const msg of aiClient.sendQuery(...)) {
-    if (msg.type === 'assistant' && msg.content) {
-      assistantMessages.push(msg.content);
+    if (msg.type === 'agent_message_chunk') {
+      assistantMessages.push(msg.text);
     }
     // Tool calls logged but not sent to user
   }
@@ -1435,8 +1447,8 @@ const newSession = await sessionDb.transitionSession(
 ```typescript
 try {
   for await (const msg of aiClient.sendQuery(...)) {
-    if (msg.type === 'assistant') {
-      await platform.sendMessage(conversationId, msg.content);
+    if (msg.type === 'agent_message_chunk') {
+      await platform.sendMessage(conversationId, msg.text);
     }
   }
 } catch (error) {

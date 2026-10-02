@@ -46,6 +46,22 @@ describe('withIdleTimeout', () => {
     expect(result).toEqual([]);
   });
 
+  test("the consumer's own processing time is not charged to the generator's idle window", async () => {
+    // The generator is never silent for more than 30ms, but the consumer spends 60ms on
+    // each value (the engine records every provider event before asking for the next).
+    // Only the generator's silence is idleness.
+    const onTimeout = mock(() => {});
+    const result: number[] = [];
+
+    for await (const v of withIdleTimeout(fromValues([1, 2, 3], 30), 70, onTimeout)) {
+      result.push(v);
+      await new Promise(resolve => setTimeout(resolve, 60));
+    }
+
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(result).toEqual([1, 2, 3]);
+  });
+
   test('fires onTimeout and exits when generator hangs', async () => {
     const onTimeout = mock(() => {});
     const result: string[] = [];

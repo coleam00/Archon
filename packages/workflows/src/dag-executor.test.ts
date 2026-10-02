@@ -76,7 +76,12 @@ import {
 } from '@archon/providers';
 import type { ProviderFailure } from '@archon/provider-contract';
 import type { SendQueryOptions } from '@archon/providers';
-import { mergeTokenUsage, type MessageChunk, type TokenUsage } from '@archon/providers/types';
+import {
+  mergeTokenUsage,
+  type MessageChunk,
+  type ProviderEvent,
+  type TokenUsage,
+} from '@archon/providers/types';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
@@ -106,6 +111,7 @@ import { planGraph, resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import { dryRunWorkflow } from './dry-run';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
 import { nodeArtifactsListingSchema } from './schemas/node-artifact';
+import { providerEventEnvelopeSchema, providerEventLineSchema } from './schemas/provider-event';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from './event-emitter';
 import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type {
@@ -280,6 +286,7 @@ function createMockStore(): MockWorkflowStore {
         return { persisted: true };
       }
     ),
+    listProviderEvents: mock<IWorkflowStore['listProviderEvents']>(async () => []),
     getDagResumeSnapshot: mock<IWorkflowStore['getDagResumeSnapshot']>(async _workflowRunId =>
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
@@ -4649,7 +4656,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   }, 5_000);
 });
 
-describe('executeDagWorkflow -- tool_called event persistence', () => {
+describe('executeDagWorkflow -- tool events reach a streaming platform', () => {
   let testDir: string;
 
   beforeEach(async () => {
@@ -4673,50 +4680,6 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
     } catch {
       // ignore cleanup errors
     }
-  });
-
-  it('should persist tool_called event during DAG node execution', async () => {
-    const mockStore = createMockStore();
-    const mockDeps = createMockDeps(mockStore);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'Reading file...' };
-      yield {
-        type: 'tool_call',
-        toolCallId: 'call-1',
-        name: 'read_file',
-        rawInput: { path: '/tmp/test.ts' },
-      };
-      yield { type: 'result', sessionId: 'dag-session-id' };
-    });
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'tool-test-dag',
-          nodes: [node('my-cmd')],
-        },
-        workflowRun,
-      })
-    );
-
-    const eventCalls = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const toolCalledEvents = eventCalls.filter(
-      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'tool_called'
-    );
-    expect(toolCalledEvents.length).toBe(1);
-    const eventData = toolCalledEvents[0][0] as Record<string, unknown>;
-    expect(eventData.step_name).toBe('my-cmd');
-    expect((eventData.data as Record<string, unknown>).tool_name).toBe('read_file');
-    expect((eventData.data as Record<string, unknown>).tool_input).toEqual({
-      path: '/tmp/test.ts',
-    });
-    expect((eventData.data as Record<string, unknown>).tool_call_id).toBe('call-1');
   });
 
   it('calls sendStructuredEvent for tool messages in streaming mode during DAG', async () => {
@@ -4757,7 +4720,7 @@ describe('executeDagWorkflow -- tool_called event persistence', () => {
   });
 });
 
-describe('executeDagWorkflow -- tool_completed event emission', () => {
+describe('executeDagWorkflow -- provider event recording', () => {
   let testDir: string;
 
   beforeEach(async () => {
@@ -4786,129 +4749,136 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
     }
   });
 
-  it('emits a DAG tool_completed duration at tool_result, excluding later assistant time', async () => {
+  it('records every provider event unchanged in the store, the JSONL log and the emitter', async () => {
     const mockStore = createMockStore();
-    const mockDeps = createMockDeps(mockStore);
-    const platform = createMockPlatform();
     const workflowRun = makeWorkflowRun();
-
-    setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield {
-        type: 'tool_call',
-        toolCallId: 'call-r',
-        name: 'read_file',
-        rawInput: { path: '/a' },
-      };
-      setSystemTime(new Date('2026-01-01T00:00:00.050Z'));
-      yield {
-        type: 'tool_call_update',
-        toolCallId: 'call-r',
-        status: 'failed',
-        output: 'contents',
-        exitCode: 1,
-      };
-      setSystemTime(new Date('2026-01-01T00:01:00.050Z'));
-      yield { type: 'agent_message_chunk', text: 'post-tool reasoning' };
-      yield { type: 'result', sessionId: 'dag-sess-tool-result' };
-    });
-
-    try {
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-dag-tool-result',
-          cwd: testDir,
-          workflow: { name: 'dag-tool-result-test', nodes: [node('my-cmd')] },
-          workflowRun,
-        })
-      );
-    } finally {
-      setSystemTime();
-    }
-
-    const completedEvents = mockStore.createWorkflowEvent.mock.calls.filter(
-      ([event]) => event.event_type === 'tool_completed'
-    );
-    expect(completedEvents).toHaveLength(1);
-    expect(completedEvents[0]?.[0].data).toMatchObject({
-      tool_name: 'read_file',
-      duration_ms: 50,
-      tool_call_id: 'call-r',
-      tool_outcome: 'error',
-      exit_code: 1,
-    });
-  });
-
-  it('correlates interleaved DAG tool lifecycles by toolCallId', async () => {
-    const mockStore = createMockStore();
-    const mockDeps = createMockDeps(mockStore);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'tool_call', toolCallId: 'id-a', name: 'read_file' };
-      setSystemTime(new Date('2026-01-01T00:00:00.010Z'));
-      yield { type: 'tool_call', toolCallId: 'id-b', name: 'write_file' };
-      setSystemTime(new Date('2026-01-01T00:00:00.040Z'));
-      yield {
-        type: 'tool_call_update',
-        toolCallId: 'id-a',
-        status: 'completed',
-        output: '',
-      };
-      setSystemTime(new Date('2026-01-01T00:00:00.070Z'));
-      yield {
+    const yielded: ProviderEvent[] = [
+      { type: 'agent_thought_chunk', text: 'thinking' },
+      { type: 'tool_call', toolCallId: 'id-a', name: 'read_file', rawInput: { path: '/a' } },
+      { type: 'tool_call', toolCallId: 'id-b', name: 'Bash', title: 'ls' },
+      { type: 'tool_call_update', toolCallId: 'id-a', status: 'completed', output: 'contents' },
+      {
         type: 'tool_call_update',
         toolCallId: 'id-b',
         status: 'failed',
-        output: '',
+        output: 'x'.repeat(16_384),
+        outputTruncated: true,
         exitCode: 2,
-      };
-      yield { type: 'agent_message_chunk', text: 'tools done' };
-      yield { type: 'result', sessionId: 'dag-sess-interleaved-tools' };
+      },
+      { type: 'warning', code: 'claude.test', message: 'careful' },
+      { type: 'mcp_server_status', server: 'github', status: 'connected' },
+      { type: 'compaction', phase: 'completed', trigger: 'auto', tokensBefore: 9, tokensAfter: 3 },
+      { type: 'subtask', taskId: 't-1', status: 'started', description: 'look' },
+      { type: 'subtask', taskId: 't-1', status: 'completed', summary: 'found' },
+      {
+        type: 'hook',
+        hookId: 'h-1',
+        hookName: 'PreToolUse',
+        hookEvent: 'PreToolUse',
+        status: 'succeeded',
+      },
+      { type: 'state_update', state: 'running' },
+      { type: 'agent_message_chunk', text: 'done' },
+    ];
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield* yielded;
+      yield { type: 'result', sessionId: 'dag-sess-envelope' };
+    });
+    const emitted: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (event.type === 'provider_event') emitted.push(event);
     });
 
     try {
       await executeDagWorkflow(
         dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-dag-interleaved-tools',
+          deps: createMockDeps(mockStore),
           cwd: testDir,
-          workflow: { name: 'dag-interleaved-tools', nodes: [node('my-cmd')] },
+          workflow: { name: 'dag-envelope-test', nodes: [node('my-cmd')] },
           workflowRun,
         })
       );
     } finally {
-      setSystemTime();
+      unsubscribe();
     }
 
-    const completedEvents = mockStore.createWorkflowEvent.mock.calls
-      .filter(([event]) => event.event_type === 'tool_completed')
-      .map(([event]) => event.data ?? {});
-    expect(completedEvents).toEqual(
-      expect.arrayContaining([
-        {
-          tool_name: 'read_file',
-          duration_ms: 40,
-          tool_call_id: 'id-a',
-          tool_outcome: 'success',
-        },
-        {
-          tool_name: 'write_file',
-          duration_ms: 60,
-          tool_call_id: 'id-b',
-          tool_outcome: 'error',
-          exit_code: 2,
-        },
-      ])
+    const transcript = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const nodeStart = transcript.find(line => line.type === 'node_start');
+    const attemptId = (nodeStart?.execution as { attempt?: { id?: string } } | undefined)?.attempt
+      ?.id;
+    expect(typeof attemptId).toBe('string');
+    const rows = persistedEvents(mockStore).filter(e => e.event_type === 'provider_event');
+    const lines = transcript.filter(line => line.type === 'provider_event');
+    expect(rows.map(row => row.data?.event)).toEqual(yielded);
+    expect(lines.map(line => line.event)).toEqual(yielded);
+    expect(emitted.map(event => (event.type === 'provider_event' ? event.event : null))).toEqual(
+      yielded
+    );
+    // The envelope names the node and the attempt, and numbers the attempt's events from 0.
+    for (const [index, row] of rows.entries()) {
+      expect(row.step_name).toBe('my-cmd');
+      expect(providerEventEnvelopeSchema.parse(row.data)).toMatchObject({ attemptId, seq: index });
+      expect(providerEventLineSchema.parse(lines[index])).toEqual({
+        type: 'provider_event',
+        workflow_id: workflowRun.id,
+        ts: expect.any(String),
+        step: 'my-cmd',
+        ...providerEventEnvelopeSchema.parse(row.data),
+      });
+    }
+    // The old line types are gone: the log has one shape for provider activity.
+    expect(transcript.filter(line => line.type === 'assistant' || line.type === 'tool')).toEqual(
+      []
     );
   });
 
-  it('should not emit tool_completed when no tools were called in DAG node', async () => {
+  it('numbers a reask pass on from the first pass of the same attempt', async () => {
+    const mockStore = createMockStore();
+    const workflowRun = makeWorkflowRun();
+    let pass = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      pass += 1;
+      yield { type: 'agent_message_chunk', text: `pass ${String(pass)}` };
+      yield {
+        type: 'result',
+        sessionId: `dag-sess-reask-${String(pass)}`,
+        structuredOutput: pass === 1 ? { note: 'bad' } : { ok: true },
+      };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(mockStore),
+        cwd: testDir,
+        workflowProvider: 'pi',
+        config: { ...minimalConfig, assistant: 'pi' },
+        workflow: {
+          name: 'dag-reask-seq',
+          nodes: [
+            {
+              ...node('my-cmd'),
+              provider: 'pi',
+              output_format: {
+                type: 'object',
+                properties: { ok: { type: 'boolean' } },
+                required: ['ok'],
+              },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(pass).toBe(2);
+    const envelopes = persistedEvents(mockStore)
+      .filter(e => e.event_type === 'provider_event')
+      .map(e => providerEventEnvelopeSchema.parse(e.data));
+    expect(envelopes.map(e => e.seq)).toEqual([0, 1]);
+    expect(new Set(envelopes.map(e => e.attemptId)).size).toBe(1);
+  });
+
+  it('records no tool event when no tools were called in DAG node', async () => {
     const mockStore = createMockStore();
     const mockDeps = createMockDeps(mockStore);
     const platform = createMockPlatform();
@@ -4932,9 +4902,13 @@ describe('executeDagWorkflow -- tool_completed event emission', () => {
 
     const createEventCalls = (mockStore.createWorkflowEvent as ReturnType<typeof mock>).mock
       .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
-    const completedEvents = createEventCalls.filter(([arg]) => arg.event_type === 'tool_completed');
+    const toolEvents = createEventCalls.filter(
+      ([arg]) =>
+        arg.event_type === 'provider_event' &&
+        (arg.data?.event as { type?: string } | undefined)?.type?.startsWith('tool_call')
+    );
 
-    expect(completedEvents.length).toBe(0);
+    expect(toolEvents.length).toBe(0);
   });
 });
 
@@ -7452,7 +7426,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed!.data.background_tasks_incomplete).toBeUndefined();
     });
 
-    it('persists output_file on a finished subtask task_activity event', async () => {
+    it('persists output_file on a finished subtask', async () => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'agent_message_chunk', text: 'delegating' };
         yield {
@@ -7469,16 +7443,11 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       const platform = createMockPlatform();
       await runSingleNode(store, platform, 'bg-output-file-run');
 
-      const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-      const taskEvent = eventCalls.find(
-        (c: unknown[]) =>
-          (c[0] as { event_type: string }).event_type === 'task_activity' &&
-          (c[0] as { data: { task_id?: string } }).data.task_id === 't-9'
-      );
-      expect(taskEvent).toBeDefined();
-      expect((taskEvent![0] as { data: { output_file?: string } }).data.output_file).toBe(
-        '/tmp/task-9-output.md'
-      );
+      const subtask = persistedEvents(store)
+        .filter(e => e.event_type === 'provider_event')
+        .map(e => providerEventEnvelopeSchema.parse(e.data).event)
+        .find(event => event.type === 'subtask');
+      expect(subtask).toMatchObject({ taskId: 't-9', outputFile: '/tmp/task-9-output.md' });
     });
   });
 
@@ -7525,80 +7494,59 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         })
       );
 
-      const activity = persistedEvents(store)
-        .filter(e => e.event_type === 'task_activity' || e.event_type === 'hook_activity')
-        .map(e => [e.event_type, e.data?.activity]);
-      expect(activity).toEqual([
-        ['task_activity', 'started'],
-        ['hook_activity', 'response'],
-        ['task_activity', 'completed'],
-      ]);
+      const recorded = persistedEvents(store)
+        .filter(e => e.event_type === 'provider_event')
+        .map(e => providerEventEnvelopeSchema.parse(e.data).event.type);
+      expect(recorded).toEqual(['subtask', 'hook', 'subtask', 'agent_message_chunk']);
     });
 
-    it('emits a loop tool_completed duration at tool_result, excluding later assistant time', async () => {
+    it('numbers every iteration of a loop attempt from one sequence', async () => {
       const store = createMockStore();
-      const mockDeps = createMockDeps(store);
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun('loop-tool-result-run');
-
-      setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
+      let iteration = 0;
       mockSendQueryDag.mockImplementation(async function* () {
-        yield {
-          type: 'tool_call',
-          toolCallId: 'call-r',
-          name: 'read_file',
-          rawInput: { path: '/a' },
-        };
-        setSystemTime(new Date('2026-01-01T00:00:00.050Z'));
+        iteration += 1;
+        yield { type: 'tool_call', toolCallId: `call-${String(iteration)}`, name: 'read_file' };
         yield {
           type: 'tool_call_update',
-          toolCallId: 'call-r',
+          toolCallId: `call-${String(iteration)}`,
           status: 'completed',
-          output: 'contents',
         };
-        setSystemTime(new Date('2026-01-01T00:01:00.050Z'));
-        yield { type: 'agent_message_chunk', text: 'Done. <promise>COMPLETE</promise>' };
-        yield { type: 'result', sessionId: 'loop-sess-tool-result' };
+        yield {
+          type: 'agent_message_chunk',
+          text: iteration === 2 ? 'Done. <promise>COMPLETE</promise>' : 'working',
+        };
+        yield { type: 'result', sessionId: `loop-sess-seq-${String(iteration)}` };
       });
 
-      try {
-        await executeDagWorkflow(
-          dagOptions({
-            deps: mockDeps,
-            platform,
-            cwd: testDir,
-            workflow: {
-              name: 'dag-loop-tool-result',
-              nodes: [
-                {
-                  id: 'my-loop',
-                  kind: 'loop',
-                  loop: {
-                    fresh_context: false,
-                    prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
-                    until: 'COMPLETE',
-                    max_iterations: 5,
-                  },
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-loop-seq',
+            nodes: [
+              {
+                id: 'my-loop',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Do a task. When done, output <promise>COMPLETE</promise>.',
+                  until: 'COMPLETE',
+                  max_iterations: 5,
                 },
-              ],
-            },
-            workflowRun,
-          })
-        );
-      } finally {
-        setSystemTime();
-      }
-
-      const completedEvents = store.createWorkflowEvent.mock.calls.filter(
-        ([event]) => event.event_type === 'tool_completed'
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('loop-seq-run'),
+        })
       );
-      expect(completedEvents).toHaveLength(1);
-      expect(completedEvents[0]?.[0].data).toMatchObject({
-        tool_name: 'read_file',
-        duration_ms: 50,
-        tool_call_id: 'call-r',
-        tool_outcome: 'success',
-      });
+
+      expect(iteration).toBe(2);
+      const envelopes = persistedEvents(store)
+        .filter(e => e.event_type === 'provider_event')
+        .map(e => providerEventEnvelopeSchema.parse(e.data));
+      expect(envelopes.map(e => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
+      expect(new Set(envelopes.map(e => e.attemptId)).size).toBe(1);
     });
 
     it('retries an iteration that dies on a 429 instead of failing the loop node — #2706', async () => {
@@ -7791,85 +7739,6 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.objectContaining({ nodeId: 'my-loop', iteration: 1, maxBudgetUsd: 1.5 }),
         'dag.node_budget_cap_exceeded'
-      );
-    });
-
-    it('correlates interleaved loop tool lifecycles by toolCallId', async () => {
-      const store = createMockStore();
-      const mockDeps = createMockDeps(store);
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun('loop-interleaved-tools-run');
-
-      setSystemTime(new Date('2026-01-01T00:00:00.000Z'));
-      mockSendQueryDag.mockImplementation(async function* () {
-        yield { type: 'tool_call', toolCallId: 'id-a', name: 'read_file' };
-        setSystemTime(new Date('2026-01-01T00:00:00.010Z'));
-        yield { type: 'tool_call', toolCallId: 'id-b', name: 'write_file' };
-        setSystemTime(new Date('2026-01-01T00:00:00.040Z'));
-        yield {
-          type: 'tool_call_update',
-          toolCallId: 'id-a',
-          status: 'completed',
-          output: '',
-        };
-        setSystemTime(new Date('2026-01-01T00:00:00.070Z'));
-        yield {
-          type: 'tool_call_update',
-          toolCallId: 'id-b',
-          status: 'failed',
-          output: '',
-        };
-        yield { type: 'agent_message_chunk', text: 'Done. <promise>COMPLETE</promise>' };
-        yield { type: 'result', sessionId: 'loop-sess-interleaved-tools' };
-      });
-
-      try {
-        await executeDagWorkflow(
-          dagOptions({
-            deps: mockDeps,
-            platform,
-            conversationId: 'conv-loop-interleaved-tools',
-            cwd: testDir,
-            workflow: {
-              name: 'loop-interleaved-tools',
-              nodes: [
-                {
-                  id: 'my-loop',
-                  kind: 'loop',
-                  loop: {
-                    fresh_context: false,
-                    prompt: 'Complete the task.',
-                    until: 'COMPLETE',
-                    max_iterations: 1,
-                  },
-                },
-              ],
-            },
-            workflowRun,
-          })
-        );
-      } finally {
-        setSystemTime();
-      }
-
-      const completedEvents = store.createWorkflowEvent.mock.calls
-        .filter(([event]) => event.event_type === 'tool_completed')
-        .map(([event]) => event.data ?? {});
-      expect(completedEvents).toEqual(
-        expect.arrayContaining([
-          {
-            tool_name: 'read_file',
-            duration_ms: 40,
-            tool_call_id: 'id-a',
-            tool_outcome: 'success',
-          },
-          {
-            tool_name: 'write_file',
-            duration_ms: 60,
-            tool_call_id: 'id-b',
-            tool_outcome: 'error',
-          },
-        ])
       );
     });
 
@@ -13517,7 +13386,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
   });
 
   it('a thinking-only stream renews the watchdog and persists a type-only timeout diagnostic', async () => {
-    const privateThinking = 'reasoning that must not be logged';
+    const privateThinking = 'reasoning the diagnostic must not copy';
     let yielded = 0;
     mockSendQueryDag.mockImplementation(async function* (
       _prompt: string,
@@ -13569,7 +13438,13 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     ]);
     expect(resetEvents.every(event => !('content' in event))).toBe(true);
     expect(resetEvents.every(event => !Number.isNaN(Date.parse(String(event.ts))))).toBe(true);
-    expect(JSON.stringify(transcript)).not.toContain(privateThinking);
+    // The thinking is recorded once, as the provider's events; the diagnostic only names its type.
+    expect(JSON.stringify(resetEvents)).not.toContain(privateThinking);
+    expect(
+      transcript.filter(event => event.type === 'provider_event').map(event => event.event)
+    ).toEqual(
+      [0, 1, 2].map(i => ({ type: 'agent_thought_chunk', text: `${privateThinking} ${String(i)}` }))
+    );
 
     const failed = transcript.find(event => event.type === 'node_error' && event.step === 'review');
     // The transcript's last record is the renewal the stall diagnostic names.
@@ -13718,8 +13593,12 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(assistantReset.every(event => !('content' in event))).toBe(true);
     expect(tool.error).toContain("chunk type 'tool_call'");
     expect(assistant.error).toContain("chunk type 'agent_message_chunk'");
-    expect(tool.transcript.some(event => event.type === 'assistant')).toBe(false);
-    expect(assistant.transcript.some(event => event.type === 'assistant')).toBe(true);
+    const recordedTypes = (transcript: Array<Record<string, unknown>>): unknown[] =>
+      transcript
+        .filter(event => event.type === 'provider_event')
+        .map(event => (event.event as { type: string }).type);
+    expect(recordedTypes(tool.transcript)).toEqual(['agent_thought_chunk', 'tool_call']);
+    expect(recordedTypes(assistant.transcript)).toEqual(['agent_message_chunk']);
   });
 
   it('idle-timeout with zero output fails a loop iteration instead of consuming its iteration budget', async () => {

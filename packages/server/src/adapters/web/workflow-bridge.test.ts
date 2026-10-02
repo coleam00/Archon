@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock } from 'bun:test';
 
 // Mock logger before importing bridge
 const mockLogger = {
@@ -20,8 +20,12 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { mapWorkflowEvent, mapWorkflowEventRow } from './workflow-bridge';
-import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
+import { mapWorkflowEvent, mapWorkflowEventRow, WorkflowEventBridge } from './workflow-bridge';
+import type { SSETransport } from './transport';
+import {
+  getWorkflowEventEmitter,
+  type WorkflowEmitterEvent,
+} from '@archon/workflows/event-emitter';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 
 const suspendedExecution: NodeExecutionMetadata = {
@@ -149,178 +153,72 @@ test('timeout skip projection preserves the live timeout cause', () => {
   });
 });
 
-describe('mapWorkflowEvent — tool activity correlation', () => {
-  test('forwards tool call IDs and completion metadata', () => {
-    const started: WorkflowEmitterEvent = {
-      type: 'tool_started',
-      runId: 'run-1',
-      toolName: 'Bash',
-      stepName: 'implement',
+describe('provider events on the live stream', () => {
+  const providerEvent: WorkflowEmitterEvent = {
+    type: 'provider_event',
+    runId: 'run-1',
+    stepName: 'loop.implement',
+    attemptId: 'attempt-1',
+    seq: 4,
+    observedAt: '2026-10-02T10:00:00.123Z',
+    event: {
+      type: 'tool_call_update',
       toolCallId: 'call-1',
-    };
-    const completed: WorkflowEmitterEvent = {
-      type: 'tool_completed',
-      runId: 'run-1',
-      toolName: 'Bash',
-      stepName: 'implement',
-      durationMs: 42,
-      toolCallId: 'call-1',
-      toolOutcome: 'error',
+      status: 'failed',
+      output: 'boom',
       exitCode: 1,
-    };
+    },
+  };
 
-    expect(JSON.parse(mapWorkflowEvent(started) ?? '{}')).toMatchObject({
-      type: 'workflow_tool_activity',
-      status: 'started',
-      toolCallId: 'call-1',
+  test('carries the recorded envelope and event unchanged', () => {
+    expect(JSON.parse(mapWorkflowEvent(providerEvent) ?? '{}')).toEqual({
+      type: 'workflow_provider_event',
+      runId: 'run-1',
+      stepName: 'loop.implement',
+      attemptId: 'attempt-1',
+      seq: 4,
+      observedAt: '2026-10-02T10:00:00.123Z',
+      event: {
+        type: 'tool_call_update',
+        toolCallId: 'call-1',
+        status: 'failed',
+        output: 'boom',
+        exitCode: 1,
+      },
     });
-    expect(JSON.parse(mapWorkflowEvent(completed) ?? '{}')).toMatchObject({
-      type: 'workflow_tool_activity',
-      status: 'completed',
-      toolCallId: 'call-1',
-      toolOutcome: 'error',
-      exitCode: 1,
-    });
   });
 
-  test('omits optional completion metadata for legacy events', () => {
-    const completed: WorkflowEmitterEvent = {
-      type: 'tool_completed',
-      runId: 'run-1',
-      toolName: 'Bash',
-      stepName: 'implement',
-      durationMs: 42,
-      toolCallId: 'call-1',
-    };
+  test("reach only the run's own stream, never the dashboard or a parent conversation", () => {
+    const emitted: Array<[string, string]> = [];
+    const transport = {
+      emitWorkflowEvent: (conversationId: string, event: string) => {
+        emitted.push([conversationId, JSON.parse(event).type as string]);
+      },
+    } as unknown as SSETransport;
+    const bridge = new WorkflowEventBridge(transport);
+    const emitter = getWorkflowEventEmitter();
+    emitter.registerRun('run-1', 'worker-conv');
+    bridge.start();
+    const unbridge = bridge.bridgeWorkerEvents('worker-conv', 'parent-conv');
+    try {
+      emitter.emit(providerEvent);
+      emitter.emit({ type: 'workflow_cancelled', runId: 'run-1', nodeId: 'n', reason: 'x' });
+    } finally {
+      unbridge();
+      bridge.stop();
+      emitter.unregisterRun('run-1');
+    }
 
-    const payload = JSON.parse(mapWorkflowEvent(completed) ?? '{}') as Record<string, unknown>;
-    expect(payload).not.toHaveProperty('toolOutcome');
-    expect(payload).not.toHaveProperty('exitCode');
-  });
-});
-
-describe('mapWorkflowEvent — task_activity (Phase 2 of #975)', () => {
-  beforeEach(() => {
-    mockLogger.warn.mockClear();
-  });
-
-  test('task_activity started → workflow_task_activity with description', () => {
-    const event: WorkflowEmitterEvent = {
-      type: 'task_activity',
-      runId: 'run-1',
-      nodeId: 'plan',
-      taskId: 't-1',
-      activity: 'started',
-      description: 'Analyzing the bug',
-      taskType: 'general-purpose',
-    };
-    const sse = mapWorkflowEvent(event);
-    expect(sse).not.toBeNull();
-    const payload = JSON.parse(sse ?? '{}') as Record<string, unknown>;
-    expect(payload.type).toBe('workflow_task_activity');
-    expect(payload.runId).toBe('run-1');
-    expect(payload.nodeId).toBe('plan');
-    expect(payload.taskId).toBe('t-1');
-    expect(payload.activity).toBe('started');
-    expect(payload.description).toBe('Analyzing the bug');
-    expect(payload.taskType).toBe('general-purpose');
-    expect(payload).toHaveProperty('timestamp');
-  });
-
-  test('task_activity progress with summary + usage + lastToolName', () => {
-    const event: WorkflowEmitterEvent = {
-      type: 'task_activity',
-      runId: 'run-1',
-      nodeId: 'plan',
-      taskId: 't-1',
-      activity: 'progress',
-      summary: 'Reading auth module',
-      usage: { total_tokens: 1234, tool_uses: 3, duration_ms: 28000 },
-      lastToolName: 'Read',
-    };
-    const sse = mapWorkflowEvent(event);
-    const payload = JSON.parse(sse ?? '{}') as Record<string, unknown>;
-    expect(payload.activity).toBe('progress');
-    expect(payload.summary).toBe('Reading auth module');
-    expect(payload.usage).toEqual({ total_tokens: 1234, tool_uses: 3, duration_ms: 28000 });
-    expect(payload.lastToolName).toBe('Read');
-  });
-
-  test('task_activity completed', () => {
-    const event: WorkflowEmitterEvent = {
-      type: 'task_activity',
-      runId: 'run-1',
-      nodeId: 'plan',
-      taskId: 't-1',
-      activity: 'completed',
-      summary: 'Done',
-    };
-    const sse = mapWorkflowEvent(event);
-    const payload = JSON.parse(sse ?? '{}') as Record<string, unknown>;
-    expect(payload.activity).toBe('completed');
-  });
-});
-
-describe('mapWorkflowEvent — hook_activity (Phase 2 of #975)', () => {
-  beforeEach(() => {
-    mockLogger.warn.mockClear();
-  });
-
-  test('hook_activity started → workflow_hook_activity', () => {
-    const event: WorkflowEmitterEvent = {
-      type: 'hook_activity',
-      runId: 'run-1',
-      nodeId: 'plan',
-      hookId: 'h-1',
-      hookName: 'Bash',
-      hookEvent: 'PreToolUse',
-      activity: 'started',
-    };
-    const sse = mapWorkflowEvent(event);
-    expect(sse).not.toBeNull();
-    const payload = JSON.parse(sse ?? '{}') as Record<string, unknown>;
-    expect(payload.type).toBe('workflow_hook_activity');
-    expect(payload.hookId).toBe('h-1');
-    expect(payload.hookName).toBe('Bash');
-    expect(payload.hookEvent).toBe('PreToolUse');
-    expect(payload.activity).toBe('started');
-    expect(payload).not.toHaveProperty('outcome');
-  });
-
-  test('hook_activity response with outcome success + exit code', () => {
-    const event: WorkflowEmitterEvent = {
-      type: 'hook_activity',
-      runId: 'run-1',
-      nodeId: 'plan',
-      hookId: 'h-1',
-      hookName: 'Bash',
-      hookEvent: 'PreToolUse',
-      activity: 'response',
-      outcome: 'success',
-      exitCode: 0,
-    };
-    const sse = mapWorkflowEvent(event);
-    const payload = JSON.parse(sse ?? '{}') as Record<string, unknown>;
-    expect(payload.activity).toBe('response');
-    expect(payload.outcome).toBe('success');
-    expect(payload.exitCode).toBe(0);
-  });
-
-  test('hook_activity response with error outcome and no exit code', () => {
-    const event: WorkflowEmitterEvent = {
-      type: 'hook_activity',
-      runId: 'run-1',
-      nodeId: 'plan',
-      hookId: 'h-2',
-      hookName: 'Edit',
-      hookEvent: 'PreToolUse',
-      activity: 'response',
-      outcome: 'error',
-    };
-    const sse = mapWorkflowEvent(event);
-    const payload = JSON.parse(sse ?? '{}') as Record<string, unknown>;
-    expect(payload.outcome).toBe('error');
-    expect(payload).not.toHaveProperty('exitCode');
+    expect(emitted.filter(([, type]) => type === 'workflow_provider_event')).toEqual([
+      ['worker-conv', 'workflow_provider_event'],
+    ]);
+    // Lifecycle frames still fan out everywhere.
+    expect(
+      emitted
+        .filter(([, type]) => type === 'workflow_status')
+        .map(([c]) => c)
+        .sort()
+    ).toEqual(['__dashboard__', 'parent-conv', 'worker-conv']);
   });
 });
 

@@ -86,6 +86,11 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
             {call.exitCode !== undefined ? ` (exit ${call.exitCode.toString()})` : ''}
           </span>
         ) : null}
+        {call.outcomeUnrecorded === true ? (
+          <span className="shrink-0 font-mono text-[11.5px] text-text-tertiary">
+            no result recorded
+          </span>
+        ) : null}
         {call.durationMs !== undefined ? (
           <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary">
             {call.durationMs.toString()}ms
@@ -118,6 +123,11 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
                   ? `${call.output.slice(0, 2000)}\n\n… (${(call.output.length - 2000).toString()} more chars)`
                   : call.output}
               </pre>
+              {call.outputTruncated === true ? (
+                <div className="mt-0.5 text-[10px] text-text-tertiary">
+                  Output cut short by the provider.
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>

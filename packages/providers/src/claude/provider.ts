@@ -970,9 +970,9 @@ function buildBaseClaudeOptions(
     settingSources,
     // Opt into the SDK's hook lifecycle frames so that tool-scoped hooks
     // (PreToolUse / PostToolUse / Stop / etc.) reach the workflow audit
-    // stream as `hook_activity` (#2324). SessionStart and Setup remain
-    // emitted regardless. The downstream normalization surfaces
-    // `hook_started` and `hook_response`; the third subtype the SDK
+    // stream as `hook` events (#2324). SessionStart and Setup remain
+    // emitted regardless. The provider maps the SDK's `hook_started` and
+    // `hook_response`; the third subtype the SDK
     // enables (`hook_progress`) falls through — it is only emitted for
     // async hooks, which Archon does not register today.
     includeHookEvents: true,

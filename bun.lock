@@ -63,6 +63,7 @@
         "@archon/isolation": "workspace:*",
         "@archon/paths": "workspace:*",
         "@archon/plugin-manifest": "workspace:*",
+        "@archon/provider-contract": "workspace:*",
         "@archon/providers": "workspace:*",
         "@archon/server": "workspace:*",
         "@archon/workflows": "workspace:*",

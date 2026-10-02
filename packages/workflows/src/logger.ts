@@ -7,6 +7,7 @@ import { join, dirname } from 'path';
 import type { WorkflowTokenUsage } from './deps';
 import type { MessageChunk } from '@archon/providers/types';
 import type { SkipCause } from './schemas';
+import type { ProviderEventEnvelope } from './schemas/provider-event';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -22,10 +23,13 @@ let logWarningShown = false;
 /**
  * A row in a run's JSONL log. Some variants are historical: nothing has emitted
  * `'validation'` (with `check`/`result`) since #805 removed its call site along with
- * sequential execution mode, and its writer is now deleted too. It stays because logs
- * already on disk contain those rows — keep it when reading, never write a new one.
+ * sequential execution mode, and its writer is now deleted too. `'assistant'` (with
+ * `content`) and `'tool'` (with `tool_name`/`tool_input`) carried agent text and tool
+ * starts with no step, id or output until `'provider_event'` replaced them. They stay
+ * because logs already on disk contain those rows — keep them when reading, never write
+ * a new one.
  */
-export interface WorkflowEvent {
+export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
   execution?: NodeExecutionMetadata;
   type:
     | 'workflow_start'
@@ -42,7 +46,8 @@ export interface WorkflowEvent {
     | 'node_skipped'
     | 'node_error'
     | 'watchdog_reset'
-    | 'exec_output';
+    | 'exec_output'
+    | 'provider_event';
   workflow_id: string;
   workflow_name?: string;
   step?: string;
@@ -276,32 +281,20 @@ export async function logGateDecision(
 }
 
 /**
- * Log assistant message
+ * Record one provider event in the run's log: the envelope the store row carries, framed
+ * by the log's own `workflow_id`, `ts` and `step`. The line parses with
+ * `providerEventLineSchema`.
  */
-export async function logAssistant(
+export async function logProviderEvent(
   logDir: string,
   workflowRunId: string,
-  content: string
+  stepName: string,
+  envelope: ProviderEventEnvelope
 ): Promise<void> {
   await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'assistant',
-    content,
-  });
-}
-
-/**
- * Log tool call
- */
-export async function logTool(
-  logDir: string,
-  workflowRunId: string,
-  toolName: string,
-  toolInput: Record<string, unknown>
-): Promise<void> {
-  await logWorkflowEvent(logDir, workflowRunId, {
-    type: 'tool',
-    tool_name: toolName,
-    tool_input: toolInput,
+    type: 'provider_event',
+    step: stepName,
+    ...envelope,
   });
 }
 

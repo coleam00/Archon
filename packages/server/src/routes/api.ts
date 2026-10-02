@@ -273,6 +273,7 @@ import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
+import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
@@ -300,6 +301,8 @@ import {
   commandListResponseSchema,
   workflowRunListResponseSchema,
   workflowRunDetailSchema,
+  providerEventsQuerySchema,
+  providerEventsResponseSchema,
   workflowRunByWorkerResponseSchema,
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
@@ -1158,6 +1161,25 @@ const getWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunDetailSchema } },
       description: 'Workflow run detail',
     },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getProviderEventsRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}/provider-events',
+  tags: ['Workflows'],
+  summary: "List a run's provider events",
+  description:
+    "Every event the run's providers streamed (text, thinking, tool calls with output, warnings, MCP status, compaction, subtasks, hooks, state), as the engine recorded them. Grouped by node; each node's in emission order. Rows written before the engine recorded envelopes come back translated, with a null attemptId.",
+  request: { params: z.object({ runId: z.string() }), query: providerEventsQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerEventsResponseSchema } },
+      description: 'Provider events',
+    },
+    400: jsonError('Invalid cursor'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -4286,7 +4308,11 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      const events = await workflowEventDb.listWorkflowEvents(runId);
+      // Provider events are served by their own route, per node; a long run has
+      // thousands and they would dominate this payload.
+      const events = await workflowEventDb.listWorkflowEvents(runId, {
+        excludeEventTypes: workflowEventDb.PROVIDER_EVENT_ROW_TYPES,
+      });
 
       // Look up the run's conversation platform ID.
       // For web runs (parent_conversation_id set): conversation_id is the worker conversation → set worker_platform_id
@@ -4324,6 +4350,29 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');
       return apiError(c, 500, 'Failed to get workflow run');
+    }
+  });
+
+  // GET /api/workflows/runs/:runId/provider-events - A run's provider events
+  registerOpenApiRoute(getProviderEventsRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const { step, attemptId, afterSeq } = (
+      c.req as unknown as { valid(k: 'query'): z.infer<typeof providerEventsQuerySchema> }
+    ).valid('query');
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return apiError(c, 404, 'Workflow run not found');
+      // Read through the engine's store seam, not the DB module.
+      const events = await createWorkflowStore().listProviderEvents(
+        runId,
+        step !== undefined && attemptId !== undefined && afterSeq !== undefined
+          ? { stepName: step, after: { attemptId, seq: afterSeq } }
+          : { stepName: step }
+      );
+      return c.json({ events });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'list_provider_events_failed');
+      return apiError(c, 500, 'Failed to list provider events');
     }
   });
 

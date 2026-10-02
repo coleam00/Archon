@@ -2,6 +2,7 @@
  * Workflow command - list and run workflows
  */
 
+import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
@@ -1064,8 +1065,18 @@ export async function maybePrintTierNotice(
   markTierNoticeShown(version);
 }
 
+/**
+ * Tool calls started in this process and not yet closed, keyed by attempt and call id,
+ * so a completion line can name its tool and duration. One per run subscription.
+ */
+type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
+
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
-function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): void {
+function renderWorkflowEvent(
+  event: WorkflowEmitterEvent,
+  verbose: boolean,
+  openToolCalls: OpenToolCalls
+): void {
   switch (event.type) {
     case 'workflow_started':
       process.stderr.write(`[workflow] Transcript: ${event.transcriptPath}\n`);
@@ -1101,22 +1112,35 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
       process.stderr.write(`[container] ${event.phase}${idPart}\n`);
       break;
     }
-    case 'tool_started':
-      if (verbose) {
+    case 'provider_event': {
+      if (!verbose) break;
+      const providerEvent = event.event;
+      // A call id is unique within its attempt; parallel nodes can repeat one.
+      const callKey = JSON.stringify([
+        event.attemptId,
+        'toolCallId' in providerEvent ? providerEvent.toolCallId : '',
+      ]);
+      if (providerEvent.type === 'tool_call') {
+        const name = toolCallDisplayName(providerEvent);
+        openToolCalls.set(callKey, { name, observedAt: event.observedAt });
         process.stderr.write(
-          `[${event.stepName}] tool: ${event.toolName} (started, ${event.toolCallId})\n`
+          `[${event.stepName}] tool: ${name} (started, ${providerEvent.toolCallId})\n`
+        );
+      } else if (providerEvent.type === 'tool_call_update') {
+        const started = openToolCalls.get(callKey);
+        openToolCalls.delete(callKey);
+        const duration =
+          started === undefined
+            ? ''
+            : `${String(Date.parse(event.observedAt) - Date.parse(started.observedAt))}ms, `;
+        const exitCode =
+          providerEvent.exitCode !== undefined ? `, exit ${String(providerEvent.exitCode)}` : '';
+        process.stderr.write(
+          `[${event.stepName}] tool: ${started?.name ?? providerEvent.toolCallId} (${duration}${providerEvent.toolCallId}, ${providerEvent.status}${exitCode})\n`
         );
       }
       break;
-    case 'tool_completed':
-      if (verbose) {
-        const outcome = event.toolOutcome ? `, ${event.toolOutcome}` : '';
-        const exitCode = event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : '';
-        process.stderr.write(
-          `[${event.stepName}] tool: ${event.toolName} (${String(event.durationMs)}ms, ${event.toolCallId}${outcome}${exitCode})\n`
-        );
-      }
-      break;
+    }
     default:
       // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
       break;
@@ -3096,9 +3120,10 @@ async function runWorkflowWithOwnedSource(
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
   // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
   const { quiet, verbose } = options;
+  const openToolCalls: OpenToolCalls = new Map();
   const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
     if (!quiet) {
-      renderWorkflowEvent(event, verbose ?? false);
+      renderWorkflowEvent(event, verbose ?? false, openToolCalls);
     }
   });
 
@@ -3846,6 +3871,19 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
 }
 
 /**
+ * A run's event rows. Provider events (every agent text block, tool call and output)
+ * are left out unless the caller prints raw rows: node summaries and terminal records
+ * never read them, and a long run has thousands.
+ */
+function listRunEvents(runId: string, rawEvents: boolean): Promise<WorkflowEventRow[]> {
+  return rawEvents
+    ? workflowEventsDb.listWorkflowEvents(runId)
+    : workflowEventsDb.listWorkflowEvents(runId, {
+        excludeEventTypes: workflowEventsDb.PROVIDER_EVENT_ROW_TYPES,
+      });
+}
+
+/**
  * Fetch a run's events for `--verbose` rendering. A failed event query must not
  * abort the command (the run summary itself is still useful), but it must NOT be
  * indistinguishable from "this run has no events" — so log a warn and flag the
@@ -3853,10 +3891,11 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
  * silenced; an empty derived/raw payload is the documented signal there.)
  */
 async function fetchVerboseEvents(
-  runId: string
+  runId: string,
+  rawEvents: boolean
 ): Promise<{ events: WorkflowEventRow[]; failed: boolean }> {
   try {
-    return { events: await workflowEventsDb.listWorkflowEvents(runId), failed: false };
+    return { events: await listRunEvents(runId, rawEvents), failed: false };
   } catch (error) {
     getLog().warn({ err: error as Error, runId }, 'cli.workflow_events_fetch_failed');
     return { events: [], failed: true };
@@ -3934,7 +3973,9 @@ export async function workflowStatusCommand(
       return;
     }
 
-    const fetchedPerRun = await Promise.all(runs.map(run => fetchVerboseEvents(run.id)));
+    const fetchedPerRun = await Promise.all(
+      runs.map(run => fetchVerboseEvents(run.id, opts.rawEvents ?? false))
+    );
     const runsOutput = runs.map((run, i) => {
       const runEvents = fetchedPerRun[i]?.events ?? [];
       return opts.rawEvents
@@ -3970,7 +4011,7 @@ export async function workflowStatusCommand(
     }
 
     if (opts.verbose) {
-      const { events, failed } = await fetchVerboseEvents(run.id);
+      const { events, failed } = await fetchVerboseEvents(run.id, false);
       if (failed) {
         console.log('  (node events unavailable — see logs)');
       }
@@ -4348,7 +4389,7 @@ export async function workflowGetCommand(
   let events: WorkflowEventRow[];
   let terminalRecord;
   try {
-    events = await workflowEventsDb.listWorkflowEvents(run.id);
+    events = await listRunEvents(run.id, rawEvents ?? false);
     terminalRecord = getTerminalRecord(run.status, events);
   } catch (error) {
     getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');
