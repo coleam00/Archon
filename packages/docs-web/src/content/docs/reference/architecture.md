@@ -358,6 +358,9 @@ export type MessageChunk =
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
   | { type: 'tool_result'; toolName: string; toolOutput: string; toolCallId?: string }
+  // The turn is over and nothing more runs for it: always the last chunk, after the
+  // final result. The executor finishes a node on it, not on `result`.
+  | { type: 'settled' }
   | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
 ```
 
@@ -400,6 +403,8 @@ export class YourAssistantProvider implements IAgentProvider {
 
     // Yield session ID for persistence
     yield { type: 'result', sessionId: session.id };
+    // Nothing more runs for this turn
+    yield { type: 'settled' };
   }
 
   getType(): string {
@@ -486,6 +491,7 @@ Different SDKs use different event types. Map them to MessageChunk types:
 **Claude Code SDK** (`packages/providers/src/claude/provider.ts`):
 
 ```typescript
+let resultReported = false;
 for await (const msg of query({ prompt, options })) {
   if (msg.type === 'assistant') {
     for (const block of msg.message.content) {
@@ -500,9 +506,22 @@ for await (const msg of query({ prompt, options })) {
       }
     }
   } else if (msg.type === 'result') {
+    resultReported = true;
     yield { type: 'result', sessionId: msg.session_id };
+  } else if (msg.type === 'system' && msg.subtype === 'session_state_changed' && msg.state === 'idle') {
+    break; // turn over, background agents drained
   }
 }
+if (!resultReported) {
+  // A stream that closed without a result is a failed turn, never an empty success.
+  yield {
+    type: 'result',
+    isError: true,
+    errorSubtype: 'stream_ended_without_result',
+    failure: { class: 'unknown', evidence: 'Claude Code ended the turn without a result' },
+  };
+}
+yield { type: 'settled' };
 ```
 
 **Codex SDK** (`packages/providers/src/codex/provider.ts`):
@@ -533,6 +552,7 @@ for await (const event of result.events) {
     break; // CRITICAL: Exit loop on turn completion
   }
 }
+yield { type: 'settled' };
 ```
 
 ### Error Handling

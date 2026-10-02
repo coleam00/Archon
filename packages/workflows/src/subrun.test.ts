@@ -1,3 +1,4 @@
+import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
  *
@@ -622,7 +623,9 @@ function makeProvider() {
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
     store,
-    getAgentProvider: mock(() => makeProvider()) as unknown as WorkflowDeps['getAgentProvider'],
+    getAgentProvider: mock(() =>
+      settlingProvider(makeProvider())
+    ) as unknown as WorkflowDeps['getAgentProvider'],
     loadConfig: mock(
       (): Promise<WorkflowConfig> =>
         Promise.resolve({
@@ -3763,7 +3766,9 @@ nodes:
     };
     const deps = {
       ...makeDeps(store),
-      getAgentProvider: mock(() => slowProvider) as unknown as WorkflowDeps['getAgentProvider'],
+      getAgentProvider: mock(() =>
+        settlingProvider(slowProvider)
+      ) as unknown as WorkflowDeps['getAgentProvider'],
     };
     const parent = await discover('fan-window');
     const result = await executeWorkflow(
@@ -3802,7 +3807,9 @@ nodes:
     };
     return {
       ...makeDeps(store),
-      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+      getAgentProvider: mock(() =>
+        settlingProvider(provider)
+      ) as unknown as WorkflowDeps['getAgentProvider'],
     };
   }
 
@@ -5528,7 +5535,9 @@ describe('workflow: runtime $INPUTS delivery and cold resume (#2470)', () => {
     return {
       deps: {
         ...makeDeps(store),
-        getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+        getAgentProvider: mock(() =>
+          settlingProvider(provider)
+        ) as unknown as WorkflowDeps['getAgentProvider'],
       },
       prompts,
     };
@@ -6087,17 +6096,19 @@ nodes:
 
     const store = new InMemoryStore();
     const deps = makeDeps(store);
-    deps.getAgentProvider = mock(() => ({
-      ...makeProvider(),
-      sendQuery: mock(function* () {
-        yield { type: 'assistant', content: '{"green":false}' };
-        yield {
-          type: 'result',
-          sessionId: 'sess-outcome',
-          structuredOutput: { green: false },
-        };
-      }),
-    })) as unknown as WorkflowDeps['getAgentProvider'];
+    deps.getAgentProvider = mock(() =>
+      settlingProvider({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          yield { type: 'assistant', content: '{"green":false}' };
+          yield {
+            type: 'result',
+            sessionId: 'sess-outcome',
+            structuredOutput: { green: false },
+          };
+        }),
+      })
+    ) as unknown as WorkflowDeps['getAgentProvider'];
 
     const result = await executeWorkflow(
       deps,
@@ -6199,7 +6210,9 @@ describe('workflow: typed value transport (#2637)', () => {
     return {
       deps: {
         ...makeDeps(store),
-        getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+        getAgentProvider: mock(() =>
+          settlingProvider(provider)
+        ) as unknown as WorkflowDeps['getAgentProvider'],
       },
       prompts,
     };

@@ -937,53 +937,32 @@ const STRUCTURED_OUTPUT_MAX_REASKS = 3;
  *
  * Since Claude SDK 0.3.193 the model can delegate work to asynchronous
  * background agents, so a `result` chunk only means "top-level turn done" —
- * NOT "all work done". Breaking out of the stream loop at a result while
- * background tasks are live calls `.return()` on the generator chain, which
- * tears down the SDK subprocess (SIGTERM) and kills the tasks — the artifacts
- * they were producing silently never appear.
+ * NOT "all work done". The stream loops therefore finish on the provider's
+ * `settled` chunk, never on a result; stopping at a result would `.return()`
+ * the generator chain, tear down the SDK subprocess and kill the tasks.
  *
  * Fed by the provider's `background_tasks` chunk (SDK `background_tasks_changed`,
  * v0.3.209+): a level signal carrying the FULL live set, REPLACE semantics.
- * Both dag-executor stream loops (AI node + loop iteration) instantiate one
- * tracker per stream pass and gate their break-on-result on it: when the set
- * is non-empty, keep consuming — the SDK keeps the subprocess alive until the
- * tasks drain, gives the agent a follow-up turn to integrate their output, and
- * emits a final `result` (verified empirically against SDK 0.3.209). The wait
- * is bounded by the existing idle-timeout machinery: `task_progress` chunks
- * (~30s cadence while subagents run) reset the idle timer, and a genuinely
- * hung task hits the normal idle-timeout path.
- *
- * Providers that never emit the chunk (Codex/Pi/OpenCode/Copilot, older Claude
- * CLIs) leave the set empty → break-on-first-result behavior is unchanged.
+ * It does not decide when a node ends. When a stream ends without settling
+ * (idle timeout, subprocess death), it names the tasks that were still live so
+ * the failure says whose output may be missing.
  */
 function createBackgroundTaskTracker(): {
   update(tasks: { taskId: string; description: string }[]): void;
-  shouldBreakOnResult(): boolean;
-  count(): number;
+  hasLiveTasks(): boolean;
   ids(): string[];
-  /** True exactly once — lets the caller announce the wait a single time per pass. */
-  shouldAnnounceWait(): boolean;
 } {
   const live = new Map<string, string>(); // taskId → description
-  let announced = false;
   return {
     update(tasks): void {
       live.clear();
       for (const t of tasks) live.set(t.taskId, t.description);
     },
-    shouldBreakOnResult(): boolean {
-      return live.size === 0;
-    },
-    count(): number {
-      return live.size;
+    hasLiveTasks(): boolean {
+      return live.size > 0;
     },
     ids(): string[] {
       return [...live.keys()];
-    },
-    shouldAnnounceWait(): boolean {
-      if (announced) return false;
-      announced = true;
-      return true;
     },
   };
 }
@@ -2287,6 +2266,9 @@ async function executeNodeInternal(
   // subprocess death) — recorded on the node_completed event so an incomplete
   // node never masquerades as a clean success (#2083).
   let backgroundTasksIncomplete: string[] = [];
+  // Whether the last stream pass ended on the provider's `settled`. Output without it
+  // means the turn was cut off, not finished.
+  let streamSettled = false;
 
   // Best-effort providers (Pi/Copilot) get a bounded validate-and-reask loop: on a
   // structured-output validation miss, re-run the stream with the schema errors
@@ -2316,6 +2298,7 @@ async function executeNodeInternal(
     nodeCostUsd = undefined;
     nodeTokens = undefined;
     nodeIdleTimedOut = false;
+    streamSettled = false;
     lastWatchdogReset = undefined;
     watchdogResets = createWatchdogResetRecorder(logDir, workflowRun.id, node.id);
     backgroundTasksIncomplete = [];
@@ -2625,33 +2608,14 @@ async function executeNodeInternal(
           );
           throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
         }
-        if (backgroundTasks.shouldBreakOnResult()) {
-          break; // Result is the "I'm done" signal — don't wait for subprocess to exit
-        }
-        // Result arrived with background Agent tasks still live (#2083).
-        // Breaking here would .return() the generator chain → SDK cleanup →
-        // SIGTERM the CLI → kill the tasks and lose their pending artifacts.
-        // Keep consuming: the SDK holds the subprocess open until the tasks
-        // drain, runs a follow-up turn to integrate their output, and emits a
-        // final result (whose fields overwrite the captures above — correct,
-        // since SDK cost/usage are session-cumulative). Bounded by the
-        // existing idle timeout; task_progress chunks reset it.
-        getLog().warn(
-          {
-            nodeId: node.id,
-            taskCount: backgroundTasks.count(),
-            taskIds: backgroundTasks.ids(),
-          },
-          'dag.node_result_with_live_background_tasks'
-        );
-        if (backgroundTasks.shouldAnnounceWait()) {
-          await safeSendMessage(
-            platform,
-            conversationId,
-            `⏳ Node \`${node.id}\`: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish before completing the node.`,
-            nodeContext
-          );
-        }
+        // A result is not the end of the node: work the turn started may still run,
+        // and a later result can follow (its fields overwrite the captures above —
+        // correct, since SDK cost/usage are session-cumulative). The node finishes on
+        // `settled` below. The wait is bounded by the idle timeout; task_progress
+        // chunks reset it.
+      } else if (msg.type === 'settled') {
+        streamSettled = true;
+        break; // The provider says the turn is over and nothing more runs for it.
       } else if (msg.type === 'background_tasks') {
         // Level signal (REPLACE semantics): swap the live set for the payload.
         backgroundTasks.update(msg.tasks);
@@ -2878,30 +2842,21 @@ async function executeNodeInternal(
     }
 
     // Stream ended with background tasks still live: the SDK subprocess died or
-    // the idle timeout fired mid-wait. The tasks' artifacts may be missing —
-    // record the incompleteness (surfaced on the node_completed event) and warn
-    // loudly instead of silently completing (#2083). Cancellation is exempt:
-    // the node returns 'failed — Cancelled by user' and the warning would be noise.
-    if (!backgroundTasks.shouldBreakOnResult()) {
+    // the idle timeout fired mid-wait, so the tasks' artifacts may be missing (#2083).
+    // Record them for the audit trail. The operator hears about it once, from the
+    // node's failure: a stream that produced output and never settled fails the node
+    // and names these tasks (see unsettledTurnError).
+    if (backgroundTasks.hasLiveTasks()) {
       backgroundTasksIncomplete = backgroundTasks.ids();
-      const cancelled = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
       getLog().warn(
         {
           nodeId: node.id,
           taskIds: backgroundTasksIncomplete,
           idleTimedOut: nodeIdleTimedOut,
-          cancelled,
+          cancelled: nodeAbortController.signal.aborted && !nodeIdleTimedOut,
         },
         'dag.node_stream_ended_with_live_background_tasks'
       );
-      if (!cancelled) {
-        await safeSendMessage(
-          platform,
-          conversationId,
-          `⚠️ Node \`${node.id}\`: the provider stream ended with ${String(backgroundTasksIncomplete.length)} background agent task(s) still running (${backgroundTasksIncomplete.join(', ')}). Their output may be missing — treat this node's artifacts as potentially incomplete.`,
-          nodeContext
-        );
-      }
     }
   };
 
@@ -3058,17 +3013,23 @@ async function executeNodeInternal(
       );
     }
 
-    // Only post "completed via idle timeout" when output exists — zero-output timeout falls through to the empty-output guard below.
-    if (nodeIdleTimedOut && (nodeOutputText.trim() !== '' || structuredOutput !== undefined)) {
-      getLog().warn(
-        { nodeId: node.id, timeoutMs: effectiveIdleTimeout },
-        'dag_node_completed_via_idle_timeout'
-      );
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `⚠️ Node \`${node.id}\` completed via idle timeout (no output for ${String(effectiveIdleTimeout / 60000)} min).${formatWatchdogResetDiagnostic(lastWatchdogReset)} The AI likely finished but the subprocess didn't exit cleanly.`,
-        nodeContext
+    // Every provider ends a turn with `settled`. Output without it means the stream was
+    // cut off (idle timeout, a provider that died or broke the contract), so the node
+    // fails rather than completing on a turn that may not be done. Zero output falls
+    // through to the empty-output guard below; cancellation is handled just after.
+    const cancelledMidStream = nodeAbortController.signal.aborted && !nodeIdleTimedOut;
+    if (
+      !streamSettled &&
+      !cancelledMidStream &&
+      (nodeOutputText.trim() !== '' || structuredOutput !== undefined)
+    ) {
+      throw new NodeFailure(
+        nodeIdleTimedOut ? 'timeout' : 'unknown',
+        `Node '${node.id}' failed: ${unsettledTurnError(
+          nodeIdleTimedOut ? effectiveIdleTimeout : undefined,
+          lastWatchdogReset,
+          backgroundTasksIncomplete
+        )}`
       );
     }
 
@@ -3595,6 +3556,27 @@ async function rejectedArtifactPointer(run: WorkflowRun, value: unknown): Promis
  * diagnostic and, worse, read a stdout excerpt containing "timed out" as a timeout.
  */
 class ExecOutputContractError extends Error {}
+
+/**
+ * Why a turn that produced output is not finished: its provider never sent `settled`.
+ * An idle timeout says how long the stream was silent; otherwise the stream simply ended.
+ * The caller names the node or iteration in front of it.
+ */
+function unsettledTurnError(
+  idleTimeoutMs: number | undefined,
+  lastWatchdogReset: WatchdogReset | undefined,
+  liveTaskIds: readonly string[]
+): string {
+  const cause =
+    idleTimeoutMs !== undefined
+      ? `timed out after ${String(idleTimeoutMs / 60000)} min without an event, before the provider signalled that its turn settled.${formatWatchdogResetDiagnostic(lastWatchdogReset)}`
+      : 'the provider stream ended without signalling that its turn settled.';
+  const tasks =
+    liveTaskIds.length > 0
+      ? ` Background agent task(s) still running: ${liveTaskIds.join(', ')}.`
+      : '';
+  return `${cause}${tasks} Its work may be incomplete.`;
+}
 
 /** A node failure whose cause the engine detected itself, carried to the failure record. */
 class NodeFailure extends Error {
@@ -6004,6 +5986,9 @@ async function executeLoopNode(
     let fullOutput = ''; // raw, for signal detection
     let cleanOutput = ''; // stripped, for platform display
     let iterationIdleTimedOut = false;
+    // Whether this attempt's stream ended on the provider's `settled` (see the AI-node
+    // path's streamSettled).
+    let iterationSettled = false;
     let lastWatchdogReset: WatchdogReset | undefined;
     let iterationPayload: unknown;
 
@@ -6112,6 +6097,7 @@ async function executeLoopNode(
         fullOutput = '';
         cleanOutput = '';
         iterationIdleTimedOut = false;
+        iterationSettled = false;
         lastWatchdogReset = undefined;
         streamStopStatus = undefined;
         attemptStructured = undefined;
@@ -6363,29 +6349,11 @@ async function executeLoopNode(
                   `Loop '${node.id}' iteration ${String(i)} failed: SDK returned ${subtype}${errorsDetail}`
                 );
               }
-              if (backgroundTasks.shouldBreakOnResult()) {
-                break; // Result is the "I'm done" signal — don't wait for subprocess to exit
-              }
-              // Result with live background Agent tasks (#2083): breaking would
-              // SIGTERM the SDK subprocess and kill them. Keep consuming until the
-              // final result — see the AI-node stream loop for the full rationale.
-              getLog().warn(
-                {
-                  nodeId: node.id,
-                  iteration: i,
-                  taskCount: backgroundTasks.count(),
-                  taskIds: backgroundTasks.ids(),
-                },
-                'loop_node.iteration_result_with_live_background_tasks'
-              );
-              if (backgroundTasks.shouldAnnounceWait()) {
-                await safeSendMessage(
-                  platform,
-                  conversationId,
-                  `⏳ Loop \`${node.id}\` iteration ${String(i)}: turn ended with ${String(backgroundTasks.count())} background agent task(s) still running — waiting for them to finish.`,
-                  msgContext
-                );
-              }
+              // A result is not the end of the iteration; `settled` is. See the
+              // AI-node stream loop for the full rationale.
+            } else if (msg.type === 'settled') {
+              iterationSettled = true;
+              break; // The provider says the turn is over and nothing more runs for it.
             } else if (msg.type === 'background_tasks') {
               // Level signal (REPLACE semantics): swap the live set for the payload.
               backgroundTasks.update(msg.tasks);
@@ -6520,34 +6488,22 @@ async function executeLoopNode(
           foldIterationUsage();
 
           // Stream ended with background tasks still live (idle timeout mid-wait or
-          // subprocess death): their artifacts may be missing — record the
-          // incompleteness (surfaced on the node_completed event) and warn loudly
-          // instead of silently continuing (#2083). Cancellation is exempt from the
-          // user-facing warning (the mid-stream check above returns the node as
-          // failed with its own message just below), but still recorded in the
-          // union — the audit trail should not depend on why the stream ended.
-          if (!backgroundTasks.shouldBreakOnResult()) {
+          // subprocess death): their artifacts may be missing (#2083). Record them for
+          // the audit trail whatever ended the stream; the operator hears about it
+          // once, from the iteration's unsettled failure, which names these tasks.
+          if (backgroundTasks.hasLiveTasks()) {
             const danglingTaskIds = backgroundTasks.ids();
             for (const id of danglingTaskIds) loopBackgroundTasksIncomplete.add(id);
-            const cancelled = iterationAbortController.signal.aborted && !iterationIdleTimedOut;
             getLog().warn(
               {
                 nodeId: node.id,
                 iteration: i,
                 taskIds: danglingTaskIds,
                 idleTimedOut: iterationIdleTimedOut,
-                cancelled,
+                cancelled: iterationAbortController.signal.aborted && !iterationIdleTimedOut,
               },
               'loop_node.iteration_stream_ended_with_live_background_tasks'
             );
-            if (!cancelled) {
-              await safeSendMessage(
-                platform,
-                conversationId,
-                `⚠️ Loop \`${node.id}\` iteration ${String(i)}: the provider stream ended with ${String(backgroundTasks.count())} background agent task(s) still running (${danglingTaskIds.join(', ')}). Their output may be missing.`,
-                msgContext
-              );
-            }
           }
         } catch (error) {
           foldIterationUsage();
@@ -6677,20 +6633,49 @@ async function executeLoopNode(
           });
         }
 
-        // A timeout after output can still preserve useful work, as with an
-        // ordinary AI node whose provider process fails to exit cleanly. A
-        // zero-output timeout is a failure on every branch below, so never announce
-        // it as a completion — same condition as executeNodeInternal's notification.
-        if (
-          iterationIdleTimedOut &&
-          (fullOutput.trim() !== '' || attemptStructured !== undefined)
-        ) {
-          await safeSendMessage(
-            platform,
-            conversationId,
-            `Loop node '${node.id}' iteration ${String(i)} completed via idle timeout (no output for ${String((node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) / 60000)} min).${formatWatchdogResetDiagnostic(lastWatchdogReset)}`,
-            msgContext
+        // Output without `settled` means the iteration's stream was cut off, not
+        // finished (see executeNodeInternal). A timed-out `output_format` iteration is
+        // left to the structured branch below, as for empty output above.
+        if (!iterationSettled && !structuredTimeout) {
+          const unsettledError = unsettledTurnError(
+            iterationIdleTimedOut ? (node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS) : undefined,
+            lastWatchdogReset,
+            backgroundTasks.ids()
           );
+          getLog().error({ nodeId: node.id, iteration: i }, 'loop_node.iteration_unsettled');
+          getWorkflowEventEmitter().emit({
+            type: 'loop_iteration_failed',
+            runId: workflowRun.id,
+            nodeId: node.id,
+            iteration: i,
+            error: unsettledError,
+          });
+          deps.store
+            .createWorkflowEvent({
+              workflow_run_id: workflowRun.id,
+              event_type: 'loop_iteration_failed',
+              step_name: stepName,
+              data: {
+                iteration: i,
+                error: unsettledError,
+                duration: Date.now() - iterationStart,
+                nodeId: node.id,
+              },
+            })
+            .catch((evtErr: Error) => {
+              logEventStoreError(evtErr, i);
+            });
+          const failureKind: NodeFailureKind = iterationIdleTimedOut ? 'timeout' : 'unknown';
+          if (await tryIterationTransientRetry({ failureKind, error: unsettledError }, iterRetry)) {
+            continue iterationAttempt;
+          }
+          return failLoopNode(`Loop iteration ${String(i)} failed: ${unsettledError}`, {
+            failureKind,
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+            data: { iteration: i },
+          });
         }
 
         // ── Structured-output gate for this attempt ───────────────────────────

@@ -1,3 +1,4 @@
+import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
@@ -193,7 +194,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
 function createMockDeps(): WorkflowDeps {
   return {
     store: createMockStore(),
-    getAgentProvider: mockGetAgentProvider,
+    getAgentProvider: provider => settlingProvider(mockGetAgentProvider(provider)),
     loadConfig: mock(() =>
       Promise.resolve({
         assistant: 'claude' as const,

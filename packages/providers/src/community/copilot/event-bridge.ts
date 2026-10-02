@@ -402,8 +402,10 @@ export async function* bridgeSession(
     };
     if (capturedTokens) result.tokens = capturedTokens;
     if (!sawAssistantContent && errorMessage) {
+      // Copilot's session.error carries only a message: an unknown failure, text as evidence.
       result.isError = true;
       result.errors = [errorMessage];
+      result.failure = { class: 'unknown', evidence: errorMessage };
     }
     if (wantsStructured) {
       const parsed = tryParseStructuredOutput(assistantBuffer);

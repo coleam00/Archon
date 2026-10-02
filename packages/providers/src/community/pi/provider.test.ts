@@ -1430,6 +1430,7 @@ describe('PiProvider', () => {
     expect(chunks).toEqual([
       { type: 'assistant', content: 'Hello world' },
       expect.objectContaining({ type: 'result', stopReason: 'stop' }),
+      { type: 'settled' },
     ]);
   });
 
@@ -1479,7 +1480,8 @@ describe('PiProvider', () => {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(chunks.length).toBe(3);
+    expect(chunks.length).toBe(4);
+    expect(chunks[3]).toEqual({ type: 'settled' });
     expect(chunks[0]).toMatchObject({
       type: 'tool',
       toolName: 'read',
@@ -2234,7 +2236,7 @@ describe('PiProvider', () => {
     expect(mockDispose).toHaveBeenCalledTimes(1);
   });
 
-  test('conforms to the provider contract’s failure-class check', async () => {
+  test('conforms to the provider contract', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const erroredAgentEnd = (): FakeEvent[] => {
       const events = scriptedAgentEnd();
@@ -2244,6 +2246,17 @@ describe('PiProvider', () => {
       return events;
     };
     const violations = await runProviderConformance({
+      turns: [
+        {
+          name: 'completed prompt',
+          run: () => {
+            resetScript(scriptedAgentEnd());
+            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+              model: 'google/gemini-2.5-pro',
+            });
+          },
+        },
+      ],
       failureCases: [
         {
           name: 'errored turn',

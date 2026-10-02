@@ -131,7 +131,6 @@ export async function* streamOpencodeSession(
   let latestAssistantInfo: Record<string, unknown> | undefined;
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
-  let resultYielded = false;
 
   const abortHandler = (): void => {
     aborted = true;
@@ -294,13 +293,8 @@ export async function* streamOpencodeSession(
             ? { resolvedModel: { id: latestAssistantInfo.modelID } }
             : {}),
         };
-        resultYielded = true;
         return;
       }
-    }
-
-    if (!resultYielded && !aborted) {
-      yield { type: 'result', sessionId };
     }
 
     if (aborted) {
@@ -310,6 +304,10 @@ export async function* streamOpencodeSession(
           (abortReason ? `: ${String(abortReason)}` : '')
       );
     }
+    // Only `session.idle` reports the turn's outcome. A stream that closed before it
+    // (the embedded server died or dropped the connection) is a failed turn, not an
+    // empty success.
+    throw new Error(`OpenCode event stream ended before session.idle (session: ${sessionId})`);
   } finally {
     requestOptions?.abortSignal?.removeEventListener('abort', abortHandler);
     streamController.abort();

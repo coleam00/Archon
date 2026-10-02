@@ -88,6 +88,11 @@ export class YourProvider implements IAgentProvider {
     // 7. If you support resume, wrap the stream with `withResumedOutcome`
     //    (../../shared/resumed) so a cold resume is stamped resumed:false and
     //    surfaced by the executor instead of silently starting fresh.
+    // 8. End every turn with `yield { type: 'settled' }` once nothing more runs
+    //    for it, after the final `result`. The executor finishes the node on
+    //    `settled`; a stream that produced output and ends without it fails the
+    //    node. Check it with `runProviderConformance` from
+    //    `@archon/provider-contract/conformance`.
   }
 
   getType() { return 'your-id'; }
@@ -95,7 +100,7 @@ export class YourProvider implements IAgentProvider {
 }
 ```
 
-See `packages/providers/src/community/pi/provider.ts` for a full reference with retry, fail-fast auth validation, and resume fallback.
+See `packages/providers/src/community/pi/provider.ts` for a full reference with a typed failure result, fail-fast auth validation, and resume fallback.
 
 ### 3. Registration
 

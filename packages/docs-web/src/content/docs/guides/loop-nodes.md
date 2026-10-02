@@ -628,7 +628,7 @@ If you need to accumulate results across iterations, write them to files in
 | Iteration throws an error | Node fails immediately (no more iterations) |
 | Max iterations exceeded | Node fails with descriptive error |
 | Workflow cancelled | Detected between iterations, node stops |
-| Idle timeout per iteration | Iteration completes with whatever output was collected; loop continues to next iteration |
+| Idle timeout per iteration | An iteration with no output yet is retried as a transient failure. An iteration whose provider produced output but never signalled that its turn settled fails, and the node fails with it |
 | `retry` configured on node | Rejected at parse time — workflow fails to load |
 
 ## Cross-Node Loops with `loop_group`

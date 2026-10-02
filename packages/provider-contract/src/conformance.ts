@@ -76,11 +76,62 @@ export async function checkFailureClasses(
   return violations;
 }
 
+/** One provider turn, for checks that hold for every turn whether it succeeds or fails. */
+export interface ProviderTurnCase {
+  name: string;
+  /** Runs one provider turn and yields its stream chunks. */
+  run: () => AsyncIterable<unknown>;
+}
+
+function chunkType(chunk: unknown): unknown {
+  return typeof chunk === 'object' && chunk !== null
+    ? (chunk as { type?: unknown }).type
+    : undefined;
+}
+
+/**
+ * Every turn ends in exactly one `settled`, sent as the last chunk, after the turn's
+ * `result`. The engine finishes a node on it, so a provider that never sends it keeps the
+ * node open until its stream ends, and one that sends it early ends the node while work
+ * still runs.
+ */
+export async function checkSettled(cases: readonly ProviderTurnCase[]): Promise<string[]> {
+  const violations: string[] = [];
+  for (const turnCase of cases) {
+    const types: unknown[] = [];
+    try {
+      for await (const chunk of turnCase.run()) types.push(chunkType(chunk));
+    } catch (error) {
+      violations.push(`${turnCase.name}: threw instead of settling (${(error as Error).message})`);
+      continue;
+    }
+    const settledAt = types.indexOf('settled');
+    const settledCount = types.filter(type => type === 'settled').length;
+    if (settledCount !== 1) {
+      violations.push(`${turnCase.name}: expected one settled, got ${String(settledCount)}`);
+      continue;
+    }
+    if (settledAt !== types.length - 1) {
+      violations.push(`${turnCase.name}: settled is not the last chunk`);
+    }
+    if (!types.slice(0, settledAt).includes('result')) {
+      violations.push(`${turnCase.name}: settled arrives before any result`);
+    }
+  }
+  return violations;
+}
+
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
   failureCases: readonly ProviderFailureCase[];
+  /** Turns that succeed, including one whose result arrives before its work drains. */
+  turns: readonly ProviderTurnCase[];
 }
 
 export async function runProviderConformance(suite: ProviderConformanceSuite): Promise<string[]> {
-  return checkFailureClasses(suite.failureCases);
+  return [
+    ...(await checkFailureClasses(suite.failureCases)),
+    // A failed turn settles too.
+    ...(await checkSettled([...suite.turns, ...suite.failureCases])),
+  ];
 }

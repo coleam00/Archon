@@ -18,4 +18,5 @@ export {
   type ResolvedModel,
   type TokenUsage,
 } from './result';
+export { providerSettledSchema, type ProviderSettled } from './settled';
 export { providerCapabilitiesSchema, type ProviderCapabilities } from './capabilities';

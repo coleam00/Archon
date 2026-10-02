@@ -120,6 +120,18 @@
         }
       }
     },
+    "ProviderSettled": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "settled"
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
     "ProviderCapabilities": {
       "type": "object",
       "properties": {

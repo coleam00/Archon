@@ -11,6 +11,18 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
+/**
+ * Stream-shape tests check the normalized stream, so they drop the chunks the contract
+ * adds at the end of every turn: `settled`, and the failure a stream that ended without
+ * a result reports. Both have their own tests.
+ */
+function isTurnEnd(chunk: MessageChunk): boolean {
+  return (
+    chunk.type === 'settled' ||
+    (chunk.type === 'result' && chunk.errorSubtype === 'stream_ended_without_result')
+  );
+}
+
 type MockQuery = (...args: Parameters<typeof sdkQuery>) => AsyncGenerator<unknown, void, unknown>;
 
 // Keep the SDK input signature while allowing tests to exercise malformed and
@@ -175,7 +187,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -200,7 +212,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -227,7 +239,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -249,7 +261,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -280,7 +292,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -470,7 +482,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks[0]).toMatchObject({ resolvedModel: { id: 'claude-sonnet-5' } });
@@ -490,7 +502,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks[0]).not.toHaveProperty('resolvedModel');
@@ -504,7 +516,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks[0]).not.toHaveProperty('cost');
@@ -520,7 +532,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks[0]).not.toHaveProperty('stopReason');
@@ -536,7 +548,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -557,7 +569,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -574,7 +586,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -598,7 +610,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(3);
@@ -687,7 +699,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('prompt', '/workspace', 'session-to-resume')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks.find(c => c.type === 'result')).toMatchObject({ resumed: true });
@@ -700,7 +712,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('prompt', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       const result = chunks.find(c => c.type === 'result');
@@ -724,7 +736,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -762,7 +774,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([{ type: 'system', content: '' }]);
@@ -794,7 +806,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([{ type: 'system', content: '' }]);
@@ -815,7 +827,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -844,7 +856,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -872,7 +884,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks[0]).toMatchObject({ type: 'task_notification', status: 'failed' });
@@ -892,7 +904,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(0);
@@ -912,7 +924,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(0);
@@ -934,7 +946,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -955,7 +967,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       // An empty set means "all background work drained" — it must be forwarded,
@@ -998,7 +1010,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -1010,16 +1022,18 @@ describe('ClaudeProvider', () => {
       ]);
     });
 
-    test('keeps forwarding chunks that arrive AFTER the result (background-task wait window)', async () => {
-      // Single-turn queries keep streaming after the turn-level result while
-      // background tasks drain; streamClaudeMessages must not stop at result.
+    test('settles only when the session goes idle, not at a result while background work runs', async () => {
+      // Recorded shape (CLI 2.1.282): a result arrives while a background agent runs,
+      // a second result follows once it drains, and only then does the session go idle.
+      let readAfterIdle = false;
       mockQuery.mockImplementation(async function* () {
+        yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+        yield { type: 'result', subtype: 'success', session_id: 's-1', is_error: false };
         yield {
           type: 'system',
           subtype: 'background_tasks_changed',
           tasks: [{ task_id: 't-1', task_type: 'local_agent', description: 'bg work' }],
         };
-        yield { type: 'result', subtype: 'success', session_id: 's-1', is_error: false };
         yield {
           type: 'system',
           subtype: 'task_notification',
@@ -1030,20 +1044,45 @@ describe('ClaudeProvider', () => {
         };
         yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
         yield { type: 'result', subtype: 'success', session_id: 's-1', is_error: false };
+        yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+        // The subprocess may linger after idle; the provider does not wait for it.
+        readAfterIdle = true;
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'late' }] } };
       });
 
-      const types = [];
+      const types: string[] = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
         types.push(chunk.type);
       }
 
       expect(types).toEqual([
-        'background_tasks',
         'result',
+        'background_tasks',
         'task_notification',
         'background_tasks',
         'result',
+        'settled',
       ]);
+      expect(readAfterIdle).toBe(false);
+      // The CLI emits its session-state events only when asked.
+      const options = (mockQuery.mock.calls[0][0] as { options: { env: Record<string, string> } })
+        .options;
+      expect(options.env.CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS).toBe('1');
+    });
+
+    test('an idle session before any result does not settle the turn', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+        yield { type: 'assistant', message: { content: [{ type: 'text', text: 'answer' }] } };
+        yield { type: 'result', subtype: 'success', session_id: 's-1', is_error: false };
+      });
+
+      const types: string[] = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        types.push(chunk.type);
+      }
+
+      expect(types).toEqual(['assistant', 'result', 'settled']);
     });
 
     test('yields hook_started chunk from SDK system message', async () => {
@@ -1059,7 +1098,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -1087,7 +1126,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -1116,7 +1155,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks[0]).toEqual({
@@ -1156,7 +1195,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks.map(c => c.type)).toEqual([
@@ -1255,7 +1294,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -1298,7 +1337,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toEqual([
@@ -1341,7 +1380,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       // The hook_progress frame is intentionally not surfaced: Archon
@@ -1362,7 +1401,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       expect(chunks).toHaveLength(1);
@@ -1388,7 +1427,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       // Only the assistant message should be yielded
@@ -2015,7 +2054,7 @@ describe('ClaudeProvider', () => {
 
       const chunks = [];
       for await (const chunk of client.sendQuery('test', '/workspace')) {
-        chunks.push(chunk);
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
       // Empty text should be filtered out
@@ -2249,7 +2288,7 @@ describe('sendQuery decomposition behaviors', () => {
     // Should not throw — the try/catch in PostToolUse should handle the circular ref
     const chunks = [];
     for await (const chunk of client.sendQuery('test', '/workspace')) {
-      chunks.push(chunk);
+      if (!isTurnEnd(chunk)) chunks.push(chunk);
     }
 
     // The assistant message should still come through
@@ -2273,7 +2312,7 @@ describe('sendQuery decomposition behaviors', () => {
 
     const chunks = [];
     for await (const chunk of client.sendQuery('test', '/workspace')) {
-      chunks.push(chunk);
+      if (!isTurnEnd(chunk)) chunks.push(chunk);
     }
 
     expect(chunks[0]).toMatchObject({
@@ -2307,7 +2346,7 @@ describe('sendQuery decomposition behaviors', () => {
 
     const chunks = [];
     for await (const chunk of client.sendQuery('test', '/workspace')) {
-      chunks.push(chunk);
+      if (!isTurnEnd(chunk)) chunks.push(chunk);
     }
 
     expect(chunks).toHaveLength(1);
@@ -3115,6 +3154,21 @@ describe('typed failures (#1797, #3524)', () => {
     expect(stream.chunks.filter(c => c.type === 'result')).toHaveLength(0);
   });
 
+  test('a stream that ends without a result reports a failure before it settles', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield { type: 'assistant', message: { content: [{ type: 'text', text: 'partial' }] } };
+    });
+
+    const stream = await collect(client.sendQuery('test', '/workspace'));
+    const result = onlyResult(stream);
+    expect(result.errorSubtype).toBe('stream_ended_without_result');
+    expect(result.failure).toEqual({
+      class: 'unknown',
+      evidence: 'Claude Code ended the turn without a result',
+    });
+    expect(stream.chunks.map(c => c.type)).toEqual(['assistant', 'result', 'settled']);
+  });
+
   test('an error after the turn reported its result does not add a second result', async () => {
     mockQuery.mockImplementation(async function* () {
       yield { type: 'result', subtype: 'success', is_error: false, session_id: 'sid-done' };
@@ -3243,7 +3297,7 @@ describe('typed failures (#1797, #3524)', () => {
     );
   });
 
-  test('conforms to the provider contract’s failure-class check', async () => {
+  test('conforms to the provider contract', async () => {
     function turn(events: unknown[] | Error): () => AsyncIterable<unknown> {
       return () => {
         mockQuery.mockImplementation(async function* () {
@@ -3254,6 +3308,33 @@ describe('typed failures (#1797, #3524)', () => {
       };
     }
     const violations = await runProviderConformance({
+      turns: [
+        {
+          name: 'plain turn',
+          run: turn([
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
+            { type: 'system', subtype: 'session_state_changed', state: 'idle' },
+          ]),
+        },
+        {
+          name: 'result before background work drains',
+          run: turn([
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
+            {
+              type: 'system',
+              subtype: 'background_tasks_changed',
+              tasks: [{ task_id: 't', task_type: 'local_agent', description: 'bg' }],
+            },
+            { type: 'system', subtype: 'background_tasks_changed', tasks: [] },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
+            { type: 'system', subtype: 'session_state_changed', state: 'idle' },
+          ]),
+        },
+        {
+          name: 'CLI without session-state events',
+          run: turn([{ type: 'result', subtype: 'success', is_error: false, session_id: 's' }]),
+        },
+      ],
       failureCases: [
         {
           name: 'rejected login',
@@ -3296,6 +3377,14 @@ describe('typed failures (#1797, #3524)', () => {
               errorClass: 'process_exited_nonzero',
             })
           ),
+        },
+        {
+          name: 'stream ended without a result',
+          expected: 'unknown',
+          evidence: 'without a result',
+          run: turn([
+            { type: 'assistant', message: { content: [{ type: 'text', text: 'partial' }] } },
+          ]),
         },
         {
           name: 'unclassified error',

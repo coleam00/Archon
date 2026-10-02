@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { runProviderConformance } from '@archon/provider-contract/conformance';
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -160,22 +161,37 @@ describe('normalizeTokens', () => {
     ).toEqual({ input: 16, output: 7, cacheRead: 5 });
   });
 });
-import { classifyOpencodeError } from './errors';
-import type { NodeConfig } from '../../types';
+import { opencodeFailureClass } from './errors';
+import type { MessageChunk, NodeConfig } from '../../types';
 
 /** Default model for tests — satisfies the model-or-agent validation */
 const TEST_MODEL = { model: 'test/mock-model' };
 
-async function consume(
-  generator: AsyncGenerator<unknown>
-): Promise<{ chunks: unknown[]; error?: Error }> {
+/**
+ * Drain a turn. A turn that completes must end with `settled`; it is checked here and
+ * dropped, so each test asserts only the chunks it is about.
+ */
+async function consume(generator: AsyncGenerator<unknown>): Promise<{
+  chunks: unknown[];
+  error?: Error;
+  /** The typed failure a failed turn ended in. */
+  failure?: { class: string; evidence: string };
+}> {
   const chunks: unknown[] = [];
   try {
     for await (const chunk of generator) chunks.push(chunk);
-    return { chunks };
   } catch (error) {
     return { chunks, error: error as Error };
   }
+  expect(chunks.at(-1)).toEqual({ type: 'settled' });
+  const result = chunks.find(
+    (c): c is { type: 'result'; failure?: { class: string; evidence: string } } =>
+      typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'result'
+  );
+  return {
+    chunks: chunks.slice(0, -1),
+    ...(result?.failure !== undefined ? { failure: result.failure } : {}),
+  };
 }
 
 async function createTempProjectDir(): Promise<string> {
@@ -371,14 +387,41 @@ describe('OpencodeProvider', () => {
       // answered, matching the hang scenario from issue #3332.
     ];
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
     );
 
-    expect(chunks).toEqual([{ type: 'assistant', content: 'partial answer' }]);
-    expect(error).toBeInstanceOf(Error);
-    expect(error?.message).toContain('perm-1');
-    expect(error?.message).toContain('bash');
+    expect(chunks).toEqual([
+      { type: 'assistant', content: 'partial answer' },
+      expect.objectContaining({ type: 'result', isError: true }),
+    ]);
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('perm-1');
+    expect(failure?.evidence).toContain('bash');
+  });
+
+  test('an event stream that ends before session.idle is a failed turn, not an empty success', async () => {
+    scriptedEvents = [
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { sessionID: 'session-1', type: 'text' },
+          delta: 'partial answer',
+        },
+      },
+      // The stream closes here: no session.idle, no session.error.
+    ];
+
+    const { chunks, failure } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(chunks).toEqual([
+      { type: 'assistant', content: 'partial answer' },
+      expect.objectContaining({ type: 'result', isError: true }),
+    ]);
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('session.idle');
   });
 
   test('permission.asked for a different session is ignored', async () => {
@@ -427,7 +470,7 @@ describe('OpencodeProvider', () => {
       // No session.idle for either child session follows.
     ];
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig: {
@@ -440,9 +483,9 @@ describe('OpencodeProvider', () => {
       })
     );
 
-    expect(error).toBeInstanceOf(Error);
-    expect(error?.message).toContain('perm-2');
-    expect(error?.message).toContain('edit');
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('perm-2');
+    expect(failure?.evidence).toContain('edit');
     expect(runtime.client.session.abort).toHaveBeenCalled();
   });
 
@@ -550,6 +593,96 @@ describe('OpencodeProvider', () => {
       ])
     );
     expect(chunks).toContainEqual({ type: 'result' });
+  });
+
+  test('conforms to the provider contract', async () => {
+    const cwd = await createTempProjectDir();
+    const sessionError = (error: Record<string, unknown>): AsyncGenerator<MessageChunk> => {
+      scriptedEvents = [{ type: 'session.error', properties: { sessionID: 'session-1', error } }];
+      return new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      });
+    };
+    const violations = await runProviderConformance({
+      // Only the SDK's auth discriminator and HTTP status fields carry a class; anything
+      // else, including auth-sounding text, is `unknown`.
+      failureCases: [
+        {
+          name: 'unclassified session error',
+          expected: 'unknown',
+          evidence: 'upstream request failed',
+          run: () =>
+            sessionError({ name: 'APIError', data: { message: 'upstream request failed' } }),
+        },
+        {
+          name: 'auth-sounding text without a structured signal',
+          expected: 'unknown',
+          evidence: 'Unauthorized',
+          run: () => sessionError({ name: 'APIError', data: { message: 'Unauthorized' } }),
+        },
+        {
+          name: 'ProviderAuthError',
+          expected: 'auth',
+          evidence: 'provider rejected request',
+          run: () =>
+            sessionError({
+              name: 'ProviderAuthError',
+              data: { providerID: 'anthropic', message: 'provider rejected request' },
+            }),
+        },
+        {
+          name: 'HTTP 401',
+          expected: 'auth',
+          evidence: 'key revoked',
+          run: () =>
+            sessionError({ name: 'APIError', data: { message: 'key revoked', statusCode: 401 } }),
+        },
+        {
+          name: 'HTTP 429',
+          expected: 'rate_limited',
+          evidence: 'slow down',
+          run: () =>
+            sessionError({ name: 'APIError', data: { message: 'slow down', statusCode: 429 } }),
+        },
+      ],
+      turns: [
+        {
+          name: 'single session',
+          run: () => {
+            scriptedEvents = [
+              {
+                type: 'message.part.updated',
+                properties: { delta: 'Hello', part: { sessionID: 'session-1', type: 'text' } },
+              },
+              { type: 'session.idle', properties: { sessionID: 'session-1' } },
+            ];
+            return new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
+              assistantConfig: TEST_MODEL,
+            });
+          },
+        },
+        {
+          name: 'multi-agent',
+          run: () => {
+            const sessionIds = ['scout-session'];
+            runtimeQueue.push(
+              makeRuntime({
+                sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+              })
+            );
+            scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'scout-session' } }];
+            return new OpencodeProvider().sendQuery('hi', cwd, undefined, {
+              assistantConfig: TEST_MODEL,
+              nodeConfig: {
+                nodeId: 'research',
+                agents: { scout: { description: 'Scout', prompt: 'Explore' } },
+              },
+            });
+          },
+        },
+      ],
+    });
+    expect(violations).toEqual([]);
   });
 
   test('multi-agent usage keeps cache from the sub-agent that reported it', async () => {
@@ -904,141 +1037,76 @@ describe('OpencodeProvider', () => {
     expect(mockLogger.warn).toHaveBeenCalledTimes(1);
   });
 
-  test('rate limit errors are classified as retryable and retried', async () => {
-    const retryRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        throw new Error('429 rate limit exceeded');
+  // The engine owns retry: a failed query is one attempt, reported once. Each case queues
+  // a healthy second runtime, so a provider that retried would succeed and hide the failure.
+  // The inline agent keeps the agent-not-found case on the path that used to refresh and retry.
+  test.each([
+    ['rate-limit text', new Error('429 rate limit exceeded'), 'unknown'],
+    ['crash text', new Error('socket hang up'), 'unknown'],
+    ['agent-not-found text', new Error("Agent not found: 'archon-reviewer'"), 'unknown'],
+    [
+      'structured 429',
+      Object.assign(new Error('upstream request failed'), {
+        cause: { name: 'APIError', data: { message: 'upstream request failed', statusCode: 429 } },
       }),
-    });
-    const successRuntime = makeRuntime();
-    runtimeQueue.push(retryRuntime, successRuntime);
-    scriptedEvents = [
-      {
-        type: 'session.idle',
-        properties: { sessionID: 'session-1' },
-      },
-    ];
-
-    const { chunks, error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
-        assistantConfig: TEST_MODEL,
-      })
+      'rate_limited',
+    ],
+    [
+      'ProviderAuthError',
+      Object.assign(new Error('provider rejected request'), { name: 'ProviderAuthError' }),
+      'auth',
+    ],
+  ] as const)('%s fails the turn in one attempt', async (_name, thrown, expectedClass) => {
+    runtimeQueue.push(
+      makeRuntime({
+        promptAsync: mock(async () => {
+          throw thrown;
+        }),
+      }),
+      makeRuntime()
     );
-
-    expect(error).toBeUndefined();
-    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
-      'opencode.retrying_query'
-    );
-  });
-
-  test('retry backoff runs inside the admission release, never while the slot is held', async () => {
-    const events: string[] = [];
-    const retryRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        events.push('attempt');
-        throw new Error('429 rate limit exceeded');
-      }),
-    });
-    const successRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        events.push('attempt');
-      }),
-    });
-    runtimeQueue.push(retryRuntime, successRuntime);
     scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-    const admission = {
-      releaseDuring: async (wait: () => Promise<void>): Promise<void> => {
-        events.push('released');
-        await wait();
-        events.push('reacquired');
-      },
-    };
 
-    const { error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+    const cwd = await createTempProjectDir();
+
+    const { chunks, failure } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
-        admission,
+        nodeConfig: {
+          nodeId: 'node-1',
+          agents: { reviewer: { description: 'Review agent', prompt: 'Return review' } },
+        },
       })
     );
 
-    expect(error).toBeUndefined();
-    expect(events).toEqual(['attempt', 'released', 'reacquired', 'attempt']);
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.class).toBe(expectedClass);
+    expect(failure?.evidence).toContain(thrown.message);
+    expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
   });
 
-  test('retries a structured 429 from the single-agent session stream', async () => {
-    const sdkError = {
-      name: 'APIError',
-      data: { message: 'upstream request failed', statusCode: 429, isRetryable: true },
-    };
-    const retryRuntime = makeRuntime({
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          {
-            type: 'session.error',
-            properties: { sessionID: 'session-1', error: sdkError },
-          },
-        ]),
-      })),
-    });
-    const successRuntime = makeRuntime({
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          { type: 'session.idle', properties: { sessionID: 'session-1' } },
-        ]),
-      })),
-    });
-    runtimeQueue.push(retryRuntime, successRuntime);
-
-    const { chunks, error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
-        assistantConfig: TEST_MODEL,
-      })
-    );
-
-    expect(error).toBeUndefined();
-    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
-      'opencode.retrying_query'
-    );
-  });
-
-  test('retries a structured 429 from the multi-agent session stream', async () => {
+  test('a structured 429 from the multi-agent session stream fails the turn in one attempt', async () => {
     const cwd = await createTempProjectDir();
     const sdkError = {
       name: 'APIError',
       data: { message: 'upstream request failed', statusCode: 429, isRetryable: true },
     };
-    const retrySessionIds = ['scout-session', 'reviewer-session'];
-    const retryRuntime = makeRuntime({
-      sessionCreate: mock(async () => ({ data: { id: retrySessionIds.shift() } })),
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          {
-            type: 'session.error',
-            properties: { sessionID: 'scout-session', error: sdkError },
-          },
-        ]),
-      })),
-    });
-    const successSessionIds = ['scout-session', 'reviewer-session'];
-    const successRuntime = makeRuntime({
-      sessionCreate: mock(async () => ({ data: { id: successSessionIds.shift() } })),
-      subscribe: mock(async () => ({
-        stream: createEventStream([
-          { type: 'session.idle', properties: { sessionID: 'scout-session' } },
-          { type: 'session.idle', properties: { sessionID: 'reviewer-session' } },
-        ]),
-      })),
-    });
-    runtimeQueue.push(retryRuntime, successRuntime);
+    const sessionIds = ['scout-session', 'reviewer-session'];
+    runtimeQueue.push(
+      makeRuntime({
+        sessionCreate: mock(async () => ({ data: { id: sessionIds.shift() } })),
+        subscribe: mock(async () => ({
+          stream: createEventStream([
+            { type: 'session.error', properties: { sessionID: 'scout-session', error: sdkError } },
+          ]),
+        })),
+      }),
+      makeRuntime()
+    );
 
-    const { error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
+    const { failure } = await consume(
+      new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig: {
           nodeId: 'research',
@@ -1050,34 +1118,9 @@ describe('OpencodeProvider', () => {
       })
     );
 
-    expect(error).toBeUndefined();
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, delayMs: 1, errorClass: 'rate_limit' },
-      'opencode.retrying_query'
-    );
-  });
-
-  test('auth errors are classified as non-retryable and do not retry', async () => {
-    const runtime = makeRuntime({
-      promptAsync: mock(async () => {
-        const error = new Error('401 unauthorized api key');
-        error.name = 'AuthenticationError';
-        throw error;
-      }),
-    });
-    runtimeQueue.push(runtime);
-
-    const { chunks, error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
-        assistantConfig: TEST_MODEL,
-      })
-    );
-
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('OpenCode auth: 401 unauthorized api key');
+    expect(failure?.class).toBe('rate_limited');
+    expect(failure?.evidence).toContain('upstream request failed');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
-    expect(mockLogger.info).not.toHaveBeenCalledWith(expect.any(Object), 'opencode.retrying_query');
   });
 
   test('abort propagates to the OpenCode session and surfaces aborted error', async () => {
@@ -1102,7 +1145,7 @@ describe('OpencodeProvider', () => {
     const { chunks, error } = await consumption;
 
     expect(chunks).toEqual([]);
-    expect(error?.message).toBe('OpenCode query aborted');
+    expect(error?.message).toStartWith('OpenCode query aborted');
     expect(runtime.client.session.abort).toHaveBeenCalledWith({
       path: { id: 'session-1' },
       query: { directory: '/tmp' },
@@ -1235,14 +1278,15 @@ describe('OpencodeProvider', () => {
   test('embedded runtime does not retry non-port startup errors', async () => {
     startupErrors.push(new Error('OpenCode binary missing'));
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('no retry startup', '/tmp', undefined, {
         assistantConfig: TEST_MODEL,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('OpenCode binary missing');
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.evidence).toContain('OpenCode binary missing');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(
       expect.any(Object),
@@ -1435,43 +1479,6 @@ describe('OpencodeProvider', () => {
     expect(callOrder).toEqual(['dispose', 'prompt']);
   });
 
-  test('retries once when first attempt fails with agent-not-found for inline agents', async () => {
-    const cwd = await createTempProjectDir();
-    const failingRuntime = makeRuntime({
-      promptAsync: mock(async () => {
-        throw new Error("Agent not found: 'archon-reviewer'");
-      }),
-    });
-    const successRuntime = makeRuntime();
-    runtimeQueue.push(failingRuntime, successRuntime);
-    scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
-
-    const nodeConfig = {
-      nodeId: 'node-2',
-      agents: {
-        reviewer: {
-          description: 'Review agent',
-          prompt: 'Return review',
-        },
-      },
-    };
-
-    const { chunks, error } = await consume(
-      new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', cwd, undefined, {
-        assistantConfig: TEST_MODEL,
-        nodeConfig,
-      })
-    );
-
-    expect(error).toBeUndefined();
-    expect(chunks).toEqual([{ type: 'result', sessionId: 'session-1' }]);
-    expect(mockCreateOpencode).toHaveBeenCalledTimes(2);
-    expect(mockLogger.info).toHaveBeenCalledWith(
-      { attempt: 0, sessionCwd: join(cwd, '.archon-opencode', 'node-2') },
-      'opencode.retrying_after_agent_refresh'
-    );
-  });
-
   test('agent config with model override injects model into promptAsync body', async () => {
     const cwd = await createTempProjectDir();
     const runtime = makeRuntime();
@@ -1569,15 +1576,16 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
     expect(mockCreateOpencode).not.toHaveBeenCalled();
   });
@@ -1608,14 +1616,14 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(await readFile(join(agentsDir, 'custom-agent.md'), 'utf8')).toBe('# user content\n');
     expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
     expect(mockCreateOpencode).not.toHaveBeenCalled();
@@ -1656,14 +1664,14 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(runtime.client.instance.dispose).not.toHaveBeenCalled();
     expect(callOrder).toEqual([]);
     expect(mockCreateOpencode).not.toHaveBeenCalled();
@@ -1685,15 +1693,16 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', cwd, undefined, {
         assistantConfig: { ...TEST_MODEL, baseUrl: 'http://remote-opencode.local' },
         nodeConfig,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error?.message).toContain('external baseUrl mode is no longer supported');
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.evidence).toContain('external baseUrl mode is no longer supported');
     expect(mockCreateOpencodeClient).not.toHaveBeenCalled();
     expect(mockCreateOpencode).not.toHaveBeenCalled();
   });
@@ -1802,90 +1811,55 @@ describe('OpencodeProvider', () => {
       },
     };
 
-    const { chunks, error } = await consume(
+    const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
         assistantConfig: TEST_MODEL,
         nodeConfig,
       })
     );
 
-    expect(chunks).toEqual([]);
-    expect(error).toBeDefined();
-    expect(error?.message).toContain(
+    // Only the failure result precedes `settled`.
+    expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain(
       "Invalid OpenCode agent model ref for 'bad-agent': 'invalid-no-slash-format'"
     );
   });
 });
 
-describe('classifyOpencodeError (#2715)', () => {
-  test('does not classify a bare "401"/"403" substring as auth', () => {
-    expect(classifyOpencodeError(new Error('connect ECONNREFUSED 127.0.0.1:401'), false)).not.toBe(
-      'auth'
-    );
-    expect(classifyOpencodeError(new Error('timeout after 401ms'), false)).not.toBe('auth');
-    expect(classifyOpencodeError(new Error('proxy responded with 403'), false)).not.toBe('auth');
-  });
-
-  test('still classifies genuine auth signals as auth', () => {
-    expect(classifyOpencodeError(new Error('Unauthorized'), false)).toBe('auth');
-    expect(classifyOpencodeError(new Error('authentication failed'), false)).toBe('auth');
-    expect(classifyOpencodeError(new Error('invalid token provided'), false)).toBe('auth');
-    expect(classifyOpencodeError(new Error('provided api key is rejected'), false)).toBe('auth');
-    // Real-world provider shape: a 401 co-occurring with the word "Unauthorized" —
-    // the word carries the signal, not the digits.
-    expect(
-      classifyOpencodeError(new Error('exceeded retry limit, last status: 401 Unauthorized'), false)
-    ).toBe('auth');
-  });
-
-  test('classifies exact structured statuses across top-level, SDK, and wrapped shapes', () => {
+describe('opencodeFailureClass', () => {
+  test('reads exact structured statuses across top-level, SDK, and wrapped shapes', () => {
     const cases = [
       [401, 'auth'],
       [403, 'auth'],
-      [429, 'rate_limit'],
+      [429, 'rate_limited'],
+      [500, 'unknown'],
     ] as const;
 
     for (const [statusCode, expectedClass] of cases) {
-      expect(classifyOpencodeError({ statusCode }, false)).toBe(expectedClass);
+      expect(opencodeFailureClass({ statusCode })).toBe(expectedClass);
 
-      const sdkError = {
-        name: 'APIError',
-        data: { message: 'request failed', statusCode, isRetryable: statusCode === 429 },
-      };
-      expect(classifyOpencodeError(sdkError, false)).toBe(expectedClass);
+      const sdkError = { name: 'APIError', data: { message: 'request failed', statusCode } };
+      expect(opencodeFailureClass(sdkError)).toBe(expectedClass);
 
       const wrappedError = new Error('request failed');
       wrappedError.cause = sdkError;
-      expect(classifyOpencodeError(wrappedError, false)).toBe(expectedClass);
+      expect(opencodeFailureClass(wrappedError)).toBe(expectedClass);
     }
   });
 
-  test('classifies the SDK auth discriminator through Error.cause', () => {
+  test('reads the SDK auth discriminator through Error.cause', () => {
     const authError = new Error('provider rejected request');
     authError.cause = {
       name: 'ProviderAuthError',
       data: { providerID: 'anthropic', message: 'provider rejected request' },
     };
-    expect(classifyOpencodeError(authError, false)).toBe('auth');
+    expect(opencodeFailureClass(authError)).toBe('auth');
   });
 
-  test('does not classify a bare "429" substring as rate_limit (#2509 R11 mirror)', () => {
-    expect(classifyOpencodeError(new Error('connect ECONNREFUSED 127.0.0.1:4291'), false)).not.toBe(
-      'rate_limit'
-    );
-    expect(
-      classifyOpencodeError(
-        new Error('operation timed out after 4293ms while establishing connection'),
-        false
-      )
-    ).not.toBe('rate_limit');
-  });
-
-  test('still classifies genuine rate-limit signals as rate_limit', () => {
-    expect(classifyOpencodeError(new Error('rate limit exceeded'), false)).toBe('rate_limit');
-    expect(classifyOpencodeError(new Error('too many requests, please slow down'), false)).toBe(
-      'rate_limit'
-    );
-    expect(classifyOpencodeError(new Error('server overloaded'), false)).toBe('rate_limit');
+  test('never classifies from the message text', () => {
+    for (const message of ['401 Unauthorized', 'rate limit exceeded', '429 too many requests']) {
+      expect(opencodeFailureClass(new Error(message))).toBe('unknown');
+    }
   });
 });

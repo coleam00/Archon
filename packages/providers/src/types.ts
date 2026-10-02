@@ -6,6 +6,7 @@ import type { EffortRung } from '@archon/paths/effort';
 import type {
   ProviderCapabilities,
   ProviderResult,
+  ProviderSettled,
   ResolvedModel,
   TokenUsage,
 } from '@archon/provider-contract';
@@ -241,6 +242,8 @@ export type MessageChunk =
   | { type: 'system'; content: string }
   | { type: 'thinking'; content: string }
   | ({ type: 'result' } & ProviderResult)
+  // The turn is over and nothing more runs for it; always the last chunk (see ProviderSettled).
+  | ProviderSettled
   | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
   | {
       type: 'tool';
@@ -309,9 +312,9 @@ export type MessageChunk =
   // Claude SDK v0.3.209+): the FULL set of live background tasks, emitted
   // whenever membership changes. Level signal with REPLACE semantics — consumers
   // swap their set for each payload (an empty array means no background work is
-  // running). The dag-executor gates node completion on this: a `result` chunk
-  // that arrives while the set is non-empty must not tear down the stream, or
-  // the SDK subprocess (and the tasks' pending artifacts) get killed (#2083).
+  // running). Node completion is gated on `settled`, not on this set; the
+  // dag-executor uses it to name the tasks still live when a stream ends without
+  // settling (#2083).
   | {
       type: 'background_tasks';
       tasks: { taskId: string; taskType: string; description: string }[];
@@ -626,26 +629,6 @@ export interface NodeConfig {
   [key: string]: unknown;
 }
 
-/**
- * Extended options for sendQuery, adding workflow-specific context.
- * The orchestrator path uses base AgentRequestOptions fields only.
- * The workflow path additionally passes nodeConfig and assistantConfig.
- */
-/**
- * The install-wide provider slot held by the current `sendQuery` call. Archon core
- * sets it only when the operator configured a cap for this provider; a provider with
- * no internal retry loop can ignore it, because core already releases the slot when
- * the `sendQuery` stream closes.
- */
-export interface ProviderAttemptAdmission {
-  /**
-   * Release the slot for a provider-internal retry backoff, run `wait`, then wait for
-   * a slot again before the next attempt. Rejects when the request is aborted while
-   * waiting for the slot, leaving no slot held.
-   */
-  releaseDuring(wait: () => Promise<void>): Promise<void>;
-}
-
 /** Typed admission transitions for one capped provider attempt. */
 export interface ProviderAdmissionEvent {
   state: 'waiting' | 'admitted' | 'released';
@@ -656,9 +639,12 @@ export interface ProviderAdmissionEvent {
   capacity: number;
 }
 
+/**
+ * Extended options for sendQuery, adding workflow-specific context.
+ * The orchestrator path uses base AgentRequestOptions fields only.
+ * The workflow path additionally passes nodeConfig and assistantConfig.
+ */
 export interface SendQueryOptions extends AgentRequestOptions {
-  /** Set by Archon core admission; callers do not supply it. */
-  admission?: ProviderAttemptAdmission;
   /** Observer for capped-provider admission transitions (queue visibility, #2817). */
   onAdmission?: (event: ProviderAdmissionEvent) => void;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */

@@ -37,6 +37,7 @@ import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } fro
 import { clampEffort } from '@archon/paths/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
+import { unknownFailureResult } from '../../shared/failure';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -412,7 +413,36 @@ export class CopilotProvider implements IAgentProvider {
     return COPILOT_CAPABILITIES;
   }
 
+  /**
+   * One call is one turn. A failure, including one thrown while setting the turn up,
+   * ends in a `result` carrying a typed `failure`, then `settled`: Copilot reports
+   * no structured failure class, so every failure is `unknown` with its text as
+   * evidence. Only cancellation throws.
+   */
   async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    let resultReported = false;
+    try {
+      for await (const chunk of this.streamTurn(prompt, cwd, resumeSessionId, requestOptions)) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
+      }
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted === true) throw error;
+      const err = error as Error;
+      // The turn already reported its one result; a later error does not change it.
+      if (resultReported) getLog().error({ err }, 'copilot.error_after_result');
+      else yield unknownFailureResult('copilot_query_failed', err.message);
+    }
+    // Nothing more runs for this turn once its stream has ended.
+    yield { type: 'settled' };
+  }
+
+  private async *streamTurn(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
