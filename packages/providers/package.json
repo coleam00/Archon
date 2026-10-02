@@ -167,6 +167,9 @@
       "src/shared/resumed.test.ts"
     ],
     [
+      "src/mcp/config.test.ts"
+    ],
+    [
       "src/claude/container-spawn.test.ts"
     ],
     [

@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { mkdtempSync, symlinkSync, unlinkSync } from 'node:fs';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createMockLogger } from '../test/mocks/logger';
+import { ClassifiedProviderError } from '../shared/failure';
 
 // Windows only permits symlink creation for an elevated process or with Developer
 // Mode enabled, so the broken-symlink case below is a capability question, not a
@@ -231,6 +232,8 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
 
     const promise = resolver.resolveClaudeBinaryPath();
     await expect(promise).rejects.toThrow('Claude Code not found');
+    // The provider reports this as `misconfigured` from the error's class, not its words.
+    await expect(promise).rejects.toBeInstanceOf(ClassifiedProviderError);
     await expect(promise).rejects.toThrow('CLAUDE_BIN_PATH');
     // Native curl installer is Anthropic's primary recommendation.
     await expect(promise).rejects.toThrow('https://claude.ai/install.sh');
@@ -291,6 +294,7 @@ describe('resolveClaudeBinaryPath (binary mode)', () => {
     await expect(promise).rejects.toThrow('assistants.claude.claudeBinaryPath');
     await expect(promise).rejects.toThrow('which is a directory');
     await expect(promise).rejects.toThrow(`does not contain ${CLAUDE_BINARY_NAME}`);
+    await expect(promise).rejects.toBeInstanceOf(ClassifiedProviderError);
   });
 
   test('adds the autodetected binary to a configured-directory error without using it', async () => {

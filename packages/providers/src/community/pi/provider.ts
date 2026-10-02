@@ -495,7 +495,7 @@ export class PiProvider implements IAgentProvider {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
       // Unclassified: this step both reads the operator's files and writes a per-call
-      // temp file, and nothing structured says which one failed.
+      // temp file, and this catch does not tell those failures apart.
       throw new Error(
         `Pi auth storage init failed: ${e.message}. Check that ~/.pi/agent/auth.json ` +
           '(or $PI_CODING_AGENT_DIR/auth.json) is valid JSON and readable.'

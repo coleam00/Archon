@@ -4311,7 +4311,12 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     failure: ProviderFailure,
     errors: string[] = [failure.evidence],
     onError?: 'transient' | 'all'
-  ): Promise<{ calls: number; failedKinds: unknown[]; runFailed: boolean }> {
+  ): Promise<{
+    calls: number;
+    failedKinds: unknown[];
+    failedErrors: unknown[];
+    runFailed: boolean;
+  }> {
     const realSetTimeout = globalThis.setTimeout;
     globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
     try {
@@ -4352,11 +4357,15 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
           workflowRun: makeWorkflowRun('dag-typed-failure-run'),
         })
       );
-      const failedKinds = store.persistWorkflowEvent.mock.calls
+      const failedEvents = store.persistWorkflowEvent.mock.calls
         .map(([event]) => event)
-        .filter(event => event.event_type === 'node_failed')
-        .map(event => event.data?.failure_kind);
-      return { calls, failedKinds, runFailed: store.failWorkflowRun.mock.calls.length > 0 };
+        .filter(event => event.event_type === 'node_failed');
+      return {
+        calls,
+        failedKinds: failedEvents.map(event => event.data?.failure_kind),
+        failedErrors: failedEvents.map(event => event.data?.error),
+        runFailed: store.failWorkflowRun.mock.calls.length > 0,
+      };
     } finally {
       globalThis.setTimeout = realSetTimeout;
     }
@@ -4399,6 +4408,9 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       );
       expect(result.calls).toBe(1);
       expect(result.failedKinds).toEqual(['fatal']);
+      expect(result.failedErrors).toEqual([
+        expect.stringContaining("the provider's configuration must be fixed"),
+      ]);
       expect(result.runFailed).toBe(true);
       // The same harness does retry an unclassified failure when on_error allows it.
       const unknown = await attemptsForTypedFailure(

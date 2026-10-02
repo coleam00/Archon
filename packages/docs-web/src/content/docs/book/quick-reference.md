@@ -263,7 +263,7 @@ Defined under `retry:` inside a node:
 | `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
 | `on_error` | No | `transient` | `transient` retries rate limits/network errors; `all` retries everything except fatal errors |
 
-> **Fatal errors are never retried**: auth failures, permission errors, and exhausted credit balances fail immediately regardless of retry config.
+> **Fatal errors are never retried**: auth failures, permission errors, exhausted credit balances, and configuration errors (a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config.
 
 ---
 

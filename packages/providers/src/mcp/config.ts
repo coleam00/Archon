@@ -151,10 +151,12 @@ export async function loadMcpConfig(
         `MCP config file not found: ${mcpPath} (resolved to ${fullPath})`
       );
     }
-    throw new ClassifiedProviderError(
-      'misconfigured',
-      `Failed to read MCP config file: ${mcpPath} - ${e.message}`
-    );
+    const message = `Failed to read MCP config file: ${mcpPath} - ${e.message}`;
+    // A path that names nothing readable is setup; EMFILE, EIO and the like can pass.
+    if (e.code === 'EACCES' || e.code === 'EISDIR' || e.code === 'ENOTDIR') {
+      throw new ClassifiedProviderError('misconfigured', message);
+    }
+    throw new Error(message);
   }
 
   let parsed: Record<string, unknown>;
