@@ -3866,6 +3866,19 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
 }
 
 /**
+ * A run's event rows. Provider events (every agent text block, tool call and output)
+ * are left out unless the caller prints raw rows: node summaries and terminal records
+ * never read them, and a long run has thousands.
+ */
+function listRunEvents(runId: string, rawEvents: boolean): Promise<WorkflowEventRow[]> {
+  return rawEvents
+    ? workflowEventsDb.listWorkflowEvents(runId)
+    : workflowEventsDb.listWorkflowEvents(runId, {
+        excludeEventTypes: workflowEventsDb.PROVIDER_EVENT_ROW_TYPES,
+      });
+}
+
+/**
  * Fetch a run's events for `--verbose` rendering. A failed event query must not
  * abort the command (the run summary itself is still useful), but it must NOT be
  * indistinguishable from "this run has no events" — so log a warn and flag the
@@ -3873,10 +3886,11 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
  * silenced; an empty derived/raw payload is the documented signal there.)
  */
 async function fetchVerboseEvents(
-  runId: string
+  runId: string,
+  rawEvents: boolean
 ): Promise<{ events: WorkflowEventRow[]; failed: boolean }> {
   try {
-    return { events: await workflowEventsDb.listWorkflowEvents(runId), failed: false };
+    return { events: await listRunEvents(runId, rawEvents), failed: false };
   } catch (error) {
     getLog().warn({ err: error as Error, runId }, 'cli.workflow_events_fetch_failed');
     return { events: [], failed: true };
@@ -3954,7 +3968,9 @@ export async function workflowStatusCommand(
       return;
     }
 
-    const fetchedPerRun = await Promise.all(runs.map(run => fetchVerboseEvents(run.id)));
+    const fetchedPerRun = await Promise.all(
+      runs.map(run => fetchVerboseEvents(run.id, opts.rawEvents ?? false))
+    );
     const runsOutput = runs.map((run, i) => {
       const runEvents = fetchedPerRun[i]?.events ?? [];
       return opts.rawEvents
@@ -3990,7 +4006,7 @@ export async function workflowStatusCommand(
     }
 
     if (opts.verbose) {
-      const { events, failed } = await fetchVerboseEvents(run.id);
+      const { events, failed } = await fetchVerboseEvents(run.id, false);
       if (failed) {
         console.log('  (node events unavailable — see logs)');
       }
@@ -4368,7 +4384,7 @@ export async function workflowGetCommand(
   let events: WorkflowEventRow[];
   let terminalRecord;
   try {
-    events = await workflowEventsDb.listWorkflowEvents(run.id);
+    events = await listRunEvents(run.id, rawEvents ?? false);
     terminalRecord = getTerminalRecord(run.status, events);
   } catch (error) {
     getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');

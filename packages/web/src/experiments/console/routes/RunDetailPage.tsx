@@ -10,7 +10,7 @@ import {
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
-import { RunStream, pairProviderToolCalls } from '../components/RunStream';
+import { RunStream, runToolCalls } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
@@ -418,13 +418,7 @@ export function RunDetailPage(): ReactElement {
 
   const { run, events } = detail;
   const messageList = messages ?? [];
-  // Mirror RunStream's source rule: provider-event tool calls, or message-inline ones
-  // for a run that recorded none.
-  const providerToolCount = pairProviderToolCalls(providerEvents).length;
-  const toolCallCount =
-    providerToolCount > 0
-      ? providerToolCount
-      : messageList.reduce((acc, m) => acc + m.toolCalls.length, 0);
+  const toolCallCount = runToolCalls(messageList, providerEvents).count;
 
   const toolbar = (
     <StreamToolbar

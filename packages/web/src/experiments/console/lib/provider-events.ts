@@ -8,7 +8,9 @@
  * attempt's sequence is a frame this page missed. A hole is closed with one cursor
  * fetch from the last contiguous event. The engine's store writes are not awaited, so
  * that fetch can run before the missing row is committed; the hole then stays open and
- * the next frame for the node retries it.
+ * the next frame for the node retries it, up to {@link GAP_FETCH_ATTEMPTS} times. A row
+ * whose write failed never arrives, so the retries stop there; a reconnect, a finished
+ * node or the run view's safety-net poll still catches up.
  */
 import { useSyncExternalStore } from 'react';
 import type { components } from '@/lib/api.generated';
@@ -97,10 +99,15 @@ function lastCursor(records: readonly ProviderEventRecord[]): ProviderEventCurso
   return 'all';
 }
 
+/** Frame-triggered fetches spent on one hole before it is left to catch-up. */
+export const GAP_FETCH_ATTEMPTS = 3;
+
 interface StepState {
   records: ProviderEventRecord[];
   loaded: boolean;
   fetching: boolean;
+  /** Frame-triggered fetches per hole, keyed by the cursor that targets it. */
+  gapFetches: Map<string, number>;
 }
 
 /** One run's events by node, replaced (never mutated) on every change. */
@@ -113,8 +120,15 @@ export interface ProviderEventStore {
   load(runId: string, stepName: string): void;
   /** Append one live frame. A frame for a node not yet loaded waits for its load. */
   receive(record: ProviderEventRecord): void;
-  /** Fetch whatever a loaded node may have missed, e.g. after a reconnect. */
-  catchUp(runId: string, stepName?: string): void;
+  /** Fetch whatever every loaded node may have missed, e.g. after a reconnect. */
+  catchUp(runId: string): void;
+  /**
+   * A node finished: fetch what it may have missed at its end. `nodeId` is the live
+   * frame's bare node id, which names a node inside a loop group or fan-out only by
+   * its prefixed step name, so every other loaded node with an open hole is caught up
+   * too; their tails are left to `catchUp`.
+   */
+  nodeFinished(runId: string, nodeId: string): void;
   snapshot(runId: string): RunProviderEvents;
   subscribe(listener: () => void): () => void;
 }
@@ -132,7 +146,7 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
     }
     let state = steps.get(stepName);
     if (state === undefined) {
-      state = { records: [], loaded: false, fetching: false };
+      state = { records: [], loaded: false, fetching: false, gapFetches: new Map() };
       steps.set(stepName, state);
     }
     return state;
@@ -176,7 +190,12 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
     const state = stepState(runId, stepName);
     if (!state.loaded || state.fetching) return;
     const gap = findProviderEventGap(state.records);
-    if (gap !== null) fetchInto(runId, stepName, gap);
+    if (gap === null) return;
+    const key = JSON.stringify(gap);
+    const spent = state.gapFetches.get(key) ?? 0;
+    if (spent >= GAP_FETCH_ATTEMPTS) return;
+    state.gapFetches.set(key, spent + 1);
+    fetchInto(runId, stepName, gap);
   };
 
   return {
@@ -196,15 +215,20 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
       publish(record.runId);
       closeGap(record.runId, record.stepName);
     },
-    catchUp(runId, stepName): void {
-      const steps = runs.get(runId);
-      if (steps === undefined) return;
-      for (const [step, state] of steps) {
-        if (stepName !== undefined && step !== stepName) continue;
+    catchUp(runId): void {
+      for (const [step, state] of runs.get(runId) ?? []) {
         // From the first hole if there is one: everything after it comes back too.
         if (state.loaded) {
           fetchInto(runId, step, findProviderEventGap(state.records) ?? lastCursor(state.records));
         }
+      }
+    },
+    nodeFinished(runId, nodeId): void {
+      for (const [step, state] of runs.get(runId) ?? []) {
+        if (!state.loaded) continue;
+        const gap = findProviderEventGap(state.records);
+        if (step === nodeId) fetchInto(runId, step, gap ?? lastCursor(state.records));
+        else if (gap !== null) fetchInto(runId, step, gap);
       }
     },
     snapshot(runId): RunProviderEvents {

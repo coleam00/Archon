@@ -161,7 +161,7 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
             typeof ev.nodeId === 'string' &&
             (ev.status === 'completed' || ev.status === 'failed')
           ) {
-            providerEventStore.catchUp(runId, ev.nodeId);
+            providerEventStore.nodeFinished(runId, ev.nodeId);
           }
           runDirty = true;
           break;

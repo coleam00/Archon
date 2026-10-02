@@ -105,9 +105,12 @@ describe('pairProviderToolCalls', () => {
       ],
     ]);
 
-    expect(pairProviderToolCalls(events).map(p => [p.call.name, p.call.status])).toEqual([
-      ['git status', 'cancelled'],
-      ['Read', undefined],
+    expect(
+      pairProviderToolCalls(events).map(p => [p.call.name, p.call.status, p.call.durationMs])
+    ).toEqual([
+      // A legacy row's time is too coarse to time the call.
+      ['git status', 'cancelled', undefined],
+      ['Read', undefined, undefined],
     ]);
   });
 });

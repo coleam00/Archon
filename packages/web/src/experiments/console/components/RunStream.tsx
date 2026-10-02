@@ -101,7 +101,11 @@ export function pairProviderToolCalls(providerEvents: RunProviderEvents): Paired
           ...(event.output !== undefined ? { output: event.output } : {}),
           ...(event.outputTruncated === true ? { outputTruncated: true } : {}),
           ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
-          durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp),
+          // A translated legacy row's time is its row's `created_at`, 1 s apart on
+          // SQLite, so it cannot time a call.
+          ...(record.attemptId !== null
+            ? { durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp) }
+            : {}),
         };
       }
     }
@@ -110,12 +114,28 @@ export function pairProviderToolCalls(providerEvents: RunProviderEvents): Paired
 }
 
 /**
- * Merges conversation messages + workflow events into a single timeline.
- *
- * Tool calls come from the run's provider events, which every provider's node records
- * with its node, input, output and outcome. Message-inline tool calls
- * (`message.metadata.toolCalls`) carry no node, and they are shown only for a run
- * that recorded no tool events at all, so a call is never shown twice.
+ * The tool calls a run view shows. Provider events record every provider's calls with
+ * their node; message-inline calls (`message.metadata.toolCalls`) carry no node and are
+ * shown only for a run that recorded no tool events, so no call is shown twice.
+ */
+export function runToolCalls(
+  messages: readonly Message[],
+  providerEvents: RunProviderEvents
+): { fromProviderEvents: PairedToolCall[]; showInline: boolean; count: number } {
+  const fromProviderEvents = pairProviderToolCalls(providerEvents);
+  const showInline = fromProviderEvents.length === 0;
+  return {
+    fromProviderEvents,
+    showInline,
+    count: showInline
+      ? messages.reduce((acc, m) => acc + m.toolCalls.length, 0)
+      : fromProviderEvents.length,
+  };
+}
+
+/**
+ * Merges conversation messages + workflow events into a single timeline. Tool calls
+ * come from {@link runToolCalls}.
  *
  * What we deliberately skip here:
  *   - `approval` events — RunDetailPage renders an inline ApprovalPanel
@@ -134,11 +154,13 @@ export function RunStream({
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
   const nodeRuns = useMemo(() => foldNodeRuns(events), [events]);
-  const providerToolCalls = useMemo(() => pairProviderToolCalls(providerEvents), [providerEvents]);
+  const toolCalls = useMemo(
+    () => runToolCalls(messages, providerEvents),
+    [messages, providerEvents]
+  );
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
-    const showInlineTools = providerToolCalls.length === 0;
     for (const m of messages) {
       const base = new Date(m.timestamp).getTime();
       const meaningful = isMeaningful(m);
@@ -192,7 +214,7 @@ export function RunStream({
       }
 
       entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
-      if (!showInlineTools) continue;
+      if (!toolCalls.showInline) continue;
       m.toolCalls.forEach((call, idx) => {
         entries.push({
           kind: 'tool',
@@ -208,7 +230,7 @@ export function RunStream({
       });
     }
 
-    for (const t of providerToolCalls) {
+    for (const t of toolCalls.fromProviderEvents) {
       entries.push({
         kind: 'tool',
         key: `pt:${t.id}`,
@@ -242,7 +264,7 @@ export function RunStream({
     }
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events, nodeRuns, providerToolCalls, showSystem]);
+  }, [messages, events, nodeRuns, toolCalls, showSystem]);
 
   // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
   // a positional fallback so node-blind entries (prose, artifacts, system rows, and

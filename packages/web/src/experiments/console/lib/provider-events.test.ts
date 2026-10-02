@@ -1,5 +1,6 @@
 import { describe, expect, mock, test } from 'bun:test';
 import {
+  GAP_FETCH_ATTEMPTS,
   createProviderEventStore,
   findProviderEventGap,
   type ProviderEventCursor,
@@ -97,6 +98,39 @@ describe('provider-event store', () => {
     expect(h.calls[2]).toEqual(['r1', 'build', { attemptId: 'a', seq: 0 }]);
     await h.resolveNext([rec('a', 1)]);
     expect(h.records()).toEqual([0, 1, 2, 3].map(seq => ['a', seq]));
+  });
+
+  test('a hole whose row never arrives stops costing a fetch per frame', async () => {
+    const h = harness();
+    h.store.load('r1', 'build');
+    await h.resolveNext([rec('a', 0)]);
+    for (let seq = 2; seq < 2 + GAP_FETCH_ATTEMPTS + 3; seq++) {
+      h.store.receive(rec('a', seq));
+      await h.resolveNext([]); // seq 1's write failed: it never comes back
+    }
+    expect(h.calls).toHaveLength(1 + GAP_FETCH_ATTEMPTS);
+    // A reconnect still asks again.
+    h.store.catchUp('r1');
+    expect(h.calls.at(-1)).toEqual(['r1', 'build', { attemptId: 'a', seq: 0 }]);
+  });
+
+  test('a finished node catches up its tail, and other nodes only their holes', async () => {
+    const h = harness();
+    h.store.load('r1', 'build');
+    await h.resolveNext([rec('a', 0)]);
+    h.store.load('r1', 'group.inner');
+    await h.resolveNext([rec('g', 0, 'group.inner'), rec('g', 2, 'group.inner')]);
+    await h.resolveNext([]); // the load's own gap check
+    h.store.load('r1', 'other');
+    await h.resolveNext([rec('o', 0, 'other')]);
+    h.calls.length = 0;
+
+    h.store.nodeFinished('r1', 'build');
+
+    expect(h.calls).toEqual([
+      ['r1', 'build', { attemptId: 'a', seq: 0 }],
+      ['r1', 'group.inner', { attemptId: 'g', seq: 0 }],
+    ]);
   });
 
   test('frames that arrive while a node loads merge with the load', async () => {

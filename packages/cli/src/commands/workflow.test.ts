@@ -578,6 +578,7 @@ mock.module('@archon/core/db/workflows', () => ({
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
   createWorkflowEvent: mock(() => Promise.resolve()),
+  PROVIDER_EVENT_ROW_TYPES: ['provider_event', 'tool_called'],
 }));
 
 // Reset-sessions runs the real resetWorkflowNodeSessions operation over this mocked
@@ -4764,6 +4765,31 @@ describe('workflowStatusCommand', () => {
     expect(error.message).toBe('Failed to resolve workflow status project: lookup unavailable');
     expect(mockListDashboardRuns).not.toHaveBeenCalled();
     expect(stdoutSpy).not.toHaveBeenCalled();
+  });
+
+  it('leaves provider events out of verbose node summaries, which never read them', async () => {
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        {
+          id: 'run-summary',
+          workflow_name: 'implement',
+          working_path: '/workspace/project-a',
+          status: 'running',
+          started_at: new Date(),
+          active_nodes: [],
+        },
+      ])
+    );
+    const eventsSpy = workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>;
+    eventsSpy.mockClear();
+    eventsSpy.mockResolvedValueOnce([]);
+
+    await workflowStatusCommand('/workspace/project-a', { json: true, verbose: true });
+
+    expect(eventsSpy).toHaveBeenCalledWith('run-summary', {
+      excludeEventTypes: ['provider_event', 'tool_called'],
+    });
   });
 
   it('fetches verbose raw events only for runs selected by the project scope', async () => {

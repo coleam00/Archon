@@ -91,19 +91,15 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
       event,
     };
     await logProviderEvent(logDir, runId, stepName, envelope);
-    store
-      .createWorkflowEvent({
-        workflow_run_id: runId,
-        event_type: 'provider_event',
-        step_name: stepName,
-        data: envelope,
-      })
-      .catch((err: Error) => {
-        getLog().error(
-          { err, workflowRunId: runId, stepName, seq: envelope.seq },
-          'provider_events.persist_failed'
-        );
-      });
+    // Not awaited, as other observability rows are; the store logs its own failure
+    // (IWorkflowStore.createWorkflowEvent never throws). The JSONL line above still
+    // holds the event, and a reader sees the missing `seq` as a hole.
+    void store.createWorkflowEvent({
+      workflow_run_id: runId,
+      event_type: 'provider_event',
+      step_name: stepName,
+      data: envelope,
+    });
     getWorkflowEventEmitter().emit({ type: 'provider_event', runId, stepName, ...envelope });
   };
 
