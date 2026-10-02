@@ -109,6 +109,8 @@ export function toolPartEvents(
 function opencodeStopReason(finish: unknown): ProviderStopReason | undefined {
   if (finish === 'stop') return 'end_turn';
   if (finish === 'length') return 'max_tokens';
+  // ACP has no name for it; the native value stays in the log.
+  if (finish !== undefined) getLog().debug({ finish }, 'opencode.stop_reason_unmapped');
   return undefined;
 }
 

@@ -1135,7 +1135,7 @@ describe('assistant chunk coalescing', () => {
     expect(chunks[1]).toEqual({
       type: 'warning',
       code: 'pi.extension_notify',
-      message: 'Open http://host:8080/',
+      message: 'pi extension info: Open http://host:8080/',
     });
   });
 });
@@ -1188,8 +1188,8 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
   }
 
   /**
-   * The executor treats the first result chunk as terminal and stops reading, so a
-   * prompt must yield exactly one, carrying the whole prompt's usage.
+   * A prompt yields exactly one result chunk, the turn's one report of its outcome, so it
+   * carries the whole prompt's usage.
    */
   async function lastResult(
     events: AgentSessionEvent[]

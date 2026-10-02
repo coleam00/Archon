@@ -82,11 +82,16 @@ export function createArchonUIContext(bridge: ArchonUIBridge): ExtensionUIContex
     ): Promise<string | undefined> {
       return Promise.resolve(undefined);
     },
-    notify(message: string, _type?: 'info' | 'warning' | 'error'): void {
+    notify(message: string, type: 'info' | 'warning' | 'error' = 'info'): void {
       // A warning reaches the operator as soon as it arrives, in every streaming mode:
       // extensions like plannotator print review URLs the user must act on before the
-      // node unblocks, so the notice cannot wait for node completion.
-      bridge.emit({ type: 'warning', code: 'pi.extension_notify', message });
+      // node unblocks, so the notice cannot wait for node completion. The contract has no
+      // notice severity, so the extension's own level rides in the text.
+      bridge.emit({
+        type: 'warning',
+        code: 'pi.extension_notify',
+        message: `pi extension ${type}: ${message}`,
+      });
     },
     onTerminalInput(_handler: TerminalInputHandler): () => void {
       return noop;

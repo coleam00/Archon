@@ -39,16 +39,21 @@ describe('createArchonUIContext', () => {
     return { ui, chunks };
   }
 
-  test.each(['info', 'warning', 'error', undefined] as const)(
-    'notify(%p) forwards the message as a pi.extension_notify warning',
-    level => {
+  test.each([
+    ['info', 'info'],
+    ['warning', 'warning'],
+    ['error', 'error'],
+    [undefined, 'info'],
+  ] as const)(
+    'notify(%p) forwards the message and its level as a pi.extension_notify warning',
+    (level, shown) => {
       const { ui, chunks } = mk();
       ui.notify('Remote session. Open: http://host:8080/', level);
       expect(chunks).toEqual([
         {
           type: 'warning',
           code: 'pi.extension_notify',
-          message: 'Remote session. Open: http://host:8080/',
+          message: `pi extension ${shown}: Remote session. Open: http://host:8080/`,
         },
       ]);
     }

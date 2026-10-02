@@ -210,6 +210,8 @@ function piStopReason(reason: StopReason): ProviderStopReason | undefined {
     case 'aborted':
       return 'cancelled';
     default:
+      // ACP has no name for it (e.g. `toolUse`); the native value stays in the log.
+      getLog().debug({ stopReason: reason }, 'pi.stop_reason_unmapped');
       return undefined;
   }
 }
@@ -435,9 +437,9 @@ export async function* bridgeSession(
   // than once (auto-retry after a retryable error, compact-and-continue after a
   // recoverable `length` stop or context overflow, queued follow-ups), and each run
   // ends with its own agent_end carrying only that run's new messages. The single
-  // result chunk is emitted when prompt() resolves: the executor treats the first
-  // result as terminal and stops reading, so a result per agent_end would end the
-  // node on an intermediate run and drop the rest of its output and usage.
+  // result chunk is emitted when prompt() resolves: a turn reports its outcome once,
+  // so a result per agent_end would report an intermediate run as the outcome and
+  // split the prompt's usage across several results.
   const promptMessages: unknown[] = [];
   // Usage of model calls that add no message, such as Pi's cache-warming refreshes.
   const promptSideCalls: Usage[] = [];
