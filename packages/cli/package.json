@@ -18,6 +18,7 @@
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/provider-contract": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/server": "workspace:*",
     "@archon/workflows": "workspace:*",

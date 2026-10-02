@@ -2,6 +2,7 @@
  * Workflow command - list and run workflows
  */
 
+import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
@@ -1064,8 +1065,18 @@ export async function maybePrintTierNotice(
   markTierNoticeShown(version);
 }
 
+/**
+ * Tool calls started in this process and not yet closed, keyed by id, so a completion
+ * line can name its tool and duration. One per run subscription.
+ */
+type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
+
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
-function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): void {
+function renderWorkflowEvent(
+  event: WorkflowEmitterEvent,
+  verbose: boolean,
+  openToolCalls: OpenToolCalls
+): void {
   switch (event.type) {
     case 'workflow_started':
       process.stderr.write(`[workflow] Transcript: ${event.transcriptPath}\n`);
@@ -1101,22 +1112,30 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
       process.stderr.write(`[container] ${event.phase}${idPart}\n`);
       break;
     }
-    case 'tool_started':
-      if (verbose) {
+    case 'provider_event': {
+      if (!verbose) break;
+      const providerEvent = event.event;
+      if (providerEvent.type === 'tool_call') {
+        const name = toolCallDisplayName(providerEvent);
+        openToolCalls.set(providerEvent.toolCallId, { name, observedAt: event.observedAt });
         process.stderr.write(
-          `[${event.stepName}] tool: ${event.toolName} (started, ${event.toolCallId})\n`
+          `[${event.stepName}] tool: ${name} (started, ${providerEvent.toolCallId})\n`
+        );
+      } else if (providerEvent.type === 'tool_call_update') {
+        const started = openToolCalls.get(providerEvent.toolCallId);
+        openToolCalls.delete(providerEvent.toolCallId);
+        const duration =
+          started === undefined
+            ? ''
+            : `${String(Date.parse(event.observedAt) - Date.parse(started.observedAt))}ms, `;
+        const exitCode =
+          providerEvent.exitCode !== undefined ? `, exit ${String(providerEvent.exitCode)}` : '';
+        process.stderr.write(
+          `[${event.stepName}] tool: ${started?.name ?? providerEvent.toolCallId} (${duration}${providerEvent.toolCallId}, ${providerEvent.status}${exitCode})\n`
         );
       }
       break;
-    case 'tool_completed':
-      if (verbose) {
-        const outcome = event.toolOutcome ? `, ${event.toolOutcome}` : '';
-        const exitCode = event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : '';
-        process.stderr.write(
-          `[${event.stepName}] tool: ${event.toolName} (${String(event.durationMs)}ms, ${event.toolCallId}${outcome}${exitCode})\n`
-        );
-      }
-      break;
+    }
     default:
       // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
       break;
@@ -3096,9 +3115,10 @@ async function runWorkflowWithOwnedSource(
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
   // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
   const { quiet, verbose } = options;
+  const openToolCalls: OpenToolCalls = new Map();
   const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
     if (!quiet) {
-      renderWorkflowEvent(event, verbose ?? false);
+      renderWorkflowEvent(event, verbose ?? false, openToolCalls);
     }
   });
 

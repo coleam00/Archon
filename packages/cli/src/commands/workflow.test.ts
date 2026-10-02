@@ -11380,20 +11380,32 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
-  it('should not write tool_started without verbose', async () => {
+  const providerEvent = (
+    seq: number,
+    observedAt: string,
+    event: Extract<WorkflowEmitterEvent, { type: 'provider_event' }>['event']
+  ): WorkflowEmitterEvent => ({
+    type: 'provider_event',
+    runId: 'run-1',
+    stepName: 'classify',
+    attemptId: 'attempt-1',
+    seq,
+    observedAt,
+    event,
+  });
+
+  it('should not write tool lines without verbose', async () => {
     setupWorkflowMocks();
 
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      if (capturedSubscribeHandler) {
-        capturedSubscribeHandler({
-          type: 'tool_started',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
+      capturedSubscribeHandler?.(
+        providerEvent(0, '2026-10-02T10:00:00.000Z', {
+          type: 'tool_call',
           toolCallId: 'call-1',
-        });
-      }
+          name: 'Bash',
+        })
+      );
       return { success: true, workflowRunId: 'run-1' };
     });
 
@@ -11402,60 +11414,45 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(stderrSpy).not.toHaveBeenCalledWith(expect.stringContaining('tool: Bash'));
   });
 
-  it('should write tool_started with verbose', async () => {
+  it('should write a tool call and its completion with verbose', async () => {
     setupWorkflowMocks();
 
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      if (capturedSubscribeHandler) {
-        capturedSubscribeHandler({
-          type: 'tool_started',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
+      capturedSubscribeHandler?.(
+        providerEvent(0, '2026-10-02T10:00:00.000Z', {
+          type: 'tool_call',
           toolCallId: 'call-1',
-        });
-        capturedSubscribeHandler({
-          type: 'tool_completed',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
-          durationMs: 42,
+          name: 'Bash',
+          title: 'ls -la',
+        })
+      );
+      capturedSubscribeHandler?.(
+        providerEvent(1, '2026-10-02T10:00:00.042Z', {
+          type: 'tool_call_update',
           toolCallId: 'call-1',
-          toolOutcome: 'error',
+          status: 'failed',
           exitCode: 1,
-        });
-      }
+        })
+      );
+      // A completion whose start this process never saw still names its call.
+      capturedSubscribeHandler?.(
+        providerEvent(2, '2026-10-02T10:00:01.000Z', {
+          type: 'tool_call_update',
+          toolCallId: 'call-2',
+          status: 'completed',
+        })
+      );
       return { success: true, workflowRunId: 'run-1' };
     });
 
     await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (started, call-1)\n');
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms, call-1, error, exit 1)\n');
-  });
-
-  it('should render a legacy tool completion without optional metadata', async () => {
-    setupWorkflowMocks();
-
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      if (capturedSubscribeHandler) {
-        capturedSubscribeHandler({
-          type: 'tool_completed',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
-          durationMs: 42,
-          toolCallId: 'call-1',
-        });
-      }
-      return { success: true, workflowRunId: 'run-1' };
-    });
-
-    await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
-
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms, call-1)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: ls -la (started, call-1)\n');
+    expect(stderrSpy).toHaveBeenCalledWith(
+      '[classify] tool: ls -la (42ms, call-1, failed, exit 1)\n'
+    );
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: call-2 (call-2, completed)\n');
   });
 
   it('should call unsubscribe even when executeWorkflow throws', async () => {
