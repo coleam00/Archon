@@ -10,15 +10,17 @@ import type {
   RunEvent,
   NodeRun,
   ArtifactEvent,
-  ToolCallEvent,
   SystemEvent,
   ErrorEvent,
 } from '../primitives/event';
+import type { RunProviderEvents } from '../lib/provider-events';
 import { StreamCard } from './StreamCard';
 
 interface RunStreamProps {
   messages: Message[];
   events: RunEvent[];
+  /** The run's provider events by node (lib/provider-events.ts). */
+  providerEvents: RunProviderEvents;
   showToolCalls: boolean;
   showSystem: boolean;
   /** `'all'` shows every node; otherwise restrict the stream to one node's entries. */
@@ -45,7 +47,7 @@ interface SystemRow {
 
 type TimelineEntry =
   | { kind: 'message'; key: string; at: number; message: Message }
-  // `nodeId` carries the owning node (workflow-event tools) or null (message-inline
+  // `nodeId` carries the owning node (provider-event tools) or null (message-inline
   // tools are node-blind) — used only by the node filter, not for display.
   | {
       kind: 'tool';
@@ -60,55 +62,49 @@ type TimelineEntry =
   | { kind: 'system'; key: string; at: number; event: SystemEvent | ErrorEvent }
   | { kind: 'system_row'; key: string; at: number; row: SystemRow };
 
-/**
- * Pairs `tool_called` events with their matching `tool_completed` so each
- * call surfaces as a single InlineToolCall with input + duration.
- *
- * Pairing key: step name. The orchestrator emits the events sequentially
- * within a step, so taking the next unclaimed `tool_completed` after each
- * `tool_called` for the same step is correct.
- *
- * Returns one InlineToolCall per `tool_called` event, in event order. The
- * `tool_completed` event contributes only `durationMs`.
- */
 interface PairedToolCall {
   id: string;
   timestamp: string;
-  /** Owning node (`step_name`) so the call can be filtered by node; null if unattributed. */
-  nodeId: string | null;
+  /** The node that made the call: the record's `stepName`. */
+  nodeId: string;
   call: InlineToolCall;
 }
 
-export function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
-  const toolEvents = events.filter((e): e is ToolCallEvent => e.kind === 'tool_call');
-  // Track unclaimed completed events per step so each call gets exactly one.
-  const completedByStep = new Map<string, ToolCallEvent[]>();
-  for (const e of toolEvents) {
-    if (e.result === null) continue; // start event; skip here
-    const key = e.nodeId ?? '';
-    const list = completedByStep.get(key) ?? [];
-    list.push(e);
-    completedByStep.set(key, list);
-  }
-
+/**
+ * One entry per `tool_call`, in emission order, completed by the `tool_call_update`
+ * with the same `toolCallId` in the same attempt. Concurrent calls of one tool pair
+ * correctly because the id, not the name or the order, joins them. A call with no
+ * update yet is still running.
+ */
+export function pairProviderToolCalls(providerEvents: RunProviderEvents): PairedToolCall[] {
   const paired: PairedToolCall[] = [];
-  for (const e of toolEvents) {
-    if (e.result !== null) continue; // only seed from start events
-    const key = e.nodeId ?? '';
-    const pool = completedByStep.get(key);
-    const match = pool !== undefined && pool.length > 0 ? pool.shift() : undefined;
-    const input =
-      typeof e.args === 'object' && e.args !== null ? (e.args as Record<string, unknown>) : {};
-    paired.push({
-      id: e.id,
-      timestamp: e.timestamp,
-      nodeId: e.nodeId,
-      call: {
-        name: e.tool || '(unknown)',
-        input,
-        durationMs: match?.result?.ok === true ? match.result.durationMs : undefined,
-      },
-    });
+  for (const [stepName, records] of providerEvents) {
+    const byId = new Map<string, PairedToolCall>();
+    for (const record of records) {
+      const { event } = record;
+      const key = JSON.stringify([record.attemptId, 'toolCallId' in event ? event.toolCallId : '']);
+      if (event.type === 'tool_call') {
+        const entry: PairedToolCall = {
+          id: `${stepName}:${key}`,
+          timestamp: record.observedAt,
+          nodeId: stepName,
+          call: { name: event.title || event.name, input: event.rawInput ?? {} },
+        };
+        byId.set(key, entry);
+        paired.push(entry);
+      } else if (event.type === 'tool_call_update') {
+        const entry = byId.get(key);
+        if (entry === undefined) continue;
+        entry.call = {
+          ...entry.call,
+          status: event.status,
+          ...(event.output !== undefined ? { output: event.output } : {}),
+          ...(event.outputTruncated === true ? { outputTruncated: true } : {}),
+          ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
+          durationMs: Date.parse(record.observedAt) - Date.parse(entry.timestamp),
+        };
+      }
+    }
   }
   return paired;
 }
@@ -116,14 +112,10 @@ export function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
 /**
  * Merges conversation messages + workflow events into a single timeline.
  *
- * Tool-call source-of-truth depends on the workflow's provider:
- *   - Claude runs persist tool calls in `message.metadata.toolCalls`
- *   - Pi / Codex / bash nodes persist them as `tool_called`/`tool_completed`
- *     workflow events
- *
- * When any message has inline tool calls we treat the conversation as
- * authoritative (avoids double-display on Claude). Otherwise we surface the
- * paired workflow tool events.
+ * Tool calls come from the run's provider events, which every provider's node records
+ * with its node, input, output and outcome. Message-inline tool calls
+ * (`message.metadata.toolCalls`) carry no node, and they are shown only for a run
+ * that recorded no tool events at all, so a call is never shown twice.
  *
  * What we deliberately skip here:
  *   - `approval` events — RunDetailPage renders an inline ApprovalPanel
@@ -134,6 +126,7 @@ export function pairToolEvents(events: RunEvent[]): PairedToolCall[] {
 export function RunStream({
   messages,
   events,
+  providerEvents,
   showToolCalls,
   showSystem,
   selectedNodeId,
@@ -141,10 +134,11 @@ export function RunStream({
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
   const nodeRuns = useMemo(() => foldNodeRuns(events), [events]);
+  const providerToolCalls = useMemo(() => pairProviderToolCalls(providerEvents), [providerEvents]);
 
   const timeline = useMemo<TimelineEntry[]>(() => {
     const entries: TimelineEntry[] = [];
-    let inlineToolCount = 0;
+    const showInlineTools = providerToolCalls.length === 0;
     for (const m of messages) {
       const base = new Date(m.timestamp).getTime();
       const meaningful = isMeaningful(m);
@@ -198,8 +192,8 @@ export function RunStream({
       }
 
       entries.push({ kind: 'message', key: `m:${m.id}`, at: base, message: m });
+      if (!showInlineTools) continue;
       m.toolCalls.forEach((call, idx) => {
-        inlineToolCount += 1;
         entries.push({
           kind: 'tool',
           key: `t:${m.id}:${idx.toString()}`,
@@ -208,24 +202,21 @@ export function RunStream({
           at: base + idx + 1,
           call,
           timestamp: m.timestamp,
-          // Message-inline tools (Claude) are node-blind — messages carry no step.
+          // Message-inline tools are node-blind — messages carry no step.
           nodeId: null,
         });
       });
     }
 
-    // If no inline tool calls came from messages, surface workflow tool events.
-    if (inlineToolCount === 0) {
-      for (const t of pairToolEvents(events)) {
-        entries.push({
-          kind: 'tool',
-          key: `wt:${t.id}`,
-          at: new Date(t.timestamp).getTime(),
-          call: t.call,
-          timestamp: t.timestamp,
-          nodeId: t.nodeId,
-        });
-      }
+    for (const t of providerToolCalls) {
+      entries.push({
+        kind: 'tool',
+        key: `pt:${t.id}`,
+        at: new Date(t.timestamp).getTime(),
+        call: t.call,
+        timestamp: t.timestamp,
+        nodeId: t.nodeId,
+      });
     }
 
     // One divider per node: fold each node's 2–3 transitions (started + terminal,
@@ -251,13 +242,12 @@ export function RunStream({
     }
     entries.sort((a, b) => a.at - b.at);
     return entries;
-  }, [messages, events, nodeRuns, showSystem]);
+  }, [messages, events, nodeRuns, providerToolCalls, showSystem]);
 
   // The selected node's execution slice `[startedAt, nextNode.startedAt)`. Used as
-  // a positional fallback so node-blind entries (message-inline tools, prose,
-  // artifacts, system rows — anything carrying no nodeId) still resolve to a node
-  // when filtering — without it, selecting a node on a message-inline-tool run
-  // (e.g. Claude) would blank the stream.
+  // a positional fallback so node-blind entries (prose, artifacts, system rows, and
+  // message-inline tools of a run with no recorded tool events) still resolve to a
+  // node when filtering.
   const nodeWindow = useMemo<{ start: number; end: number } | null>(() => {
     if (selectedNodeId === 'all') return null;
     const idx = nodeRuns.findIndex(r => r.nodeId === selectedNodeId);
@@ -271,10 +261,10 @@ export function RunStream({
     if (e.kind === 'tool' && !showToolCalls) return false;
     if (e.kind === 'system' && !showSystem) return false;
     if (e.kind === 'system_row' && !showSystem) return false;
-    // Node filter: isolate one node. Node markers and node-attributed (workflow-
-    // event) tools match by identity; every node-blind entry (message-inline
-    // tools, prose, artifacts, system rows) falls back to the node's time window
-    // so a node's whole slice of the timeline stays visible regardless of provider.
+    // Node filter: isolate one node. Node markers and tools from provider events
+    // match by identity; every node-blind entry (prose, artifacts, system rows,
+    // legacy message-inline tools) falls back to the node's time window so a
+    // node's whole slice of the timeline stays visible.
     if (selectedNodeId !== 'all') {
       if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
       if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;

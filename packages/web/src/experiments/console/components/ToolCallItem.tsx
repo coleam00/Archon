@@ -118,6 +118,11 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
                   ? `${call.output.slice(0, 2000)}\n\n… (${(call.output.length - 2000).toString()} more chars)`
                   : call.output}
               </pre>
+              {call.outputTruncated === true ? (
+                <div className="mt-0.5 text-[10px] text-text-tertiary">
+                  Output cut short by the provider.
+                </div>
+              ) : null}
             </div>
           ) : null}
         </div>
