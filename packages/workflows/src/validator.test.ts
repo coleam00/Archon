@@ -1618,7 +1618,7 @@ describe('validateWorkflowResources — output_format compiles', () => {
   });
 });
 
-describe('validateWorkflowResources — strict-schema required coverage (#2945)', () => {
+describe('validateWorkflowResources — strict-schema compatibility', () => {
   const looseSchema = {
     type: 'object',
     properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
@@ -1643,6 +1643,27 @@ describe('validateWorkflowResources — strict-schema required coverage (#2945)'
     expect(errs[0].nodeId).toBe('plan');
     expect(errs[0].message).toContain('note');
     expect(errs[0].message).toContain('required');
+  });
+
+  test('Codex-routed nested bare object reports the node and schema path', async () => {
+    const workflow = makeWorkflow('test', [
+      makeAgent('scope', {
+        output_format: {
+          type: 'object',
+          properties: { pr: { type: 'object' } },
+          required: ['pr'],
+        },
+      }),
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].nodeId).toBe('scope');
+    expect(errors[0].message).toContain('output_format.properties.pr');
+    expect(errors[0].message).toContain("Provider 'codex'");
+    expect(errors[0].hint).toContain('["object","null"]');
   });
 
   test('Claude-routed same schema reports nothing', async () => {
@@ -1759,14 +1780,14 @@ describe('validateWorkflowResources — strict-schema required coverage (#2945)'
     expect(outputFormatIssues[0].message).toContain('returns:');
   });
 
-  test('bash node with output_format + gap under Codex is not flagged', async () => {
+  test('bash node with bare object output_format under Codex is not flagged', async () => {
     const workflow = makeWorkflow('test', [
       {
         id: 'run',
         kind: 'exec',
         runtime: 'sh',
         script: 'echo {}',
-        output_format: looseSchema,
+        output_format: { type: 'object' },
       } as unknown as DagNode,
     ]);
 
