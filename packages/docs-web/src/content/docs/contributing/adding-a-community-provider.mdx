@@ -26,7 +26,7 @@ export interface IAgentProvider {
 }
 ```
 
-The provider yields a stream of `MessageChunk` variants (see `packages/providers/src/types.ts`). Archon normalizes every backend to this shape so platform adapters, the DAG executor, and the orchestrator don't need to know whether they're talking to Claude, Codex, Pi, or your provider.
+The provider yields a stream of `MessageChunk`s, which is `ProviderChunk` from `@archon/provider-contract`: its events, then a `result`, then `settled`. Archon normalizes every backend to this shape so platform adapters, the DAG executor, and the orchestrator don't need to know whether they're talking to Claude, Codex, Pi, or your provider. The [contract README](https://github.com/coleam00/Archon/blob/dev/packages/provider-contract/README.md) lists the rules a stream must follow, and `@archon/provider-contract/conformance` checks them against fixtures your provider supplies.
 
 ## Directory layout
 
