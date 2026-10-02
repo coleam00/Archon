@@ -658,7 +658,15 @@ approval or rejection appends a `gate_decision` row with the gate's `step`, the
 
 Stdout is the transcript's exact JSONL, with no log messages or wrapper document. Each
 line is one persisted event and fields may be added over time, so consumers should parse
-the fields they need and tolerate others. `--json` is invalid because the output is
+the fields they need and tolerate others.
+
+Provider activity (agent text, thinking, tool calls with their input and output,
+warnings, MCP status, compaction, subtasks, hooks and state) is written as
+`provider_event` lines: the line frame (`type`, `workflow_id`, `ts`, `step`) plus the
+engine envelope `attemptId`, `seq`, `observedAt` and `event`, where `event` is the
+provider's object unchanged. `seq` counts one node attempt's events from 0. Transcripts
+written before this line type have `assistant` lines (`content`) and `tool` lines
+(`tool_name`, `tool_input`) instead, with no step, call id or output. `--json` is invalid because the output is
 already JSONL and a live stream cannot satisfy the CLI's one-document JSON contract;
 `--events` is also limited to `workflow status/get`.
 
