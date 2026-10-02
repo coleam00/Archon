@@ -89,7 +89,7 @@ Precedence: `--container` flag > workflow `container.enabled` > config `containe
 | Provider | In-container | Notes |
 |----------|:---:|-------|
 | **Claude** | ✅ | Spawns its CLI via `docker exec`; the binary is baked into the runner image. |
-| **Codex** | 🔜 | Needs the Codex SDK's spawn/transport override + the binary in the image; `CODEX_HOME/auth.json` on the upper volume. Fails fast today via the `containerExec` capability. |
+| **Codex** | 🔜 | Needs an in-container spawn of `codex app-server` + the binary in the image; `CODEX_HOME/auth.json` on the upper volume. Fails fast today via the `containerExec` capability. |
 | **Pi** | 🔜 | In-process harness; needs a container tool-transport (Flue-style) or an in-image shim. |
 | **OpenCode / Copilot / community** | 🔜 | Declare `containerExec: true` and implement their own exec-in-container translation against the `ExecutionContext` contract. |
 

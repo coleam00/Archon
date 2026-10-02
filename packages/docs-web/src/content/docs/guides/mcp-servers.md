@@ -188,8 +188,8 @@ author-declared MCP servers. Archon may still inject its own governed native-too
 server for a node that requests an engine capability. This does not disable
 `CLAUDE.md`, built-in agents, or filesystem-defined agents.
 
-Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
-Codex SDK, so the servers are available for that node without requiring global
+Codex nodes pass the same MCP config as per-node `mcp_servers` overrides on the
+Codex thread, so the servers are available for that node without requiring global
 `~/.codex/config.toml` setup.
 
 ## MCP-Only Nodes

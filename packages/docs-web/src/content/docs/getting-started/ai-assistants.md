@@ -194,7 +194,7 @@ In compiled Archon binaries, if `codex` is not on the default PATH Archon expect
 3. **Vendor directory** (zero-config fallback): drop the native binary at `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows).
 4. **Autodetect** (zero-config fallback): if the vendor directory is empty, Archon probes the common npm-global install layouts: `~/.npm-global/bin/codex` (POSIX), `/opt/homebrew/bin/codex` (macOS Apple Silicon), `/usr/local/bin/codex` (macOS Intel and Linux), `%APPDATA%\npm\codex.cmd` and `%USERPROFILE%\.npm-global\codex.cmd` (Windows). For other npm prefixes or custom layouts, set `CODEX_BIN_PATH` or the config path explicitly.
 
-Dev mode (`bun run`) does not require any of the above — the SDK resolves `codex` via `node_modules`.
+A source install (`bun run`) needs none of the above unless you pin a binary: it runs the native binary of the `@openai/codex` package Archon depends on, from `node_modules`.
 
 ### Authenticate
 
@@ -226,6 +226,14 @@ CODEX_ACCESS_TOKEN=eyJhbGc...
 CODEX_REFRESH_TOKEN=rt_...
 CODEX_ACCOUNT_ID=6a6a7ba6-...
 ```
+
+### Use an API key instead (optional)
+
+By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`), exactly as `codex login` left it. To run Codex on an OpenAI API key instead, set `CODEX_API_KEY` in Archon's environment, for example in `~/.archon/.env`. Archon hands the key to the Codex process in memory and never writes it into your Codex home, so your own login is untouched. Codex does not read `OPENAI_API_KEY`.
+
+### How Archon runs Codex
+
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, `AGENTS.md` guidance and MCP servers load as they do for `codex` itself. A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `transient` for overload, network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a missing binary, and `unknown` for the rest.
 
 ### Codex Configuration Options
 
