@@ -142,7 +142,9 @@ export function readPiAuthValidity(authJsonPath: string, options: { now: number 
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    // `load()` strips a leading UTF-8 BOM before parsing; without the same strip
+    // a store the SDK loads would read as unreadable here.
+    parsed = JSON.parse(raw.startsWith('\uFEFF') ? raw.slice(1) : raw);
   } catch {
     return { status: 'unreadable' };
   }
