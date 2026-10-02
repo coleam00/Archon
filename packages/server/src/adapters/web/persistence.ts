@@ -10,6 +10,8 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 interface BufferedToolCall {
+  /** The provider's id for the call; its result is matched on it. Not persisted. */
+  toolCallId: string;
   name: string;
   input: Record<string, unknown>;
   startedAt: number;
@@ -99,7 +101,7 @@ export class MessagePersistence {
    */
   appendToolCall(
     conversationId: string,
-    tool: { name: string; input: Record<string, unknown> }
+    tool: { toolCallId: string; name: string; input: Record<string, unknown> }
   ): void {
     const buf = this.assistantBuffer.get(conversationId) ?? { segments: [] };
     if (buf.segments.length === 0) {
@@ -113,6 +115,7 @@ export class MessagePersistence {
       prevTool.duration = now - prevTool.startedAt;
     }
     lastSeg.toolCalls.push({
+      toolCallId: tool.toolCallId,
       name: tool.name,
       input: tool.input,
       startedAt: now,
@@ -120,22 +123,22 @@ export class MessagePersistence {
     this.assistantBuffer.set(conversationId, buf);
   }
 
-  /**
-   * Record tool output for a previously buffered tool call.
-   * Matches by name, scanning from the most recent segment to find the last
-   * unresolved tool call (no output yet). This mirrors WorkflowLogs.tsx's
-   * reverse-iteration approach for multi-tool-same-name correctness.
-   */
-  appendToolResult(conversationId: string, name: string, output: string, duration: number): void {
+  /** Record tool output for the buffered tool call with this id. */
+  appendToolResult(
+    conversationId: string,
+    toolCallId: string,
+    output: string,
+    duration: number
+  ): void {
     const buf = this.assistantBuffer.get(conversationId);
     if (!buf) {
-      getLog().warn({ conversationId, name }, 'tool_result_dropped_no_buffer');
+      getLog().warn({ conversationId, toolCallId }, 'tool_result_dropped_no_buffer');
       return;
     }
     let matched = false;
     for (let i = buf.segments.length - 1; i >= 0; i--) {
       const seg = buf.segments[i];
-      const tc = [...seg.toolCalls].reverse().find(t => t.name === name && t.output === undefined);
+      const tc = seg.toolCalls.find(t => t.toolCallId === toolCallId && t.output === undefined);
       if (tc) {
         tc.output = output;
         tc.duration = duration;
@@ -144,7 +147,7 @@ export class MessagePersistence {
       }
     }
     if (!matched) {
-      getLog().warn({ conversationId, name }, 'tool_result_no_matching_tool_call');
+      getLog().warn({ conversationId, toolCallId }, 'tool_result_no_matching_tool_call');
     }
   }
 

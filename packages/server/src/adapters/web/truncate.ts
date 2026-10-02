@@ -16,8 +16,9 @@ export const MAX_TOOL_OUTPUT_CHARS = 16_384;
  * head-slice + "(N more chars)" cap semantics) so users know truncation
  * occurred and where the full output lives.
  *
- * Apply at SSE emit time and at message-history hydration time.
- * Do NOT apply before writing to the database — the DB is the authoritative record.
+ * Apply at message-history hydration time, where older rows hold uncapped output.
+ * Live tool output is already capped by the provider (`TOOL_OUTPUT_MAX_CHARS` in
+ * `@archon/provider-contract`). Do NOT apply before writing to the database.
  */
 export function truncateToolOutput(output: string): string {
   if (output.length <= MAX_TOOL_OUTPUT_CHARS) return output;

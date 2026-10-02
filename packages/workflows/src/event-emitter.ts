@@ -177,10 +177,10 @@ interface WorkflowCancelledEvent {
   reason: string;
 }
 
-// ─── Subagent Task Lifecycle (aggregated from Claude provider task_* chunks) ──
-// Forwarded by the dag-executor whenever a `task_started` / `task_progress` /
-// `task_notification` MessageChunk arrives from the provider. The bridge maps
-// these to `workflow_task_activity` SSE events for the Web UI. `nodeId` ties
+// ─── Subagent Task Lifecycle (translated from the provider's `subtask` events) ──
+// Forwarded by provider-events.ts whenever a `subtask` event arrives from the
+// provider. The bridge maps these to `workflow_task_activity` SSE events for the
+// Web UI. `nodeId` ties
 // the task to the parent workflow node (a single node can spawn many subagents).
 interface TaskActivityEvent {
   type: 'task_activity';
@@ -190,10 +190,11 @@ interface TaskActivityEvent {
   activity: 'started' | 'progress' | 'completed' | 'failed' | 'stopped';
   description?: string;
   summary?: string;
-  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
+  /** The provider's usage report for the subtask, passed through untyped. */
+  usage?: Record<string, unknown>;
   lastToolName?: string;
   taskType?: string;
-  /** Transcript/output file the settled task points at (task_notification only)
+  /** Transcript/output file the settled task points at (terminal subtasks only)
    *  — the artifact trail for delegated work (#2083). */
   outputFile?: string;
   /** True when SDK signaled skip_transcript (housekeeping) — propagated so the
@@ -202,7 +203,7 @@ interface TaskActivityEvent {
   ambient?: boolean;
 }
 
-// ─── Hook Lifecycle (aggregated from Claude provider hook_* chunks) ─────
+// ─── Hook Lifecycle (translated from the provider's `hook` events) ─────
 // Same aggregation pattern as TaskActivityEvent. Maps to `workflow_hook_activity`
 // SSE events; the Web UI renders them as inline indicators under the parent
 // node (e.g. `PreToolUse(Bash) → approved`).

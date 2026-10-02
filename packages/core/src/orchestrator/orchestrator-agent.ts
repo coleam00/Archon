@@ -2150,12 +2150,12 @@ export async function handleMessage(
     // (HEAD moved or sync failed). Skip the "up to date" case to avoid noise.
     if (syncError && platform.sendStructuredEvent) {
       await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
+        type: 'system_status',
         content: 'Sync failed \u2014 using local state',
       });
     } else if (syncResult?.state === 'diverged' && platform.sendStructuredEvent) {
       await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
+        type: 'system_status',
         content: `Local source/ has diverged from ${syncRemote ?? 'origin'}/${syncResult.branch} \u2014 manual merge or rebase needed`,
       });
     } else if (
@@ -2164,7 +2164,7 @@ export async function handleMessage(
       platform.sendStructuredEvent
     ) {
       await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
+        type: 'system_status',
         content: `Fast-forwarded to ${syncRemote ?? 'origin'}/${syncResult.branch} \u2014 ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
       });
     }
@@ -2703,12 +2703,12 @@ async function handleStreamMode(
     session.assistant_session_id ?? undefined,
     requestOptions
   )) {
-    if (msg.type === 'assistant' && msg.content) {
+    if (msg.type === 'agent_message_chunk') {
       // Accumulate only while the command is not yet fully captured; post-command
       // trailing chunks would corrupt the project-name token if joined without a
       // whitespace boundary, causing the parse regex to overshoot.
       if (!commandFullyParsed) {
-        allMessages.push(msg.content);
+        allMessages.push(msg.text);
       }
       if (!commandDetected) {
         // Check for orchestrator commands BEFORE streaming to frontend.
@@ -2728,7 +2728,7 @@ async function handleStreamMode(
             commandFullyParsed = true;
           }
         } else {
-          await platform.sendMessage(conversationId, msg.content);
+          await platform.sendMessage(conversationId, msg.text);
         }
       } else if (!commandFullyParsed) {
         // Post-prefix: keep accumulating until the full command pattern is present.
@@ -2737,9 +2737,9 @@ async function handleStreamMode(
           commandFullyParsed = true;
         }
       }
-    } else if (msg.type === 'tool' && msg.toolName) {
+    } else if (msg.type === 'tool_call') {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+        const toolMessage = formatToolCall(msg.title ?? msg.name, msg.rawInput);
         await platform.sendMessage(conversationId, toolMessage, {
           category: 'tool_call_formatted',
         });
@@ -2747,10 +2747,12 @@ async function handleStreamMode(
           await platform.sendStructuredEvent(conversationId, msg);
         }
       }
-    } else if (msg.type === 'tool_result' && msg.toolName) {
+    } else if (msg.type === 'tool_call_update') {
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
+    } else if (msg.type === 'warning') {
+      if (!commandDetected) await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
     } else if (msg.type === 'result') {
       if (msg.isError && msg.errorSubtype === 'error_during_execution') {
         getLog().warn(
@@ -2934,12 +2936,12 @@ async function handleBatchMode(
     session.assistant_session_id ?? undefined,
     requestOptions
   )) {
-    if (msg.type === 'assistant' && msg.content) {
+    if (msg.type === 'agent_message_chunk') {
       // Always record in allChunks for debug logging; accumulate assistantMessages
       // only while the command is not yet fully captured (same reason as stream mode).
-      allChunks.push({ type: 'assistant', content: msg.content });
+      allChunks.push({ type: 'assistant', content: msg.text });
       if (!commandFullyParsed) {
-        assistantMessages.push(msg.content);
+        assistantMessages.push(msg.text);
       }
 
       // Cap assistant-only chunks while no command has been detected.  Once
@@ -2977,12 +2979,15 @@ async function handleBatchMode(
           commandFullyParsed = true;
         }
       }
-    } else if (msg.type === 'tool' && msg.toolName) {
+    } else if (msg.type === 'tool_call') {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+        const toolMessage = formatToolCall(msg.title ?? msg.name, msg.rawInput);
         allChunks.push({ type: 'tool', content: toolMessage });
-        getLog().debug({ toolName: msg.toolName }, 'tool_call');
+        getLog().debug({ toolName: msg.name }, 'tool_call');
       }
+    } else if (msg.type === 'warning') {
+      // A warning surfaces as it arrives, not batched into the reply.
+      if (!commandDetected) await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
     } else if (msg.type === 'result') {
       if (msg.isError && msg.errorSubtype === 'error_during_execution') {
         getLog().warn(
