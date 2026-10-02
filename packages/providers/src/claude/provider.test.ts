@@ -3830,6 +3830,25 @@ describe('typed failures (#1797, #3524)', () => {
           evidence: 'something unexpected',
           run: turn(new Error('something unexpected')),
         },
+        {
+          name: 'workflow node with a plugin it does not name',
+          expected: 'misconfigured',
+          evidence: 'synced@claude-ai',
+          run: () => {
+            mockQuery.mockImplementation(async function* () {
+              yield {
+                type: 'system',
+                subtype: 'init',
+                session_id: 's',
+                plugins: [{ name: 'synced', path: '/s', source: 'synced@claude-ai' }],
+              };
+              yield { type: 'result', subtype: 'success', is_error: false, session_id: 's' };
+            });
+            return client.sendQuery('test', '/workspace', undefined, {
+              nodeConfig: { nodeId: 'closed-node' },
+            });
+          },
+        },
       ],
       toolTurn: {
         name: 'tool turn with an interrupted call',
