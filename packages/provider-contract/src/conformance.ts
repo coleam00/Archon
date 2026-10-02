@@ -1,3 +1,4 @@
+import { providerChunkSchema, subtaskTerminalStatusSchema, type ProviderChunk } from './events';
 import { providerFailureSchema, type ProviderFailureClass } from './failure';
 
 /**
@@ -121,17 +122,141 @@ export async function checkSettled(cases: readonly ProviderTurnCase[]): Promise<
   return violations;
 }
 
+const TERMINAL_SUBTASK_STATUSES: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
+
+/**
+ * The stream speaks the contract's vocabulary, and tool calls and subtasks are closed by the
+ * provider, never by the engine:
+ *  1. every chunk parses with `providerChunkSchema`;
+ *  2. every `tool_call` has a unique `toolCallId` and exactly one `tool_call_update` for it,
+ *     before the next `result` (an interrupted call closes as `cancelled`). A turn whose
+ *     background work outlives its first `result` may start calls after it; those close
+ *     before the following `result`;
+ *  3. no `tool_call_update` arrives without an earlier `tool_call` for its id;
+ *  4. every subtask's last status before `settled` is `completed`, `failed` or `stopped`.
+ *     A stream that never settles is reported by `checkSettled`.
+ */
+export async function checkEventVocabulary(cases: readonly ProviderTurnCase[]): Promise<string[]> {
+  const violations: string[] = [];
+  for (const turnCase of cases) {
+    const chunks: ProviderChunk[] = [];
+    try {
+      let index = 0;
+      for await (const raw of turnCase.run()) {
+        const parsed = providerChunkSchema.safeParse(raw);
+        if (parsed.success) chunks.push(parsed.data);
+        else {
+          violations.push(
+            `${turnCase.name}: rule 1, chunk ${String(index)} (type ${JSON.stringify(chunkType(raw))}) is not a provider chunk (${parsed.error.message})`
+          );
+        }
+        index++;
+      }
+    } catch (error) {
+      violations.push(`${turnCase.name}: threw (${(error as Error).message})`);
+      continue;
+    }
+    violations.push(...toolAndSubtaskClosure(chunks).map(v => `${turnCase.name}: ${v}`));
+  }
+  return violations;
+}
+
+/** Rules 2 to 4 over the chunks that parsed. */
+function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
+  const violations: string[] = [];
+  const startedCalls = new Set<string>();
+  const openCalls = new Set<string>();
+  /** Calls already reported open at a `result`; their late update is not reported again. */
+  const lateCalls = new Set<string>();
+  const openSubtasks = new Set<string>();
+  for (const chunk of chunks) {
+    switch (chunk.type) {
+      case 'tool_call':
+        if (startedCalls.has(chunk.toolCallId)) {
+          violations.push(`rule 2, tool call ${chunk.toolCallId} is started twice`);
+        } else {
+          startedCalls.add(chunk.toolCallId);
+          openCalls.add(chunk.toolCallId);
+        }
+        break;
+      case 'tool_call_update':
+        if (!startedCalls.has(chunk.toolCallId)) {
+          violations.push(`rule 3, tool call ${chunk.toolCallId} is updated before it starts`);
+        } else if (!openCalls.delete(chunk.toolCallId) && !lateCalls.has(chunk.toolCallId)) {
+          violations.push(`rule 2, tool call ${chunk.toolCallId} is closed twice`);
+        }
+        break;
+      case 'subtask':
+        if (TERMINAL_SUBTASK_STATUSES.has(chunk.status)) openSubtasks.delete(chunk.taskId);
+        else openSubtasks.add(chunk.taskId);
+        break;
+      case 'result':
+        for (const toolCallId of openCalls) {
+          violations.push(`rule 2, tool call ${toolCallId} is still open at a result`);
+          lateCalls.add(toolCallId);
+        }
+        openCalls.clear();
+        break;
+      case 'settled':
+        for (const taskId of openSubtasks) {
+          violations.push(`rule 4, subtask ${taskId} is still open at settled`);
+        }
+        openSubtasks.clear();
+        break;
+    }
+  }
+  for (const toolCallId of openCalls) {
+    violations.push(`rule 2, tool call ${toolCallId} is never closed`);
+  }
+  return violations;
+}
+
+/**
+ * The `toolTurn` fixture must exercise what rule 2 is about: at least two tool calls, one of
+ * them interrupted and closed as `cancelled`. A smaller fixture would pass rule 2 vacuously.
+ */
+async function checkToolTurnShape(toolTurn: ProviderTurnCase): Promise<string[]> {
+  let calls = 0;
+  let cancelled = 0;
+  try {
+    for await (const raw of toolTurn.run()) {
+      const parsed = providerChunkSchema.safeParse(raw);
+      if (!parsed.success) continue;
+      if (parsed.data.type === 'tool_call') calls++;
+      if (parsed.data.type === 'tool_call_update' && parsed.data.status === 'cancelled') {
+        cancelled++;
+      }
+    }
+  } catch {
+    // checkEventVocabulary reports the throw.
+    return [];
+  }
+  return calls >= 2 && cancelled >= 1
+    ? []
+    : [
+        `${toolTurn.name}: the tool turn needs two tool calls and one cancelled, got ${String(calls)} and ${String(cancelled)}`,
+      ];
+}
+
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
   failureCases: readonly ProviderFailureCase[];
   /** Turns that succeed, including one whose result arrives before its work drains. */
   turns: readonly ProviderTurnCase[];
+  /**
+   * A turn with two tool calls, one of them interrupted. A provider without tools omits it.
+   */
+  toolTurn?: ProviderTurnCase;
 }
 
 export async function runProviderConformance(suite: ProviderConformanceSuite): Promise<string[]> {
+  const toolTurns = suite.toolTurn ? [suite.toolTurn] : [];
   return [
     ...(await checkFailureClasses(suite.failureCases)),
     // A failed turn settles too.
-    ...(await checkSettled([...suite.turns, ...suite.failureCases])),
+    ...(await checkSettled([...suite.turns, ...toolTurns, ...suite.failureCases])),
+    // Rule 1 extends to every fixture once every provider emits the vocabulary (#3569, PR B).
+    ...(await checkEventVocabulary(toolTurns)),
+    ...(suite.toolTurn ? await checkToolTurnShape(suite.toolTurn) : []),
   ];
 }
