@@ -498,6 +498,8 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ persisted: true });
   };
 
+  listProviderEvents: IWorkflowStore['listProviderEvents'] = () => Promise.resolve([]);
+
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<
       string,

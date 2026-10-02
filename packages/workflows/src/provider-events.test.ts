@@ -4,14 +4,21 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { IWorkflowPlatform } from './deps';
-import { createProviderEventHandler } from './provider-events';
+import {
+  createAttemptEventSequence,
+  createProviderEventHandler,
+  type AttemptEventSequence,
+} from './provider-events';
+import { providerEventEnvelopeSchema } from './schemas/provider-event';
 import type { IWorkflowStore } from './store';
 
 const trackTempRoot = trackTempRoots();
 
 type CreateEvent = IWorkflowStore['createWorkflowEvent'];
 
-async function makeHandler(): Promise<{
+async function makeHandler(
+  options: { configuredMcpServers?: string[]; attempt?: AttemptEventSequence } = {}
+): Promise<{
   handler: ReturnType<typeof createProviderEventHandler>;
   rows: Parameters<CreateEvent>[0][];
   sent: string[];
@@ -38,7 +45,8 @@ async function makeHandler(): Promise<{
     runId: 'run-1',
     nodeId: 'node-1',
     stepName: 'node-1',
-    configuredMcpServers: new Set(),
+    attempt: options.attempt ?? createAttemptEventSequence('attempt-1'),
+    configuredMcpServers: new Set(options.configuredMcpServers),
     onMessageText: async () => undefined,
   });
   return { handler, rows, sent };
@@ -58,36 +66,41 @@ describe('createProviderEventHandler', () => {
     expect(handler.liveSubtaskIds()).toEqual([]);
   });
 
-  test('records a tool completion only when the provider reports one', async () => {
+  test('records only what the provider reported, with no engine-made completion', async () => {
     const { handler, rows } = await makeHandler();
 
     await handler.handle({ type: 'tool_call', toolCallId: 'a', name: 'Read' });
     await handler.handle({ type: 'tool_call', toolCallId: 'b', name: 'Read' });
     await handler.handle({ type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' });
-    // A stray update for a call that never started is the provider's bug, not a completion.
-    await handler.handle({ type: 'tool_call_update', toolCallId: 'never', status: 'completed' });
     await handler.handle({ type: 'agent_message_chunk', text: 'done' });
 
-    expect(rows.filter(row => row.event_type === 'tool_called')).toHaveLength(2);
-    // Tool `a` never closed: the engine does not invent an `unknown` completion for it.
-    expect(rows.filter(row => row.event_type === 'tool_completed').map(row => row.data)).toEqual([
-      expect.objectContaining({ tool_call_id: 'b', tool_outcome: 'interrupted' }),
+    // Tool `a` never closed: nothing records an `unknown` completion for it.
+    expect(rows.map(row => providerEventEnvelopeSchema.parse(row.data).event)).toEqual([
+      { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+      { type: 'tool_call', toolCallId: 'b', name: 'Read' },
+      { type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' },
+      { type: 'agent_message_chunk', text: 'done' },
     ]);
   });
 
-  test('records long string tool input cut short', async () => {
-    const { handler, rows } = await makeHandler();
+  test('a second stream pass of one attempt numbers on from the first', async () => {
+    const attempt = createAttemptEventSequence('attempt-9');
+    const first = await makeHandler({ attempt });
+    const reask = await makeHandler({ attempt });
+    await first.handler.handle({ type: 'agent_message_chunk', text: 'one' });
+    await first.handler.handle({ type: 'agent_message_chunk', text: 'two' });
+    await reask.handler.handle({ type: 'agent_message_chunk', text: 'three' });
 
-    await handler.handle({
-      type: 'tool_call',
-      toolCallId: 'w',
-      name: 'Write',
-      rawInput: { file_path: 'a.ts', content: 'x'.repeat(2000), mode: 420 },
-    });
-
-    expect(rows[0]?.data).toMatchObject({
-      tool_input: { file_path: 'a.ts', content: `${'x'.repeat(500)}...`, mode: 420 },
-    });
+    expect(
+      [...first.rows, ...reask.rows].map(row => {
+        const { attemptId, seq } = providerEventEnvelopeSchema.parse(row.data);
+        return [attemptId, seq];
+      })
+    ).toEqual([
+      ['attempt-9', 0],
+      ['attempt-9', 1],
+      ['attempt-9', 2],
+    ]);
   });
 
   test('sends a warning to the platform with a ⚠️ prefix', async () => {
@@ -100,5 +113,19 @@ describe('createProviderEventHandler', () => {
     });
 
     expect(sent).toEqual(['⚠️ Open the link']);
+  });
+
+  test('surfaces a failed MCP server only when the node configured it', async () => {
+    const { handler, sent } = await makeHandler({ configuredMcpServers: ['github'] });
+
+    await handler.handle({ type: 'mcp_server_status', server: 'plugin-mcp', status: 'failed' });
+    await handler.handle({
+      type: 'mcp_server_status',
+      server: 'github',
+      status: 'needs_auth',
+      error: 'token expired',
+    });
+
+    expect(sent).toEqual(['MCP server connection failed: github (needs_auth): token expired']);
   });
 });

@@ -138,7 +138,11 @@ import { buildExecNodeEnvironment } from './exec-environment';
 import { planGraph, resolvedBodyNodes } from './graph-plan';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from './store';
 import type { DagResumeSnapshot, FanOutCancelReason, PersistedNodeOutput } from './store';
-import { createProviderEventHandler, type ProviderEventHandler } from './provider-events';
+import {
+  createAttemptEventSequence,
+  createProviderEventHandler,
+  type ProviderEventHandler,
+} from './provider-events';
 import { createLogger, isPathInside, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
@@ -2032,6 +2036,9 @@ async function executeNodeInternal(
   };
   getLog().info({ nodeId: node.id, provider }, 'dag_node_started');
   await recordNodeState({ store: deps.store, logDir }, execution);
+  // Every stream pass of this attempt (a structured-output reask is a second pass)
+  // numbers its provider events from one sequence.
+  const attemptEvents = createAttemptEventSequence(execution.attempt.id);
 
   let nodeTokens: TokenUsage | undefined;
   let nodeCostUsd: number | undefined;
@@ -2227,6 +2234,7 @@ async function executeNodeInternal(
       runId: workflowRun.id,
       nodeId: node.id,
       stepName,
+      attempt: attemptEvents,
       configuredMcpServers: configuredMcpNames,
       onMessageText: async text => {
         nodeOutputText += text; // ALWAYS capture for $node_id.output
@@ -5364,6 +5372,8 @@ async function executeLoopNode(
   }
   ctx.currentExecution = execution;
   loopFinalStopReason = undefined;
+  // Iterations share the loop's attempt, so they share its provider-event sequence.
+  const attemptEvents = createAttemptEventSequence(execution.attempt.id);
   await recordNodeState(
     { store: deps.store, logDir },
     {
@@ -5607,6 +5617,7 @@ async function executeLoopNode(
           runId: workflowRun.id,
           nodeId: node.id,
           stepName,
+          attempt: attemptEvents,
           // A loop node takes no `mcp:` file, so no MCP failure is the workflow's own.
           configuredMcpServers: new Set(),
           onMessageText: async text => {
