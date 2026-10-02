@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  checkEventVocabulary,
   checkFailureClasses,
   checkSettled,
   runProviderConformance,
@@ -159,5 +160,125 @@ describe('settled conformance', () => {
     expect(
       await runProviderConformance({ failureCases: [unsettledFailure], turns: [settlingTurn] })
     ).toEqual(['expired key: expected one settled, got 0']);
+  });
+});
+
+const toolTurn: ProviderTurnCase = {
+  name: 'tool turn',
+  run: turn(
+    { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+    { type: 'tool_call', toolCallId: 'b', name: 'Bash', title: 'sleep 60' },
+    { type: 'subtask', taskId: 't', status: 'started' },
+    { type: 'tool_call_update', toolCallId: 'a', status: 'completed', output: 'file' },
+    { type: 'subtask', taskId: 't', status: 'completed' },
+    { type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' },
+    { type: 'result', stopReason: 'cancelled' },
+    { type: 'settled' }
+  ),
+};
+
+describe('event vocabulary conformance', () => {
+  test('a conforming tool turn passes every check', async () => {
+    expect(
+      await runProviderConformance({ failureCases: [conforming], turns: [settlingTurn], toolTurn })
+    ).toEqual([]);
+  });
+
+  test.each<[string, unknown[], string]>([
+    [
+      'an unparseable chunk',
+      [{ type: 'assistant', content: 'hi' }, { type: 'result' }, { type: 'settled' }],
+      'tool turn: rule 1, chunk 0 (type "assistant") is not a provider chunk',
+    ],
+    [
+      'an unclosed tool call',
+      [
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 2, tool call a has 0 updates before the result, expected 1',
+    ],
+    [
+      'a tool call closed only after the result',
+      [
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'result' },
+        { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 2, tool call a has 0 updates before the result, expected 1',
+    ],
+    [
+      'a tool call closed twice',
+      [
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
+        { type: 'tool_call_update', toolCallId: 'a', status: 'failed' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 2, tool call a has 2 updates before the result, expected 1',
+    ],
+    [
+      'a duplicate tool call id',
+      [
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 2, tool call a is started twice',
+    ],
+    [
+      'an update without a start',
+      [
+        { type: 'tool_call_update', toolCallId: 'z', status: 'completed' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 3, tool call z is updated before it starts',
+    ],
+    [
+      'a subtask left open at settled',
+      [
+        { type: 'subtask', taskId: 't', status: 'started' },
+        { type: 'subtask', taskId: 't', status: 'running' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 4, subtask t is still open at settled',
+    ],
+  ])('flags %s', async (_label, chunks, violation) => {
+    expect(await checkEventVocabulary([{ name: 'tool turn', run: turn(...chunks) }])).toEqual([
+      expect.stringContaining(violation),
+    ]);
+  });
+
+  test('a tool turn that does not interrupt a call is flagged', async () => {
+    const uninterrupted: ProviderTurnCase = {
+      name: 'tool turn',
+      run: turn(
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
+        { type: 'result' },
+        { type: 'settled' }
+      ),
+    };
+    expect(
+      await runProviderConformance({
+        failureCases: [conforming],
+        turns: [settlingTurn],
+        toolTurn: uninterrupted,
+      })
+    ).toEqual(['tool turn: the tool turn needs two tool calls and one cancelled, got 1 and 0']);
+  });
+
+  test('the tool turn must settle', async () => {
+    const unsettled: ProviderTurnCase = { ...toolTurn, run: turn({ type: 'result' }) };
+    expect(
+      await runProviderConformance({ failureCases: [conforming], turns: [], toolTurn: unsettled })
+    ).toContain('tool turn: expected one settled, got 0');
   });
 });

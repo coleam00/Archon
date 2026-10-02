@@ -29,6 +29,19 @@ export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export const resolvedModelSchema = z.object({ id: z.string() });
 export type ResolvedModel = z.infer<typeof resolvedModelSchema>;
 
+/**
+ * Why a turn stopped, in ACP's `StopReason` names. A provider omits a native reason it
+ * cannot map rather than inventing one.
+ */
+export const providerStopReasonSchema = z.enum([
+  'end_turn',
+  'max_tokens',
+  'max_turn_requests',
+  'refusal',
+  'cancelled',
+]);
+export type ProviderStopReason = z.infer<typeof providerStopReasonSchema>;
+
 /** The terminal result of one provider turn. Providers stream it as the `result` chunk. */
 export const providerResultSchema = z.object({
   sessionId: z.string().optional(),
@@ -45,6 +58,7 @@ export const providerResultSchema = z.object({
   /** SDK-provided error detail strings. Populated when isError is true. */
   errors: z.array(z.string()).optional(),
   cost: z.number().optional(),
+  /** The SDK's native stop reason. Narrows to `providerStopReasonSchema` once every provider maps to it. */
   stopReason: z.string().optional(),
   numTurns: z.number().optional(),
   /** Concrete model reported by the provider; omitted when its SDK does not expose one. */
