@@ -64,6 +64,12 @@ import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { ClassifiedProviderError } from '../shared/failure';
+import {
+  buildClaudePluginSettings,
+  buildPluginListCommand,
+  readClaudePluginIds,
+  withPluginScopeCheck,
+} from './plugins';
 import { clampEffort, type AssertNever } from '@archon/paths/effort';
 import {
   claudeSkillSearchRoots,
@@ -607,6 +613,10 @@ interface ProviderWarning {
  * the workflow path; partial non-workflow configs keep ambient SDK behavior.
  * Returns structured warnings that the caller should yield as system chunks.
  */
+function isWorkflowNode(nodeConfig: NodeConfig | undefined): nodeConfig is NodeConfig {
+  return typeof nodeConfig?.nodeId === 'string' && nodeConfig.nodeId.trim().length > 0;
+}
+
 async function applyNodeConfig(
   options: Options,
   nodeConfig: NodeConfig,
@@ -616,17 +626,24 @@ async function applyNodeConfig(
     includeProject: boolean;
     includeUser: boolean;
     isContainer: boolean;
-  }
+  },
+  listInstalledPluginIds: () => Promise<string[]>
 ): Promise<ProviderWarning[]> {
   const warnings: ProviderWarning[] = [];
-  const isWorkflowNode =
-    typeof nodeConfig.nodeId === 'string' && nodeConfig.nodeId.trim().length > 0;
-  if (isWorkflowNode) {
+  const workflowNode = isWorkflowNode(nodeConfig);
+  if (workflowNode) {
     // Workflow nodes are declared-only capability boundaries. Keep normal
-    // project/user settings (CLAUDE.md and agents), but exclude ambient skills
-    // and MCP unless the workflow names them explicitly.
+    // project/user settings (CLAUDE.md, hooks, permissions), but exclude ambient
+    // skills, MCP and plugins unless the workflow names them explicitly.
     options.skills = nodeConfig.skills ?? [];
     options.strictMcpConfig = true;
+    const namedPlugins = nodeConfig.plugins ?? [];
+    const installedPluginIds = await listInstalledPluginIds();
+    options.settings = buildClaudePluginSettings(installedPluginIds, namedPlugins);
+    getLog().info(
+      { nodeId: nodeConfig.nodeId, installed: installedPluginIds.length, named: namedPlugins },
+      'claude.plugin_scope_applied'
+    );
 
     if (nodeConfig.skills && nodeConfig.skills.length > 0) {
       const { missing } = resolveClaudeSkillDirectories(cwd, nodeConfig.skills, skillSearch);
@@ -678,7 +695,7 @@ async function applyNodeConfig(
         );
         warnings.push({
           code: 'claude_skills_unresolved',
-          message: `Claude skill${missing.length === 1 ? '' : 's'} not found on disk: ${missing.join(', ')}. This is expected for Claude's built-in skills and for plugin-qualified names (plugin:skill), which the SDK resolves itself. If you meant an installed skill, check the name — an unknown name is ignored rather than loaded.`,
+          message: `Claude skill${missing.length === 1 ? '' : 's'} not found on disk: ${missing.join(', ')}. This is expected for Claude's built-in skills and for plugin-qualified names (plugin:skill), which the SDK resolves itself; a plugin's skill loads only when the node also names that plugin under plugins:. If you meant an installed skill, check the name — an unknown name is ignored rather than loaded.`,
         });
       }
     }
@@ -687,7 +704,7 @@ async function applyNodeConfig(
   // allowed_tools → tools. `Skill` is re-added only on the workflow path, which
   // is the only one that narrows `options.skills`; adding it for a non-workflow
   // caller would expose the ambient catalog instead of a declared subset.
-  const selectsSkills = isWorkflowNode && (nodeConfig.skills?.length ?? 0) > 0;
+  const selectsSkills = workflowNode && (nodeConfig.skills?.length ?? 0) > 0;
   if (nodeConfig.allowed_tools !== undefined) {
     options.tools = selectsSkills
       ? [...new Set([...nodeConfig.allowed_tools, 'Skill'])]
@@ -1563,7 +1580,16 @@ export class ClaudeProvider implements IAgentProvider {
           options,
           requestOptions.nodeConfig,
           cwd,
-          skillSearch
+          skillSearch,
+          () =>
+            readClaudePluginIds(
+              buildPluginListCommand({
+                cliPath: resolvedCliPath,
+                cwd,
+                env,
+                execContext: requestOptions.execContext,
+              })
+            )
         );
         for (const warning of nodeConfigWarnings) {
           yield { type: 'system' as const, content: `⚠️ ${warning.message}` };
@@ -1600,8 +1626,11 @@ export class ClaudeProvider implements IAgentProvider {
         options.env as Record<string, string>,
         options.model
       );
+      const nodeConfig = requestOptions?.nodeConfig;
       const events = withFirstMessageTimeout(
-        rawEvents,
+        isWorkflowNode(nodeConfig)
+          ? withPluginScopeCheck(rawEvents, nodeConfig.plugins ?? [])
+          : rawEvents,
         controller,
         getFirstEventTimeoutMs(),
         diagnostics

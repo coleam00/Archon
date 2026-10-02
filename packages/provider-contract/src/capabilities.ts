@@ -14,6 +14,14 @@ export const providerCapabilitiesSchema = z.object({
   mcp: z.boolean(),
   hooks: z.boolean(),
   skills: z.boolean(),
+  /**
+   * Whether the provider honors a workflow node's `plugins:` list exactly: a node
+   * loads every plugin it names and no user-installed plugin it does not. The
+   * engine fails a run before any spend when a node names plugins on a provider
+   * that declares `false`, because ignoring the list would run the node without
+   * a capability its author asked for.
+   */
+  plugins: z.boolean(),
   /** Whether the provider supports inline sub-agent definitions (Claude SDK's options.agents). */
   agents: z.boolean(),
   toolRestrictions: z.boolean(),

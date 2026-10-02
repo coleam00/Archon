@@ -151,6 +151,9 @@
         "skills": {
           "type": "boolean"
         },
+        "plugins": {
+          "type": "boolean"
+        },
         "agents": {
           "type": "boolean"
         },
@@ -238,6 +241,7 @@
         "mcp",
         "hooks",
         "skills",
+        "plugins",
         "agents",
         "toolRestrictions",
         "structuredOutput",

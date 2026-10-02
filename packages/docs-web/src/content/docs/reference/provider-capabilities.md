@@ -49,6 +49,7 @@ reporting declarations; absence means unknown, not unsupported.
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Plugins (`plugins:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |

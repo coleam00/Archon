@@ -34,6 +34,7 @@ const BASE_FIELD_KEY_RECORD: Record<WireBaseKey, true> = {
   hooks: true,
   mcp: true,
   skills: true,
+  plugins: true,
   agents: true,
   effort: true,
   maxBudgetUsd: true,

@@ -563,6 +563,8 @@ export interface NodeConfig {
   mcp?: string;
   hooks?: unknown;
   skills?: string[];
+  /** Exact provider plugin ids the node loads; every other user-installed plugin stays off. */
+  plugins?: string[];
   /**
    * Inline sub-agent definitions (keyed by kebab-case agent ID).
    *

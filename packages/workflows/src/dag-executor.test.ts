@@ -342,6 +342,7 @@ const mockClaudeCapabilities = () => ({
   mcp: true,
   hooks: true,
   skills: true,
+  plugins: true,
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'enforced' as const,
@@ -5390,6 +5391,59 @@ describe('executeDagWorkflow -- skills options', () => {
     expect(deliveredMessages(platform)).toContain(
       "Warning: Node 'review' uses skills but codex doesn't support it — this will be ignored."
     );
+  });
+
+  it('passes named plugins to sendQuery nodeConfig', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'dag-plugins',
+          nodes: [
+            {
+              id: 'review',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              plugins: ['formatter@tools'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    const optionsArg = mockSendQueryDag.mock.calls[0][3] as Record<string, unknown>;
+    expect((optionsArg.nodeConfig as Record<string, unknown>).plugins).toEqual(['formatter@tools']);
+  });
+
+  it('fails the run before any node runs when a later node names plugins on a provider without the capability', async () => {
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-plugins-codex',
+            nodes: [
+              { id: 'first', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } },
+              {
+                id: 'second',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                depends_on: ['first'],
+                provider: 'codex',
+                plugins: ['formatter@tools'],
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      )
+    ).rejects.toThrow("Node 'second' (provider 'codex') names plugins");
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
   it('passes agents to sendQuery nodeConfig when node has inline agents', async () => {

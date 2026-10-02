@@ -198,6 +198,7 @@ const providerCapabilities: ProviderCapabilities = {
   mcp: true,
   hooks: true,
   skills: true,
+  plugins: false,
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'enforced',

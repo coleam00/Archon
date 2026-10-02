@@ -665,6 +665,19 @@ describe('dagNodeSchema — new Claude SDK options', () => {
     }
   });
 
+  test('parses trimmed plugin ids and rejects an empty one', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      plugins: [' formatter@tools '],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as AgentNode).plugins).toEqual(['formatter@tools']);
+    expect(dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', plugins: ['  '] }).success).toBe(
+      false
+    );
+  });
+
   test('parses maxBudgetUsd as positive number', () => {
     const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', maxBudgetUsd: 2.5 });
     expect(result.success).toBe(true);
@@ -1295,6 +1308,7 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
       'hooks',
       'mcp',
       'skills',
+      'plugins',
       'effort',
       'maxBudgetUsd',
       'systemPrompt',

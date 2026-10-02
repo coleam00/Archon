@@ -72,6 +72,7 @@ export const CLAUDE_CAPABILITIES: ProviderCapabilities = {
   mcp: true,
   hooks: true,
   skills: true,
+  plugins: true, // workflow nodes load only the plugins they name (claude/plugins.ts)
   agents: true,
   toolRestrictions: true,
   knownToolNames: CLAUDE_KNOWN_TOOL_NAMES,
