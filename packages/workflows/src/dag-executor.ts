@@ -167,7 +167,13 @@ import {
   type LoopWithCompiledCommand,
   type IncludeCommandContent,
 } from './compiled-command';
-import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
+import {
+  assistantModelDefaults,
+  resolveNodeModel,
+  resolveWorkflowModelScope,
+  type NodeModelResolution,
+  type WorkflowModelScope,
+} from './node-model-resolution';
 import {
   logNodeComplete,
   logExecOutput,
@@ -203,9 +209,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import {
-  isLiteralSpec,
   isTierName,
-  resolveModelSpec,
   resolvePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
@@ -1593,10 +1597,10 @@ async function resolveNodeProviderAndModel(
   const declaredEffort = resolution.declaredEffort;
 
   // Runtime backstop for container dispatch: the run-start pre-scan
-  // (collectContainerIncompatibleProviders) hand-mirrors this same provider
-  // resolution, so it could drift. Re-check the RESOLVED provider here, at the
-  // actual dispatch point, so a container turn can never reach a provider that
-  // can't honor it — no silent host downgrade (defense in depth).
+  // (collectContainerIncompatibleProviders) now shares this resolver
+  // (resolveNodeModel), so the two read the same provider string for a given
+  // node. The dispatch re-check stays as defence in depth so a container turn
+  // can never reach a provider that can't honor it — no silent host downgrade.
   if (execContext.kind === 'container' && !caps.containerExec) {
     throw new Error(
       `Provider '${provider}' cannot run inside a container yet (containerExec ` +
@@ -1607,6 +1611,7 @@ async function resolveNodeProviderAndModel(
   // Dispatch backstop for named plugins, matching the run-start pre-scan
   // (collectPluginIncompatibleNodes). Ignoring the list would run the node
   // without a capability its author asked for, so this is fatal, not a warning.
+  // (Both preflight and dispatch read the resolved provider from resolveNodeModel.)
   if (node.plugins !== undefined && node.plugins.length > 0 && !caps.plugins) {
     throw new Error(pluginsUnsupportedMessage([{ nodeId: node.id, provider }]));
   }
@@ -10332,56 +10337,54 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 }
 
 /**
- * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
- * of `resolveNodeProviderAndModel` — just enough for the container capability
- * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
- */
-function resolveNodeProviderForPreflight(
-  node: DagNode,
-  workflowProvider: string,
-  aiProfile?: ResolvedAiProfile
-): string {
-  let provider: string = node.provider ?? workflowProvider;
-  if (node.model && aiProfile) {
-    const spec = resolveModelSpec(aiProfile, node.model);
-    if (!isLiteralSpec(spec)) provider = spec.provider;
-  }
-  return provider;
-}
-
-/**
  * Walk every node (including loop_group bodies) that can invoke a provider.
  * bash/script/cancel nodes are skipped (deterministic, no provider). An approval
  * node counts only when it has an `on_reject` reprompt (the one AI turn it can
  * spawn). For each visited node the resolved provider is passed to `visit`.
  * Unknown providers are passed through — the caller decides how to handle them.
+ *
+ * Uses the pure {@link resolveNodeModel} chain rather than a copy of its provider
+ * half: a drifted copy would let a run start whose nodes resolve to providers the
+ * preflight did not check. `resolveNodeProviderAndModel` still re-checks the
+ * resolved provider at the actual dispatch site (defence in depth) so a container
+ * turn can never reach a provider that cannot honor it.
  */
 function visitProviderInvokingNodes(
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile: ResolvedAiProfile | undefined,
   visit: (node: DagNode, provider: string) => void
 ): void {
-  const resolve = (node: DagNode): string =>
-    resolveNodeProviderForPreflight(node, workflowProvider, aiProfile);
+  const resolve = (node: DagNode): NodeModelResolution =>
+    resolveNodeModel(node, scope, assistantModels, aiProfile);
   for (const node of nodes) {
     if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
       continue;
     if (isLoopGroupNode(node)) {
-      const groupProvider = resolve(node);
-      visit(node, groupProvider);
-      visitProviderInvokingNodes(node.loop_group.nodes, groupProvider, aiProfile, visit);
+      const groupResolution = resolve(node);
+      visit(node, groupResolution.provider);
+      visitProviderInvokingNodes(
+        node.loop_group.nodes,
+        {
+          ...scope,
+          provider: groupResolution.provider,
+          providerOrigin: groupResolution.providerOrigin,
+        },
+        assistantModels,
+        aiProfile,
+        visit
+      );
       continue;
     }
     if (isGateNode(node)) {
       if (node.decisions.some(d => d.rework !== undefined)) {
-        visit(node, resolve(node));
+        visit(node, resolve(node).provider);
       }
       continue;
     }
     // agent / loop → AI node
-    visit(node, resolve(node));
+    visit(node, resolve(node).provider);
   }
 }
 
@@ -10395,11 +10398,12 @@ function visitProviderInvokingNodes(
  */
 export function collectContainerIncompatibleProviders(
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
-  visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (_node, provider) => {
+  visitProviderInvokingNodes(nodes, scope, assistantModels, aiProfile, (_node, provider) => {
     if (!isRegisteredProvider(provider)) return;
     if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
   });
@@ -10419,11 +10423,12 @@ export interface PluginIncompatibleNode {
  */
 export function collectPluginIncompatibleNodes(
   nodes: readonly DagNode[],
-  workflowProvider: string,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
 ): PluginIncompatibleNode[] {
   const incompatible: PluginIncompatibleNode[] = [];
-  visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
+  visitProviderInvokingNodes(nodes, scope, assistantModels, aiProfile, (node, provider) => {
     if (!('plugins' in node) || !node.plugins?.length) return;
     if (!isRegisteredProvider(provider)) return;
     if (!getProviderCapabilities(provider).plugins) {
@@ -10470,11 +10475,12 @@ export interface StrictSchemaViolation {
  */
 export function collectStrictSchemaViolations(
   nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
+  scope: WorkflowModelScope,
+  assistantModels: Readonly<Record<string, string | undefined>>,
   aiProfile?: ResolvedAiProfile
 ): StrictSchemaViolation[] {
   const violations: StrictSchemaViolation[] = [];
-  visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
+  visitProviderInvokingNodes(nodes, scope, assistantModels, aiProfile, (node, provider) => {
     if (!isRegisteredProvider(provider)) return;
     if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) return;
     // Only nodes whose output_format is enforced by the engine — gate/loop_group
@@ -10939,11 +10945,25 @@ export async function executeDagWorkflow(
   } = options;
   const dagStartTime = Date.now();
 
+  // One scope for the three preflight walkers below. Building it through
+  // `resolveWorkflowModelScope` (same chain the executor's per-node resolution
+  // uses) keeps a workflow-level `model:` tier/alias resolution consistent with
+  // the dispatch-time resolver — a tier that overrides the provider at workflow
+  // level is reflected in the preflight, not only at run time.
+  const preflightAssistantModels = assistantModelDefaults(config);
+  const preflightScope = resolveWorkflowModelScope(
+    workflow,
+    config.assistant,
+    preflightAssistantModels,
+    aiProfile
+  );
+
   // Named-plugin capability fail-fast: before ANY node runs, so no node spends
   // in a run that would later reach a node whose plugins cannot load.
   const pluginIncompatible = collectPluginIncompatibleNodes(
     workflow.nodes,
-    workflowProvider,
+    preflightScope,
+    preflightAssistantModels,
     aiProfile
   );
   if (pluginIncompatible.length > 0) {
@@ -10957,7 +10977,8 @@ export async function executeDagWorkflow(
   if (execContext.kind === 'container') {
     const incompatible = collectContainerIncompatibleProviders(
       workflow.nodes,
-      workflowProvider,
+      preflightScope,
+      preflightAssistantModels,
       aiProfile
     );
     if (incompatible.size > 0) {
@@ -11021,7 +11042,12 @@ export async function executeDagWorkflow(
   // required). Container scoping is irrelevant — this fires on host too, and it
   // protects the setup costs a first-turn 400 would otherwise burn.
   {
-    const violations = collectStrictSchemaViolations(workflow.nodes, workflowProvider, aiProfile);
+    const violations = collectStrictSchemaViolations(
+      workflow.nodes,
+      preflightScope,
+      preflightAssistantModels,
+      aiProfile
+    );
     if (violations.length > 0) {
       const [first] = violations;
       const more = violations.length > 1 ? ` (+${violations.length - 1} more)` : '';
