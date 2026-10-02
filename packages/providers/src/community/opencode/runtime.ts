@@ -173,8 +173,7 @@ function isPortBindConflict(error: unknown): boolean {
   return (
     message.includes('eaddrinuse') ||
     message.includes('address already in use') ||
-    message.includes('failed to start server on port') ||
-    message.includes('port 4096')
+    message.includes('failed to start server on port')
   );
 }
 
