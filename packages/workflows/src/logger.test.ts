@@ -124,12 +124,12 @@ describe('Workflow Logger', () => {
 
     it('records each burst by its ends and keeps every renewal counted', async () => {
       const recorder = createWatchdogResetRecorder(testDir, 'watchdog-burst', 'review');
-      // 500 thinking renewals 5ms apart, then a tool chunk still inside the burst.
-      for (let i = 0; i < 500; i++) recorder.observe('thinking', t0 + i * 5);
-      recorder.observe('tool', t0 + 2_600);
+      // 500 thought renewals 5ms apart, then a tool call still inside the burst.
+      for (let i = 0; i < 500; i++) recorder.observe('agent_thought_chunk', t0 + i * 5);
+      recorder.observe('tool_call', t0 + 2_600);
       // A quiet gap exactly at the threshold starts a new burst of one renewal.
       const quietEnd = t0 + 2_600 + WATCHDOG_RESET_BURST_GAP_MS;
-      recorder.observe('assistant', quietEnd);
+      recorder.observe('agent_message_chunk', quietEnd);
       await recorder.flush();
 
       const events = await readLogFile('watchdog-burst');
@@ -141,17 +141,17 @@ describe('Workflow Logger', () => {
           ts: e.ts,
         }))
       ).toEqual([
-        { step: 'review', chunk_type: 'thinking', chunk_count: 1, ts: iso(t0) },
-        { step: 'review', chunk_type: 'tool', chunk_count: 500, ts: iso(t0 + 2_600) },
-        { step: 'review', chunk_type: 'assistant', chunk_count: 1, ts: iso(quietEnd) },
+        { step: 'review', chunk_type: 'agent_thought_chunk', chunk_count: 1, ts: iso(t0) },
+        { step: 'review', chunk_type: 'tool_call', chunk_count: 500, ts: iso(t0 + 2_600) },
+        { step: 'review', chunk_type: 'agent_message_chunk', chunk_count: 1, ts: iso(quietEnd) },
       ]);
       expect(events.every(e => e.type === 'watchdog_reset' && e.content === undefined)).toBe(true);
     });
 
     it('a gap just under the threshold stays inside the burst', async () => {
       const recorder = createWatchdogResetRecorder(testDir, 'watchdog-under', 'review');
-      recorder.observe('thinking', t0);
-      recorder.observe('thinking', t0 + WATCHDOG_RESET_BURST_GAP_MS - 1);
+      recorder.observe('agent_thought_chunk', t0);
+      recorder.observe('agent_thought_chunk', t0 + WATCHDOG_RESET_BURST_GAP_MS - 1);
       await recorder.flush();
 
       const events = await readLogFile('watchdog-under');
@@ -177,17 +177,17 @@ describe('Workflow Logger', () => {
       jest.useFakeTimers();
       try {
         const recorder = createWatchdogResetRecorder(testDir, 'watchdog-quiet', 'review');
-        recorder.observe('thinking', t0);
-        recorder.observe('thinking', t0 + 5);
-        recorder.observe('tool', t0 + 10);
+        recorder.observe('agent_thought_chunk', t0);
+        recorder.observe('agent_thought_chunk', t0 + 5);
+        recorder.observe('tool_call', t0 + 10);
 
         jest.advanceTimersByTime(WATCHDOG_RESET_BURST_GAP_MS - 1);
         expect((await readAfterWrites(1)).map(e => e.chunk_count)).toEqual([1]);
 
         jest.advanceTimersByTime(1);
         expect((await readAfterWrites(2)).map(e => [e.chunk_type, e.chunk_count, e.ts])).toEqual([
-          ['thinking', 1, iso(t0)],
-          ['tool', 2, iso(t0 + 10)],
+          ['agent_thought_chunk', 1, iso(t0)],
+          ['tool_call', 2, iso(t0 + 10)],
         ]);
 
         // Flush after the timer wrote the burst end adds nothing.

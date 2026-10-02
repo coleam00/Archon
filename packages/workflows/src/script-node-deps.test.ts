@@ -162,7 +162,7 @@ function createMockStore(): IWorkflowStore {
 
 const mockSendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
   async function* (_prompt, _cwd, _resumeSessionId, _options) {
-    yield { type: 'assistant', content: 'AI response' };
+    yield { type: 'agent_message_chunk', text: 'AI response' };
     yield { type: 'result', sessionId: 'session-id' };
   }
 );
