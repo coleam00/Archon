@@ -66,7 +66,6 @@ export {
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 
 // Utilities (needed by consumers)
-export { resetCodexSingleton } from './codex/provider';
 export { loadMcpConfig, type LoadedMcpConfig } from './mcp/config';
 export {
   resolveCodexBinaryPath,

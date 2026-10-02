@@ -27,15 +27,7 @@ const OUTPUT_DIR = join(REPO_ROOT, 'packages/providers/src/codex/protocol');
 const CHECK_ONLY = process.argv.includes('--check');
 
 /** The generated types the provider imports; everything they import comes along. */
-const ROOTS = [
-  'ClientRequest',
-  'ServerNotification',
-  'ServerRequest',
-  'InitializeResponse',
-  'v2/ThreadStartResponse',
-  'v2/ThreadResumeResponse',
-  'v2/TurnStartResponse',
-];
+const ROOTS = ['ClientRequest', 'ServerNotification'];
 
 async function generate(): Promise<Map<string, string>> {
   const { path: codexBin } = resolveBundledCodexBinary();
