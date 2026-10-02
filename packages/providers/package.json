@@ -89,6 +89,9 @@
       "src/claude/config.test.ts"
     ],
     [
+      "src/claude/capabilities.test.ts"
+    ],
+    [
       "src/community/pi/model-ref.test.ts"
     ],
     [
