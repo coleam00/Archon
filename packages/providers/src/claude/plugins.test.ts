@@ -174,10 +174,20 @@ describe('withPluginScopeCheck', () => {
   });
 
   test('a result before any init frame fails instead of skipping the check', async () => {
-    const result = { type: 'result', subtype: 'success' } as unknown as SDKMessage;
+    const result = { type: 'result', subtype: 'success', is_error: false } as unknown as SDKMessage;
     const error = await failureOf(drain([result], []));
     expect(error.failureClass).toBe('misconfigured');
     expect(error.message).toContain('before reporting its loaded plugins');
+  });
+
+  test('an error result before init passes through with its own cause', async () => {
+    const result = {
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      errors: ['No conversation found with session ID: s-1'],
+    } as unknown as SDKMessage;
+    expect(await drain([result], [])).toEqual([result]);
   });
 
   test('a hook frame ahead of init passes through', async () => {

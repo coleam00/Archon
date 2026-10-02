@@ -196,9 +196,11 @@ const initPluginsSchema = z.array(z.object({ name: z.string(), source: z.string(
  * terminates the CLI before it does more work under the wrong plugin set.
  *
  * The SDK puts `system/init` "normally ahead" of the turn's other messages, not
- * always, so model output or a result before any init frame also fails: the
- * check must not pass by never running. Other system frames (hooks, status) may
- * precede init and pass through.
+ * always, so model output or a successful result before any init frame also
+ * fails: the check must not pass by never running. Other system frames (hooks,
+ * status) may precede init and pass through, and so does an error result: Claude
+ * Code refusing to start (an unknown resume id, a startup failure) reports it
+ * before init, and that cause must reach the caller rather than a scope error.
  */
 export async function* withPluginScopeCheck(
   events: AsyncIterable<SDKMessage>,
@@ -209,7 +211,11 @@ export async function* withPluginScopeCheck(
     if (event.type === 'system' && event.subtype === 'init') {
       checkInitPlugins(event.plugins, namedIds);
       initSeen = true;
-    } else if (!initSeen && MODEL_OUTPUT_TYPES.has(event.type)) {
+    } else if (
+      !initSeen &&
+      MODEL_OUTPUT_TYPES.has(event.type) &&
+      !(event.type === 'result' && event.is_error)
+    ) {
       throw new ClassifiedProviderError(
         'misconfigured',
         `Cannot verify the node's plugin scope: Claude Code sent a ${event.type} message before reporting its loaded plugins (system/init).`
