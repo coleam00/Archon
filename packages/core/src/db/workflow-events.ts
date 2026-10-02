@@ -174,13 +174,21 @@ export async function persistWorkflowEventIfRunning(
  * List all events for a workflow run in lifecycle order. `event_order` is
  * allocated by the database, so it preserves insertion order when timestamps tie.
  */
-export async function listWorkflowEvents(workflowRunId: string): Promise<WorkflowEventRow[]> {
+export async function listWorkflowEvents(
+  workflowRunId: string,
+  options: { excludeEventTypes?: readonly string[] } = {}
+): Promise<WorkflowEventRow[]> {
+  const excluded = options.excludeEventTypes ?? [];
+  const excludeClause =
+    excluded.length === 0
+      ? ''
+      : ` AND event_type NOT IN (${excluded.map((_, i) => `$${String(i + 2)}`).join(', ')})`;
   try {
     const result = await pool.query<WorkflowEventRow>(
       `SELECT * FROM remote_agent_workflow_events
-       WHERE workflow_run_id = $1
+       WHERE workflow_run_id = $1${excludeClause}
        ORDER BY created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
-      [workflowRunId]
+      [workflowRunId, ...excluded]
     );
     return [...result.rows].map(row => ({
       ...row,

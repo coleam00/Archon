@@ -2383,6 +2383,81 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/workflows/runs/{runId}/provider-events': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /**
+     * List a run's provider events
+     * @description Every event the run's providers streamed (text, thinking, tool calls with output, warnings, MCP status, compaction, subtasks, hooks, state), as the engine recorded them. Grouped by node; each node's in emission order. Rows written before the engine recorded envelopes come back translated, with a null attemptId.
+     */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Only this node (its persisted step name). */
+          step?: string;
+          /** @description Cursor attempt. Requires `step` and `afterSeq`. */
+          attemptId?: string;
+          /** @description Cursor seq: return the attempt's events after it and every later attempt's. Requires `step` and `attemptId`. */
+          afterSeq?: number | null;
+        };
+        header?: never;
+        path: {
+          runId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Provider events */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ProviderEventsResponse'];
+          };
+        };
+        /** @description Invalid cursor */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/workflows/validate': {
     parameters: {
       query?: never;
@@ -4680,6 +4755,105 @@ export interface components {
       /** Format: date-time */
       created_at: string;
       event_order?: number | null;
+    };
+    ProviderEventsResponse: {
+      events: components['schemas']['ProviderEventRecord'][];
+    };
+    ProviderEventRecord: {
+      attemptId: string | null;
+      seq: number;
+      /** Format: date-time */
+      observedAt: string;
+      event:
+        | {
+            /** @enum {string} */
+            type: 'agent_message_chunk';
+            text: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'agent_thought_chunk';
+            text: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'tool_call';
+            toolCallId: string;
+            name: string;
+            title?: string;
+            rawInput?: {
+              [key: string]: unknown;
+            };
+          }
+        | {
+            /** @enum {string} */
+            type: 'tool_call_update';
+            toolCallId: string;
+            /** @enum {string} */
+            status: 'completed' | 'failed' | 'cancelled';
+            output?: string;
+            /** @enum {boolean} */
+            outputTruncated?: true;
+            exitCode?: number;
+          }
+        | {
+            code: string;
+            message: string;
+            /** @enum {string} */
+            type: 'warning';
+          }
+        | {
+            /** @enum {string} */
+            type: 'mcp_server_status';
+            server: string;
+            /** @enum {string} */
+            status: 'connected' | 'failed' | 'needs_auth' | 'pending' | 'disabled';
+            error?: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'compaction';
+            /** @enum {string} */
+            phase: 'started' | 'completed';
+            /** @enum {string} */
+            trigger?: 'manual' | 'auto';
+            tokensBefore?: number;
+            tokensAfter?: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'subtask';
+            taskId: string;
+            /** @enum {string} */
+            status: 'started' | 'running' | 'completed' | 'failed' | 'stopped';
+            description?: string;
+            summary?: string;
+            taskType?: string;
+            parentToolCallId?: string;
+            lastToolName?: string;
+            outputFile?: string;
+            usage?: {
+              [key: string]: unknown;
+            };
+          }
+        | {
+            /** @enum {string} */
+            type: 'hook';
+            hookId: string;
+            hookName: string;
+            hookEvent: string;
+            /** @enum {string} */
+            status: 'started' | 'succeeded' | 'failed' | 'cancelled';
+            exitCode?: number;
+          }
+        | {
+            /** @enum {string} */
+            type: 'state_update';
+            /** @enum {string} */
+            state: 'running' | 'requires_action';
+          };
+      runId: string;
+      stepName: string;
     };
     ValidateWorkflowResponse: {
       valid: boolean;

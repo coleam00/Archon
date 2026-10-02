@@ -133,30 +133,9 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         timestamp: Date.now(),
       } satisfies DagNodeSseEvent);
 
-    case 'tool_started':
-      return JSON.stringify({
-        type: 'workflow_tool_activity',
-        runId: event.runId,
-        toolName: event.toolName,
-        stepName: event.stepName,
-        toolCallId: event.toolCallId,
-        status: 'started',
-        timestamp: Date.now(),
-      });
-
-    case 'tool_completed':
-      return JSON.stringify({
-        type: 'workflow_tool_activity',
-        runId: event.runId,
-        toolName: event.toolName,
-        stepName: event.stepName,
-        toolCallId: event.toolCallId,
-        status: 'completed',
-        durationMs: event.durationMs,
-        toolOutcome: event.toolOutcome,
-        exitCode: event.exitCode,
-        timestamp: Date.now(),
-      });
+    case 'provider_event':
+      // The engine's record, unchanged: only the frame's type names the SSE channel.
+      return JSON.stringify({ ...event, type: 'workflow_provider_event' });
 
     case 'approval_pending':
       return JSON.stringify({
@@ -177,35 +156,6 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         runId: event.runId,
         workflowName: '',
         status: 'cancelled',
-        timestamp: Date.now(),
-      });
-
-    case 'task_activity':
-      return JSON.stringify({
-        type: 'workflow_task_activity',
-        runId: event.runId,
-        nodeId: event.nodeId,
-        taskId: event.taskId,
-        activity: event.activity,
-        ...(event.description !== undefined ? { description: event.description } : {}),
-        ...(event.summary !== undefined ? { summary: event.summary } : {}),
-        ...(event.usage !== undefined ? { usage: event.usage } : {}),
-        ...(event.lastToolName !== undefined ? { lastToolName: event.lastToolName } : {}),
-        ...(event.taskType !== undefined ? { taskType: event.taskType } : {}),
-        timestamp: Date.now(),
-      });
-
-    case 'hook_activity':
-      return JSON.stringify({
-        type: 'workflow_hook_activity',
-        runId: event.runId,
-        nodeId: event.nodeId,
-        hookId: event.hookId,
-        hookName: event.hookName,
-        hookEvent: event.hookEvent,
-        activity: event.activity,
-        ...(event.outcome !== undefined ? { outcome: event.outcome } : {}),
-        ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
         timestamp: Date.now(),
       });
 
@@ -282,8 +232,8 @@ interface WorkflowStatusSsePayload {
 
 /**
  * The persisted event types the dashboard poller should query — exactly the ones
- * `mapWorkflowEventRow` maps. Filtering to these in SQL keeps high-frequency `tool_*`
- * rows out of the poller's result, so a single 1-second bucket realistically never
+ * `mapWorkflowEventRow` maps. Filtering to these in SQL keeps high-frequency
+ * `provider_event` rows out of the poller's result, so a single 1-second bucket realistically never
  * exceeds the drain limit (the boundary paging can't stall on overflow).
  */
 export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
@@ -300,7 +250,7 @@ export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
  *
  * Only emits the event types the dashboard reacts to — `workflow_status` and
  * `dag_node` (the client `invalidate('runs')` + refetches on those). High-frequency
- * `tool_*` and internal markers (`node_session_resumed`, `node_always_run_reset`,
+ * `provider_event` rows and internal markers (`node_session_resumed`, `node_always_run_reset`,
  * `workflow_artifact`, `ralph_*`) are skipped — the surrounding lifecycle events
  * already trigger the refetch. Keyed by `workflow_run_id`; since the client
  * refetches rather than applying the payload, the exact field values are
@@ -405,8 +355,12 @@ export class WorkflowEventBridge {
         if (conversationId) {
           this.transport.emitWorkflowEvent(conversationId, sseEvent);
         }
-        // Fan-out to dashboard stream — no-op when no dashboard client connected
-        this.transport.emitWorkflowEvent('__dashboard__', sseEvent);
+        // Fan-out to dashboard stream — no-op when no dashboard client connected.
+        // Provider events stay on the run's own stream: the dashboard reads lifecycle
+        // only, and a run streams thousands of them, tool output included.
+        if (event.type !== 'provider_event') {
+          this.transport.emitWorkflowEvent('__dashboard__', sseEvent);
+        }
       }
     });
   }
@@ -430,7 +384,8 @@ export class WorkflowEventBridge {
       workerConversationId,
       (event: WorkflowEmitterEvent) => {
         const sseEvent = mapWorkflowEvent(event);
-        if (sseEvent) {
+        // Provider events stay on the worker's stream, where the run view reads them.
+        if (sseEvent && event.type !== 'provider_event') {
           // Send to parent's stream (not worker's)
           this.transport.emitWorkflowEvent(parentConversationId, sseEvent);
         }
