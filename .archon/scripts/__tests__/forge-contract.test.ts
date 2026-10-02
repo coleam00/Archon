@@ -7,10 +7,15 @@ import {
 import { checkResultSchema } from '../../../packages/forge/src/events';
 import { handleGithubOperation } from '../../../packages/adapters/src/forge/github/operations';
 import { ghCheckUnit } from '../../workflows/sdlc/.shared/checks';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { validateStructuredOutput } from '../../../packages/providers/src/shared/structured-output';
+import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import {
   CHECK_STATES,
   CONCLUDED_CHECK_STATES,
   type ChecksObservation as PackObservation,
+  parseQualifiedPr,
   type PrRecord,
   type QualifiedPr,
 } from '../../workflows/sdlc/.shared/forge';
@@ -130,4 +135,43 @@ test('gh and the GitHub forge plugin classify every GitHub check result identica
     startup_failure: 'red',
     brand_new: 'unknown',
   });
+});
+
+// archon-review's scope node declares the pull request that publish-review then
+// hands to parseQualifiedPr. A value the schema admits but the parser refuses
+// passes the provider's structured output and fails publication after the whole
+// review ran, so the two must accept the same values (#3558 review R2).
+test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
+  const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml');
+  if (parsed.workflow === null) throw new Error(parsed.error.error);
+  const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
+  if (scope === undefined || !('output_format' in scope) || scope.output_format === undefined) {
+    throw new Error('archon-review has no scope node with an output_format');
+  }
+  const schema = scope.output_format;
+
+  const repo = { host: 'github.com', path: 'coleam00/Archon' };
+  const candidates = [
+    { repo, number: 1 },
+    { repo, number: 0 },
+    { repo, number: -3 },
+    { repo: { ...repo, host: '' }, number: 1 },
+    { repo: { ...repo, host: '  ' }, number: 1 },
+    { repo: { ...repo, path: '' }, number: 1 },
+    { repo: { ...repo, path: '\t' }, number: 1 },
+  ];
+  const verdicts = candidates.map(pr => {
+    let parserAccepts = true;
+    try {
+      parseQualifiedPr(JSON.stringify(pr));
+    } catch {
+      parserAccepts = false;
+    }
+    return { pr, parserAccepts, schemaAccepts: validateStructuredOutput({ docs: false, pr }, schema).valid };
+  });
+
+  expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
+  // Guard against a vacuous match: the parser must accept the qualified PR.
+  expect(verdicts[0].parserAccepts).toBe(true);
 });

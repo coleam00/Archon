@@ -433,10 +433,13 @@ describe('bundled-defaults', () => {
             properties: {
               repo: {
                 type: 'object',
-                properties: { host: { type: 'string' }, path: { type: 'string' } },
+                properties: {
+                  host: { type: 'string', pattern: '\\S' },
+                  path: { type: 'string', pattern: '\\S' },
+                },
                 required: ['host', 'path'],
               },
-              number: { type: 'integer' },
+              number: { type: 'integer', minimum: 1 },
             },
             required: ['repo', 'number'],
           },

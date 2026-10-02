@@ -3750,6 +3750,44 @@ describe('executeDagWorkflow -- output_format structured output', () => {
       .filter(msg => typeof msg === 'string' && msg.includes('did not return structured output'));
     expect(warningMessages).toHaveLength(0);
   });
+
+  // The launch preflight (#3558): a bare nested object under a Codex-routed node
+  // fails the run before any provider turn, naming the node and the schema path.
+  it('fails a Codex-routed bare nested object before any provider call', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+
+    const execution = executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'bare-object-preflight',
+          nodes: [
+            {
+              id: 'scope',
+              kind: 'agent',
+              source: { kind: 'command', name: 'classify' },
+              output_format: {
+                type: 'object',
+                properties: { pr: { type: 'object' } },
+                required: ['pr'],
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('bare-object-preflight'),
+        workflowProvider: 'codex',
+      })
+    );
+
+    await expect(execution).rejects.toThrow(
+      /node 'scope', output_format\.properties\.pr is an object schema with no properties/
+    );
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
+  });
 });
 
 describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () => {

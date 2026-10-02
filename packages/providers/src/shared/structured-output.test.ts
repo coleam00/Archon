@@ -610,6 +610,36 @@ describe('findOpenAiStrictSchemaViolations', () => {
     ]);
   });
 
+  // Codex sends normalizeJsonSchemaForOpenAiStrict's output, which replaces an
+  // object's additionalProperties subschema with false. The check must judge that
+  // payload, not a subschema the provider never sends (#3558 review R1).
+  test('ignores an additionalProperties subschema the normalizer replaces with false', () => {
+    expect(
+      findOpenAiStrictSchemaViolations(
+        {
+          type: 'object',
+          properties: { ready: { type: 'boolean' } },
+          required: ['ready'],
+          additionalProperties: { type: 'object' },
+        },
+        'output_format'
+      )
+    ).toEqual([]);
+  });
+
+  // Overshoot guard: a node that is not an object schema keeps its
+  // additionalProperties through normalization, so what it holds is still sent.
+  test('still checks an additionalProperties subschema the normalizer leaves in place', () => {
+    expect(
+      findOpenAiStrictSchemaViolations(
+        { additionalProperties: { type: 'object' } },
+        'output_format'
+      )
+    ).toEqual([
+      { kind: 'object_without_properties', schemaPath: 'output_format.additionalProperties' },
+    ]);
+  });
+
   test('accepts a nullable object whose properties are all required', () => {
     expect(
       findOpenAiStrictSchemaViolations(

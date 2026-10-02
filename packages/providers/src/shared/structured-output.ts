@@ -258,6 +258,12 @@ export type OpenAiStrictSchemaViolation =
  * Strict object schemas must declare at least one property, and every declared
  * property must appear in `required`. `basePath` is prepended to every result so
  * callers get meaningful schema-root-relative locations.
+ *
+ * The schema is judged as the Codex provider sends it:
+ * {@link normalizeJsonSchemaForOpenAiStrict} replaces an object schema's
+ * `additionalProperties` with `false`, so a subschema there is discarded and
+ * never reported. A non-object node keeps its `additionalProperties` and is
+ * still checked.
  */
 export function findOpenAiStrictSchemaViolations(
   schema: unknown,
@@ -325,8 +331,10 @@ function collectStrictSchemaViolations(
     }
   };
 
+  // The normalizer replaces an object schema's additionalProperties with false,
+  // so whatever it held never reaches the provider.
+  if (!isObjectSchemaNode(record)) collectSchema('additionalProperties');
   for (const key of [
-    'additionalProperties',
     'unevaluatedProperties',
     'propertyNames',
     'contains',
