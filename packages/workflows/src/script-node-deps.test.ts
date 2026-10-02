@@ -175,6 +175,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
     mcp: true,
     hooks: true,
     skills: true,
+    plugins: false,
     agents: true,
     toolRestrictions: true,
     structuredOutput: 'enforced' as const,

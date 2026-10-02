@@ -4104,6 +4104,7 @@ export interface components {
       };
       mcp?: string;
       skills?: string[];
+      plugins?: string[];
       agents?: {
         [key: string]: {
           description: string;
@@ -4801,6 +4802,7 @@ export interface components {
       mcp: boolean;
       hooks: boolean;
       skills: boolean;
+      plugins: boolean;
       agents: boolean;
       toolRestrictions: boolean;
       knownToolNames?: string[];

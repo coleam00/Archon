@@ -40,6 +40,18 @@ import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { ClaudeProvider, shouldPassNoEnvFile } from './provider';
 import * as claudeModule from './provider';
 import * as binaryResolver from './binary-resolver';
+import * as pluginsModule from './plugins';
+import { ClassifiedProviderError } from '../shared/failure';
+
+// Workflow nodes read the installed-plugin inventory before the session starts.
+// Never run the real CLI here; a test that needs an inventory overrides this.
+let pluginIdsSpy: ReturnType<typeof spyOn<typeof pluginsModule, 'readClaudePluginIds'>>;
+beforeEach(() => {
+  pluginIdsSpy = spyOn(pluginsModule, 'readClaudePluginIds').mockResolvedValue([]);
+});
+afterEach(() => {
+  pluginIdsSpy.mockRestore();
+});
 
 describe('shouldPassNoEnvFile', () => {
   test('returns false when cliPath is undefined (dev mode — SDK 0.2.x resolves a native binary)', () => {
@@ -145,6 +157,7 @@ describe('ClaudeProvider', () => {
         mcp: true,
         hooks: true,
         skills: true,
+        plugins: true,
         agents: true,
         toolRestrictions: true,
         structuredOutput: 'enforced',
@@ -2791,6 +2804,151 @@ describe('sendQuery decomposition behaviors', () => {
       expect(options.skills).toBeUndefined();
       expect(options.tools).toEqual(['Read']);
       expect(options.allowedTools ?? []).not.toContain('Skill');
+    });
+  });
+
+  describe('workflow-node plugin scope', () => {
+    const builtinInit = {
+      type: 'system',
+      subtype: 'init',
+      session_id: 'sid',
+      plugins: [{ name: 'agents-md', path: 'builtin', source: 'agents-md@builtin' }],
+    };
+
+    async function collect(nodeConfig: Record<string, unknown>): Promise<MessageChunk[]> {
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of client.sendQuery('test', tmpdir(), undefined, { nodeConfig })) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    }
+
+    test('a node that names nothing turns off every installed plugin and keeps native settings', async () => {
+      pluginIdsSpy.mockResolvedValue(['posthog@official', 'prp-core@prp']);
+      mockQuery.mockImplementation(async function* () {
+        yield builtinInit;
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      await collect({ nodeId: 'closed-node' });
+
+      const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;
+      expect(options.settings).toEqual({
+        enabledPlugins: { 'posthog@official': false, 'prp-core@prp': false },
+        syncClaudeAiPlugins: false,
+      });
+      expect(options.settingSources).toEqual(['project', 'user']);
+      expect(options.strictMcpConfig).toBe(true);
+    });
+
+    test('a named plugin is the only one enabled', async () => {
+      pluginIdsSpy.mockResolvedValue(['posthog@official', 'prp-core@prp']);
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          ...builtinInit,
+          plugins: [
+            ...builtinInit.plugins,
+            { name: 'posthog', path: '/p', source: 'posthog@official' },
+          ],
+        };
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      const chunks = await collect({ nodeId: 'named', plugins: ['posthog@official'] });
+
+      const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;
+      expect(options.settings).toEqual({
+        enabledPlugins: { 'posthog@official': true, 'prp-core@prp': false },
+        syncClaudeAiPlugins: false,
+      });
+      expect(chunks.find(c => c.type === 'result')?.isError).toBeUndefined();
+    });
+
+    test('a named plugin that is not installed fails as misconfigured before the session starts', async () => {
+      pluginIdsSpy.mockResolvedValue(['prp-core@prp']);
+
+      const chunks = await collect({ nodeId: 'named', plugins: ['posthog@official'] });
+
+      expect(mockQuery).not.toHaveBeenCalled();
+      const result = chunks.find(c => c.type === 'result');
+      expect(result?.failure?.class).toBe('misconfigured');
+      expect(result?.failure?.evidence).toContain('posthog@official');
+    });
+
+    test('a failed inventory read fails as misconfigured before the session starts', async () => {
+      pluginIdsSpy.mockRejectedValue(
+        new ClassifiedProviderError('misconfigured', 'Cannot list Claude plugins: boom')
+      );
+
+      const chunks = await collect({ nodeId: 'closed-node' });
+
+      expect(mockQuery).not.toHaveBeenCalled();
+      expect(chunks.find(c => c.type === 'result')?.failure).toEqual({
+        class: 'misconfigured',
+        evidence: 'Cannot list Claude plugins: boom',
+      });
+    });
+
+    test('a plugin that loaded without being named fails the node and ends the query', async () => {
+      let ended = false;
+      let modelTurnReached = false;
+      mockQuery.mockImplementation(async function* () {
+        try {
+          yield {
+            ...builtinInit,
+            plugins: [
+              ...builtinInit.plugins,
+              { name: 'synced', path: '/s', source: 'synced@claude-ai' },
+            ],
+          };
+          modelTurnReached = true;
+          yield { type: 'result', session_id: 'sid' };
+        } finally {
+          ended = true;
+        }
+      });
+
+      const chunks = await collect({ nodeId: 'closed-node' });
+
+      expect(modelTurnReached).toBe(false);
+      expect(ended).toBe(true);
+      const result = chunks.find(c => c.type === 'result');
+      expect(result?.failure?.class).toBe('misconfigured');
+      expect(result?.failure?.evidence).toContain('synced@claude-ai');
+    });
+
+    test('direct chat reads no inventory and sets no plugin settings', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('chat', tmpdir())) {
+        // consume
+      }
+      await collect({ allowed_tools: ['Read'] });
+
+      expect(pluginIdsSpy).not.toHaveBeenCalled();
+      for (const call of mockQuery.mock.calls) {
+        expect((call[0] as { options: Options }).options.settings).toBeUndefined();
+      }
+    });
+
+    test('a resumed node gets the same plugin scope as a fresh one', async () => {
+      pluginIdsSpy.mockResolvedValue(['posthog@official']);
+      mockQuery.mockImplementation(async function* () {
+        yield builtinInit;
+        yield { type: 'result', session_id: 'sid' };
+      });
+
+      for await (const _ of client.sendQuery('again', tmpdir(), 'prior-session', {
+        nodeConfig: { nodeId: 'closed-node' },
+      })) {
+        // consume
+      }
+
+      const options = (mockQuery.mock.calls[0][0] as { options: Options }).options;
+      expect(options.resume).toBe('prior-session');
+      expect(options.settings).toMatchObject({ enabledPlugins: { 'posthog@official': false } });
     });
   });
 });

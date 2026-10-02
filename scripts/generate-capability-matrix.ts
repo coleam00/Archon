@@ -55,6 +55,7 @@ const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'mcp', label: 'MCP servers (`mcp:`)' },
   { key: 'hooks', label: 'Hooks (`hooks:`)' },
   { key: 'skills', label: 'Skills (`skills:`)' },
+  { key: 'plugins', label: 'Plugins (`plugins:`)' },
   { key: 'agents', label: 'Inline sub-agents (`agents:`)' },
   { key: 'toolRestrictions', label: 'Tool restrictions (`allowed_tools`/`denied_tools`)' },
   { key: 'structuredOutput', label: 'Structured output (`output_format`)' },

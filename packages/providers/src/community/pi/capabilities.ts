@@ -22,6 +22,7 @@ export const PI_CAPABILITIES: ProviderCapabilities = {
   mcp: false,
   hooks: false,
   skills: true,
+  plugins: false, // Pi has no plugins; its extensions are user-owned configuration
   agents: false,
   toolRestrictions: true,
   structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)

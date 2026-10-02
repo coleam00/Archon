@@ -335,6 +335,7 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   mcp: false,
   hooks: false,
   skills: false,
+  plugins: false,
   agents: false,
   toolRestrictions: false,
   structuredOutput: false,

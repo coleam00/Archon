@@ -269,7 +269,8 @@ A declared skill that is installed on disk must live under a source that remains
 enabled — `settingSources: ['project']` cannot select a user-global skill, for
 instance — and Archon rejects that mismatch before provider spend. Names that are
 absent from disk entirely, such as Claude's built-in skills and plugin-qualified
-`plugin:skill` entries, are left to the SDK to resolve.
+`plugin:skill` entries, are left to the SDK to resolve. A plugin's skill loads only
+when the node also names that plugin under `plugins:`.
 
 Unrecognized entries are dropped rather than ignored: `settingSources: ['projct']`
 resolves to no sources and logs `claude.setting_sources_invalid_entries`. A typo

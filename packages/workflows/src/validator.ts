@@ -782,7 +782,7 @@ export async function validateWorkflowResources(
                     : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
                 hint:
                   provider === 'claude'
-                    ? `If this is not a built-in or plugin:skill name, check the spelling or create .claude/skills/${skillName}/SKILL.md`
+                    ? `A plugin:skill name also needs its plugin under plugins:. Otherwise check the spelling or create .claude/skills/${skillName}/SKILL.md`
                     : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
               });
             }
@@ -803,6 +803,17 @@ export async function validateWorkflowResources(
               : 'Remove the skills field or switch to a provider that supports skills',
         });
       }
+    }
+
+    // --- Plugins: an error, not a warning — the engine refuses to run it ---
+    if ('plugins' in node && node.plugins?.length && providerCaps?.plugins === false) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'plugins',
+        message: `Provider '${provider}' cannot load named plugins — the run would fail before any node starts`,
+        hint: 'Remove the plugins field or switch to a provider whose plugins capability is true',
+      });
     }
 
     // --- Capability-driven warnings for hooks and tool restrictions ---

@@ -282,14 +282,16 @@ filesystem:
 | Absent from every skills directory | **Warning, and the run continues.** Claude's own **built-in** skills and **plugin-qualified** names (`plugin:skill`) live outside any skills directory, so Archon lets the SDK resolve them. A misspelled name lands here too — it is reported, and Claude ignores an unknown name rather than loading it. |
 
 Built-in and plugin skills are therefore declarable on a Claude node, exactly like an
-installed one.
+installed one. A plugin's skill loads only when the node also names that plugin under
+`plugins:`, because a workflow node loads no plugin it does not name (see
+[Plugins](/guides/authoring-workflows/#plugins)).
 
 ## Troubleshooting
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Claude skill not found (error) | Installed, but outside an enabled `.claude/skills/` root | Move it to `.claude/skills/<name>/SKILL.md`, or enable the setting source that holds it |
-| Claude skill not found (warning) | Absent from disk — normal for built-in and `plugin:skill` names | Ignore it for those; otherwise check the spelling or run `npx skills add <source>` |
+| Claude skill not found (warning) | Absent from disk — normal for built-in and `plugin:skill` names | Ignore it for those, and name the plugin under `plugins:` for a `plugin:skill`; otherwise check the spelling or run `npx skills add <source>` |
 | Codex does not use a skill | Automatic catalogs are off in workflow nodes | Invoke it explicitly in the command/prompt with `$skill-name` and install it under a Codex-native root such as `.agents/skills/` |
 | Codex warns about `skills:` | Codex does not implement the YAML list | Keep the list only for other providers; use `$skill-name` for Codex |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |

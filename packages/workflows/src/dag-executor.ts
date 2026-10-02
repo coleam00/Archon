@@ -1693,6 +1693,13 @@ async function resolveNodeProviderAndModel(
     );
   }
 
+  // Dispatch backstop for named plugins, matching the run-start pre-scan
+  // (collectPluginIncompatibleNodes). Ignoring the list would run the node
+  // without a capability its author asked for, so this is fatal, not a warning.
+  if (node.plugins !== undefined && node.plugins.length > 0 && !caps.plugins) {
+    throw new Error(pluginsUnsupportedMessage([{ nodeId: node.id, provider }]));
+  }
+
   // Capability warnings — inform users when features are unsupported
   const capChecks: [string, keyof ProviderCapabilities, boolean][] = [
     [
@@ -1790,6 +1797,7 @@ async function resolveNodeProviderAndModel(
     mcp: node.mcp,
     hooks: node.hooks,
     skills: node.skills,
+    plugins: node.plugins,
     agents,
     // Portable per-node Pi extension posture (#2133) — Pi provider reads it as
     // the highest-precedence override; ignored by other providers.
@@ -11007,6 +11015,42 @@ export function collectContainerIncompatibleProviders(
   return incompatible;
 }
 
+/** A node that names plugins on a provider that cannot load exactly those plugins. */
+export interface PluginIncompatibleNode {
+  nodeId: string;
+  provider: string;
+}
+
+/**
+ * Collect AI nodes that name `plugins:` while their resolved provider declares
+ * `capabilities.plugins === false`. Unknown providers are skipped here; they fail
+ * later with a clearer "unknown provider" error.
+ */
+export function collectPluginIncompatibleNodes(
+  nodes: readonly DagNode[],
+  workflowProvider: string,
+  aiProfile?: ResolvedAiProfile
+): PluginIncompatibleNode[] {
+  const incompatible: PluginIncompatibleNode[] = [];
+  visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
+    if (!('plugins' in node) || !node.plugins?.length) return;
+    if (!isRegisteredProvider(provider)) return;
+    if (!getProviderCapabilities(provider).plugins) {
+      incompatible.push({ nodeId: node.id, provider });
+    }
+  });
+  return incompatible;
+}
+
+function pluginsUnsupportedMessage(nodes: readonly PluginIncompatibleNode[]): string {
+  const list = nodes.map(n => `'${n.nodeId}' (provider '${n.provider}')`).join(', ');
+  return (
+    `Node${nodes.length === 1 ? '' : 's'} ${list} name${nodes.length === 1 ? 's' : ''} plugins, ` +
+    'but the provider cannot load exactly the named plugins (plugins capability). ' +
+    'Remove plugins: from the node or use a provider that supports it.'
+  );
+}
+
 /**
  * A single `output_format` schema whose declared `properties` keys are not fully
  * covered by its `required` array on a provider that enforces OpenAI strict mode
@@ -11503,6 +11547,17 @@ export async function executeDagWorkflow(
     workflowSourceRoots,
   } = options;
   const dagStartTime = Date.now();
+
+  // Named-plugin capability fail-fast: before ANY node runs, so no node spends
+  // in a run that would later reach a node whose plugins cannot load.
+  const pluginIncompatible = collectPluginIncompatibleNodes(
+    workflow.nodes,
+    workflowProvider,
+    aiProfile
+  );
+  if (pluginIncompatible.length > 0) {
+    throw new Error(pluginsUnsupportedMessage(pluginIncompatible));
+  }
 
   // Container capability fail-fast: before ANY node runs (and before any
   // container work), reject a container run whose AI nodes resolve to a provider
