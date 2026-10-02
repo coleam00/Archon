@@ -414,8 +414,19 @@ describe('CopilotProvider.sendQuery', () => {
       };
     }
     const violations = await runProviderConformance({
-      // Copilot exposes no structured failure class: every failure is `unknown`.
+      // Copilot's SDK exposes no structured failure class; only Archon's MCP config check
+      // classifies its own error.
       failureCases: [
+        {
+          name: 'missing MCP config file',
+          expected: 'misconfigured',
+          evidence: 'MCP config file not found',
+          run: () =>
+            new CopilotProvider().sendQuery('hi', '/w', undefined, {
+              model: 'gpt-5',
+              nodeConfig: { mcp: 'does-not-exist.mcp.json' },
+            }),
+        },
         {
           name: 'session error',
           expected: 'unknown',

@@ -21,7 +21,7 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
-import { unknownFailureResult } from '../../shared/failure';
+import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -310,7 +310,7 @@ export class PiProvider implements IAgentProvider {
       const err = error as Error;
       // The turn already reported its one result; a later error does not change it.
       if (resultReported) getLog().error({ err }, 'pi.error_after_result');
-      else yield unknownFailureResult('pi_query_failed', err.message);
+      else yield failureResult(failureClassOfThrown(err), 'pi_query_failed', err.message);
     }
     // The bridge ends when `prompt()` resolves, after every run of Pi's agent loop
     // (auto-retry, compaction, queued follow-ups) has finished: nothing more runs.
@@ -425,7 +425,8 @@ export class PiProvider implements IAgentProvider {
       }
     }
     if (!modelRef) {
-      throw new Error(
+      throw new ClassifiedProviderError(
+        'misconfigured',
         'Pi provider requires a model. Set `model` on the workflow node or `assistants.pi.model` in .archon/config.yaml, ' +
           'or select a default model in the `pi` CLI (writes defaultProvider/defaultModel to ~/.pi/agent/settings.json). ' +
           "Format: '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro')."
@@ -433,7 +434,8 @@ export class PiProvider implements IAgentProvider {
     }
     const parsed = parsePiModelRef(modelRef);
     if (!parsed) {
-      throw new Error(
+      throw new ClassifiedProviderError(
+        'misconfigured',
         `Invalid Pi model ref: '${modelRef}'. Expected format '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro').`
       );
     }
@@ -492,6 +494,8 @@ export class PiProvider implements IAgentProvider {
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
+      // Unclassified: this step both reads the operator's files and writes a per-call
+      // temp file, and this catch does not tell those failures apart.
       throw new Error(
         `Pi auth storage init failed: ${e.message}. Check that ~/.pi/agent/auth.json ` +
           '(or $PI_CODING_AGENT_DIR/auth.json) is valid JSON and readable.'
@@ -591,7 +595,8 @@ export class PiProvider implements IAgentProvider {
             : envVarName;
           const envHint = `Set ${varHint} in the environment or codebase env vars (.archon/config.yaml env: section).`;
           const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
-          throw new Error(
+          throw new ClassifiedProviderError(
+            'auth',
             `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
           );
         }
@@ -954,7 +959,8 @@ export class PiProvider implements IAgentProvider {
               'provider extension, install that extension (e.g. `pi install npm:pi-provider-kiro`) ' +
               'and set `enableExtensions: true` in .archon/config.yaml. If it is a catalog provider, ' +
               'refresh the catalog with `pi update --models`.';
-        throw new Error(
+        throw new ClassifiedProviderError(
+          'misconfigured',
           `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ${remedy}`
         );
       }

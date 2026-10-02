@@ -779,15 +779,19 @@ Archon sorts a failed AI attempt into one of three buckets before deciding wheth
 
 | Bucket | Provider failure classes | Retried by default? |
 |--------|--------------------------|---------------------|
-| **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded` | Never (even with `on_error: all`) |
+| **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded`, `misconfigured` | Never (even with `on_error: all`) |
 | **TRANSIENT** | `transient`, `rate_limited` (rate limits get a longer retry budget and backoff) | Yes |
 | **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
+`misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable MCP config file. Fix the configuration and run again.
+
 Every built-in provider reports a typed class:
 
-- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start (a sign-in the organization rejects is `auth`; a configuration problem such as an invalid proxy URL is `unknown`).
+- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, or a declared skill Claude cannot reach.
+- **Codex** reports `misconfigured` when its binary cannot be found (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, or no binary in a compiled install) or its MCP config file cannot be read. Its SDK reports every other failure only as a message string, so those are `unknown`.
+- **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
-- **Codex, Pi and Copilot** expose failures only as message strings, so every failure they report is `unknown`.
+- **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
 
 Set `on_error: all` on a node that should retry `unknown` failures. Only failures the engine detects itself, such as an idle timeout or an empty response, are classified from their text.
 

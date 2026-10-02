@@ -1108,7 +1108,15 @@ describe('typed provider failures decide retry — #3520', () => {
     const kinds = providerFailureClassSchema.options.map(cls =>
       nodeFailureKindOf({ class: cls, evidence: 'x' })
     );
-    expect(kinds).toEqual(['fatal', 'fatal', 'fatal', 'rate_limited', 'transient', 'unknown']);
+    expect(kinds).toEqual([
+      'fatal',
+      'fatal',
+      'fatal',
+      'fatal',
+      'rate_limited',
+      'transient',
+      'unknown',
+    ]);
   });
 
   it('a recorded provider kind wins over text that reads the other way', () => {

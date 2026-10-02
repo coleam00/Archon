@@ -4309,8 +4309,14 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
   // decision the typed class must override (#3520).
   async function attemptsForTypedFailure(
     failure: ProviderFailure,
-    errors: string[] = [failure.evidence]
-  ): Promise<{ calls: number; failedKinds: unknown[]; runFailed: boolean }> {
+    errors: string[] = [failure.evidence],
+    onError?: 'transient' | 'all'
+  ): Promise<{
+    calls: number;
+    failedKinds: unknown[];
+    failedErrors: unknown[];
+    runFailed: boolean;
+  }> {
     const realSetTimeout = globalThis.setTimeout;
     globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
     try {
@@ -4344,18 +4350,22 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
                 id: 'my-node',
                 kind: 'agent',
                 source: { kind: 'command', name: 'my-cmd' },
-                retry: { max_attempts: 1, delay_ms: 1 },
+                retry: { max_attempts: 1, delay_ms: 1, ...(onError ? { on_error: onError } : {}) },
               },
             ],
           },
           workflowRun: makeWorkflowRun('dag-typed-failure-run'),
         })
       );
-      const failedKinds = store.persistWorkflowEvent.mock.calls
+      const failedEvents = store.persistWorkflowEvent.mock.calls
         .map(([event]) => event)
-        .filter(event => event.event_type === 'node_failed')
-        .map(event => event.data?.failure_kind);
-      return { calls, failedKinds, runFailed: store.failWorkflowRun.mock.calls.length > 0 };
+        .filter(event => event.event_type === 'node_failed');
+      return {
+        calls,
+        failedKinds: failedEvents.map(event => event.data?.failure_kind),
+        failedErrors: failedEvents.map(event => event.data?.error),
+        runFailed: store.failWorkflowRun.mock.calls.length > 0,
+      };
     } finally {
       globalThis.setTimeout = realSetTimeout;
     }
@@ -4383,6 +4393,35 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       const auth = await attemptsForTypedFailure({ class: 'auth', evidence });
       expect(auth.calls).toBe(1);
       expect(auth.failedKinds).toEqual(['fatal']);
+    },
+    5_000
+  );
+
+  it.each([undefined, 'transient', 'all'] as const)(
+    'a misconfigured failure is never retried, on_error: %s — #3566',
+    async onError => {
+      const evidence = 'proxy_invalid: HTTPS_PROXY is not a complete URL';
+      const result = await attemptsForTypedFailure(
+        { class: 'misconfigured', evidence },
+        [evidence],
+        onError
+      );
+      expect(result.calls).toBe(1);
+      expect(result.failedKinds).toEqual(['fatal']);
+      expect(result.failedErrors).toEqual([
+        expect.stringContaining("the provider's configuration must be fixed"),
+      ]);
+      expect(result.runFailed).toBe(true);
+      // The same harness does retry an unclassified failure when on_error allows it.
+      const unknown = await attemptsForTypedFailure(
+        { class: 'unknown', evidence },
+        [evidence],
+        onError
+      );
+      expect(unknown.calls).toBe(onError === 'all' ? 2 : 1);
+      expect(unknown.failedErrors).not.toContainEqual(
+        expect.stringContaining("the provider's configuration must be fixed")
+      );
     },
     5_000
   );

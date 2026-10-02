@@ -7,6 +7,8 @@ import { z } from 'zod';
  *  - `auth`             credentials missing, rejected or expired. Never retried.
  *  - `quota_exhausted`  a usage or credit window is used up. Never retried; `resetAt` says when it reopens.
  *  - `budget_exceeded`  the run's spend limit stopped the turn. Never retried.
+ *  - `misconfigured`    the operator's setup must change first: a bad proxy, a missing or too-old
+ *                       CLI, an unknown model, an unreadable config file. Never retried.
  *  - `rate_limited`     the vendor is shedding load. Retried with the patient rate-limit budget.
  *  - `transient`        network, overload or process failure that a new attempt may clear.
  *  - `unknown`          the provider knows the turn failed but not why. Retried only on `on_error: all`.
@@ -15,6 +17,7 @@ export const providerFailureClassSchema = z.enum([
   'auth',
   'quota_exhausted',
   'budget_exceeded',
+  'misconfigured',
   'rate_limited',
   'transient',
   'unknown',

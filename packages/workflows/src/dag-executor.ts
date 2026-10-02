@@ -3606,7 +3606,9 @@ function providerReportedFailure(
   const message =
     failure.class === 'budget_exceeded'
       ? `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`
-      : `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
+      : failure.class === 'misconfigured'
+        ? `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`
+        : `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   return new NodeFailure(nodeFailureKindOf(failure), message, failure);
 }
 

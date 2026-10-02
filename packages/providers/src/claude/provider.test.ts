@@ -2532,7 +2532,7 @@ describe('sendQuery decomposition behaviors', () => {
         })
       );
 
-      expect(failure.class).toBe('unknown');
+      expect(failure.class).toBe('misconfigured');
       expect(failure.evidence).toContain('.claude/skills/');
       expect(mockQuery).not.toHaveBeenCalled();
     });
@@ -2685,7 +2685,7 @@ describe('sendQuery decomposition behaviors', () => {
         })
       );
 
-      expect(failure.class).toBe('unknown');
+      expect(failure.class).toBe('misconfigured');
       expect(failure.evidence).toContain('Container workflows');
       expect(failure.evidence).toContain('project-local .claude/skills/');
       expect(mockQuery).not.toHaveBeenCalled();
@@ -2883,7 +2883,7 @@ describe('typed failures (#1797, #3524)', () => {
     ['overloaded', 'rate_limited'],
     ['server_error', 'transient'],
     ['invalid_request', 'unknown'],
-    ['model_not_found', 'unknown'],
+    ['model_not_found', 'misconfigured'],
     ['max_output_tokens', 'unknown'],
     ['unknown', 'unknown'],
   ])('API error code %s reports a %s failure and keeps the evidence', async (code, expected) => {
@@ -3045,7 +3045,16 @@ describe('typed failures (#1797, #3524)', () => {
     ['gateway_signin_required', 'auth'],
     ['org_pin_api_key_conflict', 'auth'],
     ['worktree_unverified', 'transient'],
-    ['proxy_invalid', 'unknown'],
+    ['proxy_invalid', 'misconfigured'],
+    ['cli_version_too_old', 'misconfigured'],
+    ['bypass_root', 'misconfigured'],
+    ['managed_settings_invalid', 'misconfigured'],
+    ['provider_not_allowed', 'misconfigured'],
+    ['temp_dir_unusable', 'misconfigured'],
+    ['cwd_unavailable', 'misconfigured'],
+    ['shell_tool_missing', 'misconfigured'],
+    ['remote_settings_required_unavailable', 'unknown'],
+    ['org_verify_failed', 'unknown'],
   ])('a startup failure for %s reports %s, classified by its reason', async (reason, expected) => {
     const text = 'Claude Code could not start.';
     mockQuery.mockImplementation(async function* () {
@@ -3134,7 +3143,7 @@ describe('typed failures (#1797, #3524)', () => {
       await collect(client.sendQuery('test', '/worktrees/removed-by-cleanup'))
     );
     const failure = result.failure as { class: string; evidence: string };
-    expect(failure.class).toBe('unknown');
+    expect(failure.class).toBe('misconfigured');
     expect(failure.evidence).toMatch(
       /working directory "\/worktrees\/removed-by-cleanup" does not exist/
     );
@@ -3148,7 +3157,34 @@ describe('typed failures (#1797, #3524)', () => {
     });
 
     const result = onlyResult(await collect(client.sendQuery('test', process.cwd())));
-    expect(result.failure).toEqual({ class: 'unknown', evidence: message });
+    expect(result.failure).toEqual({ class: 'misconfigured', evidence: message });
+  });
+
+  test.each([
+    ['executable_not_found', { errorClass: 'executable_not_found' }],
+    ['a spawn ENOENT', { code: 'ENOENT' }],
+  ])('%s is misconfigured', async (_label, fields) => {
+    const message = 'Claude Code executable not found at /missing/claude';
+    mockQuery.mockImplementation(async function* () {
+      throw sdkThrown(message, fields);
+    });
+
+    const result = onlyResult(await collect(client.sendQuery('test', process.cwd())));
+    expect(result.failure).toEqual({ class: 'misconfigured', evidence: message });
+  });
+
+  test('a missing MCP config file is misconfigured, before any query', async () => {
+    const result = onlyResult(
+      await collect(
+        client.sendQuery('test', process.cwd(), undefined, {
+          nodeConfig: { mcp: 'does-not-exist.mcp.json' },
+        })
+      )
+    );
+    const failure = result.failure as { class: string; evidence: string };
+    expect(failure.class).toBe('misconfigured');
+    expect(failure.evidence).toContain('MCP config file not found');
+    expect(mockQuery).not.toHaveBeenCalled();
   });
 
   test('a first-event timeout is transient, not a cancellation', async () => {
@@ -3393,6 +3429,21 @@ describe('typed failures (#1797, #3524)', () => {
               subtype: 'error_max_budget_usd',
               is_error: true,
               errors: ['Reached maximum budget'],
+              session_id: 's',
+            },
+          ]),
+        },
+        {
+          name: 'CLI below the minimum version',
+          expected: 'misconfigured',
+          evidence: 'Claude Code is too old',
+          run: turn([
+            {
+              type: 'result',
+              subtype: 'error_during_execution',
+              is_error: true,
+              errors: ['Claude Code is too old'],
+              startup_failure_reason: 'cli_version_too_old',
               session_id: 's',
             },
           ]),

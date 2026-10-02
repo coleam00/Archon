@@ -228,6 +228,8 @@ export function buildResultChunk(
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
   // Built by assignment on a typed value so a misspelled key fails to compile.
+  // Unclassified: Pi folds a setup `ModelsError` into this message's text, so its
+  // `code` never reaches Archon.
   const chunk: ResultChunk = isError
     ? unknownFailureResult(last.stopReason, last.errorMessage)
     : { type: 'result' };

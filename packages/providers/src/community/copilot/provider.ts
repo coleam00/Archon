@@ -37,7 +37,7 @@ import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } fro
 import { clampEffort } from '@archon/paths/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
-import { unknownFailureResult } from '../../shared/failure';
+import { failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -416,8 +416,8 @@ export class CopilotProvider implements IAgentProvider {
   /**
    * One call is one turn. A failure, including one thrown while setting the turn up,
    * ends in a `result` carrying a typed `failure`, then `settled`: Copilot reports
-   * no structured failure class, so every failure is `unknown` with its text as
-   * evidence. Only cancellation throws.
+   * no structured failure class, so a failure is `unknown` with its text as evidence
+   * unless Archon's own MCP config check classified it. Only cancellation throws.
    */
   async *sendQuery(
     prompt: string,
@@ -436,7 +436,7 @@ export class CopilotProvider implements IAgentProvider {
       const err = error as Error;
       // The turn already reported its one result; a later error does not change it.
       if (resultReported) getLog().error({ err }, 'copilot.error_after_result');
-      else yield unknownFailureResult('copilot_query_failed', err.message);
+      else yield failureResult(failureClassOfThrown(err), 'copilot_query_failed', err.message);
     }
     // Nothing more runs for this turn once its stream has ended.
     yield { type: 'settled' };

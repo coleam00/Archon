@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Provider SDKs updated to latest: Claude Agent SDK 0.3.287, Codex SDK 0.160.0, Pi 1.0.0. When Claude Code refuses to start, its stated reason now decides the failure class: a sign-in the organization rejects is an auth failure and is not retried, and a configuration problem such as an invalid proxy URL is no longer retried as a crashed process.
+- A provider setup error is now reported as a `misconfigured` failure and is never retried, even with `on_error: all`; chat and the run's failure message say to fix the configuration. Claude reports it for a configuration reason it refuses to start with, a missing or unlaunchable executable, and an unknown model. Claude, Codex and Copilot report it for an unreadable MCP config file, Claude and Codex for a binary that cannot be found, and Pi for a missing or malformed model. Claude's `provider_not_allowed` refusal moves from an auth failure to `misconfigured`, and Pi with no credentials for its provider is now an auth failure. (#3566)
 
 ## [0.11.1] - 2026-09-25
 

@@ -63,6 +63,7 @@ import {
 import { createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+import { ClassifiedProviderError } from '../shared/failure';
 import { clampEffort, type AssertNever } from '@archon/paths/effort';
 import {
   claudeSkillSearchRoots,
@@ -263,7 +264,8 @@ export function withPerRequestSystemPrompt(
 // A failed turn ends in one `result` chunk whose `failure` class comes only from
 // structured SDK signals: the typed assistant-message error code, the HTTP status the
 // result carries as a field, the result subtype, the subscription window reported by
-// `rate_limit_event`, and the typed fields the SDK sets on the errors it throws. The
+// `rate_limit_event`, the typed fields the SDK sets on the errors it throws, and the class
+// Archon's own setup checks attach to theirs (`ClassifiedProviderError`). The
 // vendor's words travel as `evidence` and nothing branches on them, so a reworded
 // message keeps its class. The provider does not retry; the engine owns that policy.
 
@@ -312,6 +314,9 @@ export function classifyClaudeApiError(
       return failureOf('auth', evidence);
     case 'billing_error':
       return failureOf('quota_exhausted', evidence);
+    case 'model_not_found':
+      // The model id comes from the node or config; another attempt asks for it again.
+      return failureOf('misconfigured', evidence);
     case 'rate_limit': {
       if (rateLimit?.status !== 'rejected') return failureOf('rate_limited', evidence);
       const failure = failureOf('quota_exhausted', evidence);
@@ -326,7 +331,6 @@ export function classifyClaudeApiError(
     case 'server_error':
       return failureOf('transient', evidence);
     case 'invalid_request':
-    case 'model_not_found':
     case 'max_output_tokens':
     case 'unknown':
       // No class of their own; the status field may still say more (a 429 or 529
@@ -341,32 +345,33 @@ export function classifyClaudeApiError(
 }
 
 /**
- * The class a reason Claude Code gave for refusing to start can justify. Most reasons
- * need the operator to change configuration, which no class names, so they stay
- * `unknown`; only sign-in refusals and the one reason the SDK documents as retryable
- * have a class of their own.
+ * The class a reason Claude Code gave for refusing to start can justify. Sign-in
+ * refusals are `auth`; a setup the operator must change is `misconfigured`; the one
+ * reason the SDK documents as retryable is `transient`. A reason that could be either a
+ * setup fault or a passing condition stays `unknown`.
  */
 function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailureClass {
   switch (reason) {
     case 'org_pin_api_key_conflict':
-    case 'provider_not_allowed':
     case 'org_pin_mismatch':
     case 'gateway_signin_required':
     case 'gateway_access_denied':
       return 'auth';
-    case 'worktree_unverified':
-      return 'transient';
-    case 'org_verify_failed': // network or a revoked token; the reason does not say which
+    case 'provider_not_allowed': // the session is set up for a provider managed settings disallow
     case 'managed_settings_invalid':
-    case 'remote_settings_required_unavailable':
     case 'proxy_invalid':
     case 'temp_dir_unusable':
     case 'cwd_unavailable':
     case 'shell_tool_missing':
-    case 'session_held_by_background':
-    case 'worktree_resume_refused':
     case 'cli_version_too_old':
     case 'bypass_root':
+      return 'misconfigured';
+    case 'worktree_unverified':
+      return 'transient';
+    case 'org_verify_failed': // network or a revoked token; the reason does not say which
+    case 'remote_settings_required_unavailable': // unreachable or missing; the reason does not say which
+    case 'session_held_by_background':
+    case 'worktree_resume_refused':
       return 'unknown';
     default: {
       // A reason newer than this mapping. Unclassified is honest; the evidence names it.
@@ -395,7 +400,7 @@ export function classifyClaudeErrorResult(
  * A spawn that fails because the WORKING DIRECTORY is gone reports ENOENT against the
  * executable's path, not the cwd's, and the SDK then blames a libc mismatch. When the
  * SDK says the executable could not be launched and the cwd is missing, say so. This
- * only rewrites the evidence; the class stays `unknown`.
+ * only rewrites the evidence; the class is `misconfigured` either way.
  */
 function launchFailureEvidence(error: Error, hostCwd: string | undefined): string {
   if (hostCwd === undefined) return error.message;
@@ -425,6 +430,7 @@ export function classifyClaudeThrownError(
 ): ProviderFailure {
   const withStderr = stderr ? `${error.message} (stderr: ${stderr})` : error.message;
   if (error instanceof ClaudeFirstEventTimeoutError) return failureOf('transient', error.message);
+  if (error instanceof ClassifiedProviderError) return failureOf(error.failureClass, error.message);
   switch (sdkErrorClass(error)) {
     case 'process_exited_nonzero':
     case 'process_killed_by_signal':
@@ -433,11 +439,12 @@ export function classifyClaudeThrownError(
       return failureOf('transient', withStderr);
     case 'executable_launch_failed':
     case 'executable_not_found':
-      return failureOf('unknown', launchFailureEvidence(error, hostCwd));
+      // A missing or unlaunchable binary, or a missing working directory: setup, not luck.
+      return failureOf('misconfigured', launchFailureEvidence(error, hostCwd));
     default:
       // An unwrapped spawn error carries the errno as a field.
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return failureOf('unknown', launchFailureEvidence(error, hostCwd));
+        return failureOf('misconfigured', launchFailureEvidence(error, hostCwd));
       }
       return failureOf('unknown', withStderr);
   }
@@ -659,7 +666,8 @@ async function applyNodeConfig(
             { nodeId: nodeConfig.nodeId, unreachable, skillSearch },
             'claude.declared_skills_unreachable'
           );
-          throw new Error(
+          throw new ClassifiedProviderError(
+            'misconfigured',
             `Claude skill${unreachable.length === 1 ? '' : 's'} not found in an enabled Claude-native skill directory: ${unreachable.join(', ')}. Install ${unreachable.length === 1 ? 'it' : 'them'} under ${installLocation}.${containerNote}`
           );
         }

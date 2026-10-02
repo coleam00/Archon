@@ -24,6 +24,7 @@ import {
   classifyBinaryPath,
   type BinaryPathKind,
 } from '../shared/binary-resolution';
+import { ClassifiedProviderError } from '../shared/failure';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {
@@ -120,7 +121,8 @@ function validateAndExpand(rawPath: string, pin: CodexBinaryPin): string {
 
   // Only compiled installs use the vendor/autodetect fallback after removing a pin.
   const candidate = BUNDLED_IS_BINARY ? findLowerTierBinary() : undefined;
-  throw new Error(
+  throw new ClassifiedProviderError(
+    'misconfigured',
     appendBinaryCandidateHint(message, {
       candidatePath: candidate?.path,
       binaryLabel: 'Codex',
@@ -184,7 +186,8 @@ export async function resolveCodexBinaryWithSource(
 
   // 5. Not found — throw with install instructions
   const vendorPath = `~/.archon/${CODEX_VENDOR_DIR}/`;
-  throw new Error(
+  throw new ClassifiedProviderError(
+    'misconfigured',
     'Codex CLI binary not found. The Codex provider requires a native binary\n' +
       'that cannot be resolved automatically in compiled Archon builds.\n\n' +
       'To fix, choose one of:\n' +

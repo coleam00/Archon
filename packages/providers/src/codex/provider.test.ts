@@ -2276,6 +2276,27 @@ describe('CodexProvider', () => {
                 mockRunStreamed.mockRejectedValue(new Error('Codex Exec exited with code 1'))
               ),
             },
+            {
+              name: 'binary pin that does not exist',
+              expected: 'misconfigured',
+              evidence: 'does not exist',
+              run: () => {
+                resetCodexSingleton(); // an earlier case already built the client
+                return client.sendQuery('test', '/workspace', undefined, {
+                  assistantConfig: { codexBinaryPath: '/nonexistent/codex-bin' },
+                });
+              },
+            },
+            {
+              name: 'binary missing at spawn',
+              expected: 'misconfigured',
+              evidence: 'spawn /pkg/codex ENOENT',
+              run: turn(() =>
+                mockRunStreamed.mockRejectedValue(
+                  Object.assign(new Error('spawn /pkg/codex ENOENT'), { code: 'ENOENT' })
+                )
+              ),
+            },
           ],
         });
         expect(violations).toEqual([]);

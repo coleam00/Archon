@@ -521,6 +521,7 @@ describe('PiProvider', () => {
     const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'sonnet' })
     );
+    expect(failure?.class).toBe('misconfigured');
     expect(failure?.evidence).toContain('Invalid Pi model ref');
   });
 
@@ -1045,6 +1046,7 @@ describe('PiProvider', () => {
       })
     );
 
+    expect(failure?.class).toBe('misconfigured');
     expect(failure?.evidence).toContain('Pi model not found');
     expect(failure?.evidence).toContain('pi update --models');
     expect(mockLogger.warn).toHaveBeenCalledWith(
@@ -1064,6 +1066,7 @@ describe('PiProvider', () => {
         model: 'google/gemini-2.5-pro',
       })
     );
+    expect(failure?.class).toBe('auth');
     expect(failure?.evidence).toContain('no credentials for provider');
     expect(failure?.evidence).toContain('GEMINI_API_KEY');
     expect(failure?.evidence).toContain('/login');
@@ -2284,7 +2287,7 @@ describe('PiProvider', () => {
         },
         {
           name: 'no model configured',
-          expected: 'unknown',
+          expected: 'misconfigured',
           evidence: 'Pi provider requires a model',
           run: () => {
             delete process.env.GEMINI_API_KEY;
