@@ -100,12 +100,14 @@ describe('credentials/delivery', () => {
       const file = r.files![0]!;
       expect(file.path).toBe(join(ART_DIR, 'codex-home', 'auth.json'));
       // Contents maps onto the Codex CLI auth.json shape (server/.../setup-auth.ts):
-      // { OPENAI_API_KEY: null, tokens: { access_token, ... }, last_refresh }.
+      // { auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { access_token, ... }, last_refresh }.
       const parsed = JSON.parse(file.contents) as {
+        auth_mode: string;
         OPENAI_API_KEY: null;
         tokens: { access_token: string };
         last_refresh: string;
       };
+      expect(parsed.auth_mode).toBe('chatgpt');
       expect(parsed.OPENAI_API_KEY).toBeNull();
       expect(parsed.tokens.access_token).toBe('oauth-bearer');
       expect(typeof parsed.last_refresh).toBe('string');
@@ -125,10 +127,12 @@ describe('credentials/delivery', () => {
       };
       const r = deliverCredential('codex', cred, { artifactsDir: ART_DIR });
       const parsed = JSON.parse(r.files![0]!.contents) as {
+        auth_mode: string;
         OPENAI_API_KEY: null;
         tokens: Record<string, string>;
         last_refresh: string;
       };
+      expect(parsed.auth_mode).toBe('chatgpt');
       expect(parsed.OPENAI_API_KEY).toBeNull();
       expect(parsed.tokens).toEqual({
         id_token: 'idt-real', // captured by openai-oauth.ts (Pi drops it)
