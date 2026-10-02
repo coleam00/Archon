@@ -416,8 +416,8 @@ export class CopilotProvider implements IAgentProvider {
   /**
    * One call is one turn. A failure, including one thrown while setting the turn up,
    * ends in a `result` carrying a typed `failure`, then `settled`: Copilot reports
-   * no structured failure class, so every failure is `unknown` with its text as
-   * evidence. Only cancellation throws.
+   * no structured failure class, so a failure is `unknown` with its text as evidence
+   * unless Archon's own MCP config check classified it. Only cancellation throws.
    */
   async *sendQuery(
     prompt: string,
