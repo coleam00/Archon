@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { ClassifiedProviderError } from '../shared/failure';
@@ -15,8 +15,7 @@ async function thrownBy(promise: Promise<unknown>): Promise<unknown> {
 
 describe('loadMcpConfig failure classes', () => {
   afterEach(() => {
-    // Restore any readFile spy between cases.
-    (fsPromises.readFile as { mockRestore?: () => void }).mockRestore?.();
+    mock.restore();
   });
 
   test.each([
