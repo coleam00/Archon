@@ -31,8 +31,7 @@ export type ResolvedModel = z.infer<typeof resolvedModelSchema>;
 
 /**
  * Why a turn stopped, in ACP's `StopReason` names. A provider omits a native reason it
- * cannot map rather than inventing one. `providerResultSchema.stopReason` does not enforce
- * this yet: it still accepts the SDK's native string until every provider maps to these names.
+ * cannot map rather than inventing one.
  */
 export const providerStopReasonSchema = z.enum([
   'end_turn',
@@ -59,8 +58,8 @@ export const providerResultSchema = z.object({
   /** SDK-provided error detail strings. Populated when isError is true. */
   errors: z.array(z.string()).optional(),
   cost: z.number().optional(),
-  /** The SDK's native stop reason. Narrows to `providerStopReasonSchema` once every provider maps to it. */
-  stopReason: z.string().optional(),
+  /** Why the turn stopped, mapped from the SDK's native reason; absent when it has no ACP name. */
+  stopReason: providerStopReasonSchema.optional(),
   numTurns: z.number().optional(),
   /** Concrete model reported by the provider; omitted when its SDK does not expose one. */
   resolvedModel: resolvedModelSchema.optional(),

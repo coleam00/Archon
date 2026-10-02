@@ -8,6 +8,7 @@ import {
   type ThreadOptions,
   type TurnOptions,
   type TurnCompletedEvent,
+  type ThreadItem,
   type ThreadStartedEvent,
 } from '@openai/codex-sdk';
 import type {
@@ -15,12 +16,14 @@ import type {
   SendQueryOptions,
   NodeConfig,
   MessageChunk,
+  ProviderEvent,
+  ProviderWarning,
   ResultChunk,
   TokenUsage,
   ProviderCapabilities,
   CodexProviderDefaults,
 } from '../types';
-import type { ProviderFailureClass } from '@archon/provider-contract';
+import { truncateToolOutput, type ProviderFailureClass } from '@archon/provider-contract';
 import { failureClassOfThrown, failureResult } from '../shared/failure';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
@@ -33,6 +36,7 @@ import {
   normalizeJsonSchemaForOpenAiStrict,
 } from '../shared/structured-output';
 import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
+import { closeOpenToolCalls } from '../shared/tool-calls';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -43,11 +47,6 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type CodexConfigOverrides = NonNullable<CodexOptions['config']>;
 type CodexConfigValue = CodexConfigOverrides[string];
-
-interface ProviderWarning {
-  code: string;
-  message: string;
-}
 
 // Singleton Codex instance (async because binary path resolution is async)
 let codexInstance: Codex | null = null;
@@ -408,18 +407,103 @@ function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions)
 
 // ─── Stream Normalizer ───────────────────────────────────────────────────
 
-/** State maintained across Codex event stream normalization. */
-interface CodexStreamState {
-  lastTodoListSignature?: string;
-  startedToolItemIds: Set<string>;
-  completedToolItemIds: Set<string>;
+type ToolCallEvent = Extract<ProviderEvent, { type: 'tool_call' }>;
+type ToolCallUpdateEvent = Extract<ProviderEvent, { type: 'tool_call_update' }>;
+
+/**
+ * The `tool_call` for an item that runs a tool, or `undefined` for an item that does not.
+ * `title` is what the operator reads (the command, the query, `server/tool`); `name` is the
+ * kind of tool.
+ */
+function toolCallOf(item: ThreadItem): ToolCallEvent | undefined {
+  switch (item.type) {
+    case 'command_execution':
+      return {
+        type: 'tool_call',
+        toolCallId: item.id,
+        name: 'command_execution',
+        title: item.command,
+        rawInput: { command: item.command },
+      };
+    case 'web_search':
+      return {
+        type: 'tool_call',
+        toolCallId: item.id,
+        name: 'web_search',
+        title: item.query,
+        rawInput: { query: item.query },
+      };
+    case 'mcp_tool_call': {
+      const call: ToolCallEvent = {
+        type: 'tool_call',
+        toolCallId: item.id,
+        name: item.tool,
+        title: `${item.server}/${item.tool}`,
+      };
+      if (typeof item.arguments === 'object' && item.arguments !== null) {
+        call.rawInput = item.arguments as Record<string, unknown>;
+      }
+      return call;
+    }
+    case 'file_change':
+      return {
+        type: 'tool_call',
+        toolCallId: item.id,
+        name: 'file_change',
+        rawInput: { changes: item.changes },
+      };
+    default:
+      return undefined;
+  }
 }
 
-function getMcpToolName(item: Record<string, unknown>): string {
-  const server = item.server as string | undefined;
-  const tool = item.tool as string | undefined;
-  const toolInfo = server && tool ? `${server}/${tool}` : (tool ?? server ?? 'MCP tool');
-  return `🔌 MCP: ${toolInfo}`;
+/** The `tool_call_update` that closes a completed tool item. */
+function toolCallUpdateOf(
+  item: Extract<
+    ThreadItem,
+    { type: 'command_execution' | 'web_search' | 'mcp_tool_call' | 'file_change' }
+  >
+): ToolCallUpdateEvent {
+  switch (item.type) {
+    case 'command_execution': {
+      const update: ToolCallUpdateEvent = {
+        type: 'tool_call_update',
+        toolCallId: item.id,
+        status:
+          item.status === 'failed' || (item.exit_code !== undefined && item.exit_code !== 0)
+            ? 'failed'
+            : item.status === 'completed'
+              ? 'completed'
+              : 'cancelled',
+        ...truncateToolOutput(item.aggregated_output),
+      };
+      if (item.exit_code !== undefined) update.exitCode = item.exit_code;
+      return update;
+    }
+    case 'web_search':
+      return { type: 'tool_call_update', toolCallId: item.id, status: 'completed' };
+    case 'mcp_tool_call':
+      if (item.status === 'failed') {
+        return {
+          type: 'tool_call_update',
+          toolCallId: item.id,
+          status: 'failed',
+          ...truncateToolOutput(item.error?.message ?? 'MCP tool failed'),
+        };
+      }
+      return {
+        type: 'tool_call_update',
+        toolCallId: item.id,
+        status: 'completed',
+        ...truncateToolOutput(item.result?.content ? JSON.stringify(item.result.content) : ''),
+      };
+    case 'file_change':
+      return {
+        type: 'tool_call_update',
+        toolCallId: item.id,
+        status: item.status === 'failed' ? 'failed' : 'completed',
+      };
+  }
 }
 
 /**
@@ -430,13 +514,10 @@ async function* streamCodexEvents(
   events: AsyncIterable<Record<string, unknown>>,
   hasOutputFormat: boolean,
   threadId: string | null | undefined,
-  abortSignal?: AbortSignal,
-  surfaceMcpClientErrors = false
+  abortSignal?: AbortSignal
 ): AsyncGenerator<MessageChunk> {
-  const state: CodexStreamState = {
-    startedToolItemIds: new Set<string>(),
-    completedToolItemIds: new Set<string>(),
-  };
+  const startedToolItemIds = new Set<string>();
+  const completedToolItemIds = new Set<string>();
   let accumulatedText = '';
 
   // A new thread's id is assigned during the run via the `thread.started` event
@@ -456,7 +537,7 @@ async function* streamCodexEvents(
   // after the loop so the dag-executor's `msg.isError` branch catches it
   // — matching Claude's contract. Both terminal branches below `return`,
   // so reaching the post-loop block can only mean no terminal fired.
-  let lastNonMcpError: string | undefined;
+  let lastError: string | undefined;
 
   for await (const event of events) {
     if (abortSignal?.aborted) {
@@ -485,31 +566,15 @@ async function* streamCodexEvents(
     }
 
     if (event.type === 'item.started') {
-      const item = event.item as Record<string, unknown>;
-      const itemType = item.type as string;
-      const itemId = item.id as string;
-      getLog().debug({ eventType: event.type, itemType, itemId }, 'item_started');
-
-      let toolName: string | undefined;
-      if (itemType === 'command_execution') {
-        if (typeof item.command === 'string' && item.command.length > 0) {
-          toolName = item.command;
-        } else {
-          getLog().warn({ itemId }, 'command_execution_missing_command');
-        }
-      } else if (itemType === 'web_search') {
-        if (typeof item.query === 'string' && item.query.length > 0) {
-          toolName = `🔍 Searching: ${item.query}`;
-        } else {
-          getLog().debug({ itemId }, 'web_search_missing_query');
-        }
-      } else if (itemType === 'mcp_tool_call') {
-        toolName = getMcpToolName(item);
-      }
-
-      if (toolName && itemId && !state.startedToolItemIds.has(itemId)) {
-        state.startedToolItemIds.add(itemId);
-        yield { type: 'tool', toolName, toolCallId: itemId };
+      const item = event.item as ThreadItem;
+      getLog().debug(
+        { eventType: event.type, itemType: item.type, itemId: item.id },
+        'item_started'
+      );
+      const call = toolCallOf(item);
+      if (call && !startedToolItemIds.has(item.id)) {
+        startedToolItemIds.add(item.id);
+        yield call;
       }
       continue;
     }
@@ -517,20 +582,11 @@ async function* streamCodexEvents(
     if (event.type === 'error') {
       const errorEvent = event as { message: string };
       getLog().error({ message: errorEvent.message }, 'stream_error');
-      // MCP client errors are non-fatal — Codex retries internally and may
-      // still reach turn.completed. Other errors are captured; whether they
-      // are fatal is decided when the stream terminates: turn.completed
-      // means the SDK recovered, so the captured error is dropped; loop
-      // closure without a terminal means the captured error caused the
-      // stream to abort and is surfaced as the failure cause.
-      const isMcpClientError = errorEvent.message.toLowerCase().includes('mcp client');
-      if (!isMcpClientError) {
-        lastNonMcpError = errorEvent.message;
-      } else if (surfaceMcpClientErrors) {
-        // MCP was explicitly configured for this node — surface MCP client
-        // errors as system warnings so the workflow author can diagnose.
-        yield { type: 'system', content: `⚠️ ${errorEvent.message}` };
-      }
+      // Whether an error is fatal is decided when the stream terminates: turn.completed
+      // means the SDK recovered (Codex retries MCP client errors internally); loop
+      // closure without a terminal makes the last error the failure's evidence.
+      lastError = errorEvent.message;
+      yield { type: 'warning', code: 'codex.error', message: errorEvent.message };
       continue;
     }
 
@@ -543,204 +599,61 @@ async function* streamCodexEvents(
     }
 
     if (event.type === 'item.completed') {
-      const item = event.item as Record<string, unknown>;
-      const itemType = item.type as string;
-
+      const item = event.item as ThreadItem;
       const logContext: Record<string, unknown> = {
         eventType: event.type,
-        itemType,
+        itemType: item.type,
         itemId: item.id,
       };
-      if (itemType === 'command_execution' && item.command) {
-        logContext.command = item.command;
-      }
+      if (item.type === 'command_execution') logContext.command = item.command;
       getLog().debug(logContext, 'item_completed');
 
-      const itemId = item.id as string;
-      const isToolItem =
-        itemType === 'command_execution' ||
-        itemType === 'web_search' ||
-        itemType === 'mcp_tool_call';
-      if (isToolItem) {
-        if (state.completedToolItemIds.has(itemId)) {
-          getLog().warn({ itemId, itemType }, 'tool_item_duplicate_completion');
-          continue;
-        }
-        state.completedToolItemIds.add(itemId);
-        if (!state.startedToolItemIds.has(itemId)) {
-          getLog().warn({ itemId, itemType }, 'tool_item_completed_without_start');
-        }
-      }
-
-      switch (itemType) {
+      switch (item.type) {
         case 'agent_message':
           if (item.text) {
             // Multiple agent_message items can arrive in one turn (preamble + answer);
             // keep only the last — it's the authoritative structured-output candidate.
-            if (hasOutputFormat) accumulatedText = item.text as string;
-            yield { type: 'assistant', content: item.text as string };
-          }
-          break;
-
-        case 'command_execution':
-          if (item.command) {
-            const cmd = item.command as string;
-            const exitCode = item.exit_code as number | null | undefined;
-            const exitSuffix =
-              exitCode != null && exitCode !== 0 ? `\n[exit code: ${String(exitCode)}]` : '';
-            let toolOutcome: 'success' | 'error' | 'unknown';
-            if (exitCode === 0) {
-              toolOutcome = 'success';
-            } else if (exitCode == null) {
-              toolOutcome = 'unknown';
-            } else {
-              toolOutcome = 'error';
-            }
-            yield {
-              type: 'tool_result',
-              toolName: cmd,
-              toolOutput: ((item.aggregated_output as string) ?? '') + exitSuffix,
-              toolCallId: itemId,
-              toolOutcome,
-              ...(exitCode != null ? { exitCode } : {}),
-            };
-          } else {
-            getLog().warn({ itemId: item.id }, 'command_execution_missing_command');
+            if (hasOutputFormat) accumulatedText = item.text;
+            yield { type: 'agent_message_chunk', text: item.text };
           }
           break;
 
         case 'reasoning':
-          if (item.text) {
-            yield { type: 'thinking', content: item.text as string };
-          }
+          if (item.text) yield { type: 'agent_thought_chunk', text: item.text };
           break;
 
+        case 'command_execution':
         case 'web_search':
-          if (item.query) {
-            const searchToolName = `🔍 Searching: ${item.query as string}`;
-            yield {
-              type: 'tool_result',
-              toolName: searchToolName,
-              toolOutput: '',
-              toolCallId: itemId,
-              toolOutcome: 'unknown',
-            };
-          } else {
-            getLog().debug({ itemId: item.id }, 'web_search_missing_query');
-          }
-          break;
-
-        case 'todo_list': {
-          const items = item.items as { text?: string; completed?: boolean }[] | undefined;
-          if (Array.isArray(items) && items.length > 0) {
-            const normalizedItems = items.map(t => ({
-              text: typeof t.text === 'string' ? t.text : '(unnamed task)',
-              completed: t.completed ?? false,
-            }));
-            const signature = JSON.stringify(normalizedItems);
-            if (signature !== state.lastTodoListSignature) {
-              state.lastTodoListSignature = signature;
-              const taskList = normalizedItems
-                .map(t => `${t.completed ? '✅' : '⬜'} ${t.text}`)
-                .join('\n');
-              yield { type: 'system', content: `📋 Tasks:\n${taskList}` };
-            }
-          } else {
-            getLog().debug({ itemId: item.id }, 'todo_list_empty_or_invalid');
-          }
-          break;
-        }
-
+        case 'mcp_tool_call':
         case 'file_change': {
-          const statusIcon = (item.status as string) === 'failed' ? '❌' : '✅';
-          const rawError = 'error' in item ? (item as { error?: unknown }).error : undefined;
-          const fileErrorMessage =
-            typeof rawError === 'string'
-              ? rawError
-              : typeof rawError === 'object' && rawError !== null && 'message' in rawError
-                ? String((rawError as { message: unknown }).message)
-                : undefined;
-
-          const changes = item.changes as { kind: string; path?: string }[] | undefined;
-          if (Array.isArray(changes) && changes.length > 0) {
-            const changeList = changes
-              .map(c => {
-                const icon = c.kind === 'add' ? '➕' : c.kind === 'delete' ? '➖' : '📝';
-                return `${icon} ${c.path ?? '(unknown file)'}`;
-              })
-              .join('\n');
-            const errorSuffix =
-              (item.status as string) === 'failed' && fileErrorMessage
-                ? `\n${fileErrorMessage}`
-                : '';
-            yield {
-              type: 'system',
-              content: `${statusIcon} File changes:\n${changeList}${errorSuffix}`,
-            };
-          } else if ((item.status as string) === 'failed') {
+          if (completedToolItemIds.has(item.id)) {
             getLog().warn(
-              { itemId: item.id, status: item.status },
-              'file_change_failed_no_changes'
+              { itemId: item.id, itemType: item.type },
+              'tool_item_duplicate_completion'
             );
-            const failMsg = fileErrorMessage
-              ? `❌ File change failed: ${fileErrorMessage}`
-              : '❌ File change failed';
-            yield { type: 'system', content: failMsg };
-          } else {
-            getLog().debug({ itemId: item.id, status: item.status }, 'file_change_no_changes');
+            break;
           }
-          break;
-        }
-
-        case 'mcp_tool_call': {
-          const server = item.server as string | undefined;
-          const tool = item.tool as string | undefined;
-          const mcpToolName = getMcpToolName(item);
-
-          if ((item.status as string) === 'failed') {
+          completedToolItemIds.add(item.id);
+          // A file change is reported only once it is applied, and a start can be missed:
+          // open the call here so its update always has one.
+          if (!startedToolItemIds.has(item.id)) {
+            startedToolItemIds.add(item.id);
+            const call = toolCallOf(item);
+            if (call) yield call;
+          }
+          if (item.type === 'mcp_tool_call' && item.status === 'failed') {
             getLog().warn(
-              { server, tool, error: item.error, itemId: item.id },
+              { server: item.server, tool: item.tool, error: item.error, itemId: item.id },
               'mcp_tool_call_failed'
             );
-            const mcpError = item.error as { message?: string } | undefined;
-            const errMsg = mcpError?.message
-              ? `❌ Error: ${mcpError.message}`
-              : '❌ Error: MCP tool failed';
-            yield {
-              type: 'tool_result',
-              toolName: mcpToolName,
-              toolOutput: errMsg,
-              toolCallId: itemId,
-              toolOutcome: 'error',
-            };
-          } else {
-            let toolOutput = '';
-            const mcpResult = item.result as { content?: unknown } | undefined;
-            if (mcpResult?.content) {
-              if (Array.isArray(mcpResult.content)) {
-                toolOutput = JSON.stringify(mcpResult.content);
-              } else {
-                getLog().warn(
-                  {
-                    itemId: item.id,
-                    server,
-                    tool,
-                    resultType: typeof mcpResult.content,
-                  },
-                  'mcp_tool_call_unexpected_result_shape'
-                );
-              }
-            }
-            yield {
-              type: 'tool_result',
-              toolName: mcpToolName,
-              toolOutput,
-              toolCallId: itemId,
-              toolOutcome: 'success',
-            };
           }
+          yield toolCallUpdateOf(item);
           break;
         }
+
+        default:
+          // todo_list and error items have no reader; they stay in the debug log above.
+          break;
       }
     }
 
@@ -762,9 +675,10 @@ async function* streamCodexEvents(
             'codex.structured_output_not_json'
           );
           yield {
-            type: 'system',
-            content:
-              '⚠️ Structured output requested but Codex returned non-JSON text. ' +
+            type: 'warning',
+            code: 'codex.structured_output_not_json',
+            message:
+              'Structured output requested but Codex returned non-JSON text. ' +
               'Downstream $nodeId.output.field references may not evaluate correctly.',
           };
         }
@@ -788,7 +702,7 @@ async function* streamCodexEvents(
   // turns this into a thrown node failure — distinct from the empty-output
   // guard further down, which returns `{ state: 'failed' }` for AI nodes
   // that streamed nothing but never raised an isError.
-  const message = lastNonMcpError ?? 'Codex stream closed without turn.completed or turn.failed';
+  const message = lastError ?? 'Codex stream closed without turn.completed or turn.failed';
   getLog().error({ message }, 'stream_incomplete');
   yield codexFailureResult('unknown', 'codex_stream_incomplete', message, resolvedThreadId);
 }
@@ -883,7 +797,7 @@ export class CodexProvider implements IAgentProvider {
           const uniqueVars = [...new Set(missingVars)];
           getLog().warn({ missingVars: uniqueVars }, 'codex.mcp_env_vars_missing');
           providerWarnings.push({
-            code: 'mcp_env_vars_missing',
+            code: 'codex.mcp_env_vars_missing',
             message: `MCP config references undefined env vars: ${uniqueVars.join(', ')}. These will be empty strings - MCP servers may fail to authenticate.`,
           });
         }
@@ -895,7 +809,7 @@ export class CodexProvider implements IAgentProvider {
         : declaredMcpConfigOverrides;
 
       for (const warning of providerWarnings) {
-        yield { type: 'system', content: `⚠️ ${warning.message}` };
+        yield { type: 'warning', ...warning };
       }
 
       // 1. Initialize SDK and build thread options
@@ -931,8 +845,9 @@ export class CodexProvider implements IAgentProvider {
 
       if (sessionResumeFailed) {
         yield {
-          type: 'system',
-          content: '⚠️ Could not resume previous session. Starting fresh conversation.',
+          type: 'warning',
+          code: 'codex.resume_failed',
+          message: 'Could not resume previous session. Starting fresh conversation.',
         };
       }
 
@@ -951,12 +866,15 @@ export class CodexProvider implements IAgentProvider {
         try {
           const result = await thread.runStreamed(effectivePrompt, turnOptions);
           for await (const chunk of withResumedOutcome(
-            streamCodexEvents(
-              result.events as AsyncIterable<Record<string, unknown>>,
-              hasOutputFormat,
-              thread.id,
-              abortSignal,
-              Boolean(requestOptions?.nodeConfig?.mcp)
+            closeOpenToolCalls(
+              streamCodexEvents(
+                result.events as AsyncIterable<Record<string, unknown>>,
+                hasOutputFormat,
+                thread.id,
+                abortSignal
+              ),
+              // A Codex turn has no background work: its result ends it.
+              { resultEndsTurn: true }
             ),
             resumedOutcome(resumeSessionId, !sessionResumeFailed)
           )) {
@@ -982,9 +900,10 @@ export class CodexProvider implements IAgentProvider {
             'codex.workflow_skill_catalog_suppression_unsupported'
           );
           yield {
-            type: 'system',
-            content:
-              '⚠️ This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
+            type: 'warning',
+            code: 'codex.skill_catalog_suppression_unsupported',
+            message:
+              'This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
           };
 
           codex = await this.createCodexClient(
@@ -1003,8 +922,9 @@ export class CodexProvider implements IAgentProvider {
               thread = codex.startThread(threadOptions);
               sessionResumeFailed = true;
               yield {
-                type: 'system',
-                content: '⚠️ Could not resume previous session. Starting fresh conversation.',
+                type: 'warning',
+                code: 'codex.resume_failed',
+                message: 'Could not resume previous session. Starting fresh conversation.',
               };
             }
           } else {

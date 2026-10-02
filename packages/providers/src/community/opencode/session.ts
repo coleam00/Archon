@@ -1,6 +1,8 @@
 import { createLogger } from '@archon/paths';
 
-import type { MessageChunk, SendQueryOptions } from '../../types';
+import { truncateToolOutput, type ProviderStopReason } from '@archon/provider-contract';
+
+import type { MessageChunk, ResultChunk, SendQueryOptions } from '../../types';
 
 import {
   adaptNamedAgentForOpencode,
@@ -21,6 +23,93 @@ function getLog(): ReturnType<typeof createLogger> {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+type TextBlock = Extract<MessageChunk, { type: 'agent_message_chunk' | 'agent_thought_chunk' }>;
+
+/**
+ * OpenCode updates one text or reasoning part many times as it grows. The contract
+ * carries a whole block, so a part becomes one chunk when OpenCode marks it finished
+ * (`time.end`); `drain()` returns the parts still open when the turn ends.
+ */
+export class TextPartBlocks {
+  private readonly open = new Map<string, TextBlock>();
+  private readonly finished = new Set<string>();
+
+  /** Records one `message.part.updated` of a text or reasoning part; returns the block once it is finished. */
+  update(part: Record<string, unknown>, delta: string | undefined): TextBlock | undefined {
+    if (typeof part.id !== 'string' || this.finished.has(part.id)) return undefined;
+    const type = part.type === 'reasoning' ? 'agent_thought_chunk' : 'agent_message_chunk';
+    const text =
+      typeof part.text === 'string'
+        ? part.text
+        : (this.open.get(part.id)?.text ?? '') + (delta ?? '');
+    if (!(isRecord(part.time) && typeof part.time.end === 'number')) {
+      this.open.set(part.id, { type, text });
+      return undefined;
+    }
+    this.open.delete(part.id);
+    this.finished.add(part.id);
+    return text ? { type, text } : undefined;
+  }
+
+  drain(): TextBlock[] {
+    const blocks = [...this.open.values()].filter(block => block.text);
+    this.open.clear();
+    return blocks;
+  }
+}
+
+/**
+ * The tool events one `message.part.updated` of a tool part adds: the `tool_call` the
+ * first time `toolCallId` is seen, and the `tool_call_update` once the part reaches
+ * `completed` or `error`. `seen` and `closed` carry that state across updates.
+ */
+export function toolPartEvents(
+  part: Record<string, unknown>,
+  toolCallId: string,
+  seen: Set<string>,
+  closed: Set<string>
+): MessageChunk[] {
+  const events: MessageChunk[] = [];
+  const state = isRecord(part.state) ? part.state : undefined;
+  if (!seen.has(toolCallId)) {
+    seen.add(toolCallId);
+    const call: MessageChunk = {
+      type: 'tool_call',
+      toolCallId,
+      name: typeof part.tool === 'string' ? part.tool : 'unknown',
+    };
+    if (isRecord(state?.input)) call.rawInput = state.input;
+    events.push(call);
+  }
+  if (!closed.has(toolCallId)) {
+    if (state?.status === 'completed') {
+      closed.add(toolCallId);
+      events.push({
+        type: 'tool_call_update',
+        toolCallId,
+        status: 'completed',
+        ...truncateToolOutput(typeof state.output === 'string' ? state.output : ''),
+      });
+    } else if (state?.status === 'error') {
+      closed.add(toolCallId);
+      events.push({
+        type: 'tool_call_update',
+        toolCallId,
+        status: 'failed',
+        ...truncateToolOutput(typeof state.error === 'string' ? state.error : 'Tool failed'),
+      });
+    }
+  }
+  return events;
+}
+
+/** OpenCode's `finish` reason in ACP's names; `undefined` for one ACP has no name for. */
+function opencodeStopReason(finish: unknown): ProviderStopReason | undefined {
+  if (finish === 'stop') return 'end_turn';
+  if (finish === 'length') return 'max_tokens';
+  return undefined;
 }
 
 export async function resolveSessionId(
@@ -128,6 +217,7 @@ export async function* streamOpencodeSession(
   const streamController = new AbortController();
   const seenToolCalls = new Set<string>();
   const completedToolCalls = new Set<string>();
+  const textBlocks = new TextPartBlocks();
   let latestAssistantInfo: Record<string, unknown> | undefined;
   let lastAssistantMessageId: string | undefined;
   let aborted = requestOptions?.abortSignal?.aborted === true;
@@ -174,62 +264,15 @@ export async function* streamOpencodeSession(
           continue;
         }
 
-        if (part.type === 'text') {
+        if (part.type === 'text' || part.type === 'reasoning') {
           const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
-          const text = delta ?? (typeof part.text === 'string' ? part.text : '');
-          if (text) {
-            yield { type: 'assistant', content: text };
-          }
+          const block = textBlocks.update(part, delta);
+          if (block) yield block;
           continue;
         }
 
-        if (part.type === 'reasoning') {
-          const delta = typeof properties.delta === 'string' ? properties.delta : undefined;
-          const text = delta ?? (typeof part.text === 'string' ? part.text : '');
-          if (text) {
-            yield { type: 'thinking', content: text };
-          }
-          continue;
-        }
-
-        if (part.type === 'tool') {
-          const callId = typeof part.callID === 'string' ? part.callID : undefined;
-          const toolName = typeof part.tool === 'string' ? part.tool : 'unknown';
-          const state = isRecord(part.state) ? part.state : undefined;
-          const toolInput = isRecord(state?.input) ? state.input : undefined;
-          const status = typeof state?.status === 'string' ? state.status : undefined;
-
-          if (callId && !seenToolCalls.has(callId)) {
-            seenToolCalls.add(callId);
-            yield {
-              type: 'tool',
-              toolName,
-              ...(toolInput ? { toolInput } : {}),
-              ...(callId ? { toolCallId: callId } : {}),
-            };
-          }
-
-          if (callId && !completedToolCalls.has(callId)) {
-            if (status === 'completed') {
-              completedToolCalls.add(callId);
-              yield {
-                type: 'tool_result',
-                toolName,
-                toolOutput: typeof state?.output === 'string' ? state.output : '',
-                ...(callId ? { toolCallId: callId } : {}),
-                toolOutcome: 'success',
-              };
-            } else if (status === 'error') {
-              completedToolCalls.add(callId);
-              yield {
-                type: 'tool_result',
-                toolName,
-                toolOutput: typeof state?.error === 'string' ? state.error : 'Tool failed',
-                ...(callId ? { toolCallId: callId } : {}),
-                toolOutcome: 'error',
-              };
-            }
-          }
+        if (part.type === 'tool' && typeof part.callID === 'string') {
+          yield* toolPartEvents(part, part.callID, seenToolCalls, completedToolCalls);
         }
         continue;
       }
@@ -277,22 +320,18 @@ export async function* streamOpencodeSession(
         );
         const tokens = normalizeTokens(latestAssistantInfo);
 
-        yield {
-          type: 'result',
-          sessionId,
-          ...(tokens ? { tokens } : {}),
-          ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-          ...(typeof latestAssistantInfo?.cost === 'number'
-            ? { cost: latestAssistantInfo.cost }
-            : {}),
-          ...(typeof latestAssistantInfo?.finish === 'string'
-            ? { stopReason: latestAssistantInfo.finish }
-            : {}),
-          ...(typeof latestAssistantInfo?.modelID === 'string' &&
-          latestAssistantInfo.modelID.length > 0
-            ? { resolvedModel: { id: latestAssistantInfo.modelID } }
-            : {}),
-        };
+        yield* textBlocks.drain();
+        // Built by assignment on a typed value so a misspelled key fails to compile.
+        const result: ResultChunk = { type: 'result', sessionId };
+        if (tokens) result.tokens = tokens;
+        if (structuredOutput !== undefined) result.structuredOutput = structuredOutput;
+        if (typeof latestAssistantInfo?.cost === 'number') result.cost = latestAssistantInfo.cost;
+        const stopReason = opencodeStopReason(latestAssistantInfo?.finish);
+        if (stopReason !== undefined) result.stopReason = stopReason;
+        if (typeof latestAssistantInfo?.modelID === 'string' && latestAssistantInfo.modelID) {
+          result.resolvedModel = { id: latestAssistantInfo.modelID };
+        }
+        yield result;
         return;
       }
     }

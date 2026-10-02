@@ -6,7 +6,7 @@
  *  1. `AsyncQueue<T>` — single-producer / single-consumer queue; copied
  *     verbatim from `community/pi/event-bridge.ts`. Peer community providers
  *     stay decoupled (no cross-imports).
- *  2. `mapCopilotEvent(event, toolCallIdToName, captureUsage)` — pure fn
+ *  2. `mapCopilotEvent(event, ctx)` — pure fn
  *     translating one SDK event into zero or more MessageChunks. Testable
  *     in isolation.
  *  3. `bridgeSession(session, prompt, abortSignal?)` — wired integration
@@ -24,6 +24,8 @@ import type {
   SessionEvent,
   ToolExecutionCompleteData,
 } from '@github/copilot-sdk';
+
+import { truncateToolOutput } from '@archon/provider-contract';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
@@ -140,25 +142,11 @@ function formatToolFailure(rawOutput: string, error: ToolExecutionCompleteData['
 }
 
 /**
- * Pure mapper: one SDK event → zero or more MessageChunks, plus side-effect
- * callbacks into closure state (toolCallId → toolName map, usage capture).
- *
- * Splitting side-effects from pure return value lets the test table drive
- * the MessageChunk output while spies verify the closure interactions.
- *
- * Events intentionally NOT mapped:
- *   - `user.message` — echo of our own prompt
- *   - `assistant.message` / `assistant.reasoning` — boundary events;
- *     streaming is covered by `*_delta` events. If deltas were somehow
- *     absent, `bridgeSession` has a safety-net using sendAndWait's return.
- *   - `session.idle` — internal signal; sendAndWait resolves on it
- *   - turn_start/turn_end, streaming_delta, intent, compaction_complete,
- *     task_complete, context_changed, title_changed, etc. — internal
- *     housekeeping, no user-facing chunk
+ * Side-effect callbacks the mapper calls into closure state. Splitting them from
+ * the pure return value lets the test table drive the MessageChunk output while
+ * spies verify the closure interactions.
  */
 export interface EventMapperContext {
-  /** Populated by tool.execution_start, read by tool.execution_complete. */
-  toolCallIdToName: Map<string, string>;
   /** Called when assistant.usage arrives; undefined for non-usage events. */
   captureUsage: (usage: TokenUsage) => void;
   /** Flagged on session.error; consumer decides whether to promote to isError on the terminal result. */
@@ -167,22 +155,29 @@ export interface EventMapperContext {
 
 /**
  * Translate one Copilot SDK `SessionEvent` into zero or more Archon
- * `MessageChunk`s, mutating the supplied context (tool-call id → name map,
- * captured usage, terminal error) as a side-effect. Keeping the side-effects
- * behind a closure lets unit tests drive pure inputs and assert on both the
- * returned chunks and the context mutations.
+ * `MessageChunk`s, mutating the supplied context (captured usage, terminal
+ * error) as a side-effect.
+ *
+ * Text and reasoning map from the whole `assistant.message` /
+ * `assistant.reasoning` events: the contract carries one chunk per block, and
+ * those events are the SDK's block boundaries. Their `*_delta` events are not
+ * mapped.
+ *
+ * Events intentionally NOT mapped:
+ *   - `user.message` — echo of our own prompt
+ *   - `session.idle` — internal signal; sendAndWait resolves on it
+ *   - turn_start/turn_end, streaming_delta, intent, task_complete,
+ *     context_changed, title_changed, etc. — internal housekeeping
  */
 export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): MessageChunk[] {
   switch (event.type) {
-    case 'assistant.message_delta': {
-      const content = event.data.deltaContent;
-      if (!content) return [];
-      return [{ type: 'assistant', content }];
+    case 'assistant.message': {
+      const text = event.data.content;
+      return text ? [{ type: 'agent_message_chunk', text }] : [];
     }
-    case 'assistant.reasoning_delta': {
-      const content = event.data.deltaContent;
-      if (!content) return [];
-      return [{ type: 'thinking', content }];
+    case 'assistant.reasoning': {
+      const text = event.data.content;
+      return text ? [{ type: 'agent_thought_chunk', text }] : [];
     }
     case 'assistant.usage': {
       const usage = normalizeCopilotUsage(event.data);
@@ -191,50 +186,46 @@ export function mapCopilotEvent(event: SessionEvent, ctx: EventMapperContext): M
     }
     case 'tool.execution_start': {
       const { toolCallId, toolName, arguments: args } = event.data;
-      ctx.toolCallIdToName.set(toolCallId, toolName);
-      return [
-        {
-          type: 'tool',
-          toolName,
-          toolInput: args ?? {},
-          toolCallId,
-        },
-      ];
+      const call: MessageChunk = { type: 'tool_call', toolCallId, name: toolName };
+      if (args) call.rawInput = args;
+      return [call];
     }
     case 'tool.execution_complete': {
       const { toolCallId, success, result, error } = event.data;
-      const toolName = ctx.toolCallIdToName.get(toolCallId) ?? 'unknown';
       // Prefer detailedContent (full output) over content (truncated for LLM).
       const rawOutput = result?.detailedContent ?? result?.content ?? '';
-      const chunks: MessageChunk[] = [];
-      if (!success) {
-        chunks.push({
-          type: 'system',
-          content: `⚠️ Tool ${toolName} failed`,
-        });
-      }
-      chunks.push({
-        type: 'tool_result',
-        toolName,
-        toolOutput: success ? rawOutput : `❌ ${formatToolFailure(rawOutput, error)}`,
-        toolCallId,
-        toolOutcome: success ? 'success' : 'error',
-      });
-      return chunks;
+      return [
+        {
+          type: 'tool_call_update',
+          toolCallId,
+          status: success ? 'completed' : 'failed',
+          ...truncateToolOutput(success ? rawOutput : formatToolFailure(rawOutput, error)),
+        },
+      ];
     }
     case 'session.error': {
-      // Don't emit a system chunk here — defer until after sendAndWait
-      // resolves. If the SDK delivers a fallback assistant message (transient
-      // upstream errors are common on auto-retry paths), the user got what
-      // they asked for and a "⚠️ ..." chunk is just noise. The bridgeSession
-      // wrapper checks `sawAssistantContent` and emits the warning only when
-      // no assistant content reached the consumer.
+      // Don't emit a warning here — defer until after sendAndWait resolves. If
+      // the SDK delivers a fallback assistant message (transient upstream errors
+      // are common on auto-retry paths), the user got what they asked for and a
+      // warning is just noise. The bridgeSession wrapper checks
+      // `sawAssistantContent` and emits the warning only when no assistant
+      // content reached the consumer.
       const msg = event.data.message || 'Copilot session error';
       ctx.markErrored(msg);
       return [];
     }
-    case 'session.compaction_start': {
-      return [{ type: 'system', content: '⚙️ Compacting context…' }];
+    case 'session.compaction_start':
+      return [{ type: 'compaction', phase: 'started' }];
+    case 'session.compaction_complete': {
+      const { error, preCompactionTokens, postCompactionTokens } = event.data;
+      if (error) {
+        getLog().warn({ error }, 'copilot.compaction_failed');
+        return [];
+      }
+      const completed: MessageChunk = { type: 'compaction', phase: 'completed' };
+      if (preCompactionTokens !== undefined) completed.tokensBefore = preCompactionTokens;
+      if (postCompactionTokens !== undefined) completed.tokensAfter = postCompactionTokens;
+      return [completed];
     }
     default: {
       getLog().debug({ eventType: event.type }, 'copilot.unhandled_event_type');
@@ -293,7 +284,6 @@ export async function* bridgeSession(
 ): AsyncGenerator<MessageChunk> {
   const log = getLog();
   const queue = new AsyncQueue<BridgeQueueItem>();
-  const toolCallIdToName = new Map<string, string>();
   let capturedTokens: TokenUsage | undefined;
   let errorMessage: string | undefined;
 
@@ -303,7 +293,6 @@ export async function* bridgeSession(
   let assistantBuffer = '';
 
   const ctx: EventMapperContext = {
-    toolCallIdToName,
     captureUsage: (u: TokenUsage): void => {
       capturedTokens = u;
     },
@@ -316,8 +305,8 @@ export async function* bridgeSession(
     try {
       const chunks = mapCopilotEvent(event, ctx);
       for (const chunk of chunks) {
-        if (wantsStructured && chunk.type === 'assistant') {
-          assistantBuffer += chunk.content;
+        if (wantsStructured && chunk.type === 'agent_message_chunk') {
+          assistantBuffer += chunk.text;
         }
         queue.push({ kind: 'chunk', chunk });
       }
@@ -373,25 +362,25 @@ export async function* bridgeSession(
     for await (const item of queue) {
       if (item.kind === 'done') break;
       if (item.kind === 'error') throw item.error;
-      if (item.chunk.type === 'assistant') sawAssistantContent = true;
+      if (item.chunk.type === 'agent_message_chunk') sawAssistantContent = true;
       yield item.chunk;
     }
 
-    // Safety net: if `streaming: true` didn't produce deltas for some reason
-    // (older SDK, model quirks, BYOK provider), emit the accumulated final
-    // content from sendAndWait's return value so the user doesn't lose output.
+    // Safety net: if no `assistant.message` event reached the listener (older
+    // SDK, model quirks, BYOK provider), emit the final content from
+    // sendAndWait's return value so the user doesn't lose output.
     if (!sawAssistantContent && sendResult?.data?.content) {
       if (wantsStructured) assistantBuffer += sendResult.data.content;
-      yield { type: 'assistant', content: sendResult.data.content };
+      yield { type: 'agent_message_chunk', text: sendResult.data.content };
       sawAssistantContent = true;
     }
 
     // Emit the deferred session.error warning only if no assistant content
     // reached the consumer. When the SDK auto-recovers and still delivers a
     // fallback message (the common case for transient upstream errors), the
-    // ⚠️ chunk is noise and gets suppressed.
+    // warning is noise and gets suppressed.
     if (!sawAssistantContent && errorMessage) {
-      yield { type: 'system', content: `⚠️ ${errorMessage}` };
+      yield { type: 'warning', code: 'copilot.session_error', message: errorMessage };
     }
 
     // Terminal result chunk — always emit, even on error, so the executor
