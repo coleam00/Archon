@@ -156,7 +156,7 @@ describe('readPiAuthValidity', () => {
     const expiresAt = Date.UTC(2027, 0, 1);
     writeFileSync(
       join(dir, 'auth.json'),
-      '﻿' + JSON.stringify({ anthropic: oauthEntry(expiresAt) })
+      '\uFEFF' + JSON.stringify({ anthropic: oauthEntry(expiresAt) })
     );
 
     const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
