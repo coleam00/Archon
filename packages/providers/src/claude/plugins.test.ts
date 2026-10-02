@@ -54,8 +54,14 @@ describe('readClaudePluginIds', () => {
     expect(error.message).toContain('config unreadable');
   });
 
-  test('runs without a host cwd, as a container inventory does', async () => {
-    expect(await readClaudePluginIds({ ...fakeCli('[]'), cwd: undefined })).toEqual([]);
+  test('a failure without stderr does not echo the command line, which can hold credentials', async () => {
+    const cmd = {
+      ...fakeCli('', 3),
+      args: [...fakeCli('', 3).args, 'sh', '-e', 'TOKEN=sk-secret'],
+    };
+    const error = await failureOf(readClaudePluginIds(cmd));
+    expect(error.message).toContain('exited with code 3');
+    expect(error.message).not.toContain('sk-secret');
   });
 
   test('output that is not the expected JSON is misconfigured', async () => {

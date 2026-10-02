@@ -115,7 +115,15 @@ export async function readClaudePluginIds(cmd: PluginListCommand): Promise<strin
       { cwd: cmd.cwd, env: cmd.env, timeout: PLUGIN_LIST_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
       (error, out, err) => {
         if (error) {
-          const detail = err.trim() || error.message;
+          // Not error.message: it repeats the full argv, which for a container run
+          // carries the session env (credentials included) as `-e KEY=VALUE`.
+          const detail =
+            err.trim() ||
+            (error.signal
+              ? `killed by ${error.signal}`
+              : typeof error.code === 'number'
+                ? `exited with code ${error.code}`
+                : String(error.code));
           reject(
             new ClassifiedProviderError(
               'misconfigured',
