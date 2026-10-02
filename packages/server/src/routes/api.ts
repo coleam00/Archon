@@ -353,7 +353,6 @@ import {
 import {
   TIER_NAMES,
   isTierName,
-  isEffortValidForProvider,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
@@ -2139,11 +2138,17 @@ export function registerApiRoutes(
         .map(p => p.id)
         .join(', ')}`;
     }
-    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
-      return (
-        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
-        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
-      );
+    if (entry.effort !== undefined) {
+      const validEfforts = validEffortsForProvider(entry.provider);
+      if (validEfforts === null) {
+        return `Provider '${entry.provider}' does not support effort (${label}).`;
+      }
+      if (!validEfforts.includes(entry.effort)) {
+        return (
+          `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
+          `Valid: ${validEfforts.join(', ')}`
+        );
+      }
     }
     return null;
   }

@@ -213,6 +213,7 @@ import {
   resolveModelSpec,
   resolvePresetEffort,
   type ModelAliasPreset,
+  type PresetEffortRejection,
   type ResolvedAiProfile,
   type TierName,
 } from './model-validation';
@@ -543,7 +544,7 @@ function applyPresetOptions(
   node: DagNode,
   declaredEffort: EffortLevel | undefined,
   nodeConfig: NodeConfig
-): void {
+): PresetEffortRejection | undefined {
   if (!preset) return;
 
   // An effort declared on the node or workflow outranks the preset's. Passed in
@@ -567,9 +568,10 @@ function applyPresetOptions(
         ? 'dag.preset_effort_unsupported'
         : 'dag.preset_effort_unknown'
     );
-    return;
+    return decision;
   }
   nodeConfig.effort = preset.effort;
+  return undefined;
 }
 
 /**
@@ -1654,19 +1656,6 @@ async function resolveNodeProviderAndModel(
     unsupported.push('webSearchMode');
   }
 
-  if (unsupported.length > 0) {
-    getLog().warn({ nodeId: node.id, provider, unsupported }, 'dag.unsupported_capabilities');
-    const delivered = await safeSendMessage(
-      platform,
-      conversationId,
-      `Warning: Node '${node.id}' uses ${unsupported.join(', ')} but ${provider} doesn't support ${unsupported.length === 1 ? 'it' : 'them'} — ${unsupported.length === 1 ? 'this will be' : 'these will be'} ignored.`,
-      { workflowId: workflowRunId, nodeName: node.id }
-    );
-    if (!delivered) {
-      getLog().error({ nodeId: node.id, workflowRunId }, 'dag.capability_warning_delivery_failed');
-    }
-  }
-
   // Build universal base options
   const baseOptions: SendQueryOptions = {};
   if (model) baseOptions.model = model;
@@ -1737,7 +1726,30 @@ async function resolveNodeProviderAndModel(
 
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
-  applyPresetOptions(provider, effectivePreset, node, declaredEffort, nodeConfig);
+  const presetEffortRejection = applyPresetOptions(
+    provider,
+    effectivePreset,
+    node,
+    declaredEffort,
+    nodeConfig
+  );
+  if (presetEffortRejection?.reason === 'unsupported') {
+    unsupported.push('effort');
+  }
+
+  if (unsupported.length > 0) {
+    getLog().warn({ nodeId: node.id, provider, unsupported }, 'dag.unsupported_capabilities');
+    const delivered = await safeSendMessage(
+      platform,
+      conversationId,
+      `Warning: Node '${node.id}' uses ${unsupported.join(', ')} but ${provider} doesn't support ${unsupported.length === 1 ? 'it' : 'them'} — ${unsupported.length === 1 ? 'this will be' : 'these will be'} ignored.`,
+      { workflowId: workflowRunId, nodeName: node.id }
+    );
+    if (!delivered) {
+      getLog().error({ nodeId: node.id, workflowRunId }, 'dag.capability_warning_delivery_failed');
+    }
+  }
+
   // `webSearchMode:` has no node-level form and no other consumer, so the
   // workflow-level value is the only value — written only where it is read.
   if (isCodex && workflowLevelOptions.webSearchMode !== undefined) {
