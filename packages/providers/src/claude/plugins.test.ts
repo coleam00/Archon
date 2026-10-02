@@ -109,9 +109,9 @@ describe('buildPluginListCommand', () => {
 // Runs the SDK's bundled CLI, at zero spend, in an empty config dir: proves the
 // dev-mode binary lookup still finds it and the CLI's JSON still parses, so an
 // SDK bump that changes either fails here instead of failing every workflow node.
-const bundledBinary = resolveBundledClaudeBinary();
 describe('real bundled Claude CLI', () => {
-  test.skipIf(bundledBinary === undefined)('lists plugins as JSON Archon can parse', async () => {
+  test('lists plugins as JSON Archon can parse', async () => {
+    expect(resolveBundledClaudeBinary()).toBeDefined();
     const configDir = mkdtempSync(join(tmpdir(), 'archon-plugin-list-'));
     try {
       const ids = await readClaudePluginIds(

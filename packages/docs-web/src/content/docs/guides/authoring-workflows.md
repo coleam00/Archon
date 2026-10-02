@@ -246,6 +246,7 @@ nodes:
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot; Codex adds servers to ambient config rather than replacing it. See [MCP Servers](/guides/mcp-servers/) |
 | `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`; OpenCode does not implement this field. See [Skills](/guides/skills/) |
+| `plugins` | string[] | — | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude only; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | — | Reasoning depth. Every provider with a request-level reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
@@ -377,6 +378,22 @@ it fails validation with an error directing the author to `effort:`.
 ```
 
 Omitting the field inherits the assistant-level `assistants.claude.settingSources` from `.archon/config.yaml`; if that is also unset, the default is `['project', 'user']`.
+
+### Plugins
+
+A Claude workflow node loads none of the Claude Code plugins installed on the machine: no plugin subagents, hooks, LSP servers, commands, skills or MCP servers. Your own settings, hooks, permissions and `CLAUDE.md` still load, and so do the plugins built into Claude Code (`@builtin`). A node that needs a plugin names it by its exact id, as `claude plugin list` prints it:
+
+```yaml
+- id: triage
+  prompt: Find the noisiest error groups from the last day.
+  plugins: [posthog@claude-plugins-official]
+  skills: [posthog:investigating-error-issue]   # a plugin's skills are still selected one by one
+  mcp: .archon/mcp/posthog.json                 # and its MCP servers are declared like any other
+```
+
+A named plugin brings its agents, hooks, LSP servers and commands. Its skills reach the node only when `skills:` names them, and its MCP servers only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-claude-plugin)).
+
+The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin the node did not name, for example one synced from claude.ai or loaded by another route. `plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error.
 
 **Workflow-level defaults** (inherited by all Claude nodes unless overridden per-node):
 
@@ -3279,12 +3296,13 @@ Before deploying a workflow:
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
 11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude/Codex/Copilot; Codex configuration is additive)
 12. **`skills:`** — select exact active skills on Claude and declare skills for Pi/Copilot; Codex workflow bodies use explicit `$skill-name`
-13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort`** — reasoning depth per node or workflow, on every provider that has request-level reasoning control (Claude/Codex/Pi/Copilot)
-15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
-16. **`systemPrompt`** — override the default system prompt per node (Claude only)
-17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
-18. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar for cross-node/cross-run lookup by type (any node type). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain)
-19. **Loop nodes** — use `loop:` within a DAG node for iterative execution until a declared completion condition is met
-20. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
-21. **Test thoroughly** — each command, the artifact flow, and edge cases
+13. **`plugins:`** — name the Claude plugins a node loads; every other installed plugin stays off
+14. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
+15. **`effort`** — reasoning depth per node or workflow, on every provider that has request-level reasoning control (Claude/Codex/Pi/Copilot)
+16. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
+17. **`systemPrompt`** — override the default system prompt per node (Claude only)
+18. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
+19. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar for cross-node/cross-run lookup by type (any node type). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain)
+20. **Loop nodes** — use `loop:` within a DAG node for iterative execution until a declared completion condition is met
+21. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
+22. **Test thoroughly** — each command, the artifact flow, and edge cases

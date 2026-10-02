@@ -44,11 +44,13 @@ export interface PluginListCommand {
 }
 
 /**
- * The executable the SDK would pick in dev mode, when no path is pinned: its
- * bundled per-platform native binary. The SDK does not export its resolver, so
- * this follows the package naming it uses (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`,
- * with a musl variant on Linux). The gated real-CLI test in `plugins.test.ts`
- * fails when this stops finding the binary.
+ * The SDK's bundled per-platform native binary, which the session runs in dev
+ * mode when no path is pinned. The SDK does not export its resolver, so this
+ * follows the package naming it uses (`@anthropic-ai/claude-agent-sdk-<platform>-<arch>`,
+ * with a musl variant on Linux). On a Linux host with both variants installed it
+ * may pick the other libc build than the session; both read the same plugin
+ * configuration. The real-CLI test in `plugins.test.ts` fails when this stops
+ * finding the binary.
  */
 export function resolveBundledClaudeBinary(): string | undefined {
   const sdkRequire = createRequire(

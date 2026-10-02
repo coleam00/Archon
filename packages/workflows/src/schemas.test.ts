@@ -1414,6 +1414,7 @@ describe('dagNodeSchema — LoopNode AI-field survival', () => {
     hooks: { PreToolUse: [{ matcher: 'Bash', response: { decision: 'block' } }] },
     mcp: '.mcp.json',
     skills: ['code-review'],
+    plugins: ['formatter@tools'],
     agents: { reviewer: { description: 'reviews', prompt: 'review it' } },
     pi: { enableExtensions: false },
     effort: 'low',
