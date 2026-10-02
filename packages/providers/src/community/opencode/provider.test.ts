@@ -400,6 +400,30 @@ describe('OpencodeProvider', () => {
     expect(failure?.evidence).toContain('bash');
   });
 
+  test('an event stream that ends before session.idle is a failed turn, not an empty success', async () => {
+    scriptedEvents = [
+      {
+        type: 'message.part.updated',
+        properties: {
+          part: { sessionID: 'session-1', type: 'text' },
+          delta: 'partial answer',
+        },
+      },
+      // The stream closes here: no session.idle, no session.error.
+    ];
+
+    const { chunks, failure } = await consume(
+      new OpencodeProvider().sendQuery('hi', '/tmp', undefined, { assistantConfig: TEST_MODEL })
+    );
+
+    expect(chunks).toEqual([
+      { type: 'assistant', content: 'partial answer' },
+      expect.objectContaining({ type: 'result', isError: true }),
+    ]);
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('session.idle');
+  });
+
   test('permission.asked for a different session is ignored', async () => {
     scriptedEvents = [
       {
