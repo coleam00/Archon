@@ -785,7 +785,7 @@ Archon sorts a failed AI attempt into one of three buckets before deciding wheth
 
 Every built-in provider reports a typed class:
 
-- **Claude** reports every class, from its SDK's error codes, HTTP status and process-exit fields.
+- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start (a sign-in the organization rejects is `auth`; a configuration problem such as an invalid proxy URL is `unknown`).
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Codex, Pi and Copilot** expose failures only as message strings, so every failure they report is `unknown`.
 

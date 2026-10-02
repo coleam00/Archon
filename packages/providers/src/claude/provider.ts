@@ -36,6 +36,7 @@ import {
   type SDKAssistantMessageError,
   type SDKRateLimitInfo,
   type SDKResultMessage,
+  type SDKStartupFailureReason,
   type ModelUsage,
 } from '@anthropic-ai/claude-agent-sdk';
 import type {
@@ -231,6 +232,11 @@ export function buildRequestSubprocessEnv(
     env.ANTHROPIC_API_KEY = env.CLAUDE_API_KEY;
     getLog().debug('claude.api_key_mirrored');
   }
+  // Without this, Claude Code reports some refusals to start (an invalid proxy URL, for
+  // one) only on stderr and exits 1, which reads as a crashed process and is retried.
+  // With it, every refusal with a known cause also ends in an error result carrying
+  // `startup_failure_reason`, which classifyClaudeErrorResult turns into a failure class.
+  env.CLAUDE_CODE_STARTUP_FAILURE_RESULTS = '1';
   return env;
 }
 
@@ -334,13 +340,54 @@ export function classifyClaudeApiError(
   }
 }
 
+/**
+ * The class a reason Claude Code gave for refusing to start can justify. Most reasons
+ * need the operator to change configuration, which no class names, so they stay
+ * `unknown`; only sign-in refusals and the one reason the SDK documents as retryable
+ * have a class of their own.
+ */
+function classOfStartupFailure(reason: SDKStartupFailureReason): ProviderFailureClass {
+  switch (reason) {
+    case 'org_pin_api_key_conflict':
+    case 'provider_not_allowed':
+    case 'org_pin_mismatch':
+    case 'gateway_signin_required':
+    case 'gateway_access_denied':
+      return 'auth';
+    case 'worktree_unverified':
+      return 'transient';
+    case 'org_verify_failed': // network or a revoked token; the reason does not say which
+    case 'managed_settings_invalid':
+    case 'remote_settings_required_unavailable':
+    case 'proxy_invalid':
+    case 'temp_dir_unusable':
+    case 'cwd_unavailable':
+    case 'shell_tool_missing':
+    case 'session_held_by_background':
+    case 'worktree_resume_refused':
+    case 'cli_version_too_old':
+    case 'bypass_root':
+      return 'unknown';
+    default: {
+      // A reason newer than this mapping. Unclassified is honest; the evidence names it.
+      const unmapped: never = reason;
+      void unmapped;
+      return 'unknown';
+    }
+  }
+}
+
 /** Classify an error result the SDK ended the turn with, when no API error preceded it. */
-function classifyClaudeErrorResult(
+export function classifyClaudeErrorResult(
   subtype: string,
   httpStatus: number | null | undefined,
+  startupFailureReason: SDKStartupFailureReason | undefined,
   evidence: string
 ): ProviderFailure {
   if (subtype === 'error_max_budget_usd') return failureOf('budget_exceeded', evidence);
+  if (startupFailureReason !== undefined) {
+    return failureOf(classOfStartupFailure(startupFailureReason), evidence);
+  }
   return failureOf(classOfHttpStatus(httpStatus), evidence);
 }
 
@@ -1310,10 +1357,19 @@ async function* streamClaudeMessages(
           evidence
         );
       } else if (isRealError) {
-        const evidence = sdkErrors?.length
-          ? `${resultMsg.subtype}: ${sdkErrors.join('; ')}`
+        // Set when Claude Code refused to start (see CLAUDE_CODE_STARTUP_FAILURE_RESULTS).
+        const startupFailureReason =
+          'startup_failure_reason' in resultMsg ? resultMsg.startup_failure_reason : undefined;
+        const label = startupFailureReason
+          ? `${resultMsg.subtype} (${startupFailureReason})`
           : resultMsg.subtype;
-        failure = classifyClaudeErrorResult(resultMsg.subtype, apiErrorStatus, evidence);
+        const evidence = sdkErrors?.length ? `${label}: ${sdkErrors.join('; ')}` : label;
+        failure = classifyClaudeErrorResult(
+          resultMsg.subtype,
+          apiErrorStatus,
+          startupFailureReason,
+          evidence
+        );
       }
 
       if (failure !== undefined) {

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Provider SDKs updated to latest: Claude Agent SDK 0.3.287, Codex SDK 0.160.0, Pi 1.0.0. When Claude Code refuses to start, its stated reason now decides the failure class: a sign-in the organization rejects is an auth failure and is not retried, and a configuration problem such as an invalid proxy URL is no longer retried as a crashed process.
+
 ## [0.11.1] - 2026-09-25
 
 A patch release: copied workflow packs load cleanly, and release notes now come from this changelog.
