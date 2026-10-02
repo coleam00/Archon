@@ -194,18 +194,37 @@ const initPluginsSchema = z.array(z.object({ name: z.string(), source: z.string(
  * (`@builtin`) or named by the node, and every named plugin must have loaded.
  * A mismatch throws `misconfigured`; leaving the loop ends the SDK query, which
  * terminates the CLI before it does more work under the wrong plugin set.
+ *
+ * The SDK puts `system/init` "normally ahead" of the turn's other messages, not
+ * always, so model output or a result before any init frame also fails: the
+ * check must not pass by never running. Other system frames (hooks, status) may
+ * precede init and pass through.
  */
 export async function* withPluginScopeCheck(
   events: AsyncIterable<SDKMessage>,
   namedIds: readonly string[]
 ): AsyncGenerator<SDKMessage> {
+  let initSeen = false;
   for await (const event of events) {
     if (event.type === 'system' && event.subtype === 'init') {
       checkInitPlugins(event.plugins, namedIds);
+      initSeen = true;
+    } else if (!initSeen && MODEL_OUTPUT_TYPES.has(event.type)) {
+      throw new ClassifiedProviderError(
+        'misconfigured',
+        `Cannot verify the node's plugin scope: Claude Code sent a ${event.type} message before reporting its loaded plugins (system/init).`
+      );
     }
     yield event;
   }
 }
+
+/** Messages that mean the model is working or the turn is over. */
+const MODEL_OUTPUT_TYPES: ReadonlySet<SDKMessage['type']> = new Set([
+  'assistant',
+  'stream_event',
+  'result',
+]);
 
 function checkInitPlugins(plugins: unknown, namedIds: readonly string[]): void {
   const parsed = initPluginsSchema.safeParse(plugins);

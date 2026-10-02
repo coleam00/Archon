@@ -173,6 +173,19 @@ describe('withPluginScopeCheck', () => {
     expect(error.message).toContain('named plugins did not load: posthog@official');
   });
 
+  test('a result before any init frame fails instead of skipping the check', async () => {
+    const result = { type: 'result', subtype: 'success' } as unknown as SDKMessage;
+    const error = await failureOf(drain([result], []));
+    expect(error.failureClass).toBe('misconfigured');
+    expect(error.message).toContain('before reporting its loaded plugins');
+  });
+
+  test('a hook frame ahead of init passes through', async () => {
+    const hook = { type: 'system', subtype: 'hook_started' } as unknown as SDKMessage;
+    const events = [hook, init([{ name: 'agents-md', source: 'agents-md@builtin' }])];
+    expect(await drain(events, [])).toEqual(events);
+  });
+
   test('a plugin row without its id fails closed', async () => {
     const error = await failureOf(drain([init([{ name: 'mystery', path: '/m' }])], []));
     expect(error.message).toContain('mystery (no source id)');
