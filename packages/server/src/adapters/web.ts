@@ -4,6 +4,7 @@
  */
 import type { IWebPlatformAdapter, MessageMetadata } from '@archon/core';
 import type { PlatformStructuredEvent } from '@archon/workflows/deps';
+import { toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { MessagePersistence } from './web/persistence';
 import { SSETransport, type SSEWriter } from './web/transport';
@@ -101,8 +102,7 @@ export class WebAdapter implements IWebPlatformAdapter {
 
     if (chunk.type === 'tool_call') {
       const now = Date.now();
-      // Shown as its title when the provider gives one (a Codex command), else its name.
-      const name = chunk.title ?? chunk.name;
+      const name = toolCallDisplayName(chunk);
       const input = chunk.rawInput ?? {};
 
       // Buffer tool call for direct chat persistence (message metadata)
@@ -143,7 +143,10 @@ export class WebAdapter implements IWebPlatformAdapter {
       // The provider already capped the output (TOOL_OUTPUT_MAX_CHARS).
       const output = chunk.output ?? '';
       try {
-        this.persistence.appendToolResult(conversationId, chunk.toolCallId, output, duration);
+        this.persistence.appendToolResult(conversationId, chunk.toolCallId, output, duration, {
+          status: chunk.status,
+          exitCode: chunk.exitCode,
+        });
       } catch (e: unknown) {
         getLog().error({ conversationId, err: e }, 'tool_result_persist_failed');
       }
@@ -152,6 +155,8 @@ export class WebAdapter implements IWebPlatformAdapter {
         toolCallId: chunk.toolCallId,
         name: tool?.name,
         output,
+        status: chunk.status,
+        ...(chunk.exitCode !== undefined ? { exitCode: chunk.exitCode } : {}),
         duration,
         timestamp: now,
       });
@@ -169,12 +174,15 @@ export class WebAdapter implements IWebPlatformAdapter {
         workflowName: chunk.workflowName,
         timestamp: Date.now(),
       });
-    } else {
+    } else if (chunk.type === 'system_status') {
       event = JSON.stringify({
         type: 'system_status',
         content: chunk.content,
         timestamp: Date.now(),
       });
+    } else {
+      const unhandled: never = chunk;
+      throw new Error(`Unhandled structured event: ${JSON.stringify(unhandled)}`);
     }
 
     await this.transport.emit(conversationId, event);

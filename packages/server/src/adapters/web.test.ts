@@ -96,7 +96,8 @@ describe('WebAdapter.sendStructuredEvent — tool results', () => {
     await adapter.sendStructuredEvent('conv-1', {
       type: 'tool_call_update',
       toolCallId: 'b',
-      status: 'completed',
+      status: 'failed',
+      exitCode: 1,
       output: 'out-b',
     });
     await adapter.sendStructuredEvent('conv-1', {
@@ -112,7 +113,13 @@ describe('WebAdapter.sendStructuredEvent — tool results', () => {
       )
       .filter(e => e.type === 'tool_result');
     expect(results).toEqual([
-      expect.objectContaining({ toolCallId: 'b', name: 'Bash', output: 'out-b' }),
+      expect.objectContaining({
+        toolCallId: 'b',
+        name: 'Bash',
+        output: 'out-b',
+        status: 'failed',
+        exitCode: 1,
+      }),
       expect.objectContaining({ toolCallId: 'a', name: 'Bash', output: 'out-a' }),
     ]);
     expect(appendToolResultCalls.map(c => [c[1], c[2]])).toEqual([

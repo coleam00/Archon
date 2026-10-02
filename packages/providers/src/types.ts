@@ -525,7 +525,7 @@ export interface NodeConfig {
   /**
    * Per-node override for Claude's `agentProgressSummaries` flag (Phase 4 of #975).
    * When unset, workflow nodes default to `true` (so the Web UI gets AI-generated
-   * `summary` fields on `task_progress` every ~30s). Authors can explicitly set
+   * `summary` fields on running `subtask` events every ~30s). Authors can explicitly set
    * `false` to opt out for a specific node.
    */
   agentProgressSummaries?: boolean;

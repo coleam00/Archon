@@ -10,6 +10,7 @@
  * event itself in an envelope (#3569).
  */
 import type { ProviderEvent } from '@archon/providers/types';
+import { toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
@@ -33,6 +34,23 @@ const TOOL_OUTCOME = {
   failed: 'error',
   cancelled: 'interrupted',
 } as const;
+
+/**
+ * Longest string input value written to the JSONL log and the `tool_called` row. A Write
+ * or Edit call carries whole file contents, which neither record needs.
+ */
+const TOOL_INPUT_VALUE_MAX_CHARS = 500;
+
+function recordedToolInput(rawInput: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!rawInput) return {};
+  return Object.fromEntries(
+    Object.entries(rawInput).map(([key, value]) =>
+      typeof value === 'string' && value.length > TOOL_INPUT_VALUE_MAX_CHARS
+        ? [key, `${value.slice(0, TOOL_INPUT_VALUE_MAX_CHARS)}...`]
+        : [key, value]
+    )
+  );
+}
 
 const HOOK_OUTCOME = {
   succeeded: 'success',
@@ -169,9 +187,8 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           await logAssistant(logDir, runId, event.text);
           return;
         case 'tool_call': {
-          // Shown as its title when the provider gives one (a Codex command), else its name.
-          const toolName = event.title ?? event.name;
-          const toolInput = event.rawInput ?? {};
+          const toolName = toolCallDisplayName(event);
+          const toolInput = recordedToolInput(event.rawInput);
           runningTools.set(event.toolCallId, { toolName, startedAt: Date.now() });
           getWorkflowEventEmitter().emit({
             type: 'tool_started',

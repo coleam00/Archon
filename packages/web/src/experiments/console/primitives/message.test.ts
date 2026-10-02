@@ -111,3 +111,25 @@ describe('isSystemCategory', () => {
     expect(isSystemCategory('tool_call_formatted')).toBe(false);
   });
 });
+
+describe('toMessage — tool calls', () => {
+  test('keeps how a tool call ended, and drops a status it does not know', () => {
+    const m = toMessage(
+      raw(
+        { id: 'm1' },
+        {
+          toolCalls: [
+            { name: 'Bash', input: {}, output: 'boom', status: 'failed', exitCode: 2 },
+            { name: 'Read', input: {}, status: 'exploded' },
+            { name: 'Grep', input: {} },
+          ],
+        }
+      )
+    );
+    expect(m.toolCalls.map(tc => [tc.status, tc.exitCode])).toEqual([
+      ['failed', 2],
+      [undefined, undefined],
+      [undefined, undefined],
+    ]);
+  });
+});

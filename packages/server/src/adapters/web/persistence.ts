@@ -1,4 +1,5 @@
 import { createLogger } from '@archon/paths';
+import type { PlatformStructuredEvent } from '@archon/workflows/deps';
 import type { MessageMetadata } from '@archon/core';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 
@@ -9,6 +10,8 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+type ToolCallUpdate = Extract<PlatformStructuredEvent, { type: 'tool_call_update' }>;
+
 interface BufferedToolCall {
   /** The provider's id for the call; its result is matched on it. Not persisted. */
   toolCallId: string;
@@ -17,6 +20,9 @@ interface BufferedToolCall {
   startedAt: number;
   duration?: number;
   output?: string;
+  /** How the call ended, as the provider reported it. */
+  status?: ToolCallUpdate['status'];
+  exitCode?: number;
 }
 
 interface BufferedSegment {
@@ -123,12 +129,13 @@ export class MessagePersistence {
     this.assistantBuffer.set(conversationId, buf);
   }
 
-  /** Record tool output for the buffered tool call with this id. */
+  /** Record how the buffered tool call with this id ended. */
   appendToolResult(
     conversationId: string,
     toolCallId: string,
     output: string,
-    duration: number
+    duration: number,
+    outcome?: Pick<ToolCallUpdate, 'status' | 'exitCode'>
   ): void {
     const buf = this.assistantBuffer.get(conversationId);
     if (!buf) {
@@ -142,6 +149,10 @@ export class MessagePersistence {
       if (tc) {
         tc.output = output;
         tc.duration = duration;
+        if (outcome) {
+          tc.status = outcome.status;
+          if (outcome.exitCode !== undefined) tc.exitCode = outcome.exitCode;
+        }
         matched = true;
         break;
       }
@@ -255,6 +266,8 @@ export class MessagePersistence {
           input: tc.input,
           duration: tc.duration,
           ...(tc.output !== undefined ? { output: tc.output } : {}),
+          ...(tc.status !== undefined ? { status: tc.status } : {}),
+          ...(tc.exitCode !== undefined ? { exitCode: tc.exitCode } : {}),
         }));
         const metadata = {
           ...toPersistedMessageMetadata(seg.metadata),

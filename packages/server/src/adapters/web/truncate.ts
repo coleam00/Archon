@@ -1,3 +1,5 @@
+import { TOOL_OUTPUT_MAX_CHARS } from '@archon/provider-contract';
+
 /**
  * Maximum characters of a single tool output sent across a server → browser
  * boundary (SSE tool_result events and message-hydration metadata).
@@ -6,8 +8,11 @@
  * (ToolCallItem.tsx), so 16 KiB is invisible to display behavior while leaving
  * ~8x headroom for future renderer changes. The full output stays in the
  * database and on-disk logs — this cap is transport hygiene only.
+ *
+ * It is the contract's cap, but measured in UTF-16 units where the contract counts code
+ * points, so live output of astral characters can still be cut here on hydration.
  */
-export const MAX_TOOL_OUTPUT_CHARS = 16_384;
+export const MAX_TOOL_OUTPUT_CHARS = TOOL_OUTPUT_MAX_CHARS;
 
 /**
  * Bound tool output to MAX_TOOL_OUTPUT_CHARS for browser transport.

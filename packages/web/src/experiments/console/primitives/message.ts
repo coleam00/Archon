@@ -11,6 +11,9 @@ export interface InlineToolCall {
   input: Record<string, unknown>;
   output?: string;
   durationMs?: number;
+  /** How the call ended, when the provider reported it. Older messages have none. */
+  status?: 'completed' | 'failed' | 'cancelled';
+  exitCode?: number;
 }
 
 export interface InlineError {
@@ -74,6 +77,8 @@ interface ParsedMetadata {
     input?: Record<string, unknown>;
     output?: string;
     duration?: number;
+    status?: string;
+    exitCode?: number;
   }[];
   category?: string;
   workflowDispatch?: {
@@ -118,6 +123,11 @@ export function toMessage(raw: RawMessage): Message {
     input: tc.input ?? {},
     output: tc.output,
     durationMs: tc.duration,
+    status:
+      tc.status === 'completed' || tc.status === 'failed' || tc.status === 'cancelled'
+        ? tc.status
+        : undefined,
+    exitCode: typeof tc.exitCode === 'number' ? tc.exitCode : undefined,
   }));
   const error: InlineError | null =
     meta.error !== undefined

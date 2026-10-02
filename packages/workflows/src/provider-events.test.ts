@@ -75,6 +75,21 @@ describe('createProviderEventHandler', () => {
     ]);
   });
 
+  test('records long string tool input cut short', async () => {
+    const { handler, rows } = await makeHandler();
+
+    await handler.handle({
+      type: 'tool_call',
+      toolCallId: 'w',
+      name: 'Write',
+      rawInput: { file_path: 'a.ts', content: 'x'.repeat(2000), mode: 420 },
+    });
+
+    expect(rows[0]?.data).toMatchObject({
+      tool_input: { file_path: 'a.ts', content: `${'x'.repeat(500)}...`, mode: 420 },
+    });
+  });
+
   test('sends a warning to the platform with a ⚠️ prefix', async () => {
     const { handler, sent } = await makeHandler();
 

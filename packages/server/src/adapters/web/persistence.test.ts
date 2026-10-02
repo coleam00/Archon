@@ -349,6 +349,22 @@ describe('MessagePersistence', () => {
       expect(metadata?.toolCalls?.[0]?.output).toBe('output-for-first');
       expect(metadata?.toolCalls?.[1]?.output).toBeUndefined();
     });
+
+    test('persists how the tool call ended', async () => {
+      persistence.setConversationDbId('conv-1', 'db-uuid-1');
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-12',
+        name: 'bash',
+        input: { command: 'false' },
+      });
+      persistence.appendToolResult('conv-1', 'call-12', '', 50, { status: 'failed', exitCode: 1 });
+      await persistence.flush('conv-1');
+
+      const metadata = mockAddMessage.mock.calls[0][3] as {
+        toolCalls?: { status?: string; exitCode?: number }[];
+      };
+      expect(metadata?.toolCalls?.[0]).toMatchObject({ status: 'failed', exitCode: 1 });
+    });
   });
 
   describe('flush — pre-finalization of terminal tool calls', () => {

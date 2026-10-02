@@ -18,6 +18,7 @@ import type {
   WorkflowRequest,
 } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
+import { toolCallDisplayName } from '@archon/provider-contract';
 import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -2739,7 +2740,7 @@ async function handleStreamMode(
       }
     } else if (msg.type === 'tool_call') {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.title ?? msg.name, msg.rawInput);
+        const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
         await platform.sendMessage(conversationId, toolMessage, {
           category: 'tool_call_formatted',
         });
@@ -2981,7 +2982,7 @@ async function handleBatchMode(
       }
     } else if (msg.type === 'tool_call') {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.title ?? msg.name, msg.rawInput);
+        const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
         allChunks.push({ type: 'tool', content: toolMessage });
         getLog().debug({ toolName: msg.name }, 'tool_call');
       }
