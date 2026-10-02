@@ -1,7 +1,8 @@
+import type { ProviderFailureClass } from '@archon/provider-contract';
+
 // Prose patterns exclude bare HTTP codes; exact structured statusCode fields
 // and SDK error discriminators are classified separately below.
 const RATE_LIMIT_PATTERNS = ['rate limit', 'too many requests', 'overloaded'];
-const AUTH_PATTERNS = ['unauthorized', 'authentication', 'invalid token', 'api key'];
 const CRASH_PATTERNS = [
   'server disconnected',
   'disposed',
@@ -29,7 +30,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function classifyStructuredError(error: unknown): RetryableErrorClass | undefined {
+function classifyStructuredError(error: unknown): 'auth' | 'rate_limit' | undefined {
   const candidates = [error];
   if (error instanceof Error) candidates.push(error.cause);
 
@@ -81,11 +82,25 @@ export function classifyOpencodeError(error: unknown, aborted: boolean): Retryab
 
   const combined = parts.join(' ').toLowerCase();
   if (RATE_LIMIT_PATTERNS.some(pattern => combined.includes(pattern))) return 'rate_limit';
-  if (AUTH_PATTERNS.some(pattern => combined.includes(pattern))) return 'auth';
   if (CRASH_PATTERNS.some(pattern => combined.includes(pattern))) return 'crash';
   if (AGENT_NOT_FOUND_PATTERNS.some(pattern => combined.includes(pattern)))
     return 'agent_not_found';
   return 'unknown';
+}
+
+/**
+ * A failed OpenCode query, carrying the contract failure class its SDK's structured
+ * signals support. The retry class named in its message may come from the error text;
+ * it drives only the in-provider retry and never becomes the reported class, because a
+ * vendor rewording must not change what the engine retries.
+ */
+export class OpencodeQueryError extends Error {
+  constructor(
+    message: string,
+    readonly failureClass: ProviderFailureClass
+  ) {
+    super(message);
+  }
 }
 
 export function enrichOpencodeError(error: unknown, errorClass: RetryableErrorClass): Error {
@@ -93,7 +108,11 @@ export function enrichOpencodeError(error: unknown, errorClass: RetryableErrorCl
     return new Error('OpenCode query aborted');
   }
 
-  const err = new Error(`OpenCode ${errorClass}: ${errorMessage(error)}`);
+  const structuredClass = classifyStructuredError(error);
+  const err = new OpencodeQueryError(
+    `OpenCode ${errorClass}: ${errorMessage(error)}`,
+    structuredClass === 'rate_limit' ? 'rate_limited' : (structuredClass ?? 'unknown')
+  );
   if (error instanceof Error) err.cause = error;
   return err;
 }

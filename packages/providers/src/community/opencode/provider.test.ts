@@ -162,7 +162,7 @@ describe('normalizeTokens', () => {
   });
 });
 import { classifyOpencodeError } from './errors';
-import type { NodeConfig } from '../../types';
+import type { MessageChunk, NodeConfig } from '../../types';
 
 /** Default model for tests — satisfies the model-or-agent validation */
 const TEST_MODEL = { model: 'test/mock-model' };
@@ -573,27 +573,52 @@ describe('OpencodeProvider', () => {
 
   test('conforms to the provider contract', async () => {
     const cwd = await createTempProjectDir();
+    const sessionError = (error: Record<string, unknown>): AsyncGenerator<MessageChunk> => {
+      scriptedEvents = [{ type: 'session.error', properties: { sessionID: 'session-1', error } }];
+      return new OpencodeProvider({ retryBaseDelayMs: 1 }).sendQuery('hi', '/tmp', undefined, {
+        assistantConfig: TEST_MODEL,
+      });
+    };
     const violations = await runProviderConformance({
-      // OpenCode exposes no structured failure class here: every failure is `unknown`.
+      // Only the SDK's auth discriminator and HTTP status fields carry a class; anything
+      // else, including auth-sounding text, is `unknown`.
       failureCases: [
         {
-          name: 'session error',
+          name: 'unclassified session error',
           expected: 'unknown',
           evidence: 'upstream request failed',
-          run: () => {
-            scriptedEvents = [
-              {
-                type: 'session.error',
-                properties: {
-                  sessionID: 'session-1',
-                  error: { name: 'APIError', data: { message: 'upstream request failed' } },
-                },
-              },
-            ];
-            return new OpencodeProvider().sendQuery('hi', '/tmp', undefined, {
-              assistantConfig: TEST_MODEL,
-            });
-          },
+          run: () =>
+            sessionError({ name: 'APIError', data: { message: 'upstream request failed' } }),
+        },
+        {
+          name: 'auth-sounding text without a structured signal',
+          expected: 'unknown',
+          evidence: 'Unauthorized',
+          run: () => sessionError({ name: 'APIError', data: { message: 'Unauthorized' } }),
+        },
+        {
+          name: 'ProviderAuthError',
+          expected: 'auth',
+          evidence: 'provider rejected request',
+          run: () =>
+            sessionError({
+              name: 'ProviderAuthError',
+              data: { providerID: 'anthropic', message: 'provider rejected request' },
+            }),
+        },
+        {
+          name: 'HTTP 401',
+          expected: 'auth',
+          evidence: 'key revoked',
+          run: () =>
+            sessionError({ name: 'APIError', data: { message: 'key revoked', statusCode: 401 } }),
+        },
+        {
+          name: 'HTTP 429',
+          expected: 'rate_limited',
+          evidence: 'slow down',
+          run: () =>
+            sessionError({ name: 'APIError', data: { message: 'slow down', statusCode: 429 } }),
         },
       ],
       turns: [
@@ -1142,11 +1167,11 @@ describe('OpencodeProvider', () => {
     );
   });
 
-  test('auth errors are classified as non-retryable and do not retry', async () => {
+  test('a structured auth error is reported as auth and not retried', async () => {
     const runtime = makeRuntime({
       promptAsync: mock(async () => {
-        const error = new Error('401 unauthorized api key');
-        error.name = 'AuthenticationError';
+        const error = new Error('provider rejected request');
+        error.name = 'ProviderAuthError';
         throw error;
       }),
     });
@@ -1160,7 +1185,8 @@ describe('OpencodeProvider', () => {
 
     // Only the failure result precedes `settled`.
     expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
-    expect(failure?.evidence).toContain('OpenCode auth: 401 unauthorized api key');
+    expect(failure?.class).toBe('auth');
+    expect(failure?.evidence).toContain('provider rejected request');
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
     expect(mockLogger.info).not.toHaveBeenCalledWith(expect.any(Object), 'opencode.retrying_query');
   });
@@ -1907,26 +1933,6 @@ describe('OpencodeProvider', () => {
 });
 
 describe('classifyOpencodeError (#2715)', () => {
-  test('does not classify a bare "401"/"403" substring as auth', () => {
-    expect(classifyOpencodeError(new Error('connect ECONNREFUSED 127.0.0.1:401'), false)).not.toBe(
-      'auth'
-    );
-    expect(classifyOpencodeError(new Error('timeout after 401ms'), false)).not.toBe('auth');
-    expect(classifyOpencodeError(new Error('proxy responded with 403'), false)).not.toBe('auth');
-  });
-
-  test('still classifies genuine auth signals as auth', () => {
-    expect(classifyOpencodeError(new Error('Unauthorized'), false)).toBe('auth');
-    expect(classifyOpencodeError(new Error('authentication failed'), false)).toBe('auth');
-    expect(classifyOpencodeError(new Error('invalid token provided'), false)).toBe('auth');
-    expect(classifyOpencodeError(new Error('provided api key is rejected'), false)).toBe('auth');
-    // Real-world provider shape: a 401 co-occurring with the word "Unauthorized" —
-    // the word carries the signal, not the digits.
-    expect(
-      classifyOpencodeError(new Error('exceeded retry limit, last status: 401 Unauthorized'), false)
-    ).toBe('auth');
-  });
-
   test('classifies exact structured statuses across top-level, SDK, and wrapped shapes', () => {
     const cases = [
       [401, 'auth'],

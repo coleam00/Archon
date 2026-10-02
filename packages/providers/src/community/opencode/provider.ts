@@ -12,9 +12,9 @@ import type {
 import { getOrderedAgents } from './agent-config';
 import { OPENCODE_CAPABILITIES } from './capabilities';
 import { parseModelRef, parseOpencodeConfig } from './config';
-import { classifyOpencodeError, enrichOpencodeError } from './errors';
+import { classifyOpencodeError, enrichOpencodeError, OpencodeQueryError } from './errors';
 import { materializeAgents } from './agent-fs';
-import { unknownFailureResult } from '../../shared/failure';
+import { failureResult } from '../../shared/failure';
 import { streamMultiAgentOpencodeSession } from './multi-agent';
 import {
   acquireEmbeddedRuntime,
@@ -50,9 +50,9 @@ export class OpencodeProvider implements IAgentProvider {
 
   /**
    * One call is one turn. A failure, including one thrown while setting the turn up,
-   * ends in a `result` carrying a typed `failure`, then `settled`: OpenCode reports
-   * no structured failure class, so every failure is `unknown` with its text as
-   * evidence. Only cancellation throws.
+   * ends in a `result` carrying a typed `failure`, then `settled`. The class is `auth`
+   * or `rate_limited` only when the SDK's auth discriminator or HTTP status says so;
+   * every other failure is `unknown` with its text as evidence. Only cancellation throws.
    */
   async *sendQuery(
     prompt: string,
@@ -71,7 +71,12 @@ export class OpencodeProvider implements IAgentProvider {
       const err = error as Error;
       // The turn already reported its one result; a later error does not change it.
       if (resultReported) getLog().error({ err }, 'opencode.error_after_result');
-      else yield unknownFailureResult('opencode_query_failed', err.message);
+      else
+        yield failureResult(
+          err instanceof OpencodeQueryError ? err.failureClass : 'unknown',
+          'opencode_query_failed',
+          err.message
+        );
     }
     // Nothing more runs for this turn once its stream has ended.
     yield { type: 'settled' };
