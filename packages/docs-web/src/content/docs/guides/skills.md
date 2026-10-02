@@ -43,8 +43,9 @@ nodes:
       - remotion-best-practices
 ```
 
-For Codex, also invoke the skill explicitly in the node body, preferably in a named
-command file. First install it into Codex's native `.agents/skills/` root:
+For Codex, leave out the `skills:` list (a Codex node that names skills fails the run
+before any node starts) and invoke the skill explicitly in the node body, preferably in
+a named command file. First install it into Codex's native `.agents/skills/` root:
 
 ```bash
 npx skills add remotion-dev/skills --agent codex --skill remotion-best-practices -y

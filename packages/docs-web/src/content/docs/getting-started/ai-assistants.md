@@ -307,11 +307,11 @@ assistants:
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
-| MCP servers | ✅ | `mcp: path/to/servers.json` passed through to OpenCode |
+| MCP servers | ❌ | Not translated to an OpenCode request yet; a node naming `mcp:` fails the run at start |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
-| Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
+| Skills | ❌ | Not translated to an OpenCode request yet; a node naming `skills:` fails the run at start |
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
 | Hooks | ❌ | Archon's per-node `hooks` field is Claude-SDK-shaped; the OpenCode provider has no translation site, so a node's `hooks:` is ignored (with a warning) |

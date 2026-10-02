@@ -5347,6 +5347,32 @@ describe('executeDagWorkflow -- skills options', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 
+  it('runs a node with empty skills and plugins lists on a provider without those capabilities', async () => {
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'dag-codex-empty-lists',
+          nodes: [
+            {
+              id: 'only',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              provider: 'codex',
+              skills: [],
+              plugins: [],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+  });
+
   it('passes named plugins to sendQuery nodeConfig', async () => {
     await executeDagWorkflow(
       dagOptions({

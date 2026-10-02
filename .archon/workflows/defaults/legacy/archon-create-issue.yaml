@@ -367,9 +367,10 @@ nodes:
 
       Even if you cannot fully reproduce the issue, document what you tried
       and what you observed. Partial reproduction is still valuable evidence.
-      Use $agent-browser when browser-based reproduction is relevant.
+      Use the agent-browser skill when browser-based reproduction is relevant.
     depends_on: [classify, git-context, investigate, start-server]
     context: fresh
+    provider: claude
     skills:
       - agent-browser
     trigger_rule: one_success
