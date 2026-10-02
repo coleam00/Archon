@@ -4419,6 +4419,9 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
         onError
       );
       expect(unknown.calls).toBe(onError === 'all' ? 2 : 1);
+      expect(unknown.failedErrors).not.toContainEqual(
+        expect.stringContaining("the provider's configuration must be fixed")
+      );
     },
     5_000
   );
