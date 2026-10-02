@@ -98,8 +98,8 @@ export const KNOWN_VENDORS: ReadonlySet<string> = new Set<string>(
 /**
  * Map the stored OpenAI subscription blob onto the Codex CLI `auth.json` shape
  * (authoritative interface: `packages/server/src/scripts/setup-auth.ts`):
- *   { OPENAI_API_KEY: null, tokens: { id_token, access_token, refresh_token,
- *     account_id }, last_refresh }
+ *   { auth_mode: 'chatgpt', OPENAI_API_KEY: null, tokens: { id_token,
+ *     access_token, refresh_token, account_id }, last_refresh }
  *
  * The blob comes from Archon's own OpenAI PKCE flow (`openai-oauth.ts`, #1924)
  * and is `{ access, refresh, expires, accountId, id_token }` — `accountId` is
@@ -114,6 +114,7 @@ function buildCodexAuthJson(rawCreds: OAuthCredentials): string {
   const c = rawCreds as Record<string, unknown>;
   const str = (v: unknown): string => (typeof v === 'string' ? v : '');
   return JSON.stringify({
+    auth_mode: 'chatgpt',
     OPENAI_API_KEY: null,
     tokens: {
       id_token: str(c.id_token),

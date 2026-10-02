@@ -10,6 +10,7 @@ import * as path from 'path';
 import * as os from 'os';
 
 interface AuthJson {
+  auth_mode: 'chatgpt';
   OPENAI_API_KEY: null;
   tokens: {
     id_token: string;
@@ -55,6 +56,7 @@ function setupAuth(): void {
 
   // Create auth.json structure
   const authData: AuthJson = {
+    auth_mode: 'chatgpt',
     OPENAI_API_KEY: null,
     tokens: {
       id_token: idToken,

@@ -46,6 +46,13 @@ interface ProviderWarning {
   message: string;
 }
 
+const CODEX_AUTH_SETUP_ENV_KEYS = new Set<string>([
+  'CODEX_ID_TOKEN',
+  'CODEX_ACCESS_TOKEN',
+  'CODEX_REFRESH_TOKEN',
+  'CODEX_ACCOUNT_ID',
+]);
+
 // Singleton Codex instance (async because binary path resolution is async)
 let codexInstance: Codex | null = null;
 let codexInitPromise: Promise<Codex> | null = null;
@@ -65,7 +72,7 @@ async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
   if (!codexInitPromise) {
     codexInitPromise = (async (): Promise<Codex> => {
       const codexPathOverride = await resolveCodexBinaryPath(configCodexBinaryPath);
-      const instance = new Codex({ codexPathOverride });
+      const instance = new Codex({ codexPathOverride, env: buildCodexEnv({}) });
       codexInstance = instance;
       return instance;
     })().catch(err => {
@@ -134,7 +141,13 @@ function buildCodexEnv(requestEnv: Record<string, string>): Record<string, strin
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
   // Managed project env intentionally overrides inherited process env for project-scoped execution.
-  return { ...baseEnv, ...requestEnv };
+  const env = { ...baseEnv, ...requestEnv };
+  // These variables are inputs to Archon's container auth writer, not a Codex CLI
+  // authentication channel. Forwarding them makes Codex ignore a valid auth.json
+  // and send requests without an Authorization header.
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !CODEX_AUTH_SETUP_ENV_KEYS.has(key))
+  );
 }
 
 function buildMcpEnvSource(

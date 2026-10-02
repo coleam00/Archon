@@ -1445,6 +1445,33 @@ describe('CodexProvider', () => {
       }
     });
 
+    test('does not forward Archon Codex auth setup variables to the Codex CLI', async () => {
+      mockRunStreamed.mockResolvedValue({
+        events: (async function* () {
+          yield { type: 'turn.completed', usage: defaultUsage };
+        })(),
+      });
+
+      for await (const _ of client.sendQuery('test prompt', '/workspace', undefined, {
+        env: {
+          CODEX_ID_TOKEN: 'id-token',
+          CODEX_ACCESS_TOKEN: 'access-token',
+          CODEX_REFRESH_TOKEN: 'refresh-token',
+          CODEX_ACCOUNT_ID: 'account-id',
+          CODEX_HOME: '/run/codex-home',
+        },
+      })) {
+        // consume
+      }
+
+      const env = MockCodex.mock.calls[0]?.[0]?.env;
+      expect(env).toMatchObject({ CODEX_HOME: '/run/codex-home' });
+      expect(env).not.toHaveProperty('CODEX_ID_TOKEN');
+      expect(env).not.toHaveProperty('CODEX_ACCESS_TOKEN');
+      expect(env).not.toHaveProperty('CODEX_REFRESH_TOKEN');
+      expect(env).not.toHaveProperty('CODEX_ACCOUNT_ID');
+    });
+
     test('passes workflow MCP config as Codex mcp_servers overrides', async () => {
       const testDir = await mkdtemp(join(tmpdir(), 'codex-provider-mcp-'));
       const originalToken = process.env.ARCHON_CODEX_MCP_TOKEN;
@@ -1610,6 +1637,11 @@ describe('CodexProvider', () => {
       }
 
       expect(MockCodex).toHaveBeenCalledTimes(1);
+      const env = MockCodex.mock.calls[0]?.[0]?.env;
+      expect(env).not.toHaveProperty('CODEX_ID_TOKEN');
+      expect(env).not.toHaveProperty('CODEX_ACCESS_TOKEN');
+      expect(env).not.toHaveProperty('CODEX_REFRESH_TOKEN');
+      expect(env).not.toHaveProperty('CODEX_ACCOUNT_ID');
     });
 
     test('wraps per-call Codex constructor failures with provider error context', async () => {
