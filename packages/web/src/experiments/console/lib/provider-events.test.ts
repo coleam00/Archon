@@ -156,6 +156,22 @@ describe('provider-event store', () => {
     ]);
   });
 
+  test('a catch-up that returns a later attempt places it after the attempts held', async () => {
+    const h = harness();
+    h.store.load('r1', 'build');
+    await h.resolveNext([rec('a', 0), rec('a', 1), rec('b', 0), rec('b', 1)]);
+    h.store.catchUp('r1'); // e.g. a reconnect while the node retries
+    expect(h.calls.at(-1)).toEqual(['r1', 'build', { attemptId: 'b', seq: 1 }]);
+    await h.resolveNext([rec('c', 0)]);
+    expect(h.records()).toEqual([
+      ['a', 0],
+      ['a', 1],
+      ['b', 0],
+      ['b', 1],
+      ['c', 0],
+    ]);
+  });
+
   test('a catch-up asked for while a fetch is in flight runs when it finishes', async () => {
     const h = harness();
     h.store.load('r1', 'build');
@@ -214,7 +230,7 @@ describe('mergeProviderEventRecords', () => {
     const merged = mergeProviderEventRecords(
       [],
       fixture.input.map(r => rec(r.attemptId, r.seq)),
-      'store'
+      'load'
     );
     expect(merged.map(r => ({ attemptId: r.attemptId, seq: r.seq }))).toEqual(fixture.expected);
   });

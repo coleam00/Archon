@@ -37,32 +37,28 @@ function recordKey(record: { attemptId: string | null; seq: number }): string {
 
 /**
  * Merge records into a node's ordered list: duplicates dropped, each attempt's events
- * by `seq`, attempts in start order. Records `from: 'live'` are frames as they arrive,
- * so an attempt not held yet is the newest. Records `from: 'store'` are a fetch result
- * in the store's order: its attempts keep that order, after the attempts held before
- * the first one it shares, and attempts it does not know (live frames it has not
- * committed yet) follow it. Merged into nothing, store records keep the engine's
- * `orderProviderEventRecords` order, which the console cannot import; both are held to
+ * by `seq`, attempts in start order. How an attempt not held yet is placed depends on
+ * where the records come from:
+ * - `'after'`: live frames, or a fetch after a cursor. Everything they carry follows
+ *   what is held, so an unseen attempt is the newest.
+ * - `'load'`: a node's full load, in the store's order. Its attempts keep that order,
+ *   and held attempts it does not contain (frames not committed yet) follow it.
+ *
+ * Loaded into nothing, records keep the engine's `orderProviderEventRecords` order,
+ * which the console cannot import; both are held to
  * `packages/workflows/src/schemas/provider-event-order.fixture.json`.
  */
 export function mergeProviderEventRecords(
   existing: readonly ProviderEventRecord[],
   incoming: readonly ProviderEventRecord[],
-  from: 'live' | 'store'
+  from: 'after' | 'load'
 ): ProviderEventRecord[] {
   const attemptsOf = (records: readonly ProviderEventRecord[]): (string | null)[] => [
     ...new Set(records.map(record => record.attemptId)),
   ];
   const held = attemptsOf(existing);
   const fetched = attemptsOf(incoming);
-  let order: (string | null)[];
-  if (from === 'live') {
-    order = [...held, ...fetched];
-  } else {
-    const firstShared = held.findIndex(attempt => fetched.includes(attempt));
-    const before = firstShared === -1 ? [] : held.slice(0, firstShared);
-    order = [...before, ...fetched, ...held];
-  }
+  const order = from === 'after' ? [...held, ...fetched] : [...fetched, ...held];
   const attemptRank = new Map<string | null, number>();
   for (const attempt of order) {
     if (!attemptRank.has(attempt)) attemptRank.set(attempt, attemptRank.size);
@@ -201,7 +197,11 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
     state.fetching = true;
     fetcher(runId, stepName, from === 'all' ? undefined : from)
       .then(records => {
-        state.records = mergeProviderEventRecords(state.records, records, 'store');
+        state.records = mergeProviderEventRecords(
+          state.records,
+          records,
+          from === 'all' ? 'load' : 'after'
+        );
         state.loaded = true;
         publish(runId);
       })
@@ -257,7 +257,7 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
     },
     receive(record): void {
       const state = stepState(record.runId, record.stepName);
-      const merged = mergeProviderEventRecords(state.records, [record], 'live');
+      const merged = mergeProviderEventRecords(state.records, [record], 'after');
       if (merged.length === state.records.length) return; // duplicate
       state.records = merged;
       publish(record.runId);
