@@ -1066,8 +1066,8 @@ export async function maybePrintTierNotice(
 }
 
 /**
- * Tool calls started in this process and not yet closed, keyed by id, so a completion
- * line can name its tool and duration. One per run subscription.
+ * Tool calls started in this process and not yet closed, keyed by attempt and call id,
+ * so a completion line can name its tool and duration. One per run subscription.
  */
 type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
 
@@ -1115,15 +1115,20 @@ function renderWorkflowEvent(
     case 'provider_event': {
       if (!verbose) break;
       const providerEvent = event.event;
+      // A call id is unique within its attempt; parallel nodes can repeat one.
+      const callKey = JSON.stringify([
+        event.attemptId,
+        'toolCallId' in providerEvent ? providerEvent.toolCallId : '',
+      ]);
       if (providerEvent.type === 'tool_call') {
         const name = toolCallDisplayName(providerEvent);
-        openToolCalls.set(providerEvent.toolCallId, { name, observedAt: event.observedAt });
+        openToolCalls.set(callKey, { name, observedAt: event.observedAt });
         process.stderr.write(
           `[${event.stepName}] tool: ${name} (started, ${providerEvent.toolCallId})\n`
         );
       } else if (providerEvent.type === 'tool_call_update') {
-        const started = openToolCalls.get(providerEvent.toolCallId);
-        openToolCalls.delete(providerEvent.toolCallId);
+        const started = openToolCalls.get(callKey);
+        openToolCalls.delete(callKey);
         const duration =
           started === undefined
             ? ''

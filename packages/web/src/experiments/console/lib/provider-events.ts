@@ -36,15 +36,38 @@ function recordKey(record: { attemptId: string | null; seq: number }): string {
 }
 
 /**
- * Merge records into a node's ordered list: duplicates dropped, attempts kept in the
- * order they were first seen, each attempt's events by `seq`. This is the engine's
- * `orderProviderEventRecords` rule, which the console cannot import; both are held to
+ * Merge records into a node's ordered list: duplicates dropped, each attempt's events
+ * by `seq`, attempts in start order. Records `from: 'live'` are frames as they arrive,
+ * so an attempt not held yet is the newest. Records `from: 'store'` are a fetch result
+ * in the store's order: its attempts keep that order, after the attempts held before
+ * the first one it shares, and attempts it does not know (live frames it has not
+ * committed yet) follow it. Merged into nothing, store records keep the engine's
+ * `orderProviderEventRecords` order, which the console cannot import; both are held to
  * `packages/workflows/src/schemas/provider-event-order.fixture.json`.
  */
 export function mergeProviderEventRecords(
   existing: readonly ProviderEventRecord[],
-  incoming: readonly ProviderEventRecord[]
+  incoming: readonly ProviderEventRecord[],
+  from: 'live' | 'store'
 ): ProviderEventRecord[] {
+  const attemptsOf = (records: readonly ProviderEventRecord[]): (string | null)[] => [
+    ...new Set(records.map(record => record.attemptId)),
+  ];
+  const held = attemptsOf(existing);
+  const fetched = attemptsOf(incoming);
+  let order: (string | null)[];
+  if (from === 'live') {
+    order = [...held, ...fetched];
+  } else {
+    const firstShared = held.findIndex(attempt => fetched.includes(attempt));
+    const before = firstShared === -1 ? [] : held.slice(0, firstShared);
+    order = [...before, ...fetched, ...held];
+  }
+  const attemptRank = new Map<string | null, number>();
+  for (const attempt of order) {
+    if (!attemptRank.has(attempt)) attemptRank.set(attempt, attemptRank.size);
+  }
+
   const seen = new Set(existing.map(recordKey));
   const merged = [...existing];
   for (const record of incoming) {
@@ -52,10 +75,6 @@ export function mergeProviderEventRecords(
     if (seen.has(key)) continue;
     seen.add(key);
     merged.push(record);
-  }
-  const attemptRank = new Map<string | null, number>();
-  for (const record of merged) {
-    if (!attemptRank.has(record.attemptId)) attemptRank.set(record.attemptId, attemptRank.size);
   }
   return merged.sort(
     (a, b) =>
@@ -108,6 +127,8 @@ interface StepState {
   records: ProviderEventRecord[];
   loaded: boolean;
   fetching: boolean;
+  /** A catch-up was asked for while a fetch was in flight; it runs when that ends. */
+  catchUpPending: boolean;
   /** Frame-triggered fetches per hole, keyed by the cursor that targets it. */
   gapFetches: Map<string, number>;
 }
@@ -148,7 +169,13 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
     }
     let state = steps.get(stepName);
     if (state === undefined) {
-      state = { records: [], loaded: false, fetching: false, gapFetches: new Map() };
+      state = {
+        records: [],
+        loaded: false,
+        fetching: false,
+        catchUpPending: false,
+        gapFetches: new Map(),
+      };
       steps.set(stepName, state);
     }
     return state;
@@ -174,7 +201,7 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
     state.fetching = true;
     fetcher(runId, stepName, from === 'all' ? undefined : from)
       .then(records => {
-        state.records = mergeProviderEventRecords(state.records, records);
+        state.records = mergeProviderEventRecords(state.records, records, 'store');
         state.loaded = true;
         publish(runId);
       })
@@ -185,7 +212,26 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
       .finally(() => {
         state.fetching = false;
         onDone?.();
+        if (state.catchUpPending) {
+          state.catchUpPending = false;
+          catchUpStep(runId, stepName);
+        }
       });
+  };
+
+  /**
+   * Fetch from a loaded node's first hole, or after its last event. A fetch in flight
+   * may stop short of what this one asks for, so the request waits for it instead of
+   * being dropped.
+   */
+  const catchUpStep = (runId: string, stepName: string): void => {
+    const state = stepState(runId, stepName);
+    if (!state.loaded) return;
+    if (state.fetching) {
+      state.catchUpPending = true;
+      return;
+    }
+    fetchInto(runId, stepName, findProviderEventGap(state.records) ?? lastCursor(state.records));
   };
 
   const closeGap = (runId: string, stepName: string): void => {
@@ -211,26 +257,20 @@ export function createProviderEventStore(fetcher: ProviderEventFetcher): Provide
     },
     receive(record): void {
       const state = stepState(record.runId, record.stepName);
-      const merged = mergeProviderEventRecords(state.records, [record]);
+      const merged = mergeProviderEventRecords(state.records, [record], 'live');
       if (merged.length === state.records.length) return; // duplicate
       state.records = merged;
       publish(record.runId);
       closeGap(record.runId, record.stepName);
     },
     catchUp(runId): void {
-      for (const [step, state] of runs.get(runId) ?? []) {
-        // From the first hole if there is one: everything after it comes back too.
-        if (state.loaded) {
-          fetchInto(runId, step, findProviderEventGap(state.records) ?? lastCursor(state.records));
-        }
-      }
+      for (const step of runs.get(runId)?.keys() ?? []) catchUpStep(runId, step);
     },
     nodeFinished(runId, nodeId): void {
       for (const [step, state] of runs.get(runId) ?? []) {
-        if (!state.loaded) continue;
-        const gap = findProviderEventGap(state.records);
-        if (step === nodeId) fetchInto(runId, step, gap ?? lastCursor(state.records));
-        else if (gap !== null) fetchInto(runId, step, gap);
+        if (step === nodeId || findProviderEventGap(state.records) !== null) {
+          catchUpStep(runId, step);
+        }
       }
     },
     snapshot(runId): RunProviderEvents {

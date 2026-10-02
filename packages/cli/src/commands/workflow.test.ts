@@ -11440,6 +11440,62 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(stderrSpy).not.toHaveBeenCalledWith(expect.stringContaining('tool: Bash'));
   });
 
+  it('keeps two attempts that reuse a call id apart', async () => {
+    setupWorkflowMocks();
+
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+      const inAttempt = (
+        attemptId: string,
+        seq: number,
+        observedAt: string,
+        event: Extract<WorkflowEmitterEvent, { type: 'provider_event' }>['event']
+      ): WorkflowEmitterEvent => ({
+        type: 'provider_event',
+        runId: 'run-1',
+        stepName: attemptId === 'attempt-1' ? 'left' : 'right',
+        attemptId,
+        seq,
+        observedAt,
+        event,
+      });
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-1', 0, '2026-10-02T10:00:00.000Z', {
+          type: 'tool_call',
+          toolCallId: 'call-1',
+          name: 'Read',
+        })
+      );
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-2', 0, '2026-10-02T10:00:00.010Z', {
+          type: 'tool_call',
+          toolCallId: 'call-1',
+          name: 'Bash',
+        })
+      );
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-1', 1, '2026-10-02T10:00:00.030Z', {
+          type: 'tool_call_update',
+          toolCallId: 'call-1',
+          status: 'completed',
+        })
+      );
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-2', 1, '2026-10-02T10:00:00.110Z', {
+          type: 'tool_call_update',
+          toolCallId: 'call-1',
+          status: 'completed',
+        })
+      );
+      return { success: true, workflowRunId: 'run-1' };
+    });
+
+    await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
+
+    expect(stderrSpy).toHaveBeenCalledWith('[left] tool: Read (30ms, call-1, completed)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[right] tool: Bash (100ms, call-1, completed)\n');
+  });
+
   it('should write a tool call and its completion with verbose', async () => {
     setupWorkflowMocks();
 

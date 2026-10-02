@@ -144,6 +144,31 @@ describe('provider-event store', () => {
     expect(h.calls).toHaveLength(1);
   });
 
+  test("a live frame of a newer attempt stays after the load's earlier attempts", async () => {
+    const h = harness();
+    h.store.load('r1', 'build');
+    h.store.receive(rec('b', 0)); // a retry's first frame lands before the load returns
+    await h.resolveNext([rec('a', 0), rec('a', 1)]);
+    expect(h.records()).toEqual([
+      ['a', 0],
+      ['a', 1],
+      ['b', 0],
+    ]);
+  });
+
+  test('a catch-up asked for while a fetch is in flight runs when it finishes', async () => {
+    const h = harness();
+    h.store.load('r1', 'build');
+    await h.resolveNext([rec('a', 0)]);
+    h.store.receive(rec('a', 2)); // starts a gap fetch from (a, 0)
+    h.store.nodeFinished('r1', 'build'); // arrives while that fetch is in flight
+    await h.resolveNext([rec('a', 1)]);
+    // The node may have frames past (a, 2) that no hole reveals; the catch-up asks for them.
+    expect(h.calls.at(-1)).toEqual(['r1', 'build', { attemptId: 'a', seq: 2 }]);
+    await h.resolveNext([rec('a', 3)]);
+    expect(h.records()).toEqual([0, 1, 2, 3].map(seq => ['a', seq]));
+  });
+
   test('a reconnect catches a loaded node up from its last event', async () => {
     const h = harness();
     h.store.load('r1', 'build');
@@ -188,7 +213,8 @@ describe('mergeProviderEventRecords', () => {
     };
     const merged = mergeProviderEventRecords(
       [],
-      fixture.input.map(r => rec(r.attemptId, r.seq))
+      fixture.input.map(r => rec(r.attemptId, r.seq)),
+      'store'
     );
     expect(merged.map(r => ({ attemptId: r.attemptId, seq: r.seq }))).toEqual(fixture.expected);
   });
