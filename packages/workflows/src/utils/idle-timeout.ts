@@ -25,8 +25,9 @@ export const STEP_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const IDLE_TIMEOUT_SENTINEL = Symbol('IDLE_TIMEOUT');
 
 /**
- * Wraps an async generator with an idle timeout. If no value is yielded within
- * `timeoutMs`, the wrapper returns normally — converting a hang into a clean exit.
+ * Wraps an async generator with an idle timeout. If the generator yields no value for
+ * `timeoutMs` of its own time — time the consumer spends handling a value does not
+ * count — the wrapper returns normally, converting a hang into a clean exit.
  *
  * When `shouldResetTimer` is provided and returns `false` for a yielded value, the
  * timer is NOT reset — it keeps counting from the previous reset point. Most callers
@@ -91,7 +92,12 @@ export async function* withIdleTimeout<T>(
         onTimerReset?.(result.value, timerStartedAt);
       }
 
+      // The clock measures the generator's silence, so the time the consumer spends on
+      // the value (the engine records every provider event before it asks for the next
+      // one) is not charged to it.
+      const yieldedAt = Date.now();
       yield result.value;
+      timerStartedAt += Date.now() - yieldedAt;
     }
   } finally {
     if (!timedOut) {
