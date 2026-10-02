@@ -43,6 +43,8 @@ export function formatProviderFailure(failure: ProviderFailure): string {
       return `⚠️ AI usage limit reached${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Please wait and try again.`;
     case 'budget_exceeded':
       return '⚠️ The turn stopped at its spend limit.';
+    case 'misconfigured':
+      return `⚠️ The AI provider is not set up correctly${detail}. Fix its configuration, then try again; retrying unchanged will fail the same way.`;
     case 'rate_limited':
       return '⚠️ The AI provider is rate limiting requests. Wait a moment and try again.';
     case 'transient':

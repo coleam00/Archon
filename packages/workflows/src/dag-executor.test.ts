@@ -4309,7 +4309,8 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
   // decision the typed class must override (#3520).
   async function attemptsForTypedFailure(
     failure: ProviderFailure,
-    errors: string[] = [failure.evidence]
+    errors: string[] = [failure.evidence],
+    onError?: 'transient' | 'all'
   ): Promise<{ calls: number; failedKinds: unknown[]; runFailed: boolean }> {
     const realSetTimeout = globalThis.setTimeout;
     globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
@@ -4344,7 +4345,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
                 id: 'my-node',
                 kind: 'agent',
                 source: { kind: 'command', name: 'my-cmd' },
-                retry: { max_attempts: 1, delay_ms: 1 },
+                retry: { max_attempts: 1, delay_ms: 1, ...(onError ? { on_error: onError } : {}) },
               },
             ],
           },
@@ -4383,6 +4384,29 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       const auth = await attemptsForTypedFailure({ class: 'auth', evidence });
       expect(auth.calls).toBe(1);
       expect(auth.failedKinds).toEqual(['fatal']);
+    },
+    5_000
+  );
+
+  it.each([undefined, 'transient', 'all'] as const)(
+    'a misconfigured failure is never retried, on_error: %s — #3566',
+    async onError => {
+      const evidence = 'proxy_invalid: HTTPS_PROXY is not a complete URL';
+      const result = await attemptsForTypedFailure(
+        { class: 'misconfigured', evidence },
+        [evidence],
+        onError
+      );
+      expect(result.calls).toBe(1);
+      expect(result.failedKinds).toEqual(['fatal']);
+      expect(result.runFailed).toBe(true);
+      // The same harness does retry an unclassified failure when on_error allows it.
+      const unknown = await attemptsForTypedFailure(
+        { class: 'unknown', evidence },
+        [evidence],
+        onError
+      );
+      expect(unknown.calls).toBe(onError === 'all' ? 2 : 1);
     },
     5_000
   );

@@ -185,6 +185,7 @@ export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
     case 'auth':
     case 'quota_exhausted':
     case 'budget_exceeded':
+    case 'misconfigured':
       return 'fatal';
     case 'rate_limited':
     case 'transient':

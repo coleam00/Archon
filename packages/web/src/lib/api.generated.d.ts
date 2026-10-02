@@ -3525,6 +3525,7 @@ export interface components {
                   | 'auth'
                   | 'quota_exhausted'
                   | 'budget_exceeded'
+                  | 'misconfigured'
                   | 'rate_limited'
                   | 'transient'
                   | 'unknown';

@@ -20,7 +20,8 @@ import type {
   ProviderCapabilities,
   CodexProviderDefaults,
 } from '../types';
-import { unknownFailureResult } from '../shared/failure';
+import type { ProviderFailureClass } from '@archon/provider-contract';
+import { failureClassOfThrown, failureResult } from '../shared/failure';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
@@ -537,7 +538,7 @@ async function* streamCodexEvents(
       const errorObj = (event as { error?: { message?: string } }).error;
       const errorMessage = errorObj?.message ?? 'Unknown error';
       getLog().error({ errorMessage }, 'turn_failed');
-      yield codexFailureResult('codex_turn_failed', errorMessage, resolvedThreadId);
+      yield codexFailureResult('unknown', 'codex_turn_failed', errorMessage, resolvedThreadId);
       return;
     }
 
@@ -789,20 +790,22 @@ async function* streamCodexEvents(
   // that streamed nothing but never raised an isError.
   const message = lastNonMcpError ?? 'Codex stream closed without turn.completed or turn.failed';
   getLog().error({ message }, 'stream_incomplete');
-  yield codexFailureResult('codex_stream_incomplete', message, resolvedThreadId);
+  yield codexFailureResult('unknown', 'codex_stream_incomplete', message, resolvedThreadId);
 }
 
 /**
- * A failed Codex turn. The Codex SDK reports every failure as a message string
- * (`turn.failed`, `error` events and thrown errors carry no code, status or error type),
- * so every Codex failure is `unknown`; the thread id rides along for resume.
+ * A failed Codex turn; the thread id rides along for resume. The Codex SDK reports
+ * failures as message strings (`turn.failed`, `error` events and its own thrown errors
+ * carry no code, status or error type), so they are `unknown`. Only a failure Archon's
+ * setup checks classified, or a spawn errno, has a class of its own.
  */
 function codexFailureResult(
+  failureClass: ProviderFailureClass,
   errorSubtype: string,
   evidence: string,
   sessionId: string | null | undefined
 ): ResultChunk {
-  const result = unknownFailureResult(errorSubtype, evidence);
+  const result = failureResult(failureClass, errorSubtype, evidence);
   if (sessionId) result.sessionId = sessionId;
   return result;
 }
@@ -818,7 +821,7 @@ function codexFailureResult(
  * - buildTurnOptions: per-turn configuration (output schema, abort signal)
  * - buildEffectivePrompt: systemPrompt delivery via prompt prepend (no SDK channel)
  * - streamCodexEvents: raw SDK event normalization into MessageChunks
- * - codexFailureResult: the typed `unknown` failure every Codex error becomes
+ * - codexFailureResult: the typed failure a Codex error becomes
  */
 export class CodexProvider implements IAgentProvider {
   private async createCodexClient(
@@ -1023,7 +1026,12 @@ export class CodexProvider implements IAgentProvider {
         const evidence = isModelAccessError(err.message)
           ? `${buildModelAccessMessage(requestOptions?.model)}\n\n${err.message}`
           : err.message;
-        yield codexFailureResult('codex_query_failed', evidence, threadId);
+        // The SDK spawns the binary without a cwd, so ENOENT means the binary is missing.
+        const failureClass =
+          (err as NodeJS.ErrnoException).code === 'ENOENT'
+            ? 'misconfigured'
+            : failureClassOfThrown(err);
+        yield codexFailureResult(failureClass, 'codex_query_failed', evidence, threadId);
       }
     }
     // A Codex turn has no background work: once its result is in, nothing more runs.

@@ -429,6 +429,10 @@ describe('formatProviderFailure', () => {
     ['auth', 'The AI provider rejected its credentials: Invalid API key'],
     ['quota_exhausted', 'AI usage limit reached. Please wait and try again.'],
     ['budget_exceeded', 'The turn stopped at its spend limit.'],
+    [
+      'misconfigured',
+      'The AI provider is not set up correctly: Invalid API key. Fix its configuration',
+    ],
     ['rate_limited', 'The AI provider is rate limiting requests.'],
     ['transient', 'The AI provider failed temporarily: Invalid API key. Try again.'],
     ['unknown', 'AI error: Invalid API key. Try /reset if issue persists.'],
