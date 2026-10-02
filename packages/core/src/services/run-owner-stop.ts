@@ -3,6 +3,7 @@ import {
   RunLiveOwnerStopUnavailableError,
   type RunLiveOwnerStopRefusal,
 } from './run-live-owner';
+import { TERMINATION_CONFIRM_MS, TERMINATION_GRACE_MS } from './run-stop-bounds';
 import { terminateWindowsProcessTree } from './windows-process-tree';
 
 /*
@@ -11,8 +12,6 @@ import { terminateWindowsProcessTree } from './windows-process-tree';
  * Every cancel and abandon surface goes through it (`cancelWorkflow`, `abandonWorkflow`).
  */
 
-const TERMINATION_GRACE_MS = 5_000;
-const TERMINATION_CONFIRM_MS = 1_000;
 const POLL_INTERVAL_MS = 50;
 
 export interface DetachedRunStopTarget {
