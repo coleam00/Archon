@@ -158,6 +158,7 @@ import {
   type ModelAliasPreset,
   type RawTiersConfig,
 } from './model-validation';
+import { resolveWorkflowModelScope } from './node-model-resolution';
 import { captureWorkflowSource, capturedSourceRoots } from './workflow-source';
 import { CONTAINER_MARKER_PROBE } from './checkout-observation';
 
@@ -27985,37 +27986,64 @@ describe('containerCommandName', () => {
 });
 
 describe('collectContainerIncompatibleProviders', () => {
-  const promptNode = (id: string, provider?: string): DagNode =>
+  const promptNode = (id: string, provider?: string, model?: string): DagNode =>
     ({
       id,
       kind: 'agent',
       source: { kind: 'inline', prompt: `do ${id}` },
       ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
     }) as unknown as DagNode;
   const bashNode = (id: string): DagNode =>
     ({ id, kind: 'exec', runtime: 'sh', script: 'echo hi' }) as unknown as DagNode;
 
+  const assistantModels = { claude: 'claude-default', codex: 'codex-default' };
+  const buildScope = (
+    workflow: {
+      provider?: string;
+      model?: string;
+      effort?: 'low' | 'medium' | 'high' | 'max';
+    } = {},
+    aiProfile?: ReturnType<typeof buildAiProfile>
+  ) => resolveWorkflowModelScope(workflow, 'claude', assistantModels, aiProfile);
+
   it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(
+      nodes,
+      buildScope({ provider: 'claude' }),
+      assistantModels
+    );
     expect([...bad]).toEqual([]);
   });
 
   it('flags a node whose provider lacks containerExec (codex)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'codex')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(
+      nodes,
+      buildScope({ provider: 'claude' }),
+      assistantModels
+    );
     expect([...bad]).toEqual(['codex']);
   });
 
   it('flags the workflow-level provider when a node does not override it', () => {
     const nodes = [promptNode('a')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(
+      nodes,
+      buildScope({ provider: 'codex' }),
+      assistantModels
+    );
     expect([...bad]).toEqual(['codex']);
   });
 
   it('ignores bash/script nodes (deterministic, no provider)', () => {
     const nodes = [bashNode('a'), bashNode('b')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(
+      nodes,
+      buildScope({ provider: 'codex' }),
+      assistantModels
+    );
     expect([...bad]).toEqual([]);
   });
 
@@ -28025,7 +28053,31 @@ describe('collectContainerIncompatibleProviders', () => {
       kind: 'loop_group',
       loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
     } as unknown as DagNode;
-    const bad = collectContainerIncompatibleProviders([group], 'claude');
+    const bad = collectContainerIncompatibleProviders(
+      [group],
+      buildScope({ provider: 'claude' }),
+      assistantModels
+    );
+    expect([...bad]).toEqual(['codex']);
+  });
+
+  it('flags a node whose model tier resolves to a different provider than the workflow default', () => {
+    // Regression test for #2606: the preflight must consult resolveNodeModel, so a
+    // node declaring `model: medium` against an aiProfile that rebinds `medium` to
+    // codex is refused the same way as a node that explicitly sets `provider: codex`.
+    // Before the refactor, the preflight hand-mirrored provider resolution and could
+    // drift from the dispatch-time resolver — a run would start in a container only to
+    // hit the runtime guard after the container existed.
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: { medium: { provider: 'codex', model: 'gpt-5.6-sol' } },
+    });
+    const nodes = [promptNode('a', undefined, 'medium')];
+    const bad = collectContainerIncompatibleProviders(
+      nodes,
+      buildScope({ provider: 'claude' }, aiProfile),
+      assistantModels,
+      aiProfile
+    );
     expect([...bad]).toEqual(['codex']);
   });
 });
@@ -28045,10 +28097,21 @@ describe('collectStrictSchemaViolations', () => {
     required: ['ready'],
   };
 
+  const assistantModels = { claude: 'claude-default', codex: 'codex-default' };
+  const buildScope = (
+    workflow: {
+      provider?: string;
+      model?: string;
+      effort?: 'low' | 'medium' | 'high' | 'max';
+    } = {},
+    aiProfile?: ReturnType<typeof buildAiProfile>
+  ) => resolveWorkflowModelScope(workflow, 'claude', assistantModels, aiProfile);
+
   it('flags an agent under Codex workflow-level provider with loose schema', () => {
     const violations = collectStrictSchemaViolations(
       [agentNode('a', { output_format: looseSchema })],
-      'codex'
+      buildScope({ provider: 'codex' }),
+      assistantModels
     );
     expect(violations).toHaveLength(1);
     expect(violations[0].provider).toBe('codex');
@@ -28059,7 +28122,8 @@ describe('collectStrictSchemaViolations', () => {
   it('is empty under Claude workflow-level provider', () => {
     const violations = collectStrictSchemaViolations(
       [agentNode('a', { output_format: looseSchema })],
-      'claude'
+      buildScope({ provider: 'claude' }),
+      assistantModels
     );
     expect(violations).toEqual([]);
   });
@@ -28067,7 +28131,8 @@ describe('collectStrictSchemaViolations', () => {
   it('is empty when node pins provider: claude under Codex workflow', () => {
     const violations = collectStrictSchemaViolations(
       [agentNode('a', { output_format: looseSchema, provider: 'claude' })],
-      'codex'
+      buildScope({ provider: 'codex' }),
+      assistantModels
     );
     expect(violations).toEqual([]);
   });
@@ -28081,7 +28146,11 @@ describe('collectStrictSchemaViolations', () => {
         nodes: [agentNode('inner', { output_format: looseSchema })],
       },
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([group], 'codex');
+    const violations = collectStrictSchemaViolations(
+      [group],
+      buildScope({ provider: 'codex' }),
+      assistantModels
+    );
     expect(violations).toHaveLength(1);
     expect(violations[0].nodeId).toBe('inner');
   });
@@ -28097,7 +28166,11 @@ describe('collectStrictSchemaViolations', () => {
       },
     } as unknown as DagNode;
 
-    const violations = collectStrictSchemaViolations([group], 'claude');
+    const violations = collectStrictSchemaViolations(
+      [group],
+      buildScope({ provider: 'claude' }),
+      assistantModels
+    );
 
     expect(violations).toHaveLength(1);
     expect(violations[0]).toMatchObject({ provider: 'codex', nodeId: 'inner' });
@@ -28119,7 +28192,9 @@ describe('collectStrictSchemaViolations', () => {
       },
     } as unknown as DagNode;
 
-    expect(collectStrictSchemaViolations([group], 'claude')).toEqual([]);
+    expect(
+      collectStrictSchemaViolations([group], buildScope({ provider: 'claude' }), assistantModels)
+    ).toEqual([]);
   });
 
   it('skips loop_group inert output_format', () => {
@@ -28129,7 +28204,11 @@ describe('collectStrictSchemaViolations', () => {
       output_format: looseSchema,
       loop_group: { max_iterations: 1, nodes: [] },
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([group], 'codex');
+    const violations = collectStrictSchemaViolations(
+      [group],
+      buildScope({ provider: 'codex' }),
+      assistantModels
+    );
     expect(violations).toEqual([]);
   });
 
@@ -28140,7 +28219,11 @@ describe('collectStrictSchemaViolations', () => {
       decisions: [{ rework: 'reassess' }],
       output_format: looseSchema,
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([gate], 'codex');
+    const violations = collectStrictSchemaViolations(
+      [gate],
+      buildScope({ provider: 'codex' }),
+      assistantModels
+    );
     expect(violations).toEqual([]);
   });
 
@@ -28149,12 +28232,43 @@ describe('collectStrictSchemaViolations', () => {
       output_format: looseSchema,
       provider: 'unknown-provider',
     });
-    expect(() => collectStrictSchemaViolations([node], 'unknown-provider')).not.toThrow();
+    expect(() =>
+      collectStrictSchemaViolations(
+        [node],
+        buildScope({ provider: 'unknown-provider' }),
+        assistantModels
+      )
+    ).not.toThrow();
   });
 
   it('skips node without output_format entirely', () => {
-    const violations = collectStrictSchemaViolations([agentNode('a')], 'codex');
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a')],
+      buildScope({ provider: 'codex' }),
+      assistantModels
+    );
     expect(violations).toEqual([]);
+  });
+
+  it('flags a node whose model tier resolves to a different provider than the workflow default', () => {
+    // Regression test for #2606: the strict-schema preflight must consult
+    // resolveNodeModel, so a node declaring `model: medium` against an aiProfile
+    // that rebinds `medium` to codex is checked against codex's strict-mode rules
+    // even when the workflow default is claude. The preflight and dispatch-time
+    // resolver must produce the same provider string for the same node.
+    const aiProfile = buildAiProfile('claude', {
+      repoTiers: { medium: { provider: 'codex', model: 'gpt-5.6-sol' } },
+    });
+    const violations = collectStrictSchemaViolations(
+      [agentNode('a', { model: 'medium', output_format: looseSchema })],
+      buildScope({ provider: 'claude' }, aiProfile),
+      assistantModels,
+      aiProfile
+    );
+    expect(violations).toHaveLength(1);
+    expect(violations[0].provider).toBe('codex');
+    expect(violations[0].nodeId).toBe('a');
+    expect(violations[0].missing).toEqual(['note']);
   });
 });
 
