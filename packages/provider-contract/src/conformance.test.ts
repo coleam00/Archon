@@ -197,7 +197,12 @@ describe('event vocabulary conformance', () => {
         { type: 'result' },
         { type: 'settled' },
       ],
-      'tool turn: rule 2, tool call a has 0 updates before the result, expected 1',
+      'tool turn: rule 2, tool call a is still open at a result',
+    ],
+    [
+      'a tool call left open at the end of the stream',
+      [{ type: 'tool_call', toolCallId: 'a', name: 'Read' }],
+      'tool turn: rule 2, tool call a is never closed',
     ],
     [
       'a tool call closed only after the result',
@@ -207,7 +212,17 @@ describe('event vocabulary conformance', () => {
         { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
         { type: 'settled' },
       ],
-      'tool turn: rule 2, tool call a has 0 updates before the result, expected 1',
+      'tool turn: rule 2, tool call a is still open at a result',
+    ],
+    [
+      'a call started after the first result and left open at the next',
+      [
+        { type: 'result' },
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 2, tool call a is still open at a result',
     ],
     [
       'a tool call closed twice',
@@ -218,7 +233,7 @@ describe('event vocabulary conformance', () => {
         { type: 'result' },
         { type: 'settled' },
       ],
-      'tool turn: rule 2, tool call a has 2 updates before the result, expected 1',
+      'tool turn: rule 2, tool call a is closed twice',
     ],
     [
       'a duplicate tool call id',
@@ -250,29 +265,95 @@ describe('event vocabulary conformance', () => {
       ],
       'tool turn: rule 4, subtask t is still open at settled',
     ],
+    [
+      'a subtask seen only as running',
+      [
+        { type: 'subtask', taskId: 't', status: 'running' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 4, subtask t is still open at settled',
+    ],
+    [
+      'a subtask that runs again after it completed',
+      [
+        { type: 'subtask', taskId: 't', status: 'started' },
+        { type: 'subtask', taskId: 't', status: 'completed' },
+        { type: 'subtask', taskId: 't', status: 'running' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 4, subtask t is still open at settled',
+    ],
   ])('flags %s', async (_label, chunks, violation) => {
     expect(await checkEventVocabulary([{ name: 'tool turn', run: turn(...chunks) }])).toEqual([
       expect.stringContaining(violation),
     ]);
   });
 
-  test('a tool turn that does not interrupt a call is flagged', async () => {
-    const uninterrupted: ProviderTurnCase = {
-      name: 'tool turn',
-      run: turn(
+  test.each(['failed', 'stopped'])('a subtask closes with %s', async status => {
+    const closed = turn(
+      { type: 'subtask', taskId: 't', status: 'started' },
+      { type: 'subtask', taskId: 't', status },
+      { type: 'result' },
+      { type: 'settled' }
+    );
+    expect(await checkEventVocabulary([{ name: 'tool turn', run: closed }])).toEqual([]);
+  });
+
+  test('a call started after the first result may close before the next one', async () => {
+    const backgroundCall = turn(
+      { type: 'result' },
+      { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+      { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
+      { type: 'result' },
+      { type: 'settled' }
+    );
+    expect(await checkEventVocabulary([{ name: 'tool turn', run: backgroundCall }])).toEqual([]);
+  });
+
+  test.each<[string, unknown[], string]>([
+    [
+      'an unclosed call',
+      [
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'tool_call', toolCallId: 'b', name: 'Bash' },
+        { type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: rule 2, tool call a is still open at a result',
+    ],
+    [
+      'no interrupted call',
+      [
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
         { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
+        { type: 'tool_call', toolCallId: 'b', name: 'Read' },
+        { type: 'tool_call_update', toolCallId: 'b', status: 'completed' },
         { type: 'result' },
-        { type: 'settled' }
-      ),
-    };
+        { type: 'settled' },
+      ],
+      'tool turn: the tool turn needs two tool calls and one cancelled, got 2 and 0',
+    ],
+    [
+      'only one call',
+      [
+        { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+        { type: 'tool_call_update', toolCallId: 'a', status: 'cancelled' },
+        { type: 'result' },
+        { type: 'settled' },
+      ],
+      'tool turn: the tool turn needs two tool calls and one cancelled, got 1 and 1',
+    ],
+  ])('runProviderConformance flags a tool turn with %s', async (_label, chunks, violation) => {
     expect(
       await runProviderConformance({
         failureCases: [conforming],
         turns: [settlingTurn],
-        toolTurn: uninterrupted,
+        toolTurn: { name: 'tool turn', run: turn(...chunks) },
       })
-    ).toEqual(['tool turn: the tool turn needs two tool calls and one cancelled, got 1 and 0']);
+    ).toEqual([violation]);
   });
 
   test('the tool turn must settle', async () => {

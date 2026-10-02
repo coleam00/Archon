@@ -128,10 +128,12 @@ const TERMINAL_SUBTASK_STATUSES: ReadonlySet<string> = new Set(subtaskTerminalSt
  * The stream speaks the contract's vocabulary, and tool calls and subtasks are closed by the
  * provider, never by the engine:
  *  1. every chunk parses with `providerChunkSchema`;
- *  2. every `tool_call` has a unique `toolCallId` and exactly one `tool_call_update` for it
- *     before the first `result` (an interrupted call closes as `cancelled`);
+ *  2. every `tool_call` has a unique `toolCallId` and exactly one `tool_call_update` for it,
+ *     before the next `result` (an interrupted call closes as `cancelled`). A turn whose
+ *     background work outlives its first `result` may start calls after it; those close
+ *     before the following `result`;
  *  3. no `tool_call_update` arrives without an earlier `tool_call` for its id;
- *  4. every subtask that started reaches `completed`, `failed` or `stopped` before `settled`.
+ *  4. every subtask's last status before `settled` is `completed`, `failed` or `stopped`.
  *     A stream that never settles is reported by `checkSettled`.
  */
 export async function checkEventVocabulary(cases: readonly ProviderTurnCase[]): Promise<string[]> {
@@ -162,30 +164,38 @@ export async function checkEventVocabulary(cases: readonly ProviderTurnCase[]): 
 /** Rules 2 to 4 over the chunks that parsed. */
 function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
   const violations: string[] = [];
-  /** Updates seen per started call, counted only before the first `result`. */
-  const updatesBeforeResult = new Map<string, number>();
+  const startedCalls = new Set<string>();
+  const openCalls = new Set<string>();
+  /** Calls already reported open at a `result`; their late update is not reported again. */
+  const lateCalls = new Set<string>();
   const openSubtasks = new Set<string>();
-  let resultSeen = false;
   for (const chunk of chunks) {
     switch (chunk.type) {
       case 'tool_call':
-        if (updatesBeforeResult.has(chunk.toolCallId)) {
+        if (startedCalls.has(chunk.toolCallId)) {
           violations.push(`rule 2, tool call ${chunk.toolCallId} is started twice`);
-        } else updatesBeforeResult.set(chunk.toolCallId, 0);
+        } else {
+          startedCalls.add(chunk.toolCallId);
+          openCalls.add(chunk.toolCallId);
+        }
         break;
-      case 'tool_call_update': {
-        const updates = updatesBeforeResult.get(chunk.toolCallId);
-        if (updates === undefined) {
+      case 'tool_call_update':
+        if (!startedCalls.has(chunk.toolCallId)) {
           violations.push(`rule 3, tool call ${chunk.toolCallId} is updated before it starts`);
-        } else if (!resultSeen) updatesBeforeResult.set(chunk.toolCallId, updates + 1);
+        } else if (!openCalls.delete(chunk.toolCallId) && !lateCalls.has(chunk.toolCallId)) {
+          violations.push(`rule 2, tool call ${chunk.toolCallId} is closed twice`);
+        }
         break;
-      }
       case 'subtask':
-        if (chunk.status === 'started') openSubtasks.add(chunk.taskId);
-        else if (TERMINAL_SUBTASK_STATUSES.has(chunk.status)) openSubtasks.delete(chunk.taskId);
+        if (TERMINAL_SUBTASK_STATUSES.has(chunk.status)) openSubtasks.delete(chunk.taskId);
+        else openSubtasks.add(chunk.taskId);
         break;
       case 'result':
-        resultSeen = true;
+        for (const toolCallId of openCalls) {
+          violations.push(`rule 2, tool call ${toolCallId} is still open at a result`);
+          lateCalls.add(toolCallId);
+        }
+        openCalls.clear();
         break;
       case 'settled':
         for (const taskId of openSubtasks) {
@@ -195,12 +205,8 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
         break;
     }
   }
-  for (const [toolCallId, updates] of updatesBeforeResult) {
-    if (updates !== 1) {
-      violations.push(
-        `rule 2, tool call ${toolCallId} has ${String(updates)} updates before the result, expected 1`
-      );
-    }
+  for (const toolCallId of openCalls) {
+    violations.push(`rule 2, tool call ${toolCallId} is never closed`);
   }
   return violations;
 }

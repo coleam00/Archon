@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { z } from 'zod';
 import {
+  toolCallUpdateSchema,
   providerChunkSchema,
   providerEventSchema,
   TOOL_OUTPUT_MAX_CHARS,
@@ -22,6 +24,7 @@ const oneOfEach: ProviderEvent[] = [
     toolCallId: 'toolu_1',
     status: 'failed',
     output: '1 fail',
+    outputTruncated: true,
     exitCode: 1,
   },
   { type: 'warning', code: 'claude.node_config_ignored', message: 'effort is ignored' },
@@ -74,6 +77,19 @@ describe('provider event vocabulary', () => {
     expect(providerEventSchema.safeParse({ type: 'result' }).success).toBe(false);
   });
 
+  test('the parser and the published schema count the output cap in the same unit', () => {
+    // JSON Schema maxLength counts code points; so does the parser.
+    const atCap = {
+      type: 'tool_call_update',
+      toolCallId: 'a',
+      status: 'completed',
+      output: '😀'.repeat(TOOL_OUTPUT_MAX_CHARS),
+    };
+    expect(toolCallUpdateSchema.safeParse(atCap).success).toBe(true);
+    const published = z.toJSONSchema(toolCallUpdateSchema, { io: 'input' });
+    expect(published.properties?.output).toMatchObject({ maxLength: TOOL_OUTPUT_MAX_CHARS });
+  });
+
   test.each<[string, unknown]>([
     ['an empty toolCallId', { type: 'tool_call', toolCallId: '', name: 'Bash' }],
     ['a tool call without an id', { type: 'tool_call', name: 'Bash' }],
@@ -85,6 +101,19 @@ describe('provider event vocabulary', () => {
         status: 'completed',
         output: 'x'.repeat(TOOL_OUTPUT_MAX_CHARS + 1),
       },
+    ],
+    [
+      'output over the cap in code points',
+      {
+        type: 'tool_call_update',
+        toolCallId: 'a',
+        status: 'completed',
+        output: '😀'.repeat(TOOL_OUTPUT_MAX_CHARS + 1),
+      },
+    ],
+    [
+      'outputTruncated: false',
+      { type: 'tool_call_update', toolCallId: 'a', status: 'completed', outputTruncated: false },
     ],
     [
       'an unknown tool status',
@@ -113,11 +142,15 @@ describe('truncateToolOutput', () => {
     expect(outputTruncated).toBe(true);
   });
 
-  test('does not split a surrogate pair at the cut', () => {
-    // The emoji's high surrogate is the last code unit the cap would keep.
+  test('counts code points, so a character outside the BMP is kept whole', () => {
+    // The emoji is two UTF-16 units and one code point: the last one the cap keeps.
     const text = `${'x'.repeat(TOOL_OUTPUT_MAX_CHARS - 1)}😀tail`;
-    const { output } = truncateToolOutput(text);
-    expect(output).toBe('x'.repeat(TOOL_OUTPUT_MAX_CHARS - 1));
+    expect(truncateToolOutput(text)).toEqual({
+      output: `${'x'.repeat(TOOL_OUTPUT_MAX_CHARS - 1)}😀`,
+      outputTruncated: true,
+    });
+    const emoji = '😀'.repeat(TOOL_OUTPUT_MAX_CHARS);
+    expect(truncateToolOutput(emoji)).toEqual({ output: emoji });
   });
 
   test('its output always parses as a tool_call_update', () => {

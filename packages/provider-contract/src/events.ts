@@ -43,8 +43,24 @@ export const toolCallSchema = z.object({
   rawInput: z.record(z.string(), z.unknown()).optional(),
 });
 
-/** Longest `tool_call_update.output` the contract accepts, in UTF-16 code units (`String.length`). */
+/**
+ * Longest `tool_call_update.output` the contract accepts, in Unicode code points: the unit
+ * JSON Schema's `maxLength` counts, so a provider validating against the published schema
+ * and the engine's parse agree.
+ */
 export const TOOL_OUTPUT_MAX_CHARS = 16_384;
+
+/** The string index where the first `TOOL_OUTPUT_MAX_CHARS` code points end, or `undefined` when the text fits. */
+function toolOutputCutIndex(text: string): number | undefined {
+  // A code point is one or two UTF-16 units, so text this short always fits.
+  if (text.length <= TOOL_OUTPUT_MAX_CHARS) return undefined;
+  let index = 0;
+  for (let points = 0; points < TOOL_OUTPUT_MAX_CHARS; points++) {
+    if (index >= text.length) return undefined;
+    index += (text.codePointAt(index) ?? 0) > 0xffff ? 2 : 1;
+  }
+  return index < text.length ? index : undefined;
+}
 
 /**
  * How a tool call ended. ACP `completed` and `failed`; `cancelled` is an Archon addition
@@ -65,7 +81,13 @@ export const toolCallUpdateSchema = z.object({
    * carries output as `content` blocks or `rawOutput`. The provider truncates with
    * `truncateToolOutput`, so the stored output is the one it emitted.
    */
-  output: z.string().max(TOOL_OUTPUT_MAX_CHARS).optional(),
+  output: z
+    .string()
+    .refine(text => toolOutputCutIndex(text) === undefined, {
+      message: `Tool output exceeds ${String(TOOL_OUTPUT_MAX_CHARS)} code points`,
+    })
+    .meta({ maxLength: TOOL_OUTPUT_MAX_CHARS })
+    .optional(),
   /** Archon addition: set only when `truncateToolOutput` cut the output. */
   outputTruncated: z.literal(true).optional(),
   /** Archon addition: the exit code of a tool that runs a process, when the SDK reports one. */
@@ -181,14 +203,9 @@ export const providerChunkSchema = z.discriminatedUnion('type', [
 ]);
 export type ProviderChunk = z.infer<typeof providerChunkSchema>;
 
-/**
- * Caps tool output at `TOOL_OUTPUT_MAX_CHARS`. The cut never splits a surrogate pair,
- * because a lone surrogate is invalid in PostgreSQL `jsonb`.
- */
+/** Caps tool output at `TOOL_OUTPUT_MAX_CHARS` code points, so the cut never splits a character's surrogate pair. */
 export function truncateToolOutput(text: string): { output: string; outputTruncated?: true } {
-  if (text.length <= TOOL_OUTPUT_MAX_CHARS) return { output: text };
-  const lastKept = text.charCodeAt(TOOL_OUTPUT_MAX_CHARS - 1);
-  const isHighSurrogate = lastKept >= 0xd800 && lastKept <= 0xdbff;
-  const end = isHighSurrogate ? TOOL_OUTPUT_MAX_CHARS - 1 : TOOL_OUTPUT_MAX_CHARS;
+  const end = toolOutputCutIndex(text);
+  if (end === undefined) return { output: text };
   return { output: text.slice(0, end), outputTruncated: true };
 }
