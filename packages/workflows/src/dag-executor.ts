@@ -76,9 +76,7 @@ import {
   getProviderCapabilities,
   getRegisteredProviders,
   isRegisteredProvider,
-  findOpenAiStrictSchemaViolations,
   validateStructuredOutput,
-  type OpenAiStrictSchemaViolation,
 } from '@archon/providers';
 import type {
   DagNode,
@@ -119,10 +117,7 @@ import {
   isGateNode,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
-  isHaltNode,
   isIncludeDirective,
-  isOutputFormatEnforced,
-  isWaitNode,
   isPersistableNode,
   readSubrunMetadata,
   isApprovalContext,
@@ -170,6 +165,7 @@ import {
   type IncludeCommandContent,
 } from './compiled-command';
 import { assistantModelDefaults, resolveNodeModel } from './node-model-resolution';
+import { collectStrictSchemaViolations, visitProviderInvokingNodes } from './provider-scope';
 import {
   logNodeComplete,
   logAssistant,
@@ -209,9 +205,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import {
-  isLiteralSpec,
   isTierName,
-  resolveModelSpec,
   resolvePresetEffort,
   type ModelAliasPreset,
   type ResolvedAiProfile,
@@ -10895,60 +10889,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 }
 
 /**
- * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
- * of `resolveNodeProviderAndModel` — just enough for the container capability
- * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
- */
-function resolveNodeProviderForPreflight(
-  node: DagNode,
-  workflowProvider: string,
-  aiProfile?: ResolvedAiProfile
-): string {
-  let provider: string = node.provider ?? workflowProvider;
-  if (node.model && aiProfile) {
-    const spec = resolveModelSpec(aiProfile, node.model);
-    if (!isLiteralSpec(spec)) provider = spec.provider;
-  }
-  return provider;
-}
-
-/**
- * Walk every node (including loop_group bodies) that can invoke a provider.
- * bash/script/cancel nodes are skipped (deterministic, no provider). An approval
- * node counts only when it has an `on_reject` reprompt (the one AI turn it can
- * spawn). For each visited node the resolved provider is passed to `visit`.
- * Unknown providers are passed through — the caller decides how to handle them.
- */
-function visitProviderInvokingNodes(
-  nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
-  aiProfile: ResolvedAiProfile | undefined,
-  visit: (node: DagNode, provider: string) => void
-): void {
-  const resolve = (node: DagNode): string =>
-    resolveNodeProviderForPreflight(node, workflowProvider, aiProfile);
-  for (const node of nodes) {
-    if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
-      continue;
-    if (isLoopGroupNode(node)) {
-      const groupProvider = resolve(node);
-      visit(node, groupProvider);
-      visitProviderInvokingNodes(node.loop_group.nodes, groupProvider, aiProfile, visit);
-      continue;
-    }
-    if (isGateNode(node)) {
-      if (node.decisions.some(d => d.rework !== undefined)) {
-        visit(node, resolve(node));
-      }
-      continue;
-    }
-    // agent / loop → AI node
-    visit(node, resolve(node));
-  }
-}
-
-/**
  * Collect providers used by AI nodes that CANNOT run inside a container
  * (`capabilities.containerExec === false`), recursing loop_group bodies. bash/
  * script/cancel nodes are deterministic (they exec via `docker exec` directly,
@@ -10967,47 +10907,6 @@ export function collectContainerIncompatibleProviders(
     if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
   });
   return incompatible;
-}
-
-/**
- * A single `output_format` schema shape rejected by a provider that enforces
- * OpenAI strict mode (Codex). Reported before any node runs.
- */
-export type StrictSchemaViolation = OpenAiStrictSchemaViolation & {
-  /** The resolved provider that enforces the rule */
-  provider: string;
-  /** The node whose output_format violates the rule */
-  nodeId: string;
-};
-
-/**
- * Collect output_format schema violations for providers that enforce the OpenAI
- * strict-mode schema rule (`requiresAllPropertiesRequired`). Walks every
- * provider-invoking node (including loop_group bodies) and reports object schemas
- * that declare no properties or whose properties aren't fully listed in required.
- *
- * A node pinned to a non-enforcing provider (e.g. `provider: claude`) is skipped
- * even when the workflow-level provider would enforce — that's the intended
- * opt-out: the workflow owner chose a provider that accepts optional-by-omission.
- */
-export function collectStrictSchemaViolations(
-  nodes: readonly (DagNode | IncludeDirective)[],
-  workflowProvider: string,
-  aiProfile?: ResolvedAiProfile
-): StrictSchemaViolation[] {
-  const violations: StrictSchemaViolation[] = [];
-  visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) return;
-    // Only nodes whose output_format is enforced by the engine — gate/loop_group
-    // schemas are inert even when present, so their violations cost nothing.
-    if (!isOutputFormatEnforced(node)) return;
-    if (node.output_format === undefined) return;
-    for (const violation of findOpenAiStrictSchemaViolations(node.output_format, 'output_format')) {
-      violations.push({ provider, nodeId: node.id, ...violation });
-    }
-  });
-  return violations;
 }
 
 /**

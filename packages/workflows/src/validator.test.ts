@@ -1645,6 +1645,15 @@ describe('validateWorkflowResources — OpenAI strict schemas (#2945, #3558)', (
     expect(errors[0].message).toContain('output_format.properties.pr');
   });
 
+  test('Claude-routed bare nested object reports nothing', async () => {
+    const workflow = makeWorkflow('test', [
+      makeAgent('scope', { output_format: schemaWithBareNestedObject }),
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+    expect(issues.filter(i => i.field === 'output_format' && i.level === 'error')).toEqual([]);
+  });
+
   test('Claude-routed same schema reports nothing', async () => {
     const workflow = makeWorkflow('test', [makeAgent('plan', { output_format: looseSchema })]);
 
@@ -1757,6 +1766,21 @@ describe('validateWorkflowResources — OpenAI strict schemas (#2945, #3558)', (
     // Ownership error fires; strict-schema error must NOT also fire.
     expect(outputFormatIssues).toHaveLength(1);
     expect(outputFormatIssues[0].message).toContain('returns:');
+  });
+
+  test('exec node with a bare nested object under Codex is not flagged', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'run',
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo {}',
+        output_format: schemaWithBareNestedObject,
+      } as unknown as DagNode,
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    expect(issues.filter(i => i.field === 'output_format' && i.level === 'error')).toEqual([]);
   });
 
   test('bash node with output_format + gap under Codex is not flagged', async () => {

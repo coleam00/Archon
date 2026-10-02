@@ -30,7 +30,6 @@ import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
   compileOutputSchema,
-  findOpenAiStrictSchemaViolations,
   findInstalledSkillNames,
   getProviderCapabilities,
   isRegisteredProvider,
@@ -47,10 +46,8 @@ import {
   isAgentNode,
   isExecNode,
   isLoopNode,
-  isLoopGroupNode,
   isIncludeDirective,
   isOutputFormatEnforced,
-  isWaitNode,
   isWorkflowNode,
 } from './schemas';
 import { parseWorkflow, workflowNodeOutputFormatError } from './loader';
@@ -63,6 +60,12 @@ import { discoverScriptsForCwd } from './script-discovery';
 import { isInlineScript } from './executor-shared';
 import { buildAiProfile, isLiteralSpec, resolveModelSpec } from './model-validation';
 import { parsePackagedResourceReference } from './packaged-workflow';
+import {
+  collectStrictSchemaViolations,
+  resolveNodeProvider,
+  walkNodeProviders,
+  type StrictSchemaViolation,
+} from './provider-scope';
 import { liveSourceRoots, packagedWorkflowDirectory } from './workflow-source';
 import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './model-validation';
 
@@ -336,35 +339,6 @@ export async function checkRuntimeAvailable(runtime: ScriptRuntime): Promise<boo
 // Workflow resource validation (Level 3)
 // =============================================================================
 
-/** Get the resolved provider for a node (node-level > workflow-level > config default).
- *  Returns undefined only when no provider is set at any level. */
-function resolveProvider(
-  node: DagNode,
-  workflowProvider?: string,
-  defaultProvider?: string
-): string | undefined {
-  if ('provider' in node && node.provider) return node.provider;
-  return workflowProvider ?? defaultProvider;
-}
-
-function resolveValidationProvider(
-  node: DagNode,
-  workflowProvider: string | undefined,
-  defaultProvider: string | undefined,
-  aiProfile: ResolvedAiProfile | undefined
-): string | undefined {
-  let provider = resolveProvider(node, workflowProvider, defaultProvider);
-  if (!aiProfile || !('model' in node) || !node.model) return provider;
-
-  try {
-    const modelSpec = resolveModelSpec(aiProfile, node.model);
-    if (!isLiteralSpec(modelSpec)) provider = modelSpec.provider;
-  } catch {
-    // validateModelRef reports the actionable model error separately.
-  }
-  return provider;
-}
-
 /**
  * Bundled workflow definitions, parsed once and cached (#2470). Used only by the
  * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
@@ -459,28 +433,48 @@ export async function validateWorkflowResources(
     }
   }
 
-  // Flatten top-level nodes plus every loop_group body while carrying the provider
-  // scope execution gives each group. Body nodes inherit the group's resolved
-  // provider/model unless they override it themselves.
+  // Every node, loop_group bodies included, with the provider execution gives it,
+  // through the same walk the launch preflight uses (provider-scope.ts). A model
+  // ref the profile cannot resolve keeps the inherited provider here;
+  // validateModelRef reports the ref itself.
   const allNodes: {
     node: DagNode | IncludeDirective;
     provider: string | undefined;
   }[] = [];
-  const collectNodes = (
-    nodes: readonly (DagNode | IncludeDirective)[],
-    inheritedProvider: string | undefined
-  ): void => {
-    for (const node of nodes) {
-      const provider = isIncludeDirective(node)
-        ? inheritedProvider
-        : resolveValidationProvider(node, inheritedProvider, defaultProvider, aiProfile);
-      allNodes.push({ node, provider });
-      if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
-        collectNodes(node.loop_group.nodes, provider);
+  walkNodeProviders<string | undefined>(
+    workflow.nodes,
+    effectiveWorkflowProvider,
+    (node, inherited) => {
+      try {
+        return resolveNodeProvider(node, inherited, aiProfile);
+      } catch {
+        return resolveNodeProvider(node, inherited, undefined);
       }
+    },
+    (node, provider) => allNodes.push({ node, provider })
+  );
+
+  // --- Strict schema (#2945, #3558) ---
+  // OpenAI strict mode rejects an object with no properties or with properties
+  // not fully covered by 'required'. Report it here so `archon validate
+  // workflows` catches it before a live run burns setup costs. The collector is
+  // the launch preflight's own, so the two cannot disagree on which nodes are
+  // checked or which provider each one runs on.
+  const strictViolationsByNode = new Map<string, StrictSchemaViolation[]>();
+  try {
+    for (const violation of collectStrictSchemaViolations(
+      workflow.nodes,
+      effectiveWorkflowProvider,
+      aiProfile
+    )) {
+      const forNode = strictViolationsByNode.get(violation.nodeId) ?? [];
+      forNode.push(violation);
+      strictViolationsByNode.set(violation.nodeId, forNode);
     }
-  };
-  collectNodes(workflow.nodes, effectiveWorkflowProvider);
+  } catch {
+    // An unresolvable model ref fails the preflight before this check would;
+    // validateModelRef reports that ref as an error.
+  }
 
   for (const { node, provider } of allNodes) {
     // Include directives carry no resources to check — the target workflow is resolved
@@ -525,42 +519,26 @@ export async function validateWorkflowResources(
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
-    // --- Strict schema (#2945, #3558) ---
-    // OpenAI strict mode rejects an object with no properties or with properties
-    // not fully covered by 'required'. Report it at validation time so `archon
-    // validate workflows` catches it before a live run burns setup costs. The
-    // set of provider-invoking kinds is the same one the launch
-    // preflight uses: every node kind that both enforces output_format
-    // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
-    // loop; not exec/bash/script, and not a wait's engine-injected schema).
-    if (
-      ownershipError === null &&
-      !isExecNode(node) &&
-      !isWaitNode(node) &&
-      isOutputFormatEnforced(node) &&
-      node.output_format !== undefined &&
-      providerCaps?.requiresAllPropertiesRequired
-    ) {
-      for (const violation of findOpenAiStrictSchemaViolations(
-        node.output_format,
-        'output_format'
-      )) {
-        const problem =
-          violation.kind === 'object_without_properties'
-            ? `object schema has no properties at '${violation.schemaPath}'`
-            : `declares properties not in 'required' at '${violation.schemaPath}': ${violation.missing.join(', ')}`;
-        const hint =
-          violation.kind === 'object_without_properties'
-            ? 'Declare the object properties, or use null when the object is absent.'
-            : 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").';
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'output_format',
-          message: `Node '${node.id}' ${problem}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
-          hint,
-        });
-      }
+    // The strict-schema findings collected above, reported in node order. A
+    // schema on a `workflow:` node is already an error of its own (ownershipError).
+    for (const violation of ownershipError === null
+      ? (strictViolationsByNode.get(node.id) ?? [])
+      : []) {
+      const problem =
+        violation.kind === 'object_without_properties'
+          ? `object schema has no properties at '${violation.schemaPath}'`
+          : `declares properties not in 'required' at '${violation.schemaPath}': ${violation.missing.join(', ')}`;
+      const hint =
+        violation.kind === 'object_without_properties'
+          ? 'Declare the object properties, or use null when the object is absent.'
+          : 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").';
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'output_format',
+        message: `Node '${node.id}' ${problem}. Provider '${violation.provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+        hint,
+      });
     }
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {

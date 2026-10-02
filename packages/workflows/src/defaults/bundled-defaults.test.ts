@@ -20,7 +20,7 @@ import {
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
-import { collectStrictSchemaViolations } from '../dag-executor';
+import { collectStrictSchemaViolations } from '../provider-scope';
 import { registerBuiltinProviders } from '@archon/providers';
 
 registerBuiltinProviders();

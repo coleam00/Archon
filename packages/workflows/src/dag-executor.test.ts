@@ -94,13 +94,13 @@ import {
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
-  collectStrictSchemaViolations,
   containerCommandName,
   buildSubprocessDockerArgs,
   childOutcomeFromRun,
   type ExecuteDagWorkflowOptions,
   type RunChildWorkflowFn,
 } from './dag-executor';
+import { collectStrictSchemaViolations } from './provider-scope';
 import { planGraph, resolveWorkflow, resolvedBodyNodes } from './graph-plan';
 import { dryRunWorkflow } from './dry-run';
 import { writeNodeArtifact, readNodeArtifacts } from './artifacts-index';
@@ -27609,6 +27609,14 @@ describe('collectStrictSchemaViolations', () => {
   it('is empty under Claude workflow-level provider', () => {
     const violations = collectStrictSchemaViolations(
       [agentNode('a', { output_format: looseSchema })],
+      'claude'
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it('is empty for a bare nested object under Claude workflow-level provider', () => {
+    const violations = collectStrictSchemaViolations(
+      [agentNode('scope', { output_format: schemaWithBareNestedObject })],
       'claude'
     );
     expect(violations).toEqual([]);
