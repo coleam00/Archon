@@ -80,7 +80,7 @@ function isRepresentableTimestamp(value: unknown): value is number {
  * Whether the SDK would accept this stored credential.
  *
  * Mirrors the acceptance rules in `auth-storage.ts`'s `load()` (pi-coding-agent
- * 0.87.1): an `api_key` record is usable when its `key` is absent-or-string and
+ * 1.0.0): an `api_key` record is usable when its `key` is absent-or-string and
  * its provider-scoped `env` values are absent-or-strings; an `oauth` record is
  * usable when it carries string `access`, string `refresh`, and a finite
  * `expires`. Anything else is a store the SDK refuses to load, so it cannot
@@ -142,7 +142,9 @@ export function readPiAuthValidity(authJsonPath: string, options: { now: number 
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    // `load()` strips a leading UTF-8 BOM before parsing; without the same strip
+    // a store the SDK loads would read as unreadable here.
+    parsed = JSON.parse(raw.startsWith('\uFEFF') ? raw.slice(1) : raw);
   } catch {
     return { status: 'unreadable' };
   }

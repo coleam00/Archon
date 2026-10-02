@@ -3041,6 +3041,35 @@ describe('typed failures (#1797, #3524)', () => {
     });
   });
 
+  test.each([
+    ['gateway_signin_required', 'auth'],
+    ['org_pin_api_key_conflict', 'auth'],
+    ['worktree_unverified', 'transient'],
+    ['proxy_invalid', 'unknown'],
+  ])('a startup failure for %s reports %s, classified by its reason', async (reason, expected) => {
+    const text = 'Claude Code could not start.';
+    mockQuery.mockImplementation(async function* () {
+      yield {
+        type: 'result',
+        subtype: 'error_during_execution',
+        is_error: true,
+        errors: [text],
+        startup_failure_reason: reason,
+        session_id: 'sid-startup',
+      };
+    });
+
+    const result = onlyResult(await collect(client.sendQuery('test', '/workspace')));
+    expect(result.failure).toEqual({
+      class: expected,
+      evidence: `error_during_execution (${reason}): ${text}`,
+    });
+    // The CLI writes that result for every known cause only when asked to; without
+    // the variable some causes reach Archon as a bare exit code.
+    const options = mockQuery.mock.calls[0][0].options as { env?: Record<string, string> };
+    expect(options.env?.CLAUDE_CODE_STARTUP_FAILURE_RESULTS).toBe('1');
+  });
+
   test('a stream ending after a synthetic error reports it as the failure', async () => {
     mockQuery.mockImplementation(async function* () {
       yield syntheticAssistantMessage('billing_error', 'Credit balance is too low');

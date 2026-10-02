@@ -27,6 +27,13 @@ describe('buildRequestSubprocessEnv — container env isolation', () => {
     expect(env.TERM).toBe('dumb'); // minimal base only
   });
 
+  test('container run asks Claude Code to report startup refusals as results', () => {
+    const env = buildRequestSubprocessEnv({
+      execContext: { kind: 'container', containerId: 'c1' },
+    });
+    expect(env.CLAUDE_CODE_STARTUP_FAILURE_RESULTS).toBe('1');
+  });
+
   test('host run INHERITS host process.env (canary present) — unchanged behavior', () => {
     const env = buildRequestSubprocessEnv({ env: { FOO: 'bar' } });
     expect(env[CANARY]).toBe('leaked-host-secret');

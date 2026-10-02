@@ -1,26 +1,46 @@
 import type { ProviderCapabilities } from '../types';
 
 /**
- * Built-in Claude Code tool names, hand-audited against
- * @anthropic-ai/claude-agent-sdk 0.3.282. The SDK exposes tool restrictions as
- * plain `string[]` options and exports NO runtime tool-name constant or
- * literal union, so this list is maintained by hand — refresh it when bumping
- * the SDK. Used for advisory (warning-level) validation only, so a tool added
- * by a newer SDK before this list is refreshed can never break a workflow.
+ * Built-in Claude Code tool names. The SDK exposes tool restrictions as plain
+ * `string[]` options and exports no tool-name constant or literal union, so this
+ * list is maintained by hand. `capabilities.test.ts` fails when the installed
+ * SDK's `sdk-tools.d.ts` declares a tool missing here. Used for advisory
+ * (warning-level) validation only, so a missing name can never break a workflow.
  */
 const CLAUDE_KNOWN_TOOL_NAMES = [
   'Agent',
+  'Artifact',
   'AskUserQuestion',
   'Bash',
+  'ClaudeDesign',
+  'CronCreate',
+  'CronDelete',
+  'CronList',
   'Edit',
+  'EnterPlanMode',
+  'EnterWorktree',
   'ExitPlanMode',
+  'ExitWorktree',
   'Glob',
   'Grep',
   'ListMcpResourcesTool',
+  'Monitor',
   'NotebookEdit',
   'PowerShell',
+  'Projects',
+  'ProposeGoal',
+  'ProposeSkills',
+  'PushNotification',
   'Read',
+  'ReadMcpResourceDirTool',
   'ReadMcpResourceTool',
+  'ReadNotifications',
+  'RefreshMcpTools',
+  'RemoteTrigger',
+  'ReportFindings',
+  'ScheduleWakeup',
+  'SendFeedback',
+  'ShowOnboardingRolePicker',
   'Skill',
   'SlashCommand',
   'TaskCreate',
@@ -31,6 +51,7 @@ const CLAUDE_KNOWN_TOOL_NAMES = [
   'TodoWrite',
   'WebFetch',
   'WebSearch',
+  'Workflow',
   'Write',
 ] as const;
 
