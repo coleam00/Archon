@@ -1086,6 +1086,10 @@ function claudeStopReason(resultMsg: SDKResultMessage): ProviderStopReason | und
     case 'refusal':
       return 'refusal';
     default:
+      // ACP has no name for it (e.g. `pause_turn`); the native value stays in the log.
+      if (resultMsg.stop_reason) {
+        getLog().debug({ stopReason: resultMsg.stop_reason }, 'claude.stop_reason_unmapped');
+      }
       return undefined;
   }
 }
@@ -1113,6 +1117,9 @@ async function* streamClaudeMessages(
   // Progress frames carry no visibility marker, so retain the start decision
   // for the lifetime of this query and suppress the complete hidden lifecycle.
   const hiddenTaskIds = new Set<string>();
+  // Tasks announced as subtasks. Their notification closes them even when it is marked
+  // ambient, so a subtask the reader saw start never stays open.
+  const visibleTaskIds = new Set<string>();
   // Tool calls yielded and not yet closed. The PostToolUse hooks close most of them with
   // their output; a call no hook reports (a permission denial) closes from the
   // `tool_result` block the CLI sends back to the model. Whichever arrives first closes
@@ -1266,6 +1273,7 @@ async function* streamClaudeMessages(
           if (sysMsg.description !== undefined) started.description = sysMsg.description;
           if (sysMsg.task_type !== undefined) started.taskType = sysMsg.task_type;
           if (sysMsg.tool_use_id !== undefined) started.parentToolCallId = sysMsg.tool_use_id;
+          visibleTaskIds.add(sysMsg.task_id);
           yield started;
         }
       } else if (subtype === 'task_progress' && sysMsg.task_id) {
@@ -1288,10 +1296,13 @@ async function* streamClaudeMessages(
         if (sysMsg.tool_use_id !== undefined) progress.parentToolCallId = sysMsg.tool_use_id;
         yield progress;
       } else if (subtype === 'task_notification' && sysMsg.task_id) {
-        if (sysMsg.ambient === true || sysMsg.skip_transcript === true) {
-          hiddenTaskIds.add(sysMsg.task_id);
-        }
-        if (hiddenTaskIds.has(sysMsg.task_id)) {
+        const announced = visibleTaskIds.delete(sysMsg.task_id);
+        if (
+          !announced &&
+          (hiddenTaskIds.has(sysMsg.task_id) ||
+            sysMsg.ambient === true ||
+            sysMsg.skip_transcript === true)
+        ) {
           getLog().debug(
             { taskId: sysMsg.task_id, taskType: sysMsg.task_type },
             'claude.task_notification_housekeeping_suppressed'
@@ -1349,6 +1360,8 @@ async function* streamClaudeMessages(
       const rateLimitMsg = msg as { rate_limit_info?: SDKRateLimitInfo };
       getLog().warn({ rateLimitInfo: rateLimitMsg.rate_limit_info }, 'claude.rate_limit_event');
       lastRateLimit = rateLimitMsg.rate_limit_info;
+      // The turn is waiting, not stalled: keep the idle watchdog from firing.
+      yield { type: 'state_update', state: 'running' };
     } else if (event.type === 'result') {
       const resultMsg = msg as SDKResultMessage;
       // The SDK's cost and per-model totals are cumulative for the session; report
@@ -1560,6 +1573,8 @@ export class ClaudeProvider implements IAgentProvider {
       requestOptions.abortSignal.addEventListener('abort', onAbort, { once: true });
     }
     let resultReported = false;
+    // Subtasks started and not yet ended; they are closed before `settled`.
+    const openSubtaskIds = new Set<string>();
 
     try {
       if (requestOptions?.abortSignal?.aborted) {
@@ -1681,6 +1696,10 @@ export class ClaudeProvider implements IAgentProvider {
         resumedOutcome(resumeSessionId, true)
       )) {
         if (chunk.type === 'result') resultReported = true;
+        else if (chunk.type === 'subtask') {
+          if (chunk.status === 'started') openSubtaskIds.add(chunk.taskId);
+          else if (chunk.status !== 'running') openSubtaskIds.delete(chunk.taskId);
+        }
         yield chunk;
       }
     } catch (error) {
@@ -1718,6 +1737,15 @@ export class ClaudeProvider implements IAgentProvider {
       );
       noResult.errorSubtype = 'stream_ended_without_result';
       yield noResult;
+    }
+    // A task the SDK never reported finished (killed with its subprocess, or the stream
+    // closed first) is over once the turn settles; the contract has no open subtask at
+    // `settled`.
+    if (openSubtaskIds.size > 0) {
+      getLog().warn({ taskIds: [...openSubtaskIds] }, 'claude.subtasks_stopped_at_settle');
+      for (const taskId of openSubtaskIds) {
+        yield { type: 'subtask', taskId, status: 'stopped' };
+      }
     }
     yield { type: 'settled' };
   }

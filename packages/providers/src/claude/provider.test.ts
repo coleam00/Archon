@@ -685,7 +685,7 @@ describe('ClaudeProvider', () => {
       ]);
     });
 
-    test('a rate_limit_event yields no chunk and logs a warning', async () => {
+    test('a rate_limit_event renews the watchdog and logs a warning', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
           type: 'rate_limit_event',
@@ -698,7 +698,7 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toEqual([]);
+      expect(chunks).toEqual([{ type: 'state_update', state: 'running' }]);
       expect(mockLogger.warn).toHaveBeenCalledWith(
         { rateLimitInfo: { requests_remaining: 0, retry_after_ms: 5000 } },
         'claude.rate_limit_event'
@@ -869,14 +869,41 @@ describe('ClaudeProvider', () => {
         if (!isTurnEnd(chunk)) chunks.push(chunk);
       }
 
-      expect(chunks).toHaveLength(1);
-      expect(chunks[0]).toEqual({
-        type: 'subtask',
-        taskId: 't-1',
-        status: 'started',
-        description: 'Investigating the bug',
-        taskType: 'general-purpose',
+      expect(chunks).toEqual([
+        {
+          type: 'subtask',
+          taskId: 't-1',
+          status: 'started',
+          description: 'Investigating the bug',
+          taskType: 'general-purpose',
+        },
+        // The SDK never reported it finished, so it closes before the turn settles.
+        { type: 'subtask', taskId: 't-1', status: 'stopped' },
+      ]);
+    });
+
+    test('closes an announced subtask whose notification is marked ambient', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield { type: 'system', subtype: 'task_started', task_id: 't-1', description: 'Research' };
+        yield {
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: 't-1',
+          status: 'completed',
+          summary: 'Done',
+          ambient: true,
+        };
       });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        { type: 'subtask', taskId: 't-1', status: 'started', description: 'Research' },
+        { type: 'subtask', taskId: 't-1', status: 'completed', summary: 'Done' },
+      ]);
     });
 
     test('hides a skip_transcript task lifecycle while preserving its idle heartbeat', async () => {
@@ -3722,6 +3749,13 @@ describe('typed failures (#1797, #3524)', () => {
         {
           name: 'CLI without session-state events',
           run: turn([{ type: 'result', subtype: 'success', is_error: false, session_id: 's' }]),
+        },
+        {
+          name: 'subtask the SDK never reports finished',
+          run: turn([
+            { type: 'system', subtype: 'task_started', task_id: 't', description: 'bg' },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
+          ]),
         },
       ],
       failureCases: [
