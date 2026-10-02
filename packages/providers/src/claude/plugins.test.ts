@@ -180,6 +180,12 @@ describe('withPluginScopeCheck', () => {
     expect(error.message).toContain('before reporting its loaded plugins');
   });
 
+  test.each(['assistant', 'stream_event'])('%s before any init frame fails', async type => {
+    const error = await failureOf(drain([{ type } as unknown as SDKMessage], []));
+    expect(error.failureClass).toBe('misconfigured');
+    expect(error.message).toContain(`sent a ${type} message before`);
+  });
+
   test('an error result before init passes through with its own cause', async () => {
     const result = {
       type: 'result',
