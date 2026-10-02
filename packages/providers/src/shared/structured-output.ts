@@ -336,6 +336,8 @@ function collectStrictSchemaViolations(
   if (!isObjectSchemaNode(record)) collectSchema('additionalProperties');
   for (const key of [
     'unevaluatedProperties',
+    'additionalItems',
+    'unevaluatedItems',
     'propertyNames',
     'contains',
     'not',

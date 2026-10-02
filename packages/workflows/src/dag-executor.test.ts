@@ -3788,6 +3788,49 @@ describe('executeDagWorkflow -- output_format structured output', () => {
     expect(mockSendQueryDag).not.toHaveBeenCalled();
     expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
   });
+
+  // The preflight resolves each node's model alias before judging its schema, so a
+  // claude workflow does not hide a node that an alias routes to Codex (#3558).
+  it('fails a bare nested object on a node whose alias routes a claude workflow to Codex', async () => {
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const aiProfile = buildAiProfile('claude', {
+      repoAliases: { '@strict': { provider: 'codex', model: 'gpt-5.5' } },
+    });
+
+    const execution = executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'alias-preflight',
+          nodes: [
+            {
+              id: 'scope',
+              kind: 'agent',
+              source: { kind: 'command', name: 'classify' },
+              model: '@strict',
+              output_format: {
+                type: 'object',
+                properties: { pr: { type: 'object' } },
+                required: ['pr'],
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('alias-preflight'),
+        workflowProvider: 'claude',
+        aiProfile,
+      })
+    );
+
+    await expect(execution).rejects.toThrow(
+      /node 'scope', output_format\.properties\.pr is an object schema with no properties\..*Provider 'codex'/
+    );
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+    expect(mockGetAgentProviderDag).not.toHaveBeenCalled();
+  });
 });
 
 describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () => {

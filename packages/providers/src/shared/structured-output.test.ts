@@ -640,6 +640,16 @@ describe('findOpenAiStrictSchemaViolations', () => {
     ]);
   });
 
+  // Codex receives these positions too, so a bare object there is rejected (#3558).
+  test.each(['unevaluatedItems', 'additionalItems'])('reports a bare object under %s', key => {
+    expect(
+      findOpenAiStrictSchemaViolations(
+        { type: 'array', [key]: { type: 'object' } },
+        'output_format'
+      )
+    ).toEqual([{ kind: 'object_without_properties', schemaPath: `output_format.${key}` }]);
+  });
+
   test('accepts a nullable object whose properties are all required', () => {
     expect(
       findOpenAiStrictSchemaViolations(
