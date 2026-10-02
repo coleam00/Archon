@@ -613,6 +613,16 @@ describe('CodexProvider', () => {
           type: 'item.completed',
           item: { id: 'fc-2', type: 'file_change', status: 'failed', changes },
         },
+        {
+          type: 'item.completed',
+          item: {
+            id: 'fc-3',
+            type: 'file_change',
+            status: 'failed',
+            changes,
+            error: { message: 'patch did not apply' },
+          },
+        },
         turnCompleted
       );
 
@@ -621,6 +631,13 @@ describe('CodexProvider', () => {
         { type: 'tool_call_update', toolCallId: 'fc-1', status: 'completed' },
         { type: 'tool_call', toolCallId: 'fc-2', name: 'file_change', rawInput: { changes } },
         { type: 'tool_call_update', toolCallId: 'fc-2', status: 'failed' },
+        { type: 'tool_call', toolCallId: 'fc-3', name: 'file_change', rawInput: { changes } },
+        {
+          type: 'tool_call_update',
+          toolCallId: 'fc-3',
+          status: 'failed',
+          output: 'patch did not apply',
+        },
         okResult,
       ]);
     });
@@ -1377,7 +1394,7 @@ describe('CodexProvider', () => {
 
     test('error events followed by turn.completed yield a clean result (recoverable)', async () => {
       // SDK error events that are followed by turn.completed indicate the SDK
-      // recovered internally: the error is a warning, not the turn's failure.
+      // recovered internally: the error stays in the log, not in the stream.
       mockRunStreamed.mockResolvedValue({
         events: (async function* () {
           yield { type: 'error', message: 'Transient blip' };
@@ -1391,7 +1408,6 @@ describe('CodexProvider', () => {
       }
 
       expect(chunks).toEqual([
-        { type: 'warning', code: 'codex.error', message: 'Transient blip' },
         {
           type: 'result',
           sessionId: 'new-thread-id',
@@ -1417,33 +1433,29 @@ describe('CodexProvider', () => {
         if (chunk.type !== 'settled') chunks.push(chunk);
       }
 
-      expect(chunks).toHaveLength(2);
-      expect(chunks[0]).toMatchObject({ type: 'warning', code: 'codex.error' });
-      expect(chunks[1]).toEqual({
-        type: 'result',
-        sessionId: 'new-thread-id',
-        isError: true,
-        errorSubtype: 'codex_stream_incomplete',
-        errors: ["'opus[1m]' model is not supported"],
-        failure: { class: 'unknown', evidence: "'opus[1m]' model is not supported" },
-      });
+      expect(chunks).toEqual([
+        {
+          type: 'result',
+          sessionId: 'new-thread-id',
+          isError: true,
+          errorSubtype: 'codex_stream_incomplete',
+          errors: ["'opus[1m]' model is not supported"],
+          failure: { class: 'unknown', evidence: "'opus[1m]' model is not supported" },
+        },
+      ]);
     });
 
-    test('every error event is a codex.error warning, an MCP client error included', async () => {
+    test('errors the SDK recovered from never reach the stream', async () => {
       const chunks = await streamOf(
         { type: 'error', message: 'mcp client connection timeout' },
         { type: 'error', message: 'Reconnecting... 1/5' },
         turnCompleted
       );
 
-      expect(chunks).toEqual([
-        { type: 'warning', code: 'codex.error', message: 'mcp client connection timeout' },
-        { type: 'warning', code: 'codex.error', message: 'Reconnecting... 1/5' },
-        okResult,
-      ]);
+      expect(chunks).toEqual([okResult]);
     });
 
-    test('the last error is the evidence when the stream closes without a terminal event', async () => {
+    test('every error is the evidence when the stream closes without a terminal event', async () => {
       const chunks = await streamOf(
         { type: 'error', message: 'Reconnecting... 1/5' },
         { type: 'error', message: 'MCP client transport closed' }
@@ -1453,7 +1465,10 @@ describe('CodexProvider', () => {
         type: 'result',
         isError: true,
         errorSubtype: 'codex_stream_incomplete',
-        failure: { class: 'unknown', evidence: 'MCP client transport closed' },
+        failure: {
+          class: 'unknown',
+          evidence: 'Reconnecting... 1/5\nMCP client transport closed',
+        },
       });
     });
 

@@ -497,12 +497,25 @@ function toolCallUpdateOf(
         status: 'completed',
         ...truncateToolOutput(item.result?.content ? JSON.stringify(item.result.content) : ''),
       };
-    case 'file_change':
-      return {
+    case 'file_change': {
+      if (item.status !== 'failed') {
+        return { type: 'tool_call_update', toolCallId: item.id, status: 'completed' };
+      }
+      // The SDK's type omits it, but a failed change can carry the reason.
+      const rawError = 'error' in item ? (item as { error?: unknown }).error : undefined;
+      const reason =
+        typeof rawError === 'string'
+          ? rawError
+          : typeof rawError === 'object' && rawError !== null && 'message' in rawError
+            ? String((rawError as { message: unknown }).message)
+            : undefined;
+      const failed: ToolCallUpdateEvent = {
         type: 'tool_call_update',
         toolCallId: item.id,
-        status: item.status === 'failed' ? 'failed' : 'completed',
+        status: 'failed',
       };
+      return reason ? { ...failed, ...truncateToolOutput(reason) } : failed;
+    }
   }
 }
 
@@ -537,7 +550,7 @@ async function* streamCodexEvents(
   // after the loop so the dag-executor's `msg.isError` branch catches it
   // — matching Claude's contract. Both terminal branches below `return`,
   // so reaching the post-loop block can only mean no terminal fired.
-  let lastError: string | undefined;
+  const streamErrors: string[] = [];
 
   for await (const event of events) {
     if (abortSignal?.aborted) {
@@ -583,10 +596,10 @@ async function* streamCodexEvents(
       const errorEvent = event as { message: string };
       getLog().error({ message: errorEvent.message }, 'stream_error');
       // Whether an error is fatal is decided when the stream terminates: turn.completed
-      // means the SDK recovered (Codex retries MCP client errors internally); loop
-      // closure without a terminal makes the last error the failure's evidence.
-      lastError = errorEvent.message;
-      yield { type: 'warning', code: 'codex.error', message: errorEvent.message };
+      // means the SDK recovered (Codex retries MCP client errors internally), so the
+      // operator sees nothing; loop closure without a terminal makes every error the
+      // failure's evidence. The message is prose, so no error is singled out as the cause.
+      streamErrors.push(errorEvent.message);
       continue;
     }
 
@@ -702,7 +715,10 @@ async function* streamCodexEvents(
   // turns this into a thrown node failure — distinct from the empty-output
   // guard further down, which returns `{ state: 'failed' }` for AI nodes
   // that streamed nothing but never raised an isError.
-  const message = lastError ?? 'Codex stream closed without turn.completed or turn.failed';
+  const message =
+    streamErrors.length > 0
+      ? streamErrors.join('\n')
+      : 'Codex stream closed without turn.completed or turn.failed';
   getLog().error({ message }, 'stream_incomplete');
   yield codexFailureResult('unknown', 'codex_stream_incomplete', message, resolvedThreadId);
 }
