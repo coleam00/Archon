@@ -36,8 +36,11 @@ export interface FakeTurnScript {
   completion?: { status: TurnStatus; error?: TurnError | null } | null;
   /** Exit the process with this code after the notifications instead of completing. */
   exitCode?: number;
-  /** Exit with this code and stderr as soon as the process starts, before any response. */
-  startupFailure?: { code: number; stderr: string };
+  /**
+   * End the process as soon as it starts, before any response: exit with `code`, or be
+   * killed by `signal`.
+   */
+  startupFailure?: { code: number; stderr: string } | { signal: NodeJS.Signals; stderr: string };
   /** JSON-RPC errors by method. */
   errors?: Record<string, { code: number; message: string }>;
   /** Fail the spawn itself with this errno code. */
@@ -132,10 +135,11 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       return child;
     }
     if (turn.startupFailure) {
-      const { code, stderr: text } = turn.startupFailure;
+      const failure = turn.startupFailure;
       setImmediate(() => {
-        stderr.write(text);
-        close(code, null);
+        stderr.write(failure.stderr);
+        if ('signal' in failure) close(null, failure.signal);
+        else close(failure.code, null);
       });
       return child;
     }
