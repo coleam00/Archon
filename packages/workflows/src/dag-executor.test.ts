@@ -4532,6 +4532,32 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   });
 
   it(
+    'script node that times out is retried as transient',
+    async () => {
+      const { mockDeps } = await runNodes([
+        {
+          id: 'slow-script',
+          kind: 'exec',
+          runtime: 'bun',
+          script: 'setTimeout(() => {}, 30000)',
+          timeout: 100,
+          retry: { max_attempts: 1, delay_ms: 1 },
+        },
+      ]);
+
+      // Count the engine's per-attempt rows rather than a side-effect file: a slow
+      // runtime start can hit the 100 ms timeout before the script writes anything.
+      const timedOut = (
+        mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+      ).mock.calls.filter(
+        ([event]) => event.event_type === 'node_failed' && event.data?.failure_kind === 'timeout'
+      );
+      expect(timedOut).toHaveLength(2);
+    },
+    testTimeout(10_000)
+  );
+
+  it(
     'script node with retry re-runs on persistent failure',
     async () => {
       // Forward-slashed for safe embedding in inline bash AND JS string literals
@@ -7578,6 +7604,51 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       },
       testTimeout(10_000)
     );
+
+    it('does not retry an iteration whose untyped error reads as a rate limit', async () => {
+      // The loop catch-all is its own site: an error that is not a NodeFailure is
+      // unknown there too, whatever its message says. Clamp the sleep so a regression
+      // to text classification fails fast instead of waiting out the rate-limit backoff.
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      try {
+        let callCount = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          callCount++;
+          throw new Error('429 too many requests: provider overloaded');
+        });
+
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: {
+              name: 'loop-untyped-error',
+              nodes: [
+                {
+                  id: 'my-loop',
+                  kind: 'loop',
+                  loop: {
+                    fresh_context: false,
+                    prompt: 'Complete the task.',
+                    until: 'COMPLETE',
+                    max_iterations: 3,
+                  },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun('loop-untyped-error-run'),
+          })
+        );
+
+        expect(callCount).toBe(1);
+        expect(store.failWorkflowRun).toHaveBeenCalled();
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+    });
 
     it('records a failed iteration’s typed failure on the loop node, unchanged', async () => {
       const failure = { class: 'auth', evidence: 'Invalid API key' } as const;
