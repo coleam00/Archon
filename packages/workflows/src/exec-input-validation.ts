@@ -113,8 +113,8 @@ export function validateExecInputTargets(
       } else {
         warnings.push(
           `Node '${target.node.id}' ${target.slot.path} (${location}) reads environment variable ` +
-            `'${read.name}', which is not provided by its bindings, declared inputs, the engine, the ` +
-            'process environment, or a configured env var. It might come from a source this check ' +
+            `'${read.name}', which is not provided by its bindings, declared inputs, the engine, ` +
+            '.archon/.env, or a configured env var. It might come from a source this check ' +
             'cannot see at validate time — for example, a codebase env var configured in the ' +
             `database — or it might be a typo. Available bindings/inputs: ${available}.`
         );

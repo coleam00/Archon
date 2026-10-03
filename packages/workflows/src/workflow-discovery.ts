@@ -704,19 +704,23 @@ export async function discoverWorkflows(
      * is correct for every listing and in-place caller.
      */
     sourceRoots?: WorkflowSourceRoots;
-    /** `.archon/config.yaml`'s `env:` section, threaded from `discoverWorkflowsWithConfig`. */
-    envVars?: Record<string, string>;
+    /**
+     * Names (never values) from `.archon/config.yaml`'s `env:` section, threaded from
+     * `discoverWorkflowsWithConfig` — live or from a frozen capture's recorded source
+     * config.
+     */
+    envVarNames?: readonly string[];
   }
 ): Promise<WorkflowLoadResult> {
   const roots = options?.sourceRoots ?? liveSourceRoots(cwd);
   await assertWorkflowSourceIntegrity(roots);
   const projectRoot = roots.project;
-  // Names the exec env-read checker treats as "supplied": everything already in
-  // process.env (which @archon/paths' loadArchonEnv has folded .archon/.env and
-  // ~/.archon/.env into by the time any CLI command runs) plus config.yaml's env:.
+  // Names the exec env-read checker treats as "supplied": .archon/.env + ~/.archon/.env
+  // (read fresh, not from the process's full ambient environment — see
+  // @archon/paths' getArchonEnvNames) plus config.yaml's env:.
   const configuredEnvNames: ReadonlySet<string> = new Set([
-    ...Object.keys(process.env),
-    ...Object.keys(options?.envVars ?? {}),
+    ...archonPaths.getArchonEnvNames(cwd ?? process.cwd()),
+    ...(options?.envVarNames ?? []),
   ]);
   // Map of filename -> workflow + source + parse warnings, for deduplication.
   // A later scope's `set()` replaces all three together, so a clean project file
@@ -1247,14 +1251,16 @@ export async function discoverWorkflowsWithConfig(
   // runtime/validator would (else it silently degrades to WARN on custom-folder repos).
   let commandFolder = sourceConfig?.command_folder;
   let loadDefaultCommands = sourceConfig?.load_default_commands;
-  let envVars: Record<string, string> | undefined;
+  // A frozen capture already recorded config.yaml's env: names (see workflow-source.ts'
+  // workflowSourceConfigFrom); only the live branch below still needs to read them.
+  let envVarNames: readonly string[] | undefined = sourceConfig?.env_var_names;
   if (cwd !== null && sourceConfig === undefined) {
     try {
       const cfg = await loadConfig(cwd);
       loadDefaults = cfg.defaults?.loadDefaultWorkflows ?? true;
       commandFolder = cfg.commands?.folder;
       loadDefaultCommands = cfg.defaults?.loadDefaultCommands;
-      envVars = cfg.envVars;
+      envVarNames = cfg.envVars && Object.keys(cfg.envVars);
     } catch (error) {
       getLog().warn(
         { err: error as Error, cwd },
@@ -1266,7 +1272,7 @@ export async function discoverWorkflowsWithConfig(
     loadDefaults,
     commandFolder,
     loadDefaultCommands,
-    envVars,
+    envVarNames,
     sourceRoots,
   });
 }

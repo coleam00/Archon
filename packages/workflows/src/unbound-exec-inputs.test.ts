@@ -302,7 +302,7 @@ nodes:
     }
   });
 
-  test('a name supplied only via options.envVars validates with no warning', async () => {
+  test('a name supplied only via options.envVarNames validates with no warning', async () => {
     const root = await createProject();
     const previousHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = join(root, 'home');
@@ -326,7 +326,7 @@ nodes:
 
       const result = await discoverWorkflows(root, {
         loadDefaults: false,
-        envVars: { NAME: 'x' },
+        envVarNames: ['NAME'],
       });
 
       expect(result.errors).toEqual([]);
@@ -373,6 +373,45 @@ nodes:
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  test('a name that only an unrelated ambient process env var happens to share still warns', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    // Simulates a CI runner or shell export unrelated to any source Archon supplies —
+    // declared nowhere (.archon/.env, config.yaml env:, bindings, declared inputs).
+    process.env.MY_RANDOM_CI_RUNNER_VAR = 'anything';
+    try {
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-ambient-var.yaml'),
+        `name: uses-ambient-var
+description: Reads a name no configured source declares
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.MY_RANDOM_CI_RUNNER_VAR)\n'
+      );
+
+      const result = await discoverWorkflows(root, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      const warnings = result.workflows[0]?.parseWarnings ?? [];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('MY_RANDOM_CI_RUNNER_VAR');
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      delete process.env.MY_RANDOM_CI_RUNNER_VAR;
     }
   });
 

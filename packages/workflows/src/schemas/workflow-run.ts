@@ -582,6 +582,12 @@ export const workflowSourceConfigSchema = z.object({
   load_default_workflows: z.boolean(),
   load_default_commands: z.boolean(),
   command_folder: z.string().optional(),
+  /**
+   * Names (never values) from `.archon/config.yaml`'s `env:` section at capture time —
+   * the exec env-read checker's "this name is configured" signal for a resumed or
+   * child run, which discovers against the frozen capture rather than live config.
+   */
+  env_var_names: z.array(z.string()).optional(),
 });
 
 export type WorkflowSourceConfig = Readonly<z.infer<typeof workflowSourceConfigSchema>>;

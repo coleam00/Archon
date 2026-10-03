@@ -1726,6 +1726,51 @@ nodes:
       expect(entry?.parseWarnings ?? []).toEqual([]);
     });
 
+    it("still treats config.yaml's env: as supplied once discovery runs from a frozen capture", async () => {
+      const scriptsDir = join(testDir, '.archon', 'scripts');
+      const workflowsDir = join(testDir, '.archon', 'workflows');
+      await mkdir(scriptsDir, { recursive: true });
+      await mkdir(workflowsDir, { recursive: true });
+      await writeFile(join(scriptsDir, 'verify.ts'), 'console.log(process.env.NAME)\n');
+      await writeFile(
+        join(workflowsDir, 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      const { captureWorkflowSource, capturedSourceRoots, DEFAULT_WORKFLOW_SOURCE_CONFIG } =
+        await import('./workflow-source');
+      const capture = await captureWorkflowSource({
+        sourceRoot: testDir,
+        captureRoot: join(testDir, 'home', 'staged-source', 'run-1'),
+        sourceConfig: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, env_var_names: ['NAME'] },
+      });
+      // A run that already froze its source never calls loadConfig again (see
+      // discoverWorkflowsWithConfig) — proving this stays unbound-env-clean without it is
+      // what distinguishes this test from the live-config one above.
+      const loadConfigShouldNotRun = mock(async () => {
+        throw new Error('loadConfig must not run once a frozen source config is already known');
+      });
+
+      const result = await discoverWorkflowsWithConfig(
+        testDir,
+        loadConfigShouldNotRun,
+        capturedSourceRoots(capture.anchor)
+      );
+
+      expect(loadConfigShouldNotRun).not.toHaveBeenCalled();
+      expect(result.errors).toEqual([]);
+      const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
+      expect(entry).toBeDefined();
+      expect(entry?.parseWarnings ?? []).toEqual([]);
+    });
+
     it('should pass loadDefaults from config to discoverWorkflows', async () => {
       const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
       const mockLoadConfig = mock(async () => ({
