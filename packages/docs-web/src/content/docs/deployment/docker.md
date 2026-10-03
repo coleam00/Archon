@@ -580,7 +580,7 @@ Install plugins inside the running container. The GitHub forge plugin:
 docker compose exec -u appuser app bun run cli plugin install coleam00/Archon/plugins/forge-github
 ```
 
-A workflow pack, from any GitHub repository that publishes one:
+A workflow pack, from a public GitHub repository that publishes one:
 
 ```bash
 docker compose exec -u appuser app bun run cli plugin install Wirasm/archon-video

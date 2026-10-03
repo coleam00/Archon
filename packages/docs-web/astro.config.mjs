@@ -2,12 +2,34 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
+// The old workflow registry's listing and entry pages lived under /workflows/. GitHub Pages
+// serves a static build, so each former page gets its own redirect to the plugin install guide.
+const retiredRegistrySlugs = [
+  'archon-piv-loop',
+  'archon-fix-github-issue',
+  'archon-comprehensive-pr-review',
+  'archon-ralph-dag',
+  'video-generic',
+  'archon-idea-to-wo',
+  'archon-smart-mr-review',
+  'archon-resolve-mr-conflicts',
+  'archon-comprehensive-mr-review',
+  'piv-system-evolution',
+  'harness-score',
+  'pocock-skills-workflow-family',
+  'token-max-site-factory',
+  'image-node-factory',
+];
+const retiredRegistryRedirects = Object.fromEntries(
+  ['/workflows/', ...retiredRegistrySlugs.map((slug) => `/workflows/${slug}/`)].map((path) => [
+    path,
+    '/guides/global-workflows/#installed-workflow-packs',
+  ])
+);
+
 export default defineConfig({
   site: 'https://archon.diy',
-  // The old workflow registry lived here; links to it land on the plugin install guide.
-  redirects: {
-    '/workflows/': '/guides/global-workflows/#installed-workflow-packs',
-  },
+  redirects: retiredRegistryRedirects,
   integrations: [
     starlight({
       title: 'Archon',
