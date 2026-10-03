@@ -23,8 +23,6 @@ import { AppServerConnection } from './app-server';
 import { resolveBundledCodexBinary } from './binary-resolver';
 import { CodexProvider } from './provider';
 
-const CASE_TIMEOUT_MS = testTimeout(20_000);
-
 /** A minimal MCP stdio server whose one tool is named `<argv[2]>_marker`. */
 const MCP_STUB = `
 const { createInterface } = require('node:readline');
@@ -38,7 +36,11 @@ createInterface({ input: process.stdin }).on('line', line => {
 });
 `;
 
-/** Appends `<argv[2]>` to the log at `<argv[3]>`: the plugin hooks' command. */
+/**
+ * Appends `<argv[2]>` to the log at `<argv[3]>`: the plugin hooks' command. Codex runs a
+ * hook command through the platform shell, so the command line is left unquoted to read
+ * the same in sh, cmd and PowerShell; `beforeAll` fails when a path it uses has a space.
+ */
 const HOOK_SCRIPT = `require('node:fs').appendFileSync(process.argv[3], process.argv[2] + '\\n');`;
 
 let root: string;
@@ -74,7 +76,7 @@ async function writePlugin(marketplace: string, name: string, stubPath: string):
               hooks: [
                 {
                   type: 'command',
-                  command: `"${bun}" "${hookScript}" ${name} "${hookLog}"`,
+                  command: `${bun} ${hookScript} ${name} ${hookLog}`,
                   timeout: 10,
                 },
               ],
@@ -128,6 +130,12 @@ beforeAll(async () => {
   home = join(root, 'home');
   repo = join(root, 'repo');
   hookLog = join(root, 'hooks.log');
+  const unquotable = [bun, root].filter(path => /\s/.test(path));
+  if (unquotable.length > 0) {
+    throw new Error(
+      `The hook command cannot hold a path with whitespace: ${unquotable.join(', ')}`
+    );
+  }
   const marketplace = join(root, 'marketplace');
   const stubPath = join(root, 'mcp-stub.js');
   await mkdir(home, { recursive: true });
@@ -267,7 +275,7 @@ describe('Codex workflow-node scope on the real binary', () => {
       expect(resultOf(chunks).failure?.evidence).toContain('stub model');
       expect(await seen()).toEqual({ tools: [], skills: [], hooks: [], guidance: true });
     },
-    CASE_TIMEOUT_MS
+    testTimeout(20_000)
   );
 
   test(
@@ -279,7 +287,7 @@ describe('Codex workflow-node scope on the real binary', () => {
       await runNode({}, sessionId);
       expect(await seen()).toEqual({ tools: [], skills: [], hooks: [], guidance: true });
     },
-    CASE_TIMEOUT_MS
+    testTimeout(20_000)
   );
 
   test(
@@ -293,7 +301,7 @@ describe('Codex workflow-node scope on the real binary', () => {
         guidance: true,
       });
     },
-    CASE_TIMEOUT_MS
+    testTimeout(20_000)
   );
 
   test(
@@ -303,7 +311,7 @@ describe('Codex workflow-node scope on the real binary', () => {
       await runNode({ plugins: ['alpha@fixture'], mcp: 'alpha-mcp.json' });
       expect((await seen()).tools).toEqual(['alpha']);
     },
-    CASE_TIMEOUT_MS
+    testTimeout(20_000)
   );
 
   test(
@@ -313,7 +321,7 @@ describe('Codex workflow-node scope on the real binary', () => {
       await runNode({ mcp: 'declared-mcp.json' });
       expect((await seen()).tools).toEqual(['declared']);
     },
-    CASE_TIMEOUT_MS
+    testTimeout(20_000)
   );
 
   test(
@@ -324,6 +332,6 @@ describe('Codex workflow-node scope on the real binary', () => {
       expect(result.failure?.evidence).toContain('ghost@fixture');
       expect(modelRequests).toEqual([]);
     },
-    CASE_TIMEOUT_MS
+    testTimeout(20_000)
   );
 });
