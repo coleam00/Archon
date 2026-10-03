@@ -60,7 +60,8 @@ Exactly one of these appears per node: `command`, `prompt`, `bash`, `script`,
 
 Key fields on AI nodes: `model`/`provider` (tiers), `output_format` (+ `output_type`
 for typed artifact sidecars), `allowed_tools`/`denied_tools`, `effort`/`thinking`,
-`retry` (default 2x on transient), `persist_session`, `idle_timeout`.
+`retry` (default 2x on transient), `persist_session` (continues across runs only on a
+provider that supports session forks; others start fresh each run), `idle_timeout`.
 
 Session context is explicit when it matters:
 

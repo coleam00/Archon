@@ -6821,6 +6821,23 @@ nodes:
       }
     });
 
+    it('warns, and still loads, when the provider cannot fork the persisted session', () => {
+      const codex = parseWorkflow(
+        `name: t\ndescription: t\nprovider: codex\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+        't.yaml'
+      );
+      expect(codex.error).toBeNull();
+      expect(codex.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+        expect.stringContaining("Node 'planner'"),
+      ]);
+
+      const claude = parseWorkflow(
+        `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+        't.yaml'
+      );
+      expect(claude.warnings?.some(w => w.includes('cannot fork a session'))).toBe(false);
+    });
+
     it('rejects persist_session: true on a provider without sessionResume', async () => {
       // Register an ephemeral provider with sessionResume: false to drive the capability gate.
       // No unregister API exists; restore via clearRegistry + registerBuiltinProviders in finally.
