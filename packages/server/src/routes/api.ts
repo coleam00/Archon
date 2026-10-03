@@ -72,7 +72,7 @@ import {
   createLogger,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
@@ -237,7 +237,7 @@ async function findWorkflowAt(
 }
 
 function isBundledWorkflowsRoot(workflowsRoot: string): boolean {
-  return resolve(workflowsRoot) === resolve(dirname(getDefaultWorkflowsPath()));
+  return resolve(workflowsRoot) === resolve(getBundledWorkflowsPath());
 }
 
 function findBundledWorkflow(
@@ -4508,7 +4508,7 @@ export function registerApiRoutes(
 
       if (!isBinaryBuild()) {
         try {
-          const hit = await findPackagedWorkflowAt(dirname(getDefaultWorkflowsPath()), name);
+          const hit = await findPackagedWorkflowAt(getBundledWorkflowsPath(), name);
           if (hit) {
             const result = hit.parsed;
             if (result.error) {

@@ -217,7 +217,7 @@ export function liveSourceRoots(
     globalWorkflows: archonPaths.getHomeWorkflowsPath(),
     globalCommands: archonPaths.getHomeCommandsPath(),
     globalScripts: archonPaths.getHomeScriptsPath(),
-    bundledWorkflows: dirname(archonPaths.getDefaultWorkflowsPath()),
+    bundledWorkflows: archonPaths.getBundledWorkflowsPath(),
     installed,
     kind: 'live',
     config,
@@ -769,7 +769,7 @@ async function resolveBundledScope(): Promise<BundledScope | undefined> {
   }
 
   // Every bundled pack, with its commands and scripts, lives under the workflows root.
-  const workflowsRoot = dirname(archonPaths.getDefaultWorkflowsPath());
+  const workflowsRoot = archonPaths.getBundledWorkflowsPath();
   const sources = await collectInstalledBundleSources(workflowsRoot);
   if (!sources) return undefined;
   const files: TreeFile[] = [];

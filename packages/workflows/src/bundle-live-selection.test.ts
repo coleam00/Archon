@@ -16,7 +16,7 @@ registerBuiltinProviders();
 const realPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realPaths,
-  getDefaultWorkflowsPath: () => join(app, 'workflows', 'defaults'),
+  getBundledWorkflowsPath: () => join(app, 'workflows'),
 }));
 
 const inventory = await import('./defaults/bundle-inventory');

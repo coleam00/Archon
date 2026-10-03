@@ -52,7 +52,7 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
-  getDefaultWorkflowsPath: () => '/nonexistent/defaults/workflows',
+  getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
   getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
   getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',

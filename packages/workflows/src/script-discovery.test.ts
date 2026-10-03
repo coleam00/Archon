@@ -35,7 +35,7 @@ let mockHomeWorkflowsPath = '/home/workflows';
 mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
   getArchonHome: mock(() => '/home'),
-  getDefaultWorkflowsPath: mock(() => '/app/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/app/workflows'),
   getHomeScriptsPath: mock(() => mockHomeScriptsPath),
   getHomeWorkflowsPath: mock(() => mockHomeWorkflowsPath),
 }));

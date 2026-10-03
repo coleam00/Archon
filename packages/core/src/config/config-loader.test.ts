@@ -11,7 +11,7 @@ mock.module('@archon/paths', () => ({
   getArchonConfigPath: mock(() => join(archonHome, 'config.yaml')),
   getArchonWorkspacesPath: mock(() => join(archonHome, 'workspaces')),
   getArchonWorktreesPath: mock(() => join(archonHome, 'worktrees')),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/app/.archon/workflows'),
 }));
 
 // Mock fs/promises so that readConfigFile/writeConfigFile (which call fsReadFile/writeFile

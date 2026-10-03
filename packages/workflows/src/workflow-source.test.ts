@@ -20,7 +20,7 @@ afterAll(async () => {
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
-  getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
+  getBundledWorkflowsPath: () => bundledDefaultsRoot,
 }));
 
 import {

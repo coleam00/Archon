@@ -564,10 +564,11 @@ export function getSourceWebDistDir(): string {
 }
 
 /**
- * Get the path to the app's bundled default workflows directory
+ * The bundled packs root in a source checkout. Every bundled pack, with its
+ * commands and scripts, lives in a folder beneath it.
  */
-export function getDefaultWorkflowsPath(): string {
-  return join(getAppArchonBasePath(), 'workflows', 'defaults');
+export function getBundledWorkflowsPath(): string {
+  return join(getAppArchonBasePath(), 'workflows');
 }
 
 /**
@@ -1102,7 +1103,7 @@ export function logArchonPaths(): void {
  * Every bundled pack, with its commands and scripts, lives under it.
  */
 export async function validateAppDefaultsPaths(): Promise<void> {
-  const workflowsPath = dirname(getDefaultWorkflowsPath());
+  const workflowsPath = getBundledWorkflowsPath();
   if (await checkPathAccessible(workflowsPath, 'workflows')) {
     getLog().info({ workflows: workflowsPath }, 'app_defaults_verified');
   }

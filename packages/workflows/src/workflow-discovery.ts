@@ -1021,10 +1021,8 @@ export async function discoverWorkflows(
     } else {
       // Bun: load from filesystem (development mode)
       const appWorkflowsPath = roots.bundledWorkflows;
-      const appDefaultsPath = join(
-        appWorkflowsPath,
-        basename(archonPaths.getDefaultWorkflowsPath())
-      );
+      // A capture taken by a build that still shipped flat defaults holds them here.
+      const appDefaultsPath = join(appWorkflowsPath, 'defaults');
       getLog().debug({ appWorkflowsPath }, 'loading_app_default_workflows');
       try {
         let appResult: DirLoadResult;

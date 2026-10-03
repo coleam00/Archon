@@ -45,7 +45,7 @@ mock.module('@archon/core', () => ({
   loadRepoConfig: mockLoadRepoConfig,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
   cloneRepository: mock(async () => {}),
   registerRepository: mock(async () => ({ success: true })),
   removeWorktree: mock(async () => ({ success: true })),
@@ -609,8 +609,7 @@ describe('GET /api/workflows/:name', () => {
 
   test('returns a source-build bundled pack workflow when its file uses .yml extension', async () => {
     const testDir = join(tmpdir(), `wf-defaults-yml-test-${Date.now()}`);
-    // The bundled root is the parent of this path; packs live beneath it.
-    const defaultsDir = join(testDir, 'workflows', 'defaults');
+    const bundledRoot = join(testDir, 'workflows');
     const flowDir = join(testDir, 'workflows', 'some-pack', 'flow');
     await mkdir(flowDir, { recursive: true });
     await writeFile(
@@ -620,8 +619,8 @@ describe('GET /api/workflows/:name', () => {
 
     // Point the bundled lookup at the temp dir; keep home-scope at a
     // nonexistent path so the handler falls through to the bundled source.
-    const defaultsPathSpy = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(
-      defaultsDir
+    const defaultsPathSpy = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
+      bundledRoot
     );
     const prevArchonHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = join(testDir, 'nonexistent-home');
@@ -850,8 +849,8 @@ describe('GET /api/workflows/:name', () => {
     const packageDir = join(workflowsRoot, 'author-pack', 'release-flow');
     await mkdir(packageDir, { recursive: true });
     await writeFile(join(packageDir, 'definition.yaml'), 'name: test\nnodes: []\n');
-    const defaultsPathSpy = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(
-      join(workflowsRoot, 'defaults')
+    const defaultsPathSpy = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
+      workflowsRoot
     );
 
     try {
@@ -874,8 +873,8 @@ describe('GET /api/workflows/:name', () => {
     const workflowsRoot = join(testDir, '.archon', 'workflows');
     await mkdir(workflowsRoot, { recursive: true });
     await writeFile(join(workflowsRoot, 'test.yaml'), 'name: test\nnodes: []\n');
-    const defaultsPathSpy = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(
-      join(workflowsRoot, 'defaults')
+    const defaultsPathSpy = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
+      workflowsRoot
     );
 
     try {
@@ -1161,8 +1160,8 @@ describe('PUT /api/workflows/:name', () => {
     const packagedPath = join(packageDir, 'definition.yaml');
     await mkdir(packageDir, { recursive: true });
     await writeFile(packagedPath, 'name: test\ndescription: Before\nnodes: []\n');
-    const defaultsPathSpy = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(
-      join(workflowsRoot, 'defaults')
+    const defaultsPathSpy = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
+      workflowsRoot
     );
 
     try {
@@ -1457,8 +1456,8 @@ describe('DELETE /api/workflows/:name', () => {
     const packagedPath = join(packageDir, 'definition.yaml');
     await mkdir(packageDir, { recursive: true });
     await writeFile(packagedPath, 'name: test\nnodes: []\n');
-    const defaultsPathSpy = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(
-      join(workflowsRoot, 'defaults')
+    const defaultsPathSpy = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
+      workflowsRoot
     );
 
     try {

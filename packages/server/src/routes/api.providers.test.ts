@@ -79,7 +79,7 @@ mock.module('@archon/paths', () => ({
   }),
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   isDocker: mock(() => false),
 }));

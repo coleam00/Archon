@@ -24,7 +24,7 @@ export {
   getCommandFolderSearchPaths,
   getWorkflowFolderSearchPaths,
   getAppArchonBasePath,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,

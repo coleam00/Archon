@@ -29,7 +29,7 @@ import {
   canonicalizeProjectPath,
   getAppArchonBasePath,
   getSourceWebDistDir,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
@@ -484,14 +484,12 @@ describe('archon-paths', () => {
     });
   });
 
-  describe('getDefaultWorkflowsPath', () => {
-    test('returns workflows/defaults under app archon base', () => {
+  describe('getBundledWorkflowsPath', () => {
+    test('returns workflows under app archon base', () => {
       delete process.env.ARCHON_DOCKER;
       delete process.env.WORKSPACE_PATH;
-      const path = getDefaultWorkflowsPath();
-      expect(path).toContain('.archon');
-      expect(path).toContain('workflows');
-      expect(path).toContain('defaults');
+      const path = getBundledWorkflowsPath();
+      expect(path).toBe(join(getAppArchonBasePath(), 'workflows'));
       expect(path).not.toContain('packages/core');
     });
   });
