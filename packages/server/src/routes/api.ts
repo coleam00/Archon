@@ -127,7 +127,7 @@ interface RawWorkflowFile {
   filename: string;
   packaged: boolean;
   parsed: ReturnType<typeof parseWorkflow>;
-  /** The file text as read — what a save edits in place. */
+  /** The file text as read. */
   content: string;
 }
 
