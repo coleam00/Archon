@@ -20,7 +20,7 @@ import type {
   HandleMessageContext,
   GlobalConfig,
   TiersPatch,
-  UserRole,
+  User,
   SchemaVersionInfo,
 } from '@archon/core';
 import {
@@ -1649,14 +1649,17 @@ function apiError(
   return c.json({ error: message, ...(detail ? { detail } : {}) }, status);
 }
 
+interface WebUserContext {
+  userId: User['id'];
+  role: User['role'];
+}
+
 /**
  * Trusted proxy headers require a proxy that strips client-supplied values, or
  * a loopback-only server. Missing identity leaves solo requests unattributed;
  * the API gate maps it to 401 when authentication is required.
  */
-export async function resolveAuthContext(
-  c: Context
-): Promise<{ userId: string; role: UserRole } | undefined> {
+export async function resolveAuthContext(c: Context): Promise<WebUserContext | undefined> {
   const auth = getAuth();
   if (auth) {
     try {
@@ -1704,7 +1707,7 @@ export async function resolveWebUserId(c: Context): Promise<string | undefined> 
 export async function requireWebUser(
   c: Context,
   failMessage = 'Web authentication required'
-): Promise<{ userId: string; role: UserRole } | { error: Response }> {
+): Promise<WebUserContext | { error: Response }> {
   const auth = getAuth();
   if (auth) {
     let session: Awaited<ReturnType<typeof auth.api.getSession>> | undefined;

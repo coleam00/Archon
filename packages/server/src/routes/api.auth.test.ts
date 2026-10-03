@@ -443,6 +443,25 @@ describe('per-request auth helpers', () => {
     expect(await resolveAuthContext(await request({ 'X-Trusted-User': '   ' }))).toBeUndefined();
   });
 
+  test('missing Better Auth session falls back to the trusted proxy for all three helpers', async () => {
+    authEnabled = true;
+    const getSession = mock(async (_args: unknown) => null);
+    authInstance = { api: { getSession } };
+    process.env.ARCHON_WEB_AUTH_HEADER = 'X-Trusted-User';
+    const c = await request({ 'X-Trusted-User': 'proxy-user', 'X-Archon-User': 'ignored' });
+    const expected = { userId: 'user-from-proxy-user', role: 'admin' as const };
+    expect(await resolveAuthContext(c)).toEqual(expected);
+    expect(await resolveWebUserId(c)).toBe(expected.userId);
+    expect(await requireWebUser(c)).toEqual(expected);
+    expect(getSession).toHaveBeenCalledTimes(3);
+    expect(getSession).toHaveBeenCalledWith({ headers: c.req.raw.headers });
+    expect(mockFindOrCreateUser.mock.calls).toEqual([
+      ['web', 'proxy-user', 'proxy-user'],
+      ['web', 'proxy-user', 'proxy-user'],
+      ['web', 'proxy-user', 'proxy-user'],
+    ]);
+  });
+
   test('session outage permits soft proxy attribution but strict identity returns 503', async () => {
     authInstance = {
       api: {
