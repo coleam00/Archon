@@ -812,6 +812,19 @@ Every built-in provider reports a typed class:
 
 Set `on_error: all` on a node that should retry `unknown` failures. Only failures the engine detects itself, such as an idle timeout or an empty response, are classified from their text.
 
+#### Pi retries inside its own runtime
+
+Pi retries a failed model call itself before Archon sees the failure. Archon reads Pi's settings from `~/.pi/agent/settings.json` and the project's `.pi/settings.json`, and does not change them:
+
+| Pi setting | Default | Effect |
+|------------|---------|--------|
+| `retry.enabled` | `true` | Pi retries a turn that failed with an error it judges transient (overload, rate limit, server error, network failure, timeout) |
+| `retry.maxRetries` | `3` | Retries per turn |
+| `retry.baseDelayMs` | `2000` | First delay, doubling each retry (2s, 4s, 8s) |
+| `retry.provider.maxRetries` | `0` | A separate HTTP-level retry that reads the status code and honors `Retry-After`. Off by default |
+
+See Pi's [settings reference](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md#network-and-retries) for the full list. A failure that outlasts Pi's retries reaches Archon as `unknown`, so by default Archon does not retry it again. To add node-level retries on top, set `retry: { on_error: all }` on the node. The attempts then multiply: with Pi's defaults and `max_attempts: 2`, a failing turn can make up to 12 model calls (3 node attempts × 4 Pi calls each). To leave retrying to Archon alone, set `"retry": { "enabled": false }` in Pi's settings.
+
 ### Retry Notifications
 
 Before each retry the platform receives a message like:
