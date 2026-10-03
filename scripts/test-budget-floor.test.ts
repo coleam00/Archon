@@ -8,7 +8,11 @@ import { gitOutput } from './check-test-cleanup-drift';
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const TEST_FILE = /\.(?:test|spec)\.(?:[cm]?ts|tsx)$/;
 
-/** Position of the budget argument: `it(name, fn, budget)` and `beforeAll(fn, budget)`. */
+/**
+ * Position of the budget argument: `it(name, fn, budget)`, `beforeAll(fn, budget)` and
+ * `setDefaultTimeout(budget)`, which replaces the floor for every test in the file. `describe`
+ * is absent because Bun 1.4 ignores a budget passed to it.
+ */
 const BUDGET_INDEX = new Map([
   ['it', 2],
   ['test', 2],
@@ -16,6 +20,7 @@ const BUDGET_INDEX = new Map([
   ['beforeEach', 1],
   ['afterAll', 1],
   ['afterEach', 1],
+  ['setDefaultTimeout', 0],
 ]);
 
 /** Local names each `bun:test` export is bound to in this file, aliases included. */
@@ -115,9 +120,11 @@ function budgetViolation(
   if (value !== undefined && value > WINDOWS_TEST_TIMEOUT_MS) return undefined;
   if (ts.isObjectLiteralExpression(budget)) {
     for (const property of budget.properties) {
+      if (ts.isShorthandPropertyAssignment(property) && property.name.text === 'timeout')
+        return budgetViolation(property.name, constants);
       if (
         ts.isPropertyAssignment(property) &&
-        ts.isIdentifier(property.name) &&
+        (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
         property.name.text === 'timeout'
       )
         return budgetViolation(property.initializer, constants);
@@ -162,6 +169,10 @@ describe('explicit test budgets respect the Windows floor', () => {
       bt.test('d', () => {}, 1_000);
       check('e', () => {}, LIMIT + 5_000);
       check('f', () => {}, IMPORTED_LIMIT);
+      const timeout = 8_000;
+      check('g', () => {}, { timeout });
+      check('h', () => {}, { 'timeout': 9_000 });
+      bt.setDefaultTimeout(5_000);
     `;
     expect(checkBudgets('x.test.ts', source)).toEqual([
       'x.test.ts:5 it budget 10_000',
@@ -171,6 +182,9 @@ describe('explicit test budgets respect the Windows floor', () => {
       'x.test.ts:9 test budget 1_000',
       'x.test.ts:10 it budget LIMIT + 5_000',
       'x.test.ts:11 it budget IMPORTED_LIMIT',
+      'x.test.ts:13 it budget timeout',
+      'x.test.ts:14 it budget 9_000',
+      'x.test.ts:15 setDefaultTimeout budget 5_000',
     ]);
   });
 
@@ -178,11 +192,13 @@ describe('explicit test budgets respect the Windows floor', () => {
     const source = `
       import { it } from 'bun:test';
       const SLOW = 30_000;
+      const timeout = 30_000;
       it('a', () => {}, testTimeout(10_000));
       it('b', () => {}, 30_000);
       it('c', () => {}, { timeout: testTimeout(8_000) });
       it('d', () => {});
       it('e', () => {}, SLOW);
+      it('f', () => {}, { timeout });
       setTimeout(() => {}, 1_000);
       execFile('git', [], { timeout: 5_000 });
     `;
