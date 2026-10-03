@@ -164,25 +164,6 @@ describe('toRunEvent — tool calls (regression guard)', () => {
     );
     expect(event).toMatchObject({ result: { ok: false, message: 'No credential configured' } });
   });
-
-  test('tool_called carries tool name + input, no result yet', () => {
-    const e = toRunEvent(
-      raw({ event_type: 'tool_called', data: { tool_name: 'Bash', tool_input: { cmd: 'ls' } } })
-    );
-    expect(e.kind).toBe('tool_call');
-    if (e.kind !== 'tool_call') throw new Error('unreachable');
-    expect(e.tool).toBe('Bash');
-    expect(e.args).toEqual({ cmd: 'ls' });
-    expect(e.result).toBeNull();
-  });
-
-  test('tool_completed reads duration_ms into the result', () => {
-    const e = toRunEvent(
-      raw({ event_type: 'tool_completed', data: { tool_name: 'Bash', duration_ms: 667 } })
-    );
-    if (e.kind !== 'tool_call') throw new Error('unreachable');
-    expect(e.result).toEqual({ ok: true, durationMs: 667 });
-  });
 });
 
 describe('toRunEvent — approvals (server writes approval_requested/approval_received)', () => {
@@ -342,7 +323,7 @@ describe('countTerminalNodes', () => {
   test('non-node_transition events are ignored', () => {
     const events = [
       node('a', 'node_completed'),
-      toRunEvent(raw({ event_type: 'tool_called', data: { tool_name: 'Bash' } })),
+      toRunEvent(raw({ event_type: 'workflow_artifact', data: { label: 'pr' } })),
       toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
     ];
     expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 1 });
@@ -478,7 +459,7 @@ describe('foldNodeRuns', () => {
   test('non-node_transition events are ignored', () => {
     const runs = foldNodeRuns([
       node('plan', 'node_completed'),
-      toRunEvent(raw({ event_type: 'tool_called', data: { tool_name: 'Bash' } })),
+      toRunEvent(raw({ event_type: 'workflow_artifact', data: { label: 'pr' } })),
       toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
     ]);
     expect(runs).toHaveLength(1);

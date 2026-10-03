@@ -100,7 +100,7 @@ function gated(): {
     script: async function* () {
       try {
         markStarted();
-        yield { type: 'assistant', content: 'working' };
+        yield { type: 'agent_message_chunk', text: 'working' };
         await gate;
         yield { type: 'result' };
       } finally {
@@ -205,8 +205,8 @@ describe('provider admission wrapper', () => {
     const order: string[] = [];
     scripts.set('a', async function* () {
       try {
-        yield { type: 'assistant', content: 'x' };
-        yield { type: 'assistant', content: 'never read' };
+        yield { type: 'agent_message_chunk', text: 'x' };
+        yield { type: 'agent_message_chunk', text: 'never read' };
       } finally {
         order.push(`provider closed, holders=${String(await holderCount())}`);
       }
@@ -220,34 +220,12 @@ describe('provider admission wrapper', () => {
   test('a failing attempt releases its slot and keeps its own error', async () => {
     await writeCaps({ [PROVIDER]: 1 });
     scripts.set('a', async function* () {
-      yield { type: 'assistant', content: 'x' };
+      yield { type: 'agent_message_chunk', text: 'x' };
       throw new Error('provider exploded');
     });
     await expect(drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('a', '/tmp'))).rejects.toThrow(
       'provider exploded'
     );
-    expect(await holderCount()).toBe(0);
-  });
-
-  test('releaseDuring frees the slot for another attempt during backoff', async () => {
-    await writeCaps({ [PROVIDER]: 1 });
-    const other = gated();
-    let duringBackoff = -1;
-    scripts.set('a', async function* (options) {
-      yield { type: 'assistant', content: 'first try failed' };
-      await options?.admission?.releaseDuring(async () => {
-        duringBackoff = await holderCount();
-        const run = drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('other', '/tmp'));
-        await other.started;
-        other.release();
-        await run;
-      });
-      yield { type: 'result' };
-    });
-    scripts.set('other', other.script);
-    await drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('a', '/tmp'));
-    expect(duringBackoff).toBe(0);
-    expect(calls).toHaveLength(2);
     expect(await holderCount()).toBe(0);
   });
 

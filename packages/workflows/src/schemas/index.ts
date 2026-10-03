@@ -220,6 +220,7 @@ export {
   isTerminalRunStatus,
   runAttention,
   isWorkflowWaitContext,
+  pendingWorkflowWaitDeadline,
   workflowWaitStepName,
   isScheduledWorkflowResume,
   isRunBlockedOnChild,
@@ -254,6 +255,7 @@ export type {
   ArtifactType,
   ApprovalContext,
   WorkflowAttentionWaitContext,
+  WorkflowDeadlineWaitContext,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
   SuspendReason,
@@ -272,7 +274,7 @@ export type {
 } from './workflow-run';
 
 // Per-node persisted provider sessions
-export { workflowNodeSessionSchema } from './workflow-node-session';
+export { workflowNodeSessionSchema, persistScopeKey } from './workflow-node-session';
 export type { WorkflowNodeSession } from './workflow-node-session';
 
 // Private provider session handles scoped to one workflow run

@@ -120,6 +120,7 @@ mock.module('@github/copilot-sdk', () => ({
 }));
 
 // Provider imports AFTER mocks are installed.
+import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { CopilotProvider, resetCopilotSingleton } from './provider';
 
 function evt<T extends SessionEvent['type']>(type: T, data: unknown): SessionEvent {
@@ -171,7 +172,7 @@ describe('CopilotProvider.sendQuery', () => {
 
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'hi' }));
     session.resolveSend(undefined);
     await firstNext;
     await collect(gen);
@@ -193,7 +194,7 @@ describe('CopilotProvider.sendQuery', () => {
     const firstNext = gen.next();
     // Give the async chain a tick so createSession resolves.
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hi' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'hi' }));
     session.resolveSend(undefined);
     const chunks = [(await firstNext).value, ...(await collect(gen))];
 
@@ -312,10 +313,11 @@ describe('CopilotProvider.sendQuery', () => {
 
     expect(resumeSessionSpy).toHaveBeenCalledTimes(1);
     expect(createSessionSpy).toHaveBeenCalledTimes(1);
-    const systemChunk = chunks.find(
-      c => c && typeof c === 'object' && 'type' in c && c.type === 'system'
-    ) as { content: string } | undefined;
-    expect(systemChunk?.content).toContain('Could not resume');
+    expect(chunks).toContainEqual({
+      type: 'warning',
+      code: 'copilot.resume_failed',
+      message: expect.stringContaining('Could not resume'),
+    });
   });
 
   test('forkSession=true with resumeSessionId creates fresh session (SDK has no fork)', async () => {
@@ -335,10 +337,11 @@ describe('CopilotProvider.sendQuery', () => {
     // resumeSession MUST NOT be called — we fork to fresh instead.
     expect(resumeSessionSpy).not.toHaveBeenCalled();
     expect(createSessionSpy).toHaveBeenCalledTimes(1);
-    const systemChunk = chunks.find(
-      c => c && typeof c === 'object' && 'type' in c && c.type === 'system'
-    ) as { content: string } | undefined;
-    expect(systemChunk?.content).toContain('does not support session forking');
+    expect(chunks).toContainEqual({
+      type: 'warning',
+      code: 'copilot.fork_unsupported',
+      message: expect.stringContaining('does not support session forking'),
+    });
   });
 
   test('resumeSessionId without forkSession resumes in place (node-to-node continuation)', async () => {
@@ -393,6 +396,94 @@ describe('CopilotProvider.sendQuery', () => {
     ) as { sessionId?: string; tokens?: { input: number; output: number } } | undefined;
     expect(result?.sessionId).toBe('sess-42');
     expect(result?.tokens).toEqual({ input: 10, output: 3 });
+  });
+
+  /** Two tools start; only the first completes before the turn ends. */
+  const toolTurnEvents = [
+    evt('tool.execution_start', { toolCallId: 'c1', toolName: 'read', arguments: { path: 'a' } }),
+    evt('tool.execution_start', {
+      toolCallId: 'c2',
+      toolName: 'bash',
+      arguments: { cmd: 'sleep' },
+    }),
+    evt('tool.execution_complete', { toolCallId: 'c1', success: true, result: { content: 'A' } }),
+    evt('assistant.message', { messageId: 'm', content: 'done' }),
+  ];
+
+  test('a tool the turn never completed closes as cancelled before the result', async () => {
+    const session = makeFakeSession('sess-open-tool');
+    nextCreateSessionResult = session;
+    const gen = new CopilotProvider().sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+    const first = gen.next();
+    await new Promise(resolve => setTimeout(resolve, 5));
+    for (const event of toolTurnEvents) session.fire(event);
+    session.resolveSend(undefined);
+    const chunks = [(await first).value, ...(await collect(gen))];
+
+    expect(chunks).toEqual([
+      { type: 'tool_call', toolCallId: 'c1', name: 'read', rawInput: { path: 'a' } },
+      { type: 'tool_call', toolCallId: 'c2', name: 'bash', rawInput: { cmd: 'sleep' } },
+      { type: 'tool_call_update', toolCallId: 'c1', status: 'completed', output: 'A' },
+      { type: 'agent_message_chunk', text: 'done' },
+      { type: 'tool_call_update', toolCallId: 'c2', status: 'cancelled' },
+      { type: 'result', sessionId: 'sess-open-tool' },
+      { type: 'settled' },
+    ]);
+  });
+
+  test('conforms to the provider contract', async () => {
+    /** One Copilot turn driven by a fake session that streams, then resolves or errors. */
+    function turn(events: SessionEvent[], rejection?: Error): () => AsyncIterable<unknown> {
+      return async function* () {
+        const session = makeFakeSession('sess-conformance');
+        nextCreateSessionResult = session;
+        const gen = new CopilotProvider().sendQuery('hi', '/w', undefined, { model: 'gpt-5' });
+        const first = gen.next();
+        await new Promise(resolve => setTimeout(resolve, 5));
+        for (const event of events) session.fire(event);
+        if (rejection) session.rejectSend(rejection);
+        else session.resolveSend(undefined);
+        const head = await first;
+        if (!head.done) yield head.value;
+        yield* gen;
+      };
+    }
+    const violations = await runProviderConformance({
+      // Copilot's SDK exposes no structured failure class; only Archon's MCP config check
+      // classifies its own error.
+      failureCases: [
+        {
+          name: 'missing MCP config file',
+          expected: 'misconfigured',
+          evidence: 'MCP config file not found',
+          run: () =>
+            new CopilotProvider().sendQuery('hi', '/w', undefined, {
+              model: 'gpt-5',
+              nodeConfig: { mcp: 'does-not-exist.mcp.json' },
+            }),
+        },
+        {
+          name: 'session error',
+          expected: 'unknown',
+          evidence: 'upstream failed',
+          run: turn([evt('session.error', { message: 'upstream failed' })]),
+        },
+        {
+          name: 'sendAndWait rejection',
+          expected: 'unknown',
+          evidence: 'kaboom',
+          run: turn([], new Error('kaboom')),
+        },
+      ],
+      turns: [
+        {
+          name: 'completed turn',
+          run: turn([evt('assistant.message', { messageId: 'm', content: 'hi' })]),
+        },
+      ],
+      toolTurn: { name: 'tool turn', run: turn(toolTurnEvents) },
+    });
+    expect(violations).toEqual([]);
   });
 
   test('abort signal triggers session.abort', async () => {
@@ -556,7 +647,7 @@ describe('CopilotProvider.sendQuery', () => {
     expect(lastClientOpts?.useLoggedInUser).toBe(true);
   });
 
-  test('sendAndWait rejection propagates as thrown error', async () => {
+  test('a sendAndWait rejection ends the turn in a typed failure, then settled', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
@@ -566,13 +657,11 @@ describe('CopilotProvider.sendQuery', () => {
     await new Promise(resolve => setTimeout(resolve, 5));
     session.rejectSend(new Error('kaboom'));
 
-    await expect(
-      (async () => {
-        await first;
-        for await (const _ of gen) {
-          /* drain */
-        }
-      })()
-    ).rejects.toThrow('kaboom');
+    const head = await first;
+    const chunks = [...(head.done ? [] : [head.value]), ...(await collect(gen))];
+    const result = chunks.find(c => c.type === 'result');
+    expect(result).toMatchObject({ type: 'result', isError: true, failure: { class: 'unknown' } });
+    expect((result as { failure?: { evidence: string } }).failure?.evidence).toContain('kaboom');
+    expect(chunks.at(-1)).toEqual({ type: 'settled' });
   });
 });

@@ -37,14 +37,14 @@ installations operate without an identity.
 
 ## Persisted view preferences
 
-| Key | Default | Purpose |
-| --- | --- | --- |
-| `archon.console.detailView` | `log` | Run-detail tab |
-| `archon.console.showToolCalls` | `1` | Show tool calls in the stream |
-| `archon.console.showSystem` | `0` | Show system events |
-| `archon.console.runNodeFilter` | `all` | Filter the run stream by node |
-| `archon.console.railWidth` | unset | Project rail width |
-| `archon.console.lastWorkflow` | unset | Last selected workflow |
-| `archon.console.builderProject` | unset | Builder project selection |
+| Key                             | Default | Purpose                       |
+| ------------------------------- | ------- | ----------------------------- |
+| `archon.console.detailView`     | `log`   | Run-detail tab                |
+| `archon.console.showToolCalls`  | `1`     | Show tool calls in the stream |
+| `archon.console.showSystem`     | `0`     | Show system events            |
+| `archon.console.runNodeFilter`  | `all`   | Filter the run stream by node |
+| `archon.console.railWidth`      | unset   | Project rail width            |
+| `archon.console.lastWorkflow`   | unset   | Last selected workflow        |
+| `archon.console.builderProject` | unset   | Builder project selection     |
 
 Local storage reads are guarded and fall back to these defaults.

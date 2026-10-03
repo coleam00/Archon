@@ -144,7 +144,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 `concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default caps. A provider without an entry is unlimited, so many runs across Claude, Codex, and Pi keep running in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
 
-- **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts, including the internal retries of Claude, Codex, and OpenCode, holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
+- **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
 - **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
 - **Changes apply immediately.** The cap is re-read on every admission check, including by attempts already waiting. Lowering it blocks new attempts until enough running ones finish; running attempts are never cancelled.
 - **Strict.** A key that is not a registered provider ID, a value that is not a positive integer, or a config file that cannot be parsed refuses every provider attempt with an error naming the problem, instead of silently running uncapped.
@@ -269,7 +269,8 @@ A declared skill that is installed on disk must live under a source that remains
 enabled — `settingSources: ['project']` cannot select a user-global skill, for
 instance — and Archon rejects that mismatch before provider spend. Names that are
 absent from disk entirely, such as Claude's built-in skills and plugin-qualified
-`plugin:skill` entries, are left to the SDK to resolve.
+`plugin:skill` entries, are left to the SDK to resolve. A plugin's skill loads only
+when the node also names that plugin under `plugins:`.
 
 Unrecognized entries are dropped rather than ignored: `settingSources: ['projct']`
 resolves to no sources and logs `claude.setting_sources_invalid_entries`. A typo
@@ -786,14 +787,14 @@ DISCORD_STREAMING_MODE=batch
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when its node error proves provider quota-window exhaustion |
-| `quotaFallbackDelayMs` | unset | Explicit delay to use only when the provider error has no machine-readable reset time, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
+| `autoResumeOnQuotaReset` | `false` | Schedule a failed workflow for continuation when a node's provider reported a `quota_exhausted` failure |
+| `quotaFallbackDelayMs` | unset | Explicit delay to use when the provider's quota failure reports no reset time, or a reset time that has already passed, capped at 1000 years. When unset, Archon records that automatic continuation was skipped instead of guessing |
 | `quotaMaxAttempts` | `1` | Maximum number of scheduled continuation attempts for one run |
 | `quotaDeadlineMs` | `86400000` | Maximum window from the first quota failure in which a continuation may be scheduled, capped at 1000 years |
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
 
-Provider errors that include an unambiguous epoch or relative reset duration use it. Errors such as MiniMax plan exhaustion code `2056` often omit a reset time; those resume only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
+Only a provider's typed failure schedules a continuation; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. No other provider reports a structured quota signal, so their quota errors never schedule a continuation. A quota failure without a reset time, or with one that has already passed, resumes only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
 
 ## Concurrency Settings
 

@@ -11,7 +11,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import {
   isScheduledWorkflowResume,
-  isWorkflowWaitContext,
+  pendingWorkflowWaitDeadline,
 } from '@archon/workflows/schemas/workflow-run';
 import { HeadlessPlatform } from '../adapters/headless';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
@@ -24,12 +24,12 @@ let continuationScheduler: ReturnType<typeof setInterval> | undefined;
 let scanInProgress = false;
 
 function continuationCursor(run: WorkflowRun): WorkflowResumeCursor | undefined {
-  if (run.status === 'paused' && isWorkflowWaitContext(run.metadata.wait)) {
-    if (run.metadata.wait.kind === 'attention') return undefined;
+  const wait = pendingWorkflowWaitDeadline(run);
+  if (wait) {
     return {
       kind: 'wait',
-      nodeId: run.metadata.wait.nodeId,
-      resumeAt: run.metadata.wait.resumeAt,
+      nodeId: wait.nodeId,
+      resumeAt: wait.resumeAt,
     };
   }
   if (run.status === 'failed' && isScheduledWorkflowResume(run.metadata.scheduled_resume)) {

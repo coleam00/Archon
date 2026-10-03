@@ -49,6 +49,7 @@ export type WireBaseKey =
   | 'hooks'
   | 'mcp'
   | 'skills'
+  | 'plugins'
   | 'agents'
   | 'effort'
   | 'maxBudgetUsd'

@@ -29,14 +29,14 @@
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.282",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.287",
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@github/copilot-sdk": "~1.0.1",
-    "@earendil-works/pi-ai": "^0.87.1",
-    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@earendil-works/pi-ai": "^1.0.0",
+    "@earendil-works/pi-coding-agent": "^1.0.0",
     "@opencode-ai/sdk": "^1.17.3",
-    "@openai/codex-sdk": "^0.157.0",
+    "@openai/codex-sdk": "^0.160.0",
     "@sinclair/typebox": "^0.34.41",
     "ajv": "^8.20.0",
     "jsonrepair": "^3.14.0",
@@ -87,6 +87,9 @@
     ],
     [
       "src/claude/config.test.ts"
+    ],
+    [
+      "src/claude/capabilities.test.ts"
     ],
     [
       "src/community/pi/model-ref.test.ts"
@@ -164,10 +167,19 @@
       "src/shared/resumed.test.ts"
     ],
     [
+      "src/shared/tool-calls.test.ts"
+    ],
+    [
+      "src/mcp/config.test.ts"
+    ],
+    [
       "src/claude/container-spawn.test.ts"
     ],
     [
       "src/claude/container-env.test.ts"
+    ],
+    [
+      "src/claude/plugins.test.ts"
     ]
   ]
 }

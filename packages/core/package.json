@@ -35,6 +35,7 @@
     "@archon/git": "workspace:*",
     "@archon/isolation": "workspace:*",
     "@archon/paths": "workspace:*",
+    "@archon/provider-contract": "workspace:*",
     "@archon/providers": "workspace:*",
     "@archon/workflows": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
@@ -133,6 +134,12 @@
     ],
     [
       "src/db/workflow-events.since.integration.test.ts"
+    ],
+    [
+      "src/db/workflow-events.provider-events.integration.test.ts"
+    ],
+    [
+      "src/db/workflow-events.provider-events.postgres.integration.test.ts"
     ],
     [
       "src/db/messages.order.integration.test.ts"

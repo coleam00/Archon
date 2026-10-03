@@ -11,7 +11,7 @@
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
  *   pull-request record here, and that record is then the only write target.
  * - INPUTS_PR: the qualified pull request the scope agent declared it reviewed,
- *   or `{}` for a working diff. It names the target of a standalone review.
+ *   or `null` for a working diff. It names the target of a standalone review.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER: the
  *   certified verdict fields this node forwards.
@@ -45,8 +45,9 @@ function recordedPr(scope: string): QualifiedPr | undefined {
 
 /** The pull request the scope agent declared, or undefined for a working diff. */
 function declaredPr(value: string): QualifiedPr | undefined {
-  const target = value.trim() || '{}';
+  const target = value.trim() || 'null';
   const parsed: unknown = JSON.parse(target);
+  // Older persisted scope output used `{}` for a working diff.
   if (parsed === null || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
     return undefined;
   }

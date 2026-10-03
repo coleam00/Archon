@@ -645,6 +645,7 @@ Print the run's existing JSONL transcript, or follow it as rows are appended:
 ```bash
 archon workflow logs <run-id>
 archon workflow logs <run-id> --follow
+archon workflow logs <run-id> --follow --format text
 ```
 
 Without `--follow`, the command copies the snapshot that exists at invocation time to
@@ -658,9 +659,35 @@ approval or rejection appends a `gate_decision` row with the gate's `step`, the
 
 Stdout is the transcript's exact JSONL, with no log messages or wrapper document. Each
 line is one persisted event and fields may be added over time, so consumers should parse
-the fields they need and tolerate others. `--json` is invalid because the output is
+the fields they need and tolerate others.
+
+Provider activity (agent text, thinking, tool calls with their input and output,
+warnings, MCP status, compaction, subtasks, hooks and state) is written as
+`provider_event` lines: the line frame (`type`, `workflow_id`, `ts`, `step`) plus the
+engine envelope `attemptId`, `seq`, `observedAt` and `event`, where `event` is the
+provider's object unchanged. `seq` counts one node attempt's events from 0. Transcripts
+written before this line type have `assistant` lines (`content`) and `tool` lines
+(`tool_name`, `tool_input`) instead, with no step, call id or output. `--json` is invalid because the output is
 already JSONL and a live stream cannot satisfy the CLI's one-document JSON contract;
 `--events` is also limited to `workflow status/get`.
+
+`--format text` reads the same transcript, with the same snapshot and follow behaviour,
+and prints it for a person instead: workflow start, resume, completion and failure; node
+start, completion with its duration, failure and skip with its cause; gate waits and
+decisions; and each subprocess's retained output with its exit code. Each node is named
+by its node id, and a command node's start line also names its command.
+
+A node's provider activity is indented beneath it: agent text in full, thinking on one
+line, one line per tool call, and each call's outcome naming the tool with its exit code
+and the last lines of its output. Warnings, MCP servers that failed, need auth or are
+disabled, compaction, subtask starts and ends, failed or cancelled hooks, and waits on
+the user get one line each; progress-only events (running subtasks, started or
+successful hooks, connected or pending MCP servers) are left out.
+`provider_event` lines record their node, so when parallel nodes interleave a `[node]`
+line marks each switch. The older `assistant` and `tool` lines record no node and are
+indented without a label. Rows the text view does not render (watchdog renewals,
+historical rows, row or event types newer than the CLI, or a line that is not JSON) are
+left out; `--format jsonl`, the default, keeps every row.
 
 A missing or empty snapshot exits `1`; for a live run the diagnostic points to
 `--follow`. Follow mode waits while the run is live, performs a final read after a
@@ -1173,6 +1200,7 @@ archon version
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
+| `--format <jsonl\|text>` | For `workflow logs`: `jsonl` (default) prints the exact transcript; `text` renders it as progress lines for a person. |
 | `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |
 | `--help`, `-h` | Show help message |
 

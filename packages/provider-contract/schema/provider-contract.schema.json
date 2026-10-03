@@ -11,6 +11,7 @@
             "auth",
             "quota_exhausted",
             "budget_exceeded",
+            "misconfigured",
             "rate_limited",
             "transient",
             "unknown"
@@ -107,7 +108,7 @@
           "type": "number"
         },
         "stopReason": {
-          "type": "string"
+          "$ref": "#/$defs/ProviderStopReason"
         },
         "numTurns": {
           "type": "number"
@@ -119,6 +120,18 @@
           "type": "boolean"
         }
       }
+    },
+    "ProviderSettled": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "settled"
+        }
+      },
+      "required": [
+        "type"
+      ]
     },
     "ProviderCapabilities": {
       "type": "object",
@@ -136,6 +149,9 @@
           "type": "boolean"
         },
         "skills": {
+          "type": "boolean"
+        },
+        "plugins": {
           "type": "boolean"
         },
         "agents": {
@@ -225,6 +241,7 @@
         "mcp",
         "hooks",
         "skills",
+        "plugins",
         "agents",
         "toolRestrictions",
         "structuredOutput",
@@ -238,6 +255,385 @@
         "settingSources",
         "nativeTools",
         "containerExec"
+      ]
+    },
+    "ProviderStopReason": {
+      "type": "string",
+      "enum": [
+        "end_turn",
+        "max_tokens",
+        "max_turn_requests",
+        "refusal",
+        "cancelled"
+      ]
+    },
+    "ProviderEvent": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "agent_message_chunk"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "agent_thought_chunk"
+            },
+            "text": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "name": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "rawInput": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tool_call_update"
+            },
+            "toolCallId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "completed",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "output": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "outputTruncated": {
+              "type": "boolean",
+              "const": true
+            },
+            "exitCode": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "toolCallId",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string",
+              "minLength": 1
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "warning"
+            }
+          },
+          "required": [
+            "code",
+            "message",
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "mcp_server_status"
+            },
+            "server": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "connected",
+                "failed",
+                "needs_auth",
+                "pending",
+                "disabled"
+              ]
+            },
+            "error": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "server",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "compaction"
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "started",
+                "completed"
+              ]
+            },
+            "trigger": {
+              "type": "string",
+              "enum": [
+                "manual",
+                "auto"
+              ]
+            },
+            "tokensBefore": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "tokensAfter": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "phase"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "subtask"
+            },
+            "taskId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "started",
+                "running",
+                "completed",
+                "failed",
+                "stopped"
+              ]
+            },
+            "description": {
+              "type": "string"
+            },
+            "summary": {
+              "type": "string"
+            },
+            "taskType": {
+              "type": "string"
+            },
+            "parentToolCallId": {
+              "type": "string"
+            },
+            "lastToolName": {
+              "type": "string"
+            },
+            "outputFile": {
+              "type": "string"
+            },
+            "usage": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "required": [
+            "type",
+            "taskId",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "hook"
+            },
+            "hookId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "hookName": {
+              "type": "string"
+            },
+            "hookEvent": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "started",
+                "succeeded",
+                "failed",
+                "cancelled"
+              ]
+            },
+            "exitCode": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "type",
+            "hookId",
+            "hookName",
+            "hookEvent",
+            "status"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "state_update"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "running",
+                "requires_action"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "state"
+          ]
+        }
+      ]
+    },
+    "ProviderChunk": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ProviderEvent"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "sessionId": {
+              "type": "string"
+            },
+            "tokens": {
+              "$ref": "#/$defs/TokenUsage"
+            },
+            "structuredOutput": {},
+            "failure": {
+              "$ref": "#/$defs/ProviderFailure"
+            },
+            "isError": {
+              "type": "boolean"
+            },
+            "errorSubtype": {
+              "type": "string"
+            },
+            "errors": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cost": {
+              "type": "number"
+            },
+            "stopReason": {
+              "$ref": "#/$defs/ProviderStopReason"
+            },
+            "numTurns": {
+              "type": "number"
+            },
+            "resolvedModel": {
+              "$ref": "#/$defs/ResolvedModel"
+            },
+            "resumed": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "result"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "$ref": "#/$defs/ProviderSettled"
+        }
       ]
     }
   }

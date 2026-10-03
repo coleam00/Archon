@@ -171,15 +171,15 @@ describe('listWorkflowEventsSince — real SQLite (catches the C1 datetime misma
     expect(ev?.data).toEqual({ node_output: 'x' }); // parsed object, not a string
   });
 
-  test('filters by eventTypes in SQL (keeps tool_* out)', async () => {
-    await createWorkflowEvent({ workflow_run_id: 'run-1', event_type: 'tool_called', data: {} });
+  test('filters by eventTypes in SQL (keeps provider_event out)', async () => {
+    await createWorkflowEvent({ workflow_run_id: 'run-1', event_type: 'provider_event', data: {} });
 
     const onlyNodes = await listWorkflowEventsSince(minuteAgo(), 100, [
       'node_completed',
       'node_started',
     ]);
 
-    expect(onlyNodes.some(r => r.event_type === 'tool_called')).toBe(false);
+    expect(onlyNodes.some(r => r.event_type === 'provider_event')).toBe(false);
     expect(onlyNodes.some(r => r.event_type === 'node_completed')).toBe(true);
   });
 

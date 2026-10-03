@@ -4,8 +4,8 @@
  * Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript flag).
  * This table stores the provider's session ID returned in the result `MessageChunk`
  * (see `@archon/providers/types`) so the DAG executor can pass it back as
- * `resumeSessionId` on a subsequent workflow run with the same scope (typically
- * `conversation_id`).
+ * `resumeSessionId` on a subsequent workflow run with the same scope (the launching
+ * conversation; see `persistScopeKey` in `@archon/workflows/schemas`).
  *
  * No cascade is wired into conversation deletion: conversation deletion is a soft
  * delete and `scope_key` is the conversation UUID (never reused), so any rows left

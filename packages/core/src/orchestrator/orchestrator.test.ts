@@ -198,6 +198,7 @@ const providerCapabilities: ProviderCapabilities = {
   mcp: true,
   hooks: true,
   skills: true,
+  plugins: false,
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'enforced',
@@ -855,7 +856,7 @@ describe('orchestrator-agent handleMessage', () => {
     test('non-deterministic commands go to AI orchestrator', async () => {
       // /unknown-command should NOT be routed to command handler
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'I can help with that.' };
+        yield { type: 'agent_message_chunk', text: 'I can help with that.' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -872,7 +873,7 @@ describe('orchestrator-agent handleMessage', () => {
   describe('AI orchestrator path', () => {
     test('sends message to AI and streams response', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'I can help you with that!' };
+        yield { type: 'agent_message_chunk', text: 'I can help you with that!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -885,7 +886,7 @@ describe('orchestrator-agent handleMessage', () => {
     test('does NOT require a codebase to function', async () => {
       // Conversation has no codebase_id — this is fine for the orchestrator
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Hello!' };
+        yield { type: 'agent_message_chunk', text: 'Hello!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -898,7 +899,7 @@ describe('orchestrator-agent handleMessage', () => {
     test('loads all codebases for prompt context', async () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -917,7 +918,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockListCodebases.mockResolvedValue([mockCodebase]);
       mockGetCodebase.mockResolvedValue(mockCodebase);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Scoped response' };
+        yield { type: 'agent_message_chunk', text: 'Scoped response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1134,8 +1135,8 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('streams assistant messages immediately', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'First chunk' };
-        yield { type: 'assistant', content: 'Second chunk' };
+        yield { type: 'agent_message_chunk', text: 'First chunk' };
+        yield { type: 'agent_message_chunk', text: 'Second chunk' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1147,8 +1148,13 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('streams tool calls with formatted message', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'tool', toolName: 'Bash', toolInput: { command: 'ls' } };
-        yield { type: 'assistant', content: 'Done' };
+        yield {
+          type: 'tool_call',
+          toolCallId: 'call-1',
+          name: 'Bash',
+          rawInput: { command: 'ls' },
+        };
+        yield { type: 'agent_message_chunk', text: 'Done' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1171,13 +1177,13 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
+          type: 'agent_message_chunk',
           // Trailing \n terminates the line so INVOKE_WORKFLOW_FULL_RE fires immediately,
           // setting commandFullyParsed=true before the second chunk is processed.
-          content: '/invoke-workflow fix-bug --project test-project\n',
+          text: '/invoke-workflow fix-bug --project test-project\n',
         };
         // These are silenced (not sent to platform) but loop continues to capture result
-        yield { type: 'assistant', content: 'This should not appear' };
+        yield { type: 'agent_message_chunk', text: 'This should not appear' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1204,11 +1210,11 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         // First chunk: user-visible explanation text - should be streamed
-        yield { type: 'assistant', content: "I'll help with that." };
+        yield { type: 'agent_message_chunk', text: "I'll help with that." };
         // Second chunk: the command - should NOT be streamed
         yield {
-          type: 'assistant',
-          content: '\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: '\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1238,10 +1244,10 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: '/register-project my-app /home/user/my-app',
+          type: 'agent_message_chunk',
+          text: '/register-project my-app /home/user/my-app',
         };
-        yield { type: 'assistant', content: 'This should not appear' };
+        yield { type: 'agent_message_chunk', text: 'This should not appear' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1266,9 +1272,9 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         // Chunk 1: partial command — does not match regex yet, so it IS sent
-        yield { type: 'assistant', content: '/invoke-work' };
+        yield { type: 'agent_message_chunk', text: '/invoke-work' };
         // Chunk 2: completes the command — accumulated string matches, NOT sent
-        yield { type: 'assistant', content: 'flow fix-bug --project test-project' };
+        yield { type: 'agent_message_chunk', text: 'flow fix-bug --project test-project' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1294,9 +1300,9 @@ describe('orchestrator-agent handleMessage', () => {
       );
 
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: '/invoke-workflow ' };
-        yield { type: 'assistant', content: 'fix-bug ' };
-        yield { type: 'assistant', content: '--project test-project' };
+        yield { type: 'agent_message_chunk', text: '/invoke-workflow ' };
+        yield { type: 'agent_message_chunk', text: 'fix-bug ' };
+        yield { type: 'agent_message_chunk', text: '--project test-project' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1321,8 +1327,8 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('accumulates messages and sends final clean response', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Part 1' };
-        yield { type: 'assistant', content: 'Part 2\n\nFinal summary' };
+        yield { type: 'agent_message_chunk', text: 'Part 1' };
+        yield { type: 'agent_message_chunk', text: 'Part 2\n\nFinal summary' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1337,7 +1343,7 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('filters emoji tool indicators from batch response', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: '🔧 BASH\nnpm test\n\nClean summary here' };
+        yield { type: 'agent_message_chunk', text: '🔧 BASH\nnpm test\n\nClean summary here' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1374,8 +1380,8 @@ describe('orchestrator-agent handleMessage', () => {
     test('dispatches workflow when AI responds with /invoke-workflow', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'I will fix this bug.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'I will fix this bug.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1389,8 +1395,8 @@ describe('orchestrator-agent handleMessage', () => {
     test('sends remaining message before dispatching workflow', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'Let me investigate this.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'Let me investigate this.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1404,8 +1410,8 @@ describe('orchestrator-agent handleMessage', () => {
     test('sends error for unknown project in workflow invocation', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: '/invoke-workflow fix-bug --project nonexistent-project',
+          type: 'agent_message_chunk',
+          text: '/invoke-workflow fix-bug --project nonexistent-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1419,7 +1425,7 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('conversational response passes through without routing', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Let me help you with that!' };
+        yield { type: 'agent_message_chunk', text: 'Let me help you with that!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1434,8 +1440,8 @@ describe('orchestrator-agent handleMessage', () => {
       platform.getStreamingMode.mockReturnValue('batch');
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'Fixing the bug.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'Fixing the bug.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1448,9 +1454,9 @@ describe('orchestrator-agent handleMessage', () => {
     test('batch mode dispatches workflow when command body arrives after detection', async () => {
       platform.getStreamingMode.mockReturnValue('batch');
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: '/invoke-workflow ' };
-        yield { type: 'assistant', content: 'fix-bug ' };
-        yield { type: 'assistant', content: '--project test-project' };
+        yield { type: 'agent_message_chunk', text: '/invoke-workflow ' };
+        yield { type: 'agent_message_chunk', text: 'fix-bug ' };
+        yield { type: 'agent_message_chunk', text: '--project test-project' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1471,8 +1477,8 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: `Running analysis.\n/invoke-workflow archon-assist --project test-project --prompt "${synthesized}"`,
+          type: 'agent_message_chunk',
+          text: `Running analysis.\n/invoke-workflow archon-assist --project test-project --prompt "${synthesized}"`,
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1500,8 +1506,8 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: 'On it.\n/invoke-workflow fix-bug --project test-project',
+          type: 'agent_message_chunk',
+          text: 'On it.\n/invoke-workflow fix-bug --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1538,8 +1544,8 @@ describe('orchestrator-agent handleMessage', () => {
 
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
-          type: 'assistant',
-          content: '/invoke-workflow archon-assist --project test-project',
+          type: 'agent_message_chunk',
+          text: '/invoke-workflow archon-assist --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1559,7 +1565,7 @@ describe('orchestrator-agent handleMessage', () => {
   describe('workflow discovery', () => {
     test('discovers global workflows from workspaces path', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1577,7 +1583,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockGetOrCreateConversation.mockResolvedValue(mockConversationWithProject);
       mockGetCodebase.mockResolvedValue(mockCodebase);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1599,7 +1605,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockGetOrCreateConversation.mockResolvedValue(mockConversationWithProject);
       mockGetCodebase.mockResolvedValue(mockCodebase);
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'Response' };
+        yield { type: 'agent_message_chunk', text: 'Response' };
         yield { type: 'result', sessionId: 'session-id' };
       });
       mockResolveWorkflowSourceRoot.mockImplementation(() =>
@@ -1622,7 +1628,7 @@ describe('orchestrator-agent handleMessage', () => {
     test('handles workflow discovery failure gracefully', async () => {
       mockDiscoverWorkflows.mockRejectedValue(new Error('No .archon/workflows directory'));
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'I can still help!' };
+        yield { type: 'agent_message_chunk', text: 'I can still help!' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1978,7 +1984,7 @@ describe('orchestrator-agent handleMessage', () => {
   describe('prompt construction', () => {
     test('includes issueContext in prompt', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'On it' };
+        yield { type: 'agent_message_chunk', text: 'On it' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 
@@ -1993,7 +1999,7 @@ describe('orchestrator-agent handleMessage', () => {
 
     test('includes threadContext in prompt', async () => {
       mockClient.sendQuery.mockImplementation(async function* () {
-        yield { type: 'assistant', content: 'On it' };
+        yield { type: 'agent_message_chunk', text: 'On it' };
         yield { type: 'result', sessionId: 'session-id' };
       });
 

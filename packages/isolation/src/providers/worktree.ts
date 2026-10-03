@@ -1477,24 +1477,13 @@ export class WorktreeProvider implements IIsolationProvider {
       // race on its ref lock; fetchWithRefLockRetry owns the bounded retry.
       await this.createBranchWithStaleRetry(
         repoPath,
-        async () => {
-          try {
-            return await fetchWithRefLockRetry(
-              toRepoPath(repoPath),
-              remote,
-              `pull/${prNumber}/head:${reviewBranch}`,
-              { timeoutMs: GIT_OPERATION_TIMEOUT_MS }
-            );
-          } catch (error) {
-            const err = error as Error & { stderr?: string };
-            const wrapped = new Error(
-              `Fetch ${remote} pull/${prNumber}/head:${reviewBranch} failed: ${err.message}`
-            ) as Error & { stderr?: string };
-            // createBranchWithStaleRetry keys on stderr for its stale-branch retry
-            wrapped.stderr = err.stderr;
-            throw wrapped;
-          }
-        },
+        () =>
+          fetchWithRefLockRetry(
+            toRepoPath(repoPath),
+            remote,
+            `pull/${prNumber}/head:${reviewBranch}`,
+            { timeoutMs: GIT_OPERATION_TIMEOUT_MS }
+          ),
         reviewBranch
       );
 

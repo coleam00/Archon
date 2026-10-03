@@ -75,21 +75,44 @@ export function buildDockerExecArgs(
   options: SpawnOptions,
   pidFile: string
 ): string[] {
-  const args = ['exec', '-i'];
-  if (execContext.execUser) args.push('-u', execContext.execUser);
-  if (options.cwd) args.push('-w', options.cwd);
-  for (const [key, value] of Object.entries(options.env)) {
-    if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
-    args.push('-e', `${key}=${value}`);
-  }
-  args.push(
-    execContext.containerId,
+  return [
+    ...dockerExecPrefix(execContext, options.cwd, options.env),
     'sh',
     '-c',
     `echo $$ > ${pidFile}; exec ${CONTAINER_CLAUDE_BIN} "$@"`,
     CONTAINER_CLAUDE_BIN, // $0 (cosmetic — "$@" starts at the real SDK args below)
-    ...options.args
-  );
+    ...options.args,
+  ];
+}
+
+/**
+ * `docker exec` argv for a one-shot in-container Claude CLI command (no pidfile:
+ * nothing signals it). Runs the same in-container binary, user, cwd and env as a
+ * session, so a CLI query such as `plugin list` sees what the session will see.
+ */
+export function buildDockerExecCommandArgs(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  cliArgs: readonly string[]
+): string[] {
+  return [...dockerExecPrefix(execContext, cwd, env), CONTAINER_CLAUDE_BIN, ...cliArgs];
+}
+
+/** `exec -i [-u user] [-w cwd] -e K=V... <container>`, shared by both builders. */
+function dockerExecPrefix(
+  execContext: Extract<ExecutionContext, { kind: 'container' }>,
+  cwd: string | undefined,
+  env: NodeJS.ProcessEnv | Record<string, string | undefined>
+): string[] {
+  const args = ['exec', '-i'];
+  if (execContext.execUser) args.push('-u', execContext.execUser);
+  if (cwd) args.push('-w', cwd);
+  for (const [key, value] of Object.entries(env)) {
+    if (value === undefined || CONTAINER_ENV_DENYLIST.has(key)) continue;
+    args.push('-e', `${key}=${value}`);
+  }
+  args.push(execContext.containerId);
   return args;
 }
 

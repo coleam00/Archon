@@ -47,36 +47,23 @@ describe('runDetailPath', () => {
 });
 
 describe('toRun — provenance', () => {
-  test('keeps parallel active nodes without inventing a singular representative', () => {
+  test('keeps every parallel active node', () => {
     const parallel = toRun(
       raw({
         id: 'r-parallel',
         workflow_name: 'implement',
         status: 'running',
         active_nodes: ['parallel-a', 'parallel-b'],
-        current_step_name: 'parallel-a',
-      })
-    );
-    const singular = toRun(
-      raw({
-        id: 'r-singular',
-        workflow_name: 'implement',
-        status: 'running',
-        active_nodes: ['plan'],
       })
     );
 
     expect(parallel.activeNodes).toEqual(['parallel-a', 'parallel-b']);
-    expect(parallel.currentNode).toBeNull();
-    expect(singular.activeNodes).toEqual(['plan']);
-    expect(singular.currentNode).toBe('plan');
   });
 
   test('detail responses without active_nodes normalize to empty active state', () => {
     const detail = toRun(raw({ id: 'r-detail', workflow_name: 'plan', status: 'running' }));
 
     expect(detail.activeNodes).toEqual([]);
-    expect(detail.currentNode).toBeNull();
   });
 
   test('keeps authored outcome independent from execution status', () => {

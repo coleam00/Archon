@@ -411,6 +411,15 @@ export class ChildRunRedirectError extends Error {
   }
 }
 
+/** Render an operation failure, including a surface-specific child-run redirect. */
+export function workflowOperationErrorMessage(
+  error: unknown,
+  surface: WorkflowCommandSurface
+): string {
+  if (error instanceof ChildRunRedirectError) return error.messageFor(surface);
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function assertApprovable(run: WorkflowRun): ApprovalContext {
   if (run.status !== 'paused') {
     throw new Error(

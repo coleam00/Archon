@@ -25,8 +25,7 @@ mock.module('@archon/paths', () => ({
 import {
   logWorkflowEvent,
   logWorkflowStart,
-  logAssistant,
-  logTool,
+  logProviderEvent,
   logWorkflowError,
   logWorkflowComplete,
   logNodeComplete,
@@ -34,6 +33,7 @@ import {
   WATCHDOG_RESET_BURST_GAP_MS,
   type WorkflowEvent,
 } from './logger';
+import { providerEventLineSchema } from './schemas/provider-event';
 
 describe('Workflow Logger', () => {
   let testDir: string;
@@ -124,12 +124,12 @@ describe('Workflow Logger', () => {
 
     it('records each burst by its ends and keeps every renewal counted', async () => {
       const recorder = createWatchdogResetRecorder(testDir, 'watchdog-burst', 'review');
-      // 500 thinking renewals 5ms apart, then a tool chunk still inside the burst.
-      for (let i = 0; i < 500; i++) recorder.observe('thinking', t0 + i * 5);
-      recorder.observe('tool', t0 + 2_600);
+      // 500 thought renewals 5ms apart, then a tool call still inside the burst.
+      for (let i = 0; i < 500; i++) recorder.observe('agent_thought_chunk', t0 + i * 5);
+      recorder.observe('tool_call', t0 + 2_600);
       // A quiet gap exactly at the threshold starts a new burst of one renewal.
       const quietEnd = t0 + 2_600 + WATCHDOG_RESET_BURST_GAP_MS;
-      recorder.observe('assistant', quietEnd);
+      recorder.observe('agent_message_chunk', quietEnd);
       await recorder.flush();
 
       const events = await readLogFile('watchdog-burst');
@@ -141,17 +141,17 @@ describe('Workflow Logger', () => {
           ts: e.ts,
         }))
       ).toEqual([
-        { step: 'review', chunk_type: 'thinking', chunk_count: 1, ts: iso(t0) },
-        { step: 'review', chunk_type: 'tool', chunk_count: 500, ts: iso(t0 + 2_600) },
-        { step: 'review', chunk_type: 'assistant', chunk_count: 1, ts: iso(quietEnd) },
+        { step: 'review', chunk_type: 'agent_thought_chunk', chunk_count: 1, ts: iso(t0) },
+        { step: 'review', chunk_type: 'tool_call', chunk_count: 500, ts: iso(t0 + 2_600) },
+        { step: 'review', chunk_type: 'agent_message_chunk', chunk_count: 1, ts: iso(quietEnd) },
       ]);
       expect(events.every(e => e.type === 'watchdog_reset' && e.content === undefined)).toBe(true);
     });
 
     it('a gap just under the threshold stays inside the burst', async () => {
       const recorder = createWatchdogResetRecorder(testDir, 'watchdog-under', 'review');
-      recorder.observe('thinking', t0);
-      recorder.observe('thinking', t0 + WATCHDOG_RESET_BURST_GAP_MS - 1);
+      recorder.observe('agent_thought_chunk', t0);
+      recorder.observe('agent_thought_chunk', t0 + WATCHDOG_RESET_BURST_GAP_MS - 1);
       await recorder.flush();
 
       const events = await readLogFile('watchdog-under');
@@ -177,17 +177,17 @@ describe('Workflow Logger', () => {
       jest.useFakeTimers();
       try {
         const recorder = createWatchdogResetRecorder(testDir, 'watchdog-quiet', 'review');
-        recorder.observe('thinking', t0);
-        recorder.observe('thinking', t0 + 5);
-        recorder.observe('tool', t0 + 10);
+        recorder.observe('agent_thought_chunk', t0);
+        recorder.observe('agent_thought_chunk', t0 + 5);
+        recorder.observe('tool_call', t0 + 10);
 
         jest.advanceTimersByTime(WATCHDOG_RESET_BURST_GAP_MS - 1);
         expect((await readAfterWrites(1)).map(e => e.chunk_count)).toEqual([1]);
 
         jest.advanceTimersByTime(1);
         expect((await readAfterWrites(2)).map(e => [e.chunk_type, e.chunk_count, e.ts])).toEqual([
-          ['thinking', 1, iso(t0)],
-          ['tool', 2, iso(t0 + 10)],
+          ['agent_thought_chunk', 1, iso(t0)],
+          ['tool_call', 2, iso(t0 + 10)],
         ]);
 
         // Flush after the timer wrote the burst end adds nothing.
@@ -254,48 +254,30 @@ describe('Workflow Logger', () => {
     });
   });
 
-  describe('logAssistant', () => {
-    it('should log assistant message content', async () => {
-      await logAssistant(testDir, 'assistant-test', 'Here is my response to your request.');
-
-      const events = await readLogFile('assistant-test');
-      expect(events).toHaveLength(1);
-      expect(events[0].type).toBe('assistant');
-      expect(events[0].content).toBe('Here is my response to your request.');
-    });
-
-    it('should handle multi-line content', async () => {
-      const multiLineContent = `Line 1
-Line 2
-Line 3`;
-      await logAssistant(testDir, 'multiline-test', multiLineContent);
-
-      const events = await readLogFile('multiline-test');
-      expect(events[0].content).toBe(multiLineContent);
-    });
-  });
-
-  describe('logTool', () => {
-    it('should log tool call with name and input', async () => {
-      await logTool(testDir, 'tool-test', 'Read', { file_path: '/src/index.ts' });
-
-      const events = await readLogFile('tool-test');
-      expect(events).toHaveLength(1);
-      expect(events[0].type).toBe('tool');
-      expect(events[0].tool_name).toBe('Read');
-      expect(events[0].tool_input).toEqual({ file_path: '/src/index.ts' });
-    });
-
-    it('should handle complex tool input', async () => {
-      const complexInput = {
-        command: 'npm test',
-        timeout: 30000,
-        env: { NODE_ENV: 'test' },
+  describe('logProviderEvent', () => {
+    it('writes the envelope inside the line frame, parseable as a provider_event line', async () => {
+      const envelope = {
+        attemptId: 'attempt-1',
+        seq: 3,
+        observedAt: '2026-01-01T00:00:00.123Z',
+        event: {
+          type: 'tool_call' as const,
+          toolCallId: 'call-1',
+          name: 'Read',
+          rawInput: { p: 1 },
+        },
       };
-      await logTool(testDir, 'complex-tool-test', 'Bash', complexInput);
+      await logProviderEvent(testDir, 'provider-event-test', 'loop.build', envelope);
 
-      const events = await readLogFile('complex-tool-test');
-      expect(events[0].tool_input).toEqual(complexInput);
+      const events = await readLogFile('provider-event-test');
+      expect(events).toHaveLength(1);
+      expect(providerEventLineSchema.parse(events[0])).toEqual({
+        type: 'provider_event',
+        workflow_id: 'provider-event-test',
+        ts: expect.any(String),
+        step: 'loop.build',
+        ...envelope,
+      });
     });
   });
 
@@ -359,22 +341,25 @@ Line 3`;
 
       // Simulate a complete DAG workflow
       await logWorkflowStart(testDir, runId, 'feature-dev', 'Add dark mode');
-      await logAssistant(testDir, runId, 'I will create a plan for dark mode...');
-      await logTool(testDir, runId, 'Write', { file_path: '/plan.md' });
-      await logAssistant(testDir, runId, 'Implementing dark mode...');
-      await logTool(testDir, runId, 'Edit', { file_path: '/src/theme.ts' });
+      await logProviderEvent(testDir, runId, 'plan', {
+        attemptId: 'attempt-1',
+        seq: 0,
+        observedAt: '2026-01-01T00:00:00.000Z',
+        event: { type: 'agent_message_chunk', text: 'I will create a plan for dark mode...' },
+      });
+      await logProviderEvent(testDir, runId, 'plan', {
+        attemptId: 'attempt-1',
+        seq: 1,
+        observedAt: '2026-01-01T00:00:00.001Z',
+        event: { type: 'tool_call', toolCallId: 'call-1', name: 'Write' },
+      });
       await logWorkflowComplete(testDir, runId);
 
       const events = await readLogFile(runId);
-      expect(events).toHaveLength(6);
-
-      // Verify event types in order
       expect(events.map(e => e.type)).toEqual([
         'workflow_start',
-        'assistant',
-        'tool',
-        'assistant',
-        'tool',
+        'provider_event',
+        'provider_event',
         'workflow_complete',
       ]);
 

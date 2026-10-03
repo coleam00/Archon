@@ -11,13 +11,15 @@ sidebar:
 
 DAG workflow nodes support an `mcp` field that attaches MCP (Model Context Protocol)
 servers to individual nodes. Claude workflow nodes exclude ambient user/project/plugin
-MCP by default and expose exactly the external servers in their declared file, plus
+MCP by default, including the servers of plugins the node names with `plugins:`, and
+expose exactly the external servers in their declared file, plus
 governed native tools that Archon injects for the current workflow when applicable.
 Codex is an explicit exception: its SDK adds declared servers to ambient configuration
 rather than replacing it.
 
-MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
-currently warn and ignore the `mcp` field.
+MCP works with Claude, Codex, and Copilot workflow nodes. On Pi and OpenCode, a
+node with `mcp:` fails the run before any node starts, and `archon validate workflows`
+reports it as an error.
 
 ## Quick Start
 
@@ -225,6 +227,28 @@ Check your config file path, server command, and environment variables if this h
 Claude's strict workflow configuration prevents undeclared user/plugin MCPs from
 starting, so their connection failures do not affect the run. Codex can still
 inherit ambient servers as described below.
+
+### Servers that ship in a Claude plugin
+
+Naming a plugin with `plugins:` does not connect its MCP servers. To use one, declare
+it in the node's `mcp:` file under the name Claude Code gives plugin servers,
+`plugin:<plugin>:<server>`. That name lets Claude reuse the sign-in it already stored
+for the plugin's server. Copy the server's definition from `claude plugin list --json`:
+
+```json
+{
+  "plugin:posthog:posthog": {
+    "type": "http",
+    "url": "https://mcp.posthog.com/mcp",
+    "headers": { "x-posthog-mcp-consumer": "plugin" }
+  }
+}
+```
+
+Its tools appear as `mcp__plugin_posthog_posthog__*`. This works for `http` and `sse`
+servers. A `stdio` server, or a definition that uses Claude plugin placeholders such as
+`${CLAUDE_PLUGIN_ROOT}`, cannot be restated this way, because Archon does not expand
+those placeholders.
 
 ### Codex ambient MCP limitation
 

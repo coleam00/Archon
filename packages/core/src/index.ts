@@ -167,7 +167,6 @@ export {
   canConnectToRunLiveOwner,
   RunLiveOwnerStopUnavailableError,
   RUN_LIVE_OWNER_IPC_TIMEOUT_MS,
-  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
 } from './services/run-live-owner';
 export type {
   RunLiveOwner,

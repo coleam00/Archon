@@ -29,10 +29,11 @@ import {
   isWaitNode,
 } from '../schemas';
 import {
-  findRequiredPropertyGaps,
+  findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
   registerBuiltinProviders,
+  validateStructuredOutput,
 } from '@archon/providers';
 
 registerBuiltinProviders();
@@ -462,11 +463,44 @@ describe('bundled-defaults', () => {
       expect(scope?.depends_on).toEqual(['mode']);
       expect(scope?.kind).toBe('agent');
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
-      expect(scope.output_format).toEqual({
+      const scopeSchema = scope.output_format;
+      if (scopeSchema === undefined) throw new Error('scope has no output_format');
+      expect(scopeSchema).toEqual({
         type: 'object',
-        properties: { docs: { type: 'boolean' }, pr: { type: 'object' } },
+        properties: {
+          docs: { type: 'boolean' },
+          pr: {
+            type: ['object', 'null'],
+            properties: {
+              repo: {
+                type: 'object',
+                properties: {
+                  host: { type: 'string', pattern: '\\S' },
+                  path: { type: 'string', pattern: '\\S' },
+                },
+                required: ['host', 'path'],
+              },
+              number: { type: 'integer', minimum: 1 },
+            },
+            required: ['repo', 'number'],
+          },
+        },
         required: ['docs', 'pr'],
       });
+      expect(validateStructuredOutput({ docs: false, pr: null }, scopeSchema).valid).toBe(true);
+      expect(
+        validateStructuredOutput(
+          {
+            docs: false,
+            pr: {
+              repo: { host: 'github.com', path: 'coleam00/Archon' },
+              number: 3557,
+            },
+          },
+          scopeSchema
+        ).valid
+      ).toBe(true);
+      expect(validateStructuredOutput({ docs: false, pr: {} }, scopeSchema).valid).toBe(false);
       expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
       expect(docs?.when).toContain("$INPUTS.docs == 'auto' && $scope.output.docs == true");
@@ -610,7 +644,7 @@ describe('bundled-defaults', () => {
     // profile: an unpinned node routes to the install's default assistant, so an install
     // pinned to Codex is the reachable strict case. A node explicitly pinned to a
     // non-enforcing provider (Claude) is the documented opt-out and is skipped.
-    it('every bundled workflow satisfies Codex strict-mode required coverage', () => {
+    it('every bundled workflow is compatible with Codex strict-mode schemas', () => {
       const violations: string[] = [];
 
       type WalkNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
@@ -640,9 +674,11 @@ describe('bundled-defaults', () => {
             if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) continue;
           }
           // provider === undefined routes to the install default, scanned as Codex.
-          for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+          for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
             violations.push(
-              `${name}:${node.id} ${gap.schemaPath} missing ${gap.missing.join(', ')}`
+              issue.kind === 'missing-properties'
+                ? `${name}:${node.id} ${issue.schemaPath} missing properties`
+                : `${name}:${node.id} ${issue.schemaPath} missing required keys ${issue.missing.join(', ')}`
             );
           }
         }

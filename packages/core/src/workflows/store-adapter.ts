@@ -104,6 +104,7 @@ export function createWorkflowStore(): IWorkflowStore {
     persistWorkflowEvent: workflowEventDb.persistWorkflowEvent,
     persistWorkflowEventIfRunning: workflowEventDb.persistWorkflowEventIfRunning,
     getDagResumeSnapshot: workflowEventDb.getDagResumeSnapshot,
+    listProviderEvents: workflowEventDb.listProviderEvents,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,
     getWorkflowNodeSession: workflowNodeSessionDb.getWorkflowNodeSession,

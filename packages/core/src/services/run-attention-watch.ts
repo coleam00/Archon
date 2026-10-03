@@ -16,11 +16,11 @@ import { WORKFLOW_EVENT_NOTIFY_CHANNEL } from '../db/adapters/types';
 import { getDbNotificationListener } from '../db/connection';
 import * as workflowDb from '../db/workflows';
 import {
-  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
   watchRunLiveOwner,
   type RunLiveOwnerWatch,
   type RunLiveOwnerWatchEvent,
 } from './run-live-owner';
+import { DETACHED_RUN_STOP_HANDOFF_GRACE_MS } from './run-stop-bounds';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -244,7 +244,7 @@ export async function waitForRunAttention(
 
   const onOwnerEvent = (event: RunLiveOwnerWatchEvent): void => {
     if (event === 'control_handoff') {
-      controlHandoffUntil = Date.now() + RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS;
+      controlHandoffUntil = Date.now() + DETACHED_RUN_STOP_HANDOFF_GRACE_MS;
       queueWake('owner_handoff');
       return;
     }

@@ -209,6 +209,9 @@ export const dagNodeBaseSchema = z.object({
   hooks: workflowNodeHooksSchema.optional(),
   mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
   skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
+  // Exact provider plugin ids (Claude: `name@marketplace`). A workflow node loads
+  // only the plugins it names; the provider fails the node when it cannot.
+  plugins: z.array(z.string().trim().min(1, 'each plugin must be a non-empty string')).optional(),
   agents: z
     .record(z.string(), agentDefinitionSchema)
     // Validate agent-id keys in a superRefine rather than via a regex on the
@@ -1008,6 +1011,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'hooks',
   'mcp',
   'skills',
+  'plugins',
   'agents',
   'pi',
   'effort',
@@ -1782,6 +1786,7 @@ export const dagNodeSchema = z
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
       ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
+      ...(data.plugins !== undefined ? { plugins: data.plugins } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),

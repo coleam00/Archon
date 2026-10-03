@@ -27,6 +27,7 @@ import type {
   IAgentProvider,
   MessageChunk,
   ProviderCapabilities,
+  ProviderWarning,
   SendQueryOptions,
 } from '../../types';
 import { loadMcpConfig } from '../../mcp/config';
@@ -37,6 +38,8 @@ import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } fro
 import { clampEffort } from '@archon/paths/effort';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
+import { closeOpenToolCalls } from '../../shared/tool-calls';
+import { failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // `ReasoningEffort` is defined in the SDK but not re-exported from its barrel
 // (as of @github/copilot-sdk@0.2.2), so the vocabulary is mirrored in ./config
@@ -72,14 +75,6 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 export function resetCopilotSingleton(): void {
   // no-op
-}
-
-// ─── Warning collection ─────────────────────────────────────────────────────
-
-/** Structured provider warning collected during translation; flushed as a system chunk. */
-interface ProviderWarning {
-  code: string;
-  message: string;
 }
 
 // ─── Env + auth ─────────────────────────────────────────────────────────────
@@ -412,7 +407,36 @@ export class CopilotProvider implements IAgentProvider {
     return COPILOT_CAPABILITIES;
   }
 
+  /**
+   * One call is one turn. A failure, including one thrown while setting the turn up,
+   * ends in a `result` carrying a typed `failure`, then `settled`: Copilot reports
+   * no structured failure class, so a failure is `unknown` with its text as evidence
+   * unless Archon's own MCP config check classified it. Only cancellation throws.
+   */
   async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    let resultReported = false;
+    try {
+      for await (const chunk of this.streamTurn(prompt, cwd, resumeSessionId, requestOptions)) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
+      }
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted === true) throw error;
+      const err = error as Error;
+      // The turn already reported its one result; a later error does not change it.
+      if (resultReported) getLog().error({ err }, 'copilot.error_after_result');
+      else yield failureResult(failureClassOfThrown(err), 'copilot_query_failed', err.message);
+    }
+    // Nothing more runs for this turn once its stream has ended.
+    yield { type: 'settled' };
+  }
+
+  private async *streamTurn(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
@@ -459,7 +483,7 @@ export class CopilotProvider implements IAgentProvider {
     // Flush translation warnings before session creation so the user sees
     // them even if session construction fails.
     for (const w of warnings) {
-      yield { type: 'system', content: `⚠️ ${w.message}` };
+      yield { type: 'warning', ...w };
     }
 
     // Best-effort structured output: Copilot has no native JSON-mode, so we
@@ -549,14 +573,16 @@ export class CopilotProvider implements IAgentProvider {
 
     if (resumeFailed) {
       yield {
-        type: 'system',
-        content: '⚠️ Could not resume Copilot session — starting a fresh conversation.',
+        type: 'warning',
+        code: 'copilot.resume_failed',
+        message: 'Could not resume Copilot session — starting a fresh conversation.',
       };
     } else if (forkedToFresh) {
       yield {
-        type: 'system',
-        content:
-          '⚠️ Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
+        type: 'warning',
+        code: 'copilot.fork_unsupported',
+        message:
+          'Copilot SDK does not support session forking; starting a fresh conversation to keep retries safe.',
       };
     }
 
@@ -577,11 +603,14 @@ export class CopilotProvider implements IAgentProvider {
     );
 
     try {
-      yield* bridgeSession(
-        session,
-        effectivePrompt,
-        requestOptions?.abortSignal,
-        wantsStructured ? outputFormat.schema : undefined
+      yield* closeOpenToolCalls(
+        bridgeSession(
+          session,
+          effectivePrompt,
+          requestOptions?.abortSignal,
+          wantsStructured ? outputFormat.schema : undefined
+        ),
+        { resultEndsTurn: true }
       );
       log.info({ sessionId: session.sessionId }, 'copilot.prompt_completed');
     } catch (err) {
