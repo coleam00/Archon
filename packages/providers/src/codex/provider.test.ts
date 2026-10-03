@@ -23,14 +23,20 @@ import {
   command,
   createFakeAppServer,
   errorNotification,
+  fileChange,
   itemCompleted,
   itemStarted,
+  mcpToolCall,
+  plan,
   rateLimits,
+  reasoning,
   tokenUsage,
   turnError,
+  webSearch,
   type FakeTurnScript,
 } from '../test/codex-app-server-fake';
 import { CodexProvider } from './provider';
+import type { CodexErrorInfo } from './protocol/v2/CodexErrorInfo';
 
 const trackTempRoot = trackTempRoots();
 
@@ -349,31 +355,12 @@ describe('CodexProvider', () => {
     test('web search, MCP and file-change items are tool calls; a file change opens on completion', async () => {
       const chunks = await streamOf({
         notifications: [
-          itemCompleted({ type: 'webSearch', id: 'ws-1', query: 'bun docs', action: null }),
-          itemStarted({
-            type: 'mcpToolCall',
-            id: 'mcp-1',
-            server: 'figma',
-            tool: 'get_file',
-            status: 'inProgress',
-            arguments: { key: 'abc' },
-          }),
-          itemCompleted({
-            type: 'mcpToolCall',
-            id: 'mcp-1',
-            server: 'figma',
-            tool: 'get_file',
-            status: 'failed',
-            arguments: { key: 'abc' },
-            result: null,
-            error: { message: 'not found' },
-          }),
-          itemCompleted({
-            type: 'fileChange',
-            id: 'fc-1',
-            status: 'completed',
-            changes: [{ path: 'a.ts', kind: { type: 'add' }, diff: '+x' }],
-          }),
+          itemCompleted(webSearch('ws-1', 'bun docs')),
+          itemStarted(mcpToolCall('mcp-1', 'figma', 'get_file', 'inProgress', { key: 'abc' })),
+          itemCompleted(
+            mcpToolCall('mcp-1', 'figma', 'get_file', 'failed', { key: 'abc' }, 'not found')
+          ),
+          itemCompleted(fileChange('fc-1', [{ path: 'a.ts', kind: { type: 'add' }, diff: '+x' }])),
         ],
       });
       expect(chunks.slice(0, 6)).toEqual([
@@ -406,15 +393,10 @@ describe('CodexProvider', () => {
     test('reasoning streams its summary as a thought; items with nothing to show stream nothing', async () => {
       const chunks = await streamOf({
         notifications: [
-          itemCompleted({
-            type: 'reasoning',
-            id: 'r-1',
-            summary: ['first', 'second'],
-            content: [],
-          }),
-          itemCompleted({ type: 'reasoning', id: 'r-2', summary: [], content: ['raw'] }),
+          itemCompleted(reasoning('r-1', ['first', 'second'])),
+          itemCompleted(reasoning('r-2', [], ['raw'])),
           agentMessage('', 'm-empty'),
-          itemCompleted({ type: 'plan', id: 'p-1', text: 'step' }),
+          itemCompleted(plan('p-1', 'step')),
         ],
       });
       expect(chunks).toEqual([
@@ -657,7 +639,7 @@ describe('CodexProvider', () => {
       const turn =
         (script: FakeTurnScript, options?: SendQueryOptions) => (): AsyncIterable<MessageChunk> =>
           providerWith(script).provider.sendQuery('p', '/workspace', undefined, options);
-      const failed = (info: unknown, message: string): FakeTurnScript => ({
+      const failed = (info: CodexErrorInfo, message: string): FakeTurnScript => ({
         completion: { status: 'failed', error: turnError(info, message) },
       });
       const violations = await runProviderConformance({
