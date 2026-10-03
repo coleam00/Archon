@@ -17,13 +17,14 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub"
     docs: "stub"
-resolve-scope: '{"errors":"false","simplify":"false"}'
+resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   # accepted contract recorded
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 6 }
 review__code: "1 blocking in-scope finding"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"

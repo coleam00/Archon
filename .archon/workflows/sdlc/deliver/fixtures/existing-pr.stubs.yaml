@@ -22,6 +22,7 @@ review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
 review__code: "1 blocking finding"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -76,8 +77,6 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: no new failure paths"
     docs: "stub: no doc-facing changes"
-delta-scope: '{"moved":false,"base":"fixturehead"}'
-polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:

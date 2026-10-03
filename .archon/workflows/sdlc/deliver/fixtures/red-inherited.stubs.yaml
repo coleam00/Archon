@@ -25,13 +25,14 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-resolve-scope: '{"errors":"false","simplify":"false"}'
+resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 6 }
 review__code: "0 findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -51,8 +52,6 @@ validate__classify:
   red_cause: inherited
   summary: "stub: the same inherited break, still red on the base"
 ci-probe: '{"state":"pending","detail":"stub: 1 check still running"}'
-delta-scope: '{"moved":false,"base":"fixturehead"}'
-polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:

@@ -1,10 +1,10 @@
 name: archon-review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
-  verdict. On the first round, seams always runs. A full-tier round adds code and
-  tests; a focused round (a low-risk change) adds one general reviewer instead. The
-  simplify pass runs unless the caller already ran it before the PR opened; errors
-  is selected for failure-path changes and docs only for shipped-doc changes.
+  verdict. On the first round, seams always runs. A full-tier round adds code,
+  tests, and simplify; a focused round (a low-risk change) adds one general
+  reviewer instead. Errors is selected for failure-path changes and docs only for
+  shipped-doc changes.
   Reviews a PR when given one, otherwise the working diff. Every round also holds the change to the accepted contract: each
   stated acceptance item, invariant, and steering constraint is met with cited
   evidence or raised as a blocking finding.
@@ -49,12 +49,7 @@ inputs:
     description: >-
       focused — seams plus one general reviewer, for a change that engages none
       of the risks the lenses scale on; any other value runs the full tier: code,
-      seams and tests.
-  simplify:
-    default: "true"
-    description: >-
-      Run the simplify pass as a lens. Delivery sets false: it runs the same pass
-      on the implementation before the pull request opens.
+      seams, tests and simplify.
   docs:
     default: "auto"
     description: >-
@@ -166,16 +161,17 @@ nodes:
       max_attempts: 2
       delay_ms: 20000
 
-  # Structure is judged on every change, never selected for one. The charter lives
-  # in its own workflow so delivery can run the same pass before the PR opens,
-  # when a smaller shape is still cheap; that caller turns this lens off.
+  # Structure is judged on every full-tier change, never selected for one; the
+  # focused reviewer carries a machinery check instead. The charter lives in its
+  # own workflow so delivery can also run it before the PR opens, when a smaller
+  # shape is still cheap; this lens is then the second, independent look.
   - id: simplify
     include: archon-simplify
     with:
       stage: review
       work_order: "$INPUTS.work_order"
     depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.simplify == 'true'"
+    when: "$mode.output.continuation == false && $INPUTS.tier != 'focused'"
 
   - id: errors
     command: review-errors

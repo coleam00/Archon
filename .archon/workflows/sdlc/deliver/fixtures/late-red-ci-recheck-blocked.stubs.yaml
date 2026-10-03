@@ -1,8 +1,7 @@
-# Dry-run fixture: a late branch-introduced red is fixed, and the structure pass
-# over the CI fix's own commits finds a smaller shape. One implementation pass
-# judges it and pushes before the re-wait, whose probe then reads the final head
-# (--exec-code, so the real gates decide). The fix's structure is never reviewed
-# by a review round; this pass is its only structural check.
+# Dry-run fixture: a late branch-introduced red is fixed, and the continuation
+# review of the CI fix's commits finds a blocking finding. There is no second
+# correction loop after CI: the real readiness gate refuses, the PR stays draft,
+# and flip-ready, stubbed here as a tripwire, never runs (--exec-code).
 impl__implement:
   done: true
   green: true
@@ -21,13 +20,14 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-resolve-scope: '{"errors":"false","simplify":"false"}'
+resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }
 review__code: "0 findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -51,22 +51,27 @@ ci-fix__implement:
   red_cause: ""
   summary: "stub: the branch's new test asserted an unsorted order; fixed at the cause and pushed"
 ci-fix__assert-changed: "1 file changed"
-ci-delta-scope: '{"moved":true,"base":"fixturehead"}'
-ci-delta__simplify: { findings: true }
-ci-reshape__implement:
-  done: true
-  green: true
-  red_cause: ""
-  summary: "stub: adopted the smaller shape for the CI fix"
-ci-reshape__assert-changed: "1 file changed"
-fix-ci-probe: '{"state":"concluded","detail":"all 9 required check(s) green"}'
+ci-delta-scope: '{"moved":true}'
+ci-recheck__mode: '{"continuation":true}'
+ci-recheck__scope:
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }
+ci-recheck__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: the CI fix reimplements an existing helper"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+ci-recheck__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: the CI fix reimplements an existing helper"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 flip-ready: { pr_url: "https://github.com/example/repo/pull/9" }
 outcome: { pr_url: "https://github.com/example/repo/pull/9", summary: "https://github.com/example/repo/pull/9" }
-delta-scope: '{"moved":false,"base":"fixturehead"}'
-polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:
-  expect: completed
-  reached: [gate-ci-fix, ci-delta__simplify, ci-reshape__implement, gate-ci-reshape, fix-ci-probe, flip-ready]
+  expect: failed
+  fail-node: gate-ci-recheck
+  reached: [gate-ci-fix, ci-recheck__synthesize]
 exec-code: true

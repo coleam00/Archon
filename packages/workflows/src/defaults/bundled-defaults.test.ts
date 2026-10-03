@@ -388,6 +388,44 @@ describe('bundled-defaults', () => {
       expect(review.with).not.toHaveProperty('pr_head');
     });
 
+    // Every commit that ships is read by a review round that judges structure as well
+    // as correctness. A pass that writes code with no review after it ships that code
+    // unread, and any structure finding it declines goes unjudged.
+    it('archon-deliver follows every implementation pass with a review', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      type ParsedNode = (typeof parsed.workflow.nodes)[number];
+      const unreviewed: string[] = [];
+      const checkScope = (nodes: readonly ParsedNode[]): void => {
+        const dependents = new Map<string, string[]>();
+        for (const node of nodes) {
+          for (const dep of node.depends_on ?? []) {
+            dependents.set(dep, [...(dependents.get(dep) ?? []), node.id]);
+          }
+        }
+        const byId = new Map(nodes.map(node => [node.id, node]));
+        const isInclude = (id: string, target: string): boolean => {
+          const node = byId.get(id);
+          return node?.kind === 'include' && node.include === target;
+        };
+        const reviewedAfter = (id: string, seen = new Set<string>()): boolean =>
+          (dependents.get(id) ?? []).some(next => {
+            if (seen.has(next)) return false;
+            seen.add(next);
+            return isInclude(next, 'archon-review') || reviewedAfter(next, seen);
+          });
+        for (const node of nodes) {
+          if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
+          if (isInclude(node.id, 'archon-implement') && !reviewedAfter(node.id)) {
+            unreviewed.push(node.id);
+          }
+        }
+      };
+      checkScope(parsed.workflow.nodes);
+      expect(unreviewed).toEqual([]);
+    });
+
     it('archon-deliver delegates the optional CI read timeout to the engine', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
@@ -520,6 +558,9 @@ describe('bundled-defaults', () => {
       expect(lensWhen('code')).toContain("$INPUTS.tier != 'focused'");
       expect(lensWhen('tests')).toContain("$INPUTS.tier != 'focused'");
       expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
+      // Structure is a full-tier lens again: delivery's pre-PR pass is the first look,
+      // not a replacement for this one.
+      expect(lensWhen('simplify')).toContain("$INPUTS.tier != 'focused'");
       // Reviewers are read-only by the engine's check, not only by their prompts.
       for (const id of [
         'scope',
@@ -593,7 +634,7 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('$ARTIFACTS_DIR/review/findings.json');
       expect(synthesize).toContain('{id, severity, sources, claim, status, round}');
-      // polish-scope reads these exact values to decide whether open notes remain.
+      // scripts/lens-yield.ts tallies blocking and disproved findings by these values.
       expect(synthesize).toContain('`severity` is `blocking` or `note`');
       expect(synthesize).toContain('`status` is `open`, `fixed`, `declined`');
       // Carried-forward findings keep the lens that found them, or a multi-round review

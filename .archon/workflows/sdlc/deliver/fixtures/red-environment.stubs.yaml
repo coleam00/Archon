@@ -22,13 +22,14 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-resolve-scope: '{"errors":"false","simplify":"false"}'
+resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
 review__code: "1 blocking finding"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -76,8 +77,6 @@ ci-probe: '{"state":"concluded","detail":"all checks green"}'
 ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
 outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
-delta-scope: '{"moved":false,"base":"fixturehead"}'
-polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:

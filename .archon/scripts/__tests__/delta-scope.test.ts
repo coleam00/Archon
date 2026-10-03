@@ -1,7 +1,7 @@
 /**
- * delta-scope decides whether delivery spends one more structure pass, and on
- * which commits. It compares two engine checkout observations: the earlier
- * pass's start, bound as `since`, and its own start.
+ * delta-scope decides whether the CI fix committed anything, so delivery reviews
+ * those commits only when they exist. It compares two engine checkout
+ * observations: the fix's start, bound as `since`, and its own start.
  */
 import { describe, expect, it } from 'bun:test';
 import { runPackScript, type ScriptRun } from './deliver-checks-harness';
@@ -23,19 +23,19 @@ function scope(since: unknown, current: unknown): ScriptRun {
 }
 
 describe('delta-scope', () => {
-  it('runs the pass over the commits after the earlier start', () => {
+  it('reports movement when a commit landed after the fix started', () => {
     const run = scope(observation(EARLIER), observation(LATER));
     expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({ moved: true, base: EARLIER });
+    expect(JSON.parse(run.stdout)).toEqual({ moved: true });
   });
 
-  it('skips the pass when no commit landed since', () => {
+  it('reports no movement when no commit landed since', () => {
     const run = scope(observation(EARLIER), observation(EARLIER));
     expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({ moved: false, base: EARLIER });
+    expect(JSON.parse(run.stdout)).toEqual({ moved: false });
   });
 
-  it('refuses when the earlier start names no commit, instead of guessing a base', () => {
+  it('refuses when the earlier start names no commit, instead of guessing', () => {
     const run = scope({ kind: 'unavailable', reason: 'HEAD moved while observing' }, observation(LATER));
     expect(run.code).not.toBe(0);
     expect(run.stdout).toBe('');

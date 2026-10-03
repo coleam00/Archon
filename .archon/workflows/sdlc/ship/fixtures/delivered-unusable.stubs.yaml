@@ -43,13 +43,14 @@ deliver__classify:
     tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-deliver__resolve-scope: '{"errors":"false","simplify":"false"}'
+deliver__resolve-scope: '{"errors":"false"}'
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 5 }
 deliver__review__code: "0 findings"
+deliver__review__simplify__simplify: { findings: false }
 deliver__review__seams: "0 findings"
 deliver__shape__simplify: { findings: false }
 deliver__review__tests: "0 findings"
@@ -72,8 +73,6 @@ ci-probe: '{"state":"concluded","detail":"all checks green"}'
 # The mutation: the flip printed something that is not a URL.
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "flip printed something that is not a pull request URL"
-deliver__delta-scope: '{"moved":false,"base":"fixturehead"}'
-deliver__polish-scope: '{"polish":false}'
 deliver__file-discoveries: '{"issues":[]}'
 deliver__fork: '{"fork":true}'
 fixture:

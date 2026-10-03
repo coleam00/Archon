@@ -47,9 +47,7 @@ classify:
     tier: "stub: a one-line fix touching no risk the lenses scale on"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-resolve-scope: '{"errors":"false","simplify":"false"}'
-delta-scope: '{"moved":false,"base":"fixturehead"}'
-polish-scope: '{"polish":false}'
+resolve-scope: '{"errors":"false"}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":false}'
 fixture:

@@ -26,6 +26,7 @@ review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -57,8 +58,6 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: the diff adds a retry and a fallback"
     docs: "stub: no doc-facing changes"
-delta-scope: '{"moved":false,"base":"fixturehead"}'
-polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:

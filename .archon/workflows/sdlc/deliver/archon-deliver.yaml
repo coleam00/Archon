@@ -17,11 +17,10 @@ description: |
 # body repeats fix → light review, so every blocking correction is independently
 # checked and a clean review stops immediately. Exhausting the bound fails
 # truthfully with the PR still draft and the canonical report carrying the open
-# findings. Commits made after the pre-PR structure pass (review corrections, the
-# structure correction, a CI fix) get one more structure pass over just those
-# commits before they ship. The passes that adopt those findings, polish and the
-# CI fix's structure correction, ship on CI alone, as does the CI fix itself: no
-# review round follows them.
+# findings. Every commit that ships is read by a review round that judges structure
+# as well as correctness: the first round's simplify lens (or the focused reviewer)
+# reads the implementation and the structure correction, each recheck reads its
+# correction, and a CI fix gets a continuation review of its own before the flip.
 
 requires: [github]
 
@@ -97,8 +96,9 @@ nodes:
 
   # Structure is judged before the pull request opens: a smaller shape is cheapest
   # while nothing is published and no reviewer has spent effort on code it would
-  # delete. The same charter runs as a review lens elsewhere; delivery turns that
-  # lens off below because this pass already covered it.
+  # delete. The full-tier review runs the same charter again as a lens, so the code
+  # gets a second, independent structure look after the PR opens; on the focused
+  # tier the focused reviewer's machinery check is that second look.
   - id: shape
     include: archon-simplify
     with:
@@ -179,8 +179,8 @@ nodes:
       required: [tier, errors, docs, reasons]
 
   # Deterministic merge at the boundary: a declared 'true'/'false' beats the
-  # classifier; 'auto' adopts its judgment. Output values are the strings the
-  # lens gates compare against.
+  # classifier; 'auto' adopts its judgment. The output value is the string the
+  # lens gate compares against.
   - id: resolve-scope
     script: resolve-review-scope
     runtime: bun
@@ -191,8 +191,7 @@ nodes:
       type: object
       properties:
         errors: { type: string, enum: ['true', 'false'] }
-        simplify: { type: string, enum: ['false'] }
-      required: [errors, simplify]
+      required: [errors]
 
   - id: review
     include: archon-review
@@ -203,8 +202,6 @@ nodes:
       prior_report: "$INPUTS.prior_report"
       work_order: "$INPUTS.work"
       tier: "$classify.output.tier"
-      # shape already ran the simplify pass on this change.
-      simplify: "$resolve-scope.output.simplify"
       errors: "$resolve-scope.output.errors"
       docs: "$classify.output.docs"
     depends_on: [resolve-scope]
@@ -343,7 +340,6 @@ nodes:
             # Continuation mode owns coverage and skips every specialist,
             # regardless of these conditional-lens bindings.
             tier: "$classify.output.tier"
-            simplify: "$resolve-scope.output.simplify"
             errors: "$resolve-scope.output.errors"
             docs: "$classify.output.docs"
           depends_on: [gate-correction-green]
@@ -364,82 +360,6 @@ nodes:
     with:
       review_action: "$review.output.action"
       correction_action: { from: "$corrections.output.action", if_skipped: null }
-
-  # The pre-PR structure pass judged the change as `shape` saw it. Corrections
-  # and the structure correction committed more since, so one more structure
-  # pass reads only those commits: code written to satisfy a reviewer is where an
-  # overbuilt shape slips in. Skipped when nothing moved.
-  - id: delta-scope
-    script: delta-scope
-    runtime: bun
-    depends_on: [gate-ready]
-    with:
-      since: "$shape.execution.checkoutStart"
-    output_format: &delta_scope
-      type: object
-      properties:
-        moved: { type: boolean }
-        base: { type: string }
-      required: [moved, base]
-
-  - id: delta
-    include: archon-simplify
-    depends_on: [delta-scope]
-    when: "$delta-scope.output.moved == true"
-    with:
-      stage: delta
-      base: "$delta-scope.output.base"
-      report: delta.md
-      work_order: "$INPUTS.work"
-
-  # Notes never block, so a ready verdict can leave valid ones open, and the delta
-  # pass's findings arrive after the last review. One implementation pass judges
-  # both and needs no review round of its own: CI on its pushed head is its proof.
-  - id: polish-scope
-    script: polish-scope
-    runtime: bun
-    depends_on: [delta-scope, delta]
-    trigger_rule: none_failed_min_one_success
-    with:
-      delta_findings: { from: "$delta.output.findings", if_skipped: false }
-    output_format:
-      type: object
-      properties:
-        polish: { type: boolean }
-      required: [polish]
-
-  - id: polish
-    include: archon-implement
-    depends_on: [polish-scope]
-    when: "$polish-scope.output.polish == true"
-    with:
-      work: >-
-        The review of this pull request is ready. Read the accepted work order
-        below, the open notes in $ARTIFACTS_DIR/review/report.md, and, when it
-        exists, the structure report $ARTIFACTS_DIR/simplify/delta.md over the
-        commits made after the pre-PR structure pass. Fix each open note or decline
-        it with a one-line reason. Adopt each finding in the structure report, or
-        decline it only with the evidence that it is wrong or that its smaller
-        shape changes behavior: no review follows this pass to judge it. Record
-        every disposition in implementation.md. When you changed anything, push it to the
-        branch this run is on, explicitly by name, and record the push target and a
-        read-back of the remote ref. Do not change the PR's draft state or edit the
-        canonical review comment.
-
-        Accepted work order, for scope only — do not reopen it:
-        $INPUTS.work
-
-  - id: gate-polish
-    script: gate-green
-    runtime: bun
-    output_type: green-gate
-    output_format: *green_gate
-    depends_on: [polish]
-    with:
-      green: "$polish.output.green"
-      red_cause: "$polish.output.red_cause"
-      summary: "$polish.output.summary"
-      stage: "The polish pass"
 
   # Unrelated work the review proved becomes tracker issues, one per record, each
   # linking back to this run and the pull request. Off the flip's path: a failed
@@ -463,8 +383,7 @@ nodes:
   - id: fork
     script: is-fork
     runtime: bun
-    depends_on: [gate-ready, gate-polish]
-    trigger_rule: none_failed_min_one_success
+    depends_on: [gate-ready]
     with:
       pr: "$pr.output"
     output_format:
@@ -473,11 +392,11 @@ nodes:
         fork: { type: boolean }
       required: [fork]
 
-  # Correction and polish passes change the diff after `pr` wrote the
+  # Correction passes change the diff after `pr` wrote the
   # description, so concrete claims in the body can be falsified by the very
   # fixes the review demanded. One resync, once readiness is certified — never per
   # iteration (that would be repeated public writes describing diffs the next
-  # iteration falsifies). Skipped when neither ran: the diff never changed after
+  # iteration falsifies). Skipped when none ran: the diff never changed after
   # the body was written.
   # The live description, read through the selected source: a human may have
   # edited the body since this run wrote it, and a resync that silently reverted
@@ -492,7 +411,7 @@ nodes:
     # so this reads once all of them exist instead of racing the last writer.
     depends_on: [fork, gate-validated]
     trigger_rule: none_failed_min_one_success
-    when: "$review.output.action != 'none' || $polish-scope.output.polish == true"
+    when: "$review.output.action != 'none'"
     output_format:
       type: object
       properties:
@@ -620,9 +539,9 @@ nodes:
     depends_on: [await-checks]
     output_format: *ci_state
 
-  # One correction pass, entered only on concluded red. No review follows it: the
-  # re-await below reads CI on the pushed fix, which is the proof a CI fix needs,
-  # and the red-cause discipline in its brief is what keeps it honest.
+  # One correction pass, entered only on concluded red. A continuation review of
+  # its commits follows (ci-recheck below), and the re-await reads CI on the
+  # pushed fix; the red-cause discipline in its brief is what keeps it honest.
   - id: ci-fix
     include: archon-implement
     depends_on: [ci-verdict]
@@ -663,57 +582,44 @@ nodes:
       summary: "$ci-fix.output.summary"
       stage: "The CI correction"
 
-  # A CI fix is written against a failing check, after every other structure pass
-  # ran, so its commits get one of their own. Skipped when the fix pushed nothing
-  # (an inherited or environment classification).
+  # A CI fix is written after the review converged, so its commits get a review
+  # round of their own: a continuation over the canonical report that judges the
+  # fix's correctness and structure. Skipped when the fix pushed nothing (an
+  # inherited or environment classification). A blocking finding stops the run
+  # with the PR still draft and the report public; there is no second correction
+  # loop after CI.
   - id: ci-delta-scope
     script: delta-scope
     runtime: bun
     depends_on: [gate-ci-fix]
     with:
       since: "$ci-fix.execution.checkoutStart"
-    output_format: *delta_scope
+    output_format:
+      type: object
+      properties:
+        moved: { type: boolean }
+      required: [moved]
 
-  - id: ci-delta
-    include: archon-simplify
+  - id: ci-recheck
+    include: archon-review
     depends_on: [ci-delta-scope]
     when: "$ci-delta-scope.output.moved == true"
     with:
-      stage: delta
-      base: "$ci-delta-scope.output.base"
-      report: ci-delta.md
+      scope: "$pr.output"
+      prior_report: "$ARTIFACTS_DIR/review/report.md"
       work_order: "$INPUTS.work"
+      tier: "$classify.output.tier"
+      errors: "$resolve-scope.output.errors"
+      docs: "$classify.output.docs"
 
-  - id: ci-reshape
-    include: archon-implement
-    depends_on: [ci-delta]
-    when: "$ci-delta.output.findings == true"
-    with:
-      work: >-
-        A structure pass judged this run's CI fix and recorded smaller shapes in
-        $ARTIFACTS_DIR/simplify/ci-delta.md. Read it and the accepted work order
-        below in full. Adopt each finding, or decline it only with the evidence
-        that it is wrong or that its smaller shape changes behavior: no review
-        follows this pass to judge it. Record every disposition in
-        implementation.md. Keep the CI fix working. When you changed anything,
-        push it to the branch this run is on, explicitly by name, and record the
-        push target and a read-back of the remote ref. Do not change the PR's
-        draft state or edit the canonical review comment.
-
-        Accepted work order, for scope only — do not reopen it:
-        $INPUTS.work
-
-  - id: gate-ci-reshape
-    script: gate-green
+  # The readiness gate's script on the CI fix's review: only `none` passes.
+  - id: gate-ci-recheck
+    script: gate-ready
     runtime: bun
-    output_type: green-gate
-    output_format: *green_gate
-    depends_on: [ci-reshape]
+    depends_on: [ci-recheck]
     with:
-      green: "$ci-reshape.output.green"
-      red_cause: "$ci-reshape.output.red_cause"
-      summary: "$ci-reshape.output.summary"
-      stage: "The CI fix's structure correction"
+      review_action: "$ci-recheck.output.action"
+      correction_action: ""
 
   # The re-wait after a pushed correction: same probe, webhook wake-up,
   # five-minute deadline fallback, and ceiling as await-checks. On an inherited
@@ -739,7 +645,7 @@ nodes:
             deadline_ms: 300000
           when: $fix-ci-probe.output.state == 'pending'
           depends_on: [fix-ci-probe]
-    depends_on: [gate-ci-fix, ci-delta-scope, ci-delta, gate-ci-reshape]
+    depends_on: [gate-ci-fix, ci-delta-scope, gate-ci-recheck]
     trigger_rule: none_failed_min_one_success
 
   # Late red that the branch did not introduce needs a person, not another

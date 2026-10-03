@@ -47,7 +47,7 @@ deliver__classify:
     tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-deliver__resolve-scope: '{"errors":"false","simplify":"false"}'
+deliver__resolve-scope: '{"errors":"false"}'
 fixture:
   expect: completed
   inputs:
@@ -70,6 +70,7 @@ deliver__review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 3 }
 deliver__review__code: "0 findings"
+deliver__review__simplify__simplify: { findings: false }
 deliver__review__seams: "0 findings"
 deliver__shape__simplify: { findings: false }
 deliver__review__tests: "0 findings"

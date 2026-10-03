@@ -19,12 +19,13 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: changed shipped docs need impact review"
-resolve-scope: '{"errors":"false","simplify":"false"}'
+resolve-scope: '{"errors":"false"}'
 review__mode: '{"continuation":false}'
 review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -55,8 +56,6 @@ ci-verdict: '{"state":"concluded","detail":"no checks configured on this reposit
 ci-attention-route: '{"attention":false,"red_cause":""}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
-delta-scope: '{"moved":false,"base":"fixturehead"}'
-polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:

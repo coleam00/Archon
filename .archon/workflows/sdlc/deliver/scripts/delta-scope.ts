@@ -1,18 +1,18 @@
 /**
- * Did any commit land since an earlier structure pass judged this change?
+ * Did the CI fix commit anything?
  *
- * A structure pass judges the commits it saw. Commits made after it — review
- * corrections, a structure correction, a CI fix — need one more pass over just
- * those commits, and only when there are any. Both ends are the engine's own
- * checkout observations: `since` is the observation recorded when the earlier
- * node started, and the current one is this node's start. Only commits count:
- * every pass that changes code commits it, and nothing uncommitted ships.
+ * The CI fix runs after the review converged, so commits it made need a review
+ * round of their own, and only when there are any: a fix that classified the red
+ * as inherited or environmental pushed nothing. Both ends are the engine's own
+ * checkout observations: `since` is the observation recorded when the fix started,
+ * and the current one is this node's start. Only commits count: every pass that
+ * changes code commits it, and nothing uncommitted ships.
  *
  * An observation that names no commit cannot bound the delta, so the node
- * refuses rather than guessing a base and judging the wrong commits.
+ * refuses rather than guessing and skipping or reviewing the wrong commits.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_SINCE: `$<node>.execution.checkoutStart` of the earlier pass.
+ * - INPUTS_SINCE: `$ci-fix.execution.checkoutStart`.
  */
 
 import { emit, refuse, trimmed } from '../../.shared/io.ts';
@@ -44,7 +44,7 @@ try {
     'this node start',
     JSON.stringify(execution.attempt?.checkoutStart ?? null)
   );
-  emit({ moved: current !== since, base: since });
+  emit({ moved: current !== since });
 } catch (error) {
   refuse(`delta-scope: ${error instanceof Error ? error.message : String(error)}`);
 }

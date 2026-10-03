@@ -5,12 +5,8 @@
 #
 # This is also the classifier-selects-errors path: `classify` says the diff has
 # failure paths, the operator declared nothing, and resolve-scope is left unstubbed
-# so the real script adopts that judgment. `reached` proves the lens actually ran.
-#
-# The correction moved the head after the pre-PR structure pass, so the delta pass
-# runs and reports a finding. polish-scope is unstubbed: the real script must turn
-# that finding alone (no findings.json exists here, so no open note) into a polish
-# pass.
+# so the real script adopts that judgment. `reached` proves the lens actually ran,
+# beside the full tier's simplify lens.
 impl__implement:
   done: true
   green: true
@@ -26,6 +22,7 @@ review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
 review__code: "2 blocking findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -85,18 +82,9 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: the diff adds a retry and a fallback"
     docs: "stub: no doc-facing changes"
-delta-scope: '{"moved":true,"base":"fixturehead"}'
-delta__simplify: { findings: true }
-polish__implement:
-  done: true
-  green: true
-  red_cause: ""
-  summary: "stub: adopted the delta pass's smaller shape"
-polish__assert-changed: "1 file changed"
-gate-polish: '{"gate":"green","red_cause":"","stage":"The polish pass","summary":""}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:
   expect: completed
-  reached: [review__errors, ci-note, delta__simplify, polish-scope, polish__implement]
+  reached: [review__errors, review__simplify__simplify, ci-note, recheck__synthesize]
 exec-code: true

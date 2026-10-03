@@ -32,13 +32,14 @@ deliver__classify:
     tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
-deliver__resolve-scope: '{"errors":"false","simplify":"false"}'
+deliver__resolve-scope: '{"errors":"false"}'
 deliver__review__mode: '{"continuation":false}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 6 }
 deliver__review__code: "0 findings"
+deliver__review__simplify__simplify: { findings: false }
 deliver__review__seams: "0 findings"
 deliver__shape__simplify: { findings: false }
 deliver__review__tests: "0 findings"
@@ -61,8 +62,6 @@ deliver__validate__classify:
   summary: "stub: the change broke one spec in the project gate"
 # deliver__gate-validated is deliberately unstubbed: the real gate must refuse
 # introduced red.
-deliver__delta-scope: '{"moved":false,"base":"fixturehead"}'
-deliver__polish-scope: '{"polish":false}'
 deliver__file-discoveries: '{"issues":[]}'
 deliver__fork: '{"fork":true}'
 fixture:
