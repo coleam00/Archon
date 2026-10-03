@@ -22,6 +22,7 @@ import type { Thread } from '../codex/protocol/v2/Thread';
 import type { ThreadItem } from '../codex/protocol/v2/ThreadItem';
 import type { ThreadResumeResponse } from '../codex/protocol/v2/ThreadResumeResponse';
 import type { ThreadStartResponse } from '../codex/protocol/v2/ThreadStartResponse';
+import type { TokenUsageBreakdown } from '../codex/protocol/v2/TokenUsageBreakdown';
 import type { Turn } from '../codex/protocol/v2/Turn';
 import type { TurnError } from '../codex/protocol/v2/TurnError';
 import type { TurnInterruptResponse } from '../codex/protocol/v2/TurnInterruptResponse';
@@ -423,24 +424,39 @@ export function plan(id: string, text: string): ThreadItem {
   return { type: 'plan', id, text };
 }
 
-export function tokenUsage(
-  last: { input: number; output: number; cached?: number; cacheWrite?: number },
-  turnId = TURN_ID
-): ServerNotification {
-  const breakdown = {
-    totalTokens: last.input + last.output,
-    inputTokens: last.input,
-    cachedInputTokens: last.cached ?? 0,
-    cacheWriteInputTokens: last.cacheWrite ?? 0,
-    outputTokens: last.output,
+interface Usage {
+  input: number;
+  output: number;
+  cached?: number;
+  cacheWrite?: number;
+}
+
+function breakdownOf(usage: Usage): TokenUsageBreakdown {
+  return {
+    totalTokens: usage.input + usage.output,
+    inputTokens: usage.input,
+    cachedInputTokens: usage.cached ?? 0,
+    cacheWriteInputTokens: usage.cacheWrite ?? 0,
+    outputTokens: usage.output,
     reasoningOutputTokens: 0,
   };
+}
+
+/**
+ * A usage snapshot: `total` is the thread's cumulative usage, `last` the most recent
+ * request's. They are equal for the first request of a new thread.
+ */
+export function tokenUsage(
+  total: Usage,
+  last: Usage = total,
+  turnId = TURN_ID
+): ServerNotification {
   return {
     method: 'thread/tokenUsage/updated',
     params: {
       threadId: THREAD_ID,
       turnId,
-      tokenUsage: { total: breakdown, last: breakdown, modelContextWindow: null },
+      tokenUsage: { total: breakdownOf(total), last: breakdownOf(last), modelContextWindow: null },
     },
   };
 }

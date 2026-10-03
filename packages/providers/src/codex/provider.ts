@@ -43,6 +43,7 @@ import { classifyTurnError, describeErrorInfo } from './turn-error';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
+import type { ThreadTokenUsage } from './protocol/v2/ThreadTokenUsage';
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
 import type { Turn } from './protocol/v2/Turn';
 import type { TurnError } from './protocol/v2/TurnError';
@@ -402,12 +403,20 @@ function toolCallUpdateOf(item: ToolItem): ToolCallUpdateEvent {
   }
 }
 
-function tokenUsageOf(last: TokenUsageBreakdown): TokenUsage {
+/**
+ * The turn's usage: the thread's cumulative total at the end less the total before the
+ * turn's first request (`total - last` of the turn's first snapshot), clamped at zero as
+ * Codex clamps its own per-turn figure (a context overflow resets the total). Codex reports
+ * reasoning tokens inside `outputTokens`, so they are not added again.
+ */
+function turnUsageOf(first: ThreadTokenUsage, end: TokenUsageBreakdown): TokenUsage {
+  const used = (key: keyof TokenUsageBreakdown): number =>
+    Math.max(0, end[key] - (first.total[key] - first.last[key]));
   return {
-    input: last.inputTokens,
-    output: last.outputTokens,
-    cacheRead: last.cachedInputTokens,
-    cacheWrite: last.cacheWriteInputTokens,
+    input: used('inputTokens'),
+    output: used('outputTokens'),
+    cacheRead: used('cachedInputTokens'),
+    cacheWrite: used('cacheWriteInputTokens'),
   };
 }
 
@@ -481,7 +490,13 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const startedToolIds = new Set<string>();
   const errors: string[] = [];
   let lastAgentMessage = '';
-  let usage: TokenUsage | undefined;
+  // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
+  // is the change in the thread's `total`. A resumed thread's total already includes earlier
+  // turns and is not replayed before the turn starts, so the first snapshot sets the baseline.
+  // If that first snapshot is a re-send rather than a request (a local compaction or a
+  // usage-limit failure before the first request), a resumed turn over-counts by one earlier
+  // request; Codex sends no pre-turn total on this resume path to correct it.
+  let usageSpan: { first: ThreadTokenUsage; end: TokenUsageBreakdown } | undefined;
   let rateLimits: RateLimitSnapshot | undefined;
   let retries = 0;
 
@@ -492,9 +507,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         break;
 
       case 'thread/tokenUsage/updated':
-        // A resumed thread first replays the previous turn's usage under its own turn id.
+        // Usage reported for another turn of the thread is not this turn's.
         if (notification.params.turnId === turnId) {
-          usage = tokenUsageOf(notification.params.tokenUsage.last);
+          const { tokenUsage } = notification.params;
+          usageSpan = { first: usageSpan?.first ?? tokenUsage, end: tokenUsage.total };
         }
         break;
 
@@ -565,7 +581,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         if (turn.id !== turnId) break;
         yield* completeTurn(turn.status, turn.error, request, {
           threadId,
-          usage,
+          usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
           rateLimits,
           lastAgentMessage,
         });
