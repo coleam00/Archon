@@ -1,6 +1,6 @@
 name: archon-assist
 description: |
-  Use when: No other workflow matches the request.
+  One full-capability agent session in the live checkout, with no gates or review.
   Handles: Questions, debugging, exploration, one-off tasks, explanations, CI failures, general help.
   Capability: Full Claude Code agent with all tools available.
   Note: Will inform user when assist mode is used for tracking.
@@ -17,3 +17,7 @@ worktree:
 nodes:
   - id: assist
     command: archon-assist
+
+# Deprecated legacy default (#2781): announce removal in the run-start notice during this window.
+deprecated:
+  message: Switch to the sdlc pack instead.

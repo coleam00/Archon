@@ -248,7 +248,7 @@ When you send a message, an AI "router" decides what to do:
 │                                                                         │
 │   "fix this issue"          ───────▶     archon-fix-github-issue       │
 │   "review this PR"          ───────▶     archon-comprehensive-pr-review│
-│   "what does X do?"         ───────▶     archon-assist (catch-all)     │
+│   "what does X do?"         ───────▶     answered directly, no workflow│
 │   "resolve the conflicts"   ───────▶     archon-resolve-conflicts      │
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
@@ -298,12 +298,6 @@ The table below lists the key bundled workflows. All bundled workflows are prefi
 │   ┌─────────────────────────────────────────────────────────────────┐  │
 │   │ archon-ralph-dag          "run ralph"             PRD loop       │  │
 │   │                           "ralph dag"             (autonomous)   │  │
-│   └─────────────────────────────────────────────────────────────────┘  │
-│                                                                         │
-│   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │ archon-assist             (anything else)         General help    │  │
-│   │                           "what does X do?"       questions,     │  │
-│   │                           "help me debug"         debugging      │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘

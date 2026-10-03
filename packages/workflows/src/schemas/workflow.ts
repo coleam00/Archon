@@ -257,8 +257,7 @@ export const workflowBaseSchema = z.object({
    * Marks the workflow deprecated (#2781): run-start surfaces announce removal
    * in an upcoming release with a switch/copy escape hatch, while it keeps
    * running normally. Metadata-only — never blocks or alters execution.
-   * Bundled defaults carry it during a deprecation window; nothing may ship it
-   * on the exempt `archon-assist` default.
+   * Bundled defaults carry it during a deprecation window.
    */
   deprecated: workflowDeprecationSchema.optional(),
 });
