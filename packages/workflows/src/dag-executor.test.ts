@@ -33429,7 +33429,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
   it("#3532: each pause persists the paused iteration's own session, so fresh_context: false continues it", async () => {
     const workflow = ready(gateTerminatedLoopGroupWorkflow());
     mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'assistant', content: 'draft 1' };
+      yield { type: 'agent_message_chunk', text: 'draft 1' };
       yield { type: 'result', sessionId: 'iteration-1-session' };
     });
     const firstStore = createEscalationStore('run-escalation-session');
@@ -33451,7 +33451,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
 
     mockSendQueryDag.mockClear();
     mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'assistant', content: 'draft 2' };
+      yield { type: 'agent_message_chunk', text: 'draft 2' };
       yield { type: 'result', sessionId: 'iteration-2-session' };
     });
     const revise = { decision: 'revise', text: 'tighten it' };
