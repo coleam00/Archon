@@ -55,6 +55,7 @@ export function sessionPreview(sessionId: string): string {
 
 /** The terminal result of one provider turn. Providers stream it as the `result` chunk. */
 export const providerResultSchema = z.object({
+  /** Required on every non-failing turn of a provider that declares `sessionResume`. */
   sessionId: z.string().optional(),
   tokens: tokenUsageSchema.optional(),
   structuredOutput: z.unknown().optional(),

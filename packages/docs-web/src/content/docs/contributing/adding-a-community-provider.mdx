@@ -84,8 +84,9 @@ export class YourProvider implements IAgentProvider {
     // 3. Resolve auth (options.env → process.env → config)
     // 4. Translate nodeConfig to SDK options (only for capabilities you declared)
     // 5. Invoke SDK, yield normalized MessageChunks
-    // 6. Include sessionId in every `result` chunk. Archon records it on the node
-    //    record so users can resume the session; log only sessionPreview(id)
+    // 6. If you declare sessionResume, include sessionId in every non-failing
+    //    `result` chunk. Archon records it on the node record so users can resume
+    //    the session; log only sessionPreview(id)
     // 7. If you support resume, wrap the stream with `withResumedOutcome`
     //    (../../shared/resumed) so a cold resume is stamped resumed:false and
     //    surfaced by the executor instead of silently starting fresh.

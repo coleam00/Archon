@@ -2289,6 +2289,7 @@ describe('PiProvider', () => {
       ];
     };
     const violations = await runProviderConformance({
+      capabilities: new PiProvider().getCapabilities(),
       turns: [
         {
           name: 'completed prompt',

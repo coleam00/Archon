@@ -449,6 +449,7 @@ describe('CopilotProvider.sendQuery', () => {
       };
     }
     const violations = await runProviderConformance({
+      capabilities: new CopilotProvider().getCapabilities(),
       // Copilot's SDK exposes no structured failure class; only Archon's MCP config check
       // classifies its own error.
       failureCases: [

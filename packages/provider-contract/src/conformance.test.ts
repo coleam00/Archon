@@ -15,6 +15,8 @@ function turn(...chunks: unknown[]): () => AsyncIterable<unknown> {
   };
 }
 
+const resumable = { sessionResume: true };
+
 const failedTurnEnd = [
   { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } },
   { type: 'settled' },
@@ -40,7 +42,11 @@ const settlingTurn: ProviderTurnCase = {
 describe('failure-class conformance', () => {
   test('a provider that reports the expected class conforms', async () => {
     expect(
-      await runProviderConformance({ failureCases: [conforming], turns: [settlingTurn] })
+      await runProviderConformance({
+        capabilities: resumable,
+        failureCases: [conforming],
+        turns: [settlingTurn],
+      })
     ).toEqual([]);
   });
 
@@ -174,29 +180,37 @@ describe('settled conformance', () => {
       }),
     };
     expect(
-      await runProviderConformance({ failureCases: [unsettledFailure], turns: [settlingTurn] })
+      await runProviderConformance({
+        capabilities: resumable,
+        failureCases: [unsettledFailure],
+        turns: [settlingTurn],
+      })
     ).toEqual(['expired key: expected one settled, got 0']);
   });
 });
 
-const toolTurn: ProviderTurnCase = {
-  name: 'tool turn',
-  run: turn(
-    { type: 'tool_call', toolCallId: 'a', name: 'Read' },
-    { type: 'tool_call', toolCallId: 'b', name: 'Bash', title: 'sleep 60' },
-    { type: 'subtask', taskId: 't', status: 'started' },
-    { type: 'tool_call_update', toolCallId: 'a', status: 'completed', output: 'file' },
-    { type: 'subtask', taskId: 't', status: 'completed' },
-    { type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' },
-    { type: 'result', sessionId: 'session-1', stopReason: 'cancelled' },
-    { type: 'settled' }
-  ),
-};
+const toolTurnChunks: Record<string, unknown>[] = [
+  { type: 'tool_call', toolCallId: 'a', name: 'Read' },
+  { type: 'tool_call', toolCallId: 'b', name: 'Bash', title: 'sleep 60' },
+  { type: 'subtask', taskId: 't', status: 'started' },
+  { type: 'tool_call_update', toolCallId: 'a', status: 'completed', output: 'file' },
+  { type: 'subtask', taskId: 't', status: 'completed' },
+  { type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' },
+  { type: 'result', sessionId: 'session-1', stopReason: 'cancelled' },
+  { type: 'settled' },
+];
+
+const toolTurn: ProviderTurnCase = { name: 'tool turn', run: turn(...toolTurnChunks) };
 
 describe('event vocabulary conformance', () => {
   test('a conforming tool turn passes every check', async () => {
     expect(
-      await runProviderConformance({ failureCases: [conforming], turns: [settlingTurn], toolTurn })
+      await runProviderConformance({
+        capabilities: resumable,
+        failureCases: [conforming],
+        turns: [settlingTurn],
+        toolTurn,
+      })
     ).toEqual([]);
   });
 
@@ -369,6 +383,7 @@ describe('event vocabulary conformance', () => {
   ])('runProviderConformance flags a tool turn with %s', async (_label, chunks, violation) => {
     expect(
       await runProviderConformance({
+        capabilities: resumable,
         failureCases: [conforming],
         turns: [settlingTurn],
         toolTurn: { name: 'tool turn', run: turn(...chunks) },
@@ -382,13 +397,19 @@ describe('event vocabulary conformance', () => {
       run: turn({ type: 'result', sessionId: 'session-1' }),
     };
     expect(
-      await runProviderConformance({ failureCases: [conforming], turns: [], toolTurn: unsettled })
+      await runProviderConformance({
+        capabilities: resumable,
+        failureCases: [conforming],
+        turns: [],
+        toolTurn: unsettled,
+      })
     ).toContain('tool turn: expected one settled, got 0');
   });
 
   test('every fixture, not only the tool turn, must speak the vocabulary', async () => {
     const legacy = { type: 'assistant', content: 'hi' };
     const violations = await runProviderConformance({
+      capabilities: resumable,
       failureCases: [{ ...conforming, run: turn(legacy, ...failedTurnEnd) }],
       turns: [
         {
@@ -423,8 +444,40 @@ describe('session id conformance', () => {
         }
       ),
     };
-    expect(await runProviderConformance({ failureCases: [conforming], turns: [unnamed] })).toEqual([
-      'plain turn: 1 of 2 results carry no sessionId',
-    ]);
+    expect(
+      await runProviderConformance({
+        capabilities: resumable,
+        failureCases: [conforming],
+        turns: [unnamed],
+      })
+    ).toEqual(['plain turn: 1 of 2 results carry no sessionId']);
+  });
+
+  test('the tool turn must name its session too', async () => {
+    const chunks = toolTurnChunks.map(chunk =>
+      chunk.type === 'result' ? { ...chunk, sessionId: undefined } : chunk
+    );
+    expect(
+      await runProviderConformance({
+        capabilities: resumable,
+        failureCases: [conforming],
+        turns: [settlingTurn],
+        toolTurn: { ...toolTurn, run: turn(...chunks) },
+      })
+    ).toEqual(['tool turn: 1 of 1 results carry no sessionId']);
+  });
+
+  test('a provider that cannot resume sessions is not asked to name one', async () => {
+    const unnamed: ProviderTurnCase = {
+      name: 'plain turn',
+      run: turn({ type: 'result' }, { type: 'settled' }),
+    };
+    expect(
+      await runProviderConformance({
+        capabilities: { sessionResume: false },
+        failureCases: [conforming],
+        turns: [unnamed],
+      })
+    ).toEqual([]);
   });
 });

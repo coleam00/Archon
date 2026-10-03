@@ -1838,6 +1838,7 @@ describe('CodexProvider', () => {
           };
         }
         const violations = await runProviderConformance({
+          capabilities: client.getCapabilities(),
           turns: [
             {
               name: 'completed turn',

@@ -3691,6 +3691,7 @@ describe('typed failures (#1797, #3524)', () => {
       };
     }
     const violations = await runProviderConformance({
+      capabilities: client.getCapabilities(),
       turns: [
         {
           name: 'plain turn',

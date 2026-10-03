@@ -1,4 +1,5 @@
 import { providerChunkSchema, subtaskTerminalStatusSchema, type ProviderChunk } from './events';
+import type { ProviderCapabilities } from './capabilities';
 import { providerFailureSchema, type ProviderFailureClass } from './failure';
 
 /**
@@ -212,8 +213,10 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
 }
 
 /**
- * Every result of a successful turn names the session the turn ran in. The engine records
+ * Every result of a non-failing turn names the session the turn ran in. The engine records
  * it on the node record, which is how a user finds the session to resume it outside Archon.
+ * Only a provider that declares `sessionResume` is held to this: one that cannot resume has
+ * no session to name.
  */
 export async function checkSessionIdReported(
   cases: readonly ProviderTurnCase[]
@@ -271,6 +274,8 @@ async function checkToolTurnShape(toolTurn: ProviderTurnCase): Promise<string[]>
 
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
+  /** The provider's declared capabilities; pass `getCapabilities()`. */
+  capabilities: Pick<ProviderCapabilities, 'sessionResume'>;
   failureCases: readonly ProviderFailureCase[];
   /** Turns that succeed, including one whose result arrives before its work drains. */
   turns: readonly ProviderTurnCase[];
@@ -289,6 +294,8 @@ export async function runProviderConformance(suite: ProviderConformanceSuite): P
     // Every fixture streams the vocabulary, a failed turn included.
     ...(await checkEventVocabulary([...suite.turns, ...toolTurns, ...suite.failureCases])),
     ...(suite.toolTurn ? await checkToolTurnShape(suite.toolTurn) : []),
-    ...(await checkSessionIdReported([...suite.turns, ...toolTurns])),
+    ...(suite.capabilities.sessionResume
+      ? await checkSessionIdReported([...suite.turns, ...toolTurns])
+      : []),
   ];
 }
