@@ -150,6 +150,75 @@ describe('Pi native credentials', () => {
       source: 'native',
     });
   });
+  describe('a runtime error that echoes a configured credential', () => {
+    const leakingRefresh = async () => {
+      writeFileSync(
+        join(root, 'auth.json'),
+        JSON.stringify({
+          anthropic: { type: 'oauth', access: 'stale', refresh: 'dead-refresh', expires: 1 },
+        })
+      );
+      const runtime = await ModelRuntime.create();
+      const oauth = runtime.getProvider('anthropic')?.auth.oauth;
+      if (!oauth) throw new Error('Anthropic OAuth runtime missing');
+      const refresh = spyOn(oauth, 'refresh').mockRejectedValue(
+        new ModelsError('auth', `refresh rejected for ${secret}`)
+      );
+      const create = spyOn(ModelRuntime, 'create').mockResolvedValue(runtime);
+      return (): void => {
+        create.mockRestore();
+        refresh.mockRestore();
+      };
+    };
+    const fixtureEnv = { PI_FIXTURE_TOKEN: secret };
+
+    test('is redacted from the check, with the value in the request env', async () => {
+      const restore = await leakingRefresh();
+      try {
+        expect(await check(undefined, fixtureEnv)).toEqual({
+          state: 'check_failed',
+          source: 'native',
+          evidence: 'OAuth refresh failed for anthropic: refresh rejected for [REDACTED]',
+        });
+      } finally {
+        restore();
+      }
+    });
+    test('is redacted from the check, with the value in assistant config env', async () => {
+      const restore = await leakingRefresh();
+      try {
+        expect(
+          await new PiProvider().checkCredential({
+            assistantConfig: { model: 'anthropic/claude-sonnet-4-6', env: fixtureEnv },
+            env: {},
+            signal: AbortSignal.timeout(2000),
+          })
+        ).toEqual({
+          state: 'check_failed',
+          source: 'native',
+          evidence: 'OAuth refresh failed for anthropic: refresh rejected for [REDACTED]',
+        });
+      } finally {
+        restore();
+      }
+    });
+    test('is redacted from the failed turn', async () => {
+      const restore = await leakingRefresh();
+      try {
+        const chunks = [];
+        for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
+          model: 'anthropic/claude-sonnet-4-6',
+          env: fixtureEnv,
+        }))
+          chunks.push(chunk);
+        const result = JSON.stringify(chunks.find(chunk => chunk.type === 'result'));
+        expect(result).toContain('refresh rejected for [REDACTED]');
+        expect(result).not.toContain(secret);
+      } finally {
+        restore();
+      }
+    });
+  });
   test('mapped missing auth is not_connected; a local provider is not_checked', async () => {
     expect(await check()).toEqual({ state: 'not_connected', source: 'native' });
     expect(await check('local/model')).toEqual({ state: 'not_checked', source: 'native' });
@@ -212,7 +281,7 @@ describe('Pi native credentials', () => {
       new ModelsError('auth', 'fixture rejection')
     );
     try {
-      expect(await resolvePiAuth(runtime, 'anthropic')).toEqual({
+      expect(await resolvePiAuth(runtime, 'anthropic', [])).toEqual({
         status: { state: 'unusable', source: 'native', evidence: 'fixture rejection' },
       });
     } finally {

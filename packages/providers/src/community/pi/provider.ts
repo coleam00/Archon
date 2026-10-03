@@ -335,11 +335,13 @@ function isPiModelsError(error: unknown, code: ModelsErrorCode): boolean {
  * says whether a credential is configured; `getAuth` then resolves it, which refreshes an
  * OAuth grant and runs a command-backed key. `checkAuth` alone reports a models.json key
  * command as configured without running it, so a failing command would pass the check.
- * `apiKey` is the resolved key, for a turn that needs to inspect it.
+ * `apiKey` is the resolved key, for a turn that needs to inspect it. Evidence has every
+ * value in `credentialValues` redacted: Pi's errors can echo a configured credential.
  */
 export async function resolvePiAuth(
   runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth'>,
   providerId: string,
+  credentialValues: readonly string[],
   signal?: AbortSignal
 ): Promise<{ status: CredentialStatus; apiKey?: string }> {
   // Without an Archon env mapping the provider may be a local one that needs no credential.
@@ -358,7 +360,10 @@ export async function resolvePiAuth(
       status: {
         state: isPiModelsError(error, 'auth') ? 'unusable' : 'check_failed',
         source: 'native',
-        evidence: error instanceof Error ? error.message : String(error),
+        evidence: redactCredentialValues(
+          error instanceof Error ? error.message : String(error),
+          credentialValues
+        ),
       },
     };
   }
@@ -455,13 +460,13 @@ export class PiProvider implements IAgentProvider {
         refreshOnCreate: false,
       });
       await applyPiEnvOverride(runtime, parsed.provider, env);
-      const { status } = await resolvePiAuth(runtime, parsed.provider, signal);
-      return 'evidence' in status
-        ? {
-            ...status,
-            evidence: redactCredentialValues(status.evidence, collectCredentialValues(env)),
-          }
-        : status;
+      const { status } = await resolvePiAuth(
+        runtime,
+        parsed.provider,
+        collectCredentialValues(env),
+        signal
+      );
+      return status;
     } catch (error) {
       return {
         state: 'check_failed',
@@ -647,6 +652,10 @@ export class PiProvider implements IAgentProvider {
       const { status: authStatus, apiKey } = await resolvePiAuth(
         modelRuntime,
         parsed.provider,
+        collectCredentialValues(
+          { ...process.env, ...requestOptions?.env },
+          requestOptions?.protectedEnvKeys
+        ),
         requestOptions?.abortSignal
       );
       switch (authStatus.state) {
