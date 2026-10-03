@@ -122,7 +122,7 @@ nodes:
   - id: hold
     bash: |
       for _ in $(seq 240); do [ -f '${release}' ] && break; sleep 0.25; done
-      [ -f '${release}' ] || exit 1
+      [ -f '${release}' ] || { echo "hold: no release file at ${release} after 60 s" >&2; exit 1; }
       echo "${marker}-$INPUTS_COUNT-$TRIGGER_CONFIG_PROOF" > "$ARTIFACTS_DIR/result.txt"
 `;
 }
