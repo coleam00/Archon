@@ -20,6 +20,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import type { IWorkflowPlatform } from './deps';
+import { nodeFailureKindSchema } from './schemas/node-execution';
 import {
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -991,6 +992,25 @@ describe('typed provider failures decide retry — #3520', () => {
       expect(retryClassOf(kind)).toBe(kind);
     }
     expect(retryClassOf(undefined)).toBe('unknown');
+  });
+
+  it('gives every failure kind its retry class', () => {
+    const classes = Object.fromEntries(
+      nodeFailureKindSchema.options.map(kind => [kind, retryClassOf(kind)])
+    );
+    expect(classes).toEqual({
+      fatal: 'fatal',
+      transient: 'transient',
+      unknown: 'unknown',
+      rate_limited: 'rate_limited',
+      timeout: 'transient',
+      exec_failed: 'unknown',
+      output_contract: 'unknown',
+      max_iterations: 'unknown',
+      child_failed: 'unknown',
+      cancelled: 'fatal',
+      config: 'fatal',
+    });
   });
 });
 
