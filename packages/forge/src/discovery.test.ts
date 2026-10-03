@@ -1,34 +1,41 @@
-import { expect, test } from 'bun:test';
-import { link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
+import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { copyFile, link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
+import { runForgeReadConformance } from './outbound-conformance';
+
+const exe = process.platform === 'win32' ? '.exe' : '';
+let buildRoot: string;
+let compiledFixture: string;
+
+// One compile for the file. On windows-latest `bun build --compile` writes an ~86 MB
+// executable to the OS disk and took 0.7-8 s of each test that ran it; installing the
+// binary under a name is a hard link. The source is copied out of the repository first,
+// so the build proves the fixture resolves no Archon code.
+beforeAll(async () => {
+  buildRoot = await mkdtemp(join(tmpdir(), 'forge-fixture-build-'));
+  const entry = join(buildRoot, 'fixture.ts');
+  await copyFile(join(import.meta.dir, 'fixtures', 'discovery-plugin.ts'), entry);
+  compiledFixture = join(buildRoot, `fixture${exe}`);
+  const built = Bun.spawnSync(
+    [process.execPath, 'build', '--compile', entry, '--outfile', compiledFixture],
+    { cwd: buildRoot, stdout: 'pipe', stderr: 'pipe' }
+  );
+  if (built.exitCode !== 0) throw new Error(built.stderr.toString());
+});
+
+afterAll(() => removeTempTree(buildRoot));
 
 test('opportunistic discovery failures do not disable a healthy plugin or hide selected failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'forge-discovery-'));
   try {
-    const executable = join(root, `fixture${process.platform === 'win32' ? '.exe' : ''}`);
-    const built = Bun.spawnSync(
-      [
-        process.execPath,
-        'build',
-        '--compile',
-        join(import.meta.dir, 'fixtures/discovery-plugin.ts'),
-        '--outfile',
-        executable,
-      ],
-      { stdout: 'pipe', stderr: 'pipe' }
-    );
-    if (built.exitCode !== 0) throw new Error(built.stderr.toString());
     const fixtureDir = async (name: string): Promise<string> => {
       const dir = join(root, name);
       await mkdir(dir);
-      await link(
-        executable,
-        join(dir, `archon-forge-${name}${process.platform === 'win32' ? '.exe' : ''}`)
-      );
+      await link(compiledFixture, join(dir, `archon-forge-${name}${exe}`));
       return dir;
     };
     const dirs = [];
@@ -73,10 +80,7 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
           plugins: [
             {
               plugin: 'invalid',
-              command: join(
-                dirs[1],
-                `archon-forge-invalid${process.platform === 'win32' ? '.exe' : ''}`
-              ),
+              command: join(dirs[1], `archon-forge-invalid${exe}`),
             },
           ],
           scanPath: false,
@@ -105,3 +109,47 @@ test('opportunistic discovery failures do not disable a healthy plugin or hide s
     await removeTempTree(root);
   }
 }, 60_000);
+
+test('discovers and runs an independently installed executable outside the source tree', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'forge-external-'));
+  try {
+    const plugins = join(root, 'plugins');
+    await mkdir(plugins);
+    const executable = join(plugins, `archon-forge-external-fixture${exe}`);
+    await link(compiledFixture, executable);
+    const env = {
+      ...process.env,
+      EXTERNAL_FORGE_TOKEN: 'fixture-credential',
+      UNRELATED_SECRET: 'must-not-be-inherited',
+    };
+    const discovery = await discoverPlugins({
+      config: { pluginDirs: [plugins], scanPath: false },
+      env,
+    });
+    expect(discovery.plugins.map(plugin => plugin.command)).toEqual([executable]);
+    const request = {
+      operationId: 'external-observation',
+      op: 'checks.state' as const,
+      ref: { repo: { host: 'fixture.invalid', path: 'group/project' }, number: 42 },
+    };
+    const missing = await dispatchForge(request, { discovery, env: {} });
+    expect(missing.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+    const failures = await runForgeReadConformance(
+      async input => (await dispatchForge(input, { discovery, env })).response,
+      [
+        {
+          name: 'externally installed producer',
+          request,
+          expected: {
+            revision: 'fixture-revision',
+            state: 'green',
+            units: [{ kind: 'commit_status', id: 'external-1' }],
+          },
+        },
+      ]
+    );
+    expect(failures).toEqual([]);
+  } finally {
+    await removeTempTree(root);
+  }
+});
