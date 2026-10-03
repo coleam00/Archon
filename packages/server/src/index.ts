@@ -60,7 +60,11 @@ import {
   registerCommunityProviders,
 } from '@archon/providers';
 import { getVendorCatalog } from '@archon/core';
-import { formatCodexSetupDeprecation, readCodexSetupEnv } from '@archon/providers/codex/setup-env';
+import {
+  CODEX_SETUP_ENV,
+  formatCodexSetupDeprecation,
+  readCodexSetupEnv,
+} from '@archon/providers/codex/setup-env';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
@@ -324,18 +328,19 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
   }
   const hasCodexCredentials = codexSetup.values.idToken && codexSetup.values.accessToken;
+  const codexChecked = [CODEX_SETUP_ENV.idToken.name, CODEX_SETUP_ENV.accessToken.name];
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     getLog().fatal(
       {
         checked: {
           claude: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_USE_GLOBAL_AUTH'],
-          codex: ['ARCHON_CODEX_ID_TOKEN', 'ARCHON_CODEX_ACCESS_TOKEN'],
+          codex: codexChecked,
         },
         hints: [
           'Set CLAUDE_USE_GLOBAL_AUTH=true in .env (requires `claude /login` first)',
           'Or set CLAUDE_API_KEY in .env',
-          'Or set ARCHON_CODEX_ID_TOKEN + ARCHON_CODEX_ACCESS_TOKEN in .env',
+          `Or set ${codexChecked.join(' + ')} in .env`,
           'See .env.example for all options',
         ],
         envFile: BUNDLED_IS_BINARY ? getArchonEnvPath() : envPath,
@@ -352,10 +357,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
   }
   if (!hasCodexCredentials) {
-    getLog().warn(
-      { checked: ['ARCHON_CODEX_ID_TOKEN', 'ARCHON_CODEX_ACCESS_TOKEN'] },
-      'codex_credentials_missing'
-    );
+    getLog().warn({ checked: codexChecked }, 'codex_credentials_missing');
   }
 
   // Test database connection

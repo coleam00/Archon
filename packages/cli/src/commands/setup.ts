@@ -991,7 +991,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const idToken = await password({
-    message: 'Enter ARCHON_CODEX_ID_TOKEN:',
+    message: `Enter ${CODEX_SETUP_ENV.idToken.name}:`,
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1004,7 +1004,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const accessToken = await password({
-    message: 'Enter ARCHON_CODEX_ACCESS_TOKEN:',
+    message: `Enter ${CODEX_SETUP_ENV.accessToken.name}:`,
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1017,7 +1017,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const refreshToken = await password({
-    message: 'Enter ARCHON_CODEX_REFRESH_TOKEN:',
+    message: `Enter ${CODEX_SETUP_ENV.refreshToken.name}:`,
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1030,7 +1030,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const accountId = await text({
-    message: 'Enter ARCHON_CODEX_ACCOUNT_ID:',
+    message: `Enter ${CODEX_SETUP_ENV.accountId.name}:`,
     validate: value => {
       if (!value) return 'Account ID is required';
       return undefined;
