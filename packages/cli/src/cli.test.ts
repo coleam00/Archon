@@ -596,15 +596,27 @@ describe('workflow logs arguments', () => {
     expect(result.stdout).toBe('');
   });
 
-  it('rejects --json because stdout is already raw JSONL', () => {
+  it.each([
+    [
+      '--json, because stdout is already raw JSONL',
+      ['--json'],
+      'workflow logs already emits JSONL',
+    ],
+    [
+      '--json with --format text',
+      ['--json', '--format', 'text'],
+      'workflow logs already emits JSONL',
+    ],
+    ['an unknown --format', ['--format', 'yaml'], "--format must be 'jsonl' or 'text', got 'yaml'"],
+  ])('rejects %s', (_label, flags, message) => {
     const result = spawnSync(
       process.execPath,
-      [join(import.meta.dir, 'cli.ts'), 'workflow', 'logs', 'abc123', '--json'],
+      [join(import.meta.dir, 'cli.ts'), 'workflow', 'logs', 'abc123', ...flags],
       { encoding: 'utf8' }
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('workflow logs already emits JSONL');
+    expect(result.stderr).toContain(message);
     expect(result.stdout).toBe('');
   });
 

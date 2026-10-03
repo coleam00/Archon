@@ -725,6 +725,12 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'logs' }],
   },
   {
+    spec: '--format <jsonl|text>',
+    description:
+      "For 'workflow logs': jsonl (default) prints the exact transcript;\ntext renders it as progress lines for a human",
+    owners: [{ command: 'workflow', subcommand: 'logs' }],
+  },
+  {
     spec: '--conversation-id <id>',
     description:
       'Reuse a stable conversation scope across runs (enables\npersist_session resume between separate CLI invocations)',
@@ -789,6 +795,10 @@ const orderedExamples: ExampleHelp[] = [
   },
   {
     text: 'archon workflow logs <run-id> --follow',
+    owner: { command: 'workflow', subcommand: 'logs' },
+  },
+  {
+    text: 'archon workflow logs <run-id> --follow --format text',
     owner: { command: 'workflow', subcommand: 'logs' },
   },
   {
