@@ -151,8 +151,9 @@ describe('bundled-defaults', () => {
     it('classify-review-scope declares only its structured output fields', () => {
       const content =
         BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'];
+      expect(content).toContain('- `tier` — `focused` or `full`');
       expect(content).toContain('- `errors`, `docs` — booleans');
-      expect(content).toContain('- `reasons` — `{errors, docs}`');
+      expect(content).toContain('- `reasons` — `{tier, errors, docs}`');
       expect(content).not.toContain('`tests`, `errors`, `comments`, `types`, `docs`');
     });
 
@@ -161,7 +162,8 @@ describe('bundled-defaults', () => {
         ['__archon_pack__bundled:sdlc:implement::implement', 'discoveries/implement.json'],
         ['__archon_pack__bundled:sdlc:review::review-code', 'discoveries/review-code.json'],
         ['__archon_pack__bundled:sdlc:review::review-seams', 'discoveries/review-seams.json'],
-        ['__archon_pack__bundled:sdlc:review::review-simplify', 'discoveries/review-simplify.json'],
+        ['__archon_pack__bundled:sdlc:simplify::simplify', 'discoveries/review-simplify.json'],
+        ['__archon_pack__bundled:sdlc:review::review-focused', 'discoveries/review-focused.json'],
         ['__archon_pack__bundled:sdlc:review::review-tests', 'discoveries/review-tests.json'],
         ['__archon_pack__bundled:sdlc:review::review-errors', 'discoveries/review-errors.json'],
         ['__archon_pack__bundled:sdlc:review::review-docs', 'discoveries/review-docs.json'],
@@ -176,7 +178,7 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.json');
       expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.md');
-      expect(synthesize).toContain('an `adjacent` record never affects readiness');
+      expect(synthesize).toContain('An `unrelated` record never affects readiness');
       expect(synthesize).toContain(
         'If you are an agent reading this: open discoveries.md and surface each discovery to your human.'
       );
@@ -184,25 +186,35 @@ describe('bundled-defaults', () => {
 
     // A reusable pack must not hardcode one project's context paths (AGENTS.md,
     // "Project guidance should be available, not sprayed everywhere"). Every evaluative
-    // prompt reads the pack-owned scope artifact plus a conventional, conditional
-    // `architecture.md`; project guidance arrives through the provider's own context
-    // mechanism, which is why no prompt instructs reading AGENTS.md either. The rules the
-    // prompts used to delegate to a project file are stated in the prompts themselves.
+    // prompt reads the pack-owned scope artifact plus the project's conventional
+    // architecture, engineering and direction documents, each only where it exists — the
+    // same conditional read implementation makes — so a reviewer judges taste against the
+    // project's own values rather than its own. Project guidance arrives through the
+    // provider's own context mechanism, which is why no prompt instructs reading
+    // AGENTS.md. The rules the prompts used to delegate to a project file are stated in
+    // the prompts themselves.
     it('no review prompt hardcodes a project context path', () => {
       const lenses = [
-        'review-code',
-        'review-seams',
-        'review-simplify',
-        'review-tests',
-        'review-errors',
-        'review-docs',
+        '__archon_pack__bundled:sdlc:review::review-code',
+        '__archon_pack__bundled:sdlc:review::review-seams',
+        '__archon_pack__bundled:sdlc:review::review-focused',
+        '__archon_pack__bundled:sdlc:simplify::simplify',
+        '__archon_pack__bundled:sdlc:review::review-tests',
+        '__archon_pack__bundled:sdlc:review::review-errors',
+        '__archon_pack__bundled:sdlc:review::review-docs',
       ];
-      for (const name of [...lenses, 'review-synthesize']) {
-        const content = BUNDLED_COMMANDS[`__archon_pack__bundled:sdlc:review::${name}`];
+      for (const key of [...lenses, '__archon_pack__bundled:sdlc:review::review-synthesize']) {
+        const content = BUNDLED_COMMANDS[key];
         expect(content).toBeDefined();
         expect(content).not.toContain('.archon/engineering.md');
         expect(content).not.toContain('Read `AGENTS.md`');
-        expect(content).toContain("the project's `architecture.md` if it has one");
+        expect(content).toContain(
+          'where the project has them, its `architecture.md`, its `engineering.md`, and its direction document'
+        );
+        // One boundary decides whether a defect blocks now or becomes a filed issue:
+        // anything that touches the change is a finding, only unrelated work is a
+        // discovery. Every reviewer states it in the same words.
+        expect(content).toContain('is a finding, even when the contract never named it');
         expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
         // The risk taxonomy the removed file used to own, now stated in every prompt
         // that depends on it rather than cited.
@@ -213,9 +225,28 @@ describe('bundled-defaults', () => {
       }
       // Synthesis judges whether the lenses engaged those risks; the lenses scale their
       // own depth by them.
-      for (const name of lenses) {
-        expect(BUNDLED_COMMANDS[`__archon_pack__bundled:sdlc:review::${name}`]).toContain(
-          'scale depth to what the change can destroy'
+      for (const key of lenses) {
+        expect(BUNDLED_COMMANDS[key]).toContain('scale depth to what the change can destroy');
+      }
+    });
+
+    // Severity has one definition: synthesis assigns every label, so a lens that kept its
+    // own scale would be a second owner of the same decision.
+    it('only synthesis defines finding severity', () => {
+      const reviewers = Object.keys(BUNDLED_COMMANDS).filter(
+        key =>
+          (key.startsWith('__archon_pack__bundled:sdlc:review::review-') &&
+            !key.endsWith('review-synthesize') &&
+            !key.endsWith('review-scope')) ||
+          key === '__archon_pack__bundled:sdlc:simplify::simplify'
+      );
+      expect(reviewers.length).toBeGreaterThanOrEqual(7);
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '## Severity'
+      );
+      for (const key of reviewers) {
+        expect(BUNDLED_COMMANDS[key]).not.toMatch(
+          /## Severity|\bCritical\b|\bImportant\b|Suggestion/
         );
       }
     });
@@ -290,6 +321,44 @@ describe('bundled-defaults', () => {
       // beside a head branch nothing downstream reads (#2968).
       expect(review.with).not.toHaveProperty('pr_number');
       expect(review.with).not.toHaveProperty('pr_head');
+    });
+
+    // Every commit that ships is read by a review round that judges structure as well
+    // as correctness. A pass that writes code with no review after it ships that code
+    // unread, and any structure finding it declines goes unjudged.
+    it('archon-deliver follows every implementation pass with a review', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      type ParsedNode = (typeof parsed.workflow.nodes)[number];
+      const unreviewed: string[] = [];
+      const checkScope = (nodes: readonly ParsedNode[]): void => {
+        const dependents = new Map<string, string[]>();
+        for (const node of nodes) {
+          for (const dep of node.depends_on ?? []) {
+            dependents.set(dep, [...(dependents.get(dep) ?? []), node.id]);
+          }
+        }
+        const byId = new Map(nodes.map(node => [node.id, node]));
+        const isInclude = (id: string, target: string): boolean => {
+          const node = byId.get(id);
+          return node?.kind === 'include' && node.include === target;
+        };
+        const reviewedAfter = (id: string, seen = new Set<string>()): boolean =>
+          (dependents.get(id) ?? []).some(next => {
+            if (seen.has(next)) return false;
+            seen.add(next);
+            return isInclude(next, 'archon-review') || reviewedAfter(next, seen);
+          });
+        for (const node of nodes) {
+          if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
+          if (isInclude(node.id, 'archon-implement') && !reviewedAfter(node.id)) {
+            unreviewed.push(node.id);
+          }
+        }
+      };
+      checkScope(parsed.workflow.nodes);
+      expect(unreviewed).toEqual([]);
     });
 
     it('archon-deliver delegates the optional CI read timeout to the engine', () => {
@@ -413,10 +482,34 @@ describe('bundled-defaults', () => {
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
       expect(docs?.when).toContain("$INPUTS.docs == 'auto' && $scope.output.docs == true");
 
-      const specialists = ['code', 'seams', 'simplify', 'tests', 'errors', 'docs'];
+      const specialists = ['seams', 'code', 'tests', 'focused', 'simplify', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
       expect(reviewComplete?.depends_on).toEqual(specialists);
+      // Seams runs on every tier; code and tests only on the full one, where the
+      // focused reviewer stands in for them on a low-risk change.
+      const lensWhen = (id: string) => parsed.workflow?.nodes.find(node => node.id === id)?.when;
+      expect(lensWhen('seams')).not.toContain('tier');
+      expect(lensWhen('code')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('tests')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
+      // Structure is a full-tier lens again: delivery's pre-PR pass is the first look,
+      // not a replacement for this one.
+      expect(lensWhen('simplify')).toContain("$INPUTS.tier != 'focused'");
+      // Reviewers are read-only by the engine's check, not only by their prompts.
+      for (const id of [
+        'scope',
+        'seams',
+        'code',
+        'tests',
+        'focused',
+        'errors',
+        'docs',
+        'synthesize',
+      ]) {
+        const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
+        expect(node && 'mutates_checkout' in node ? node.mutates_checkout : undefined).toBe(false);
+      }
       expect(reviewComplete?.trigger_rule).toBe('all_done');
 
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
@@ -445,12 +538,13 @@ describe('bundled-defaults', () => {
       );
       // The lens this restores was cut as inert, not as unwanted (#2898/#2899): its charter
       // demoted every finding to a Suggestion. Pin the two halves of the posture that
-      // replaced it — the values frame it reasons from, and the blocking severity.
-      expect(commands['__archon_pack__bundled:sdlc:review::review-simplify']).toContain(
+      // replaced it — the values frame it reasons from, and the blocking severity, which
+      // synthesis owns because it assigns every label.
+      expect(commands['__archon_pack__bundled:sdlc:simplify::simplify']).toContain(
         'Writing code is cheap; maintaining it and recovering option value are not'
       );
-      expect(commands['__archon_pack__bundled:sdlc:review::review-simplify']).toContain(
-        'a verdict may rest on simplification alone'
+      expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '- **Unneeded** — the change adds complexity that a proved, behavior-preserving smaller shape removes'
       );
       expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
         'report-round-N.md'
@@ -460,9 +554,11 @@ describe('bundled-defaults', () => {
       );
 
       for (const lens of specialists) {
-        expect(commands[`__archon_pack__bundled:sdlc:review::review-${lens}`]).toContain(
-          `sources: [${lens}]`
-        );
+        const key =
+          lens === 'simplify'
+            ? '__archon_pack__bundled:sdlc:simplify::simplify'
+            : `__archon_pack__bundled:sdlc:review::review-${lens}`;
+        expect(commands[key]).toContain(`sources: [${lens}]`);
       }
     });
 
@@ -473,6 +569,9 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('$ARTIFACTS_DIR/review/findings.json');
       expect(synthesize).toContain('{id, severity, sources, claim, status, round}');
+      // scripts/lens-yield.ts tallies blocking and disproved findings by these values.
+      expect(synthesize).toContain('`severity` is `blocking` or `note`');
+      expect(synthesize).toContain('`status` is `open`, `fixed`, `declined`');
       // Carried-forward findings keep the lens that found them, or a multi-round review
       // reattributes every surviving finding to its last round.
       expect(synthesize).toContain('keeping the `sources` it was first attributed to');
@@ -480,8 +579,8 @@ describe('bundled-defaults', () => {
 
     // The lenses judge defects in what changed; only synthesis runs on every round, so it
     // owns holding the change to the contract's acceptance, invariants, and steering. Scope
-    // must carry those items for it to judge, and an unmet one must block like any
-    // Important finding and stay attributable in findings.json.
+    // must carry those items for it to judge, and an unmet one must block as a blocking
+    // finding and stay attributable in findings.json.
     it('review holds the change to the accepted contract on every round', () => {
       // Triage is where the delivery chain first restates the contract; a count or summary
       // of acceptance there is where the items were lost.
@@ -493,7 +592,7 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('## Judge contract coverage');
       expect(synthesize).toContain('`sources: [contract]`');
-      expect(synthesize).toContain('An unmet contract item is an Important or Critical finding');
+      expect(synthesize).toContain('An unmet contract item is a blocking finding');
     });
 
     // The same "does this diff earn a docs review" call is made in two packs — at

@@ -1,6 +1,8 @@
 # Dry-run fixture: the initial review is ready, so the correction loop stays
 # skipped and gate-ready binds the review verdict directly (the corrections
-# binding takes its if_skipped default).
+# binding takes its if_skipped default). The pull request's head is in its own
+# repository, so the final local validation is skipped: its nodes carry no stub,
+# and running them would fail this fixture.
 impl__implement:
   done: true
   green: true
@@ -16,8 +18,9 @@ review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__review-complete: "settled"
 review__synthesize:
@@ -31,27 +34,22 @@ review__publish:
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 gate-ready: '{"ready":"true"}'
-validate__mode: '{"comparison":false}'
-validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
-validate__run: { status: green, summary: "stub: full gate green" }
-validate__result:
-  evidence: null
-  green: true
-  red_cause: ""
-  summary: "stub: full gate green"
-gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-attention-route: '{"attention":false,"red_cause":""}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":false}'
 fixture:
   expect: completed
   # The review round is handed the verified PR record, not a bare number: the

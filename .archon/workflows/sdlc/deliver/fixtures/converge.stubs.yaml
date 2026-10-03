@@ -5,7 +5,8 @@
 #
 # This is also the classifier-selects-errors path: `classify` says the diff has
 # failure paths, the operator declared nothing, and resolve-scope is left unstubbed
-# so the real script adopts that judgment. `reached` proves the lens actually ran.
+# so the real script adopts that judgment. `reached` proves the lens actually ran,
+# beside the full tier's simplify lens.
 impl__implement:
   done: true
   green: true
@@ -20,20 +21,21 @@ review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
-review__code: "2 findings (Important)"
+review__code: "2 blocking findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__errors: "0 findings"
 review__synthesize:
   ready: false
   action: correct
-  findings_summary: "stub: 3 Important findings open"
+  findings_summary: "stub: 3 blocking findings open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 review__publish:
   ready: false
   action: correct
-  findings_summary: "stub: 3 Important findings open"
+  findings_summary: "stub: 3 blocking findings open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures. 2 check(s) still running — never wait on them."
 fix__implement:
@@ -53,12 +55,12 @@ recheck__scope:
 recheck__synthesize:
   ready: true
   action: none
-  findings_summary: "stub: no open Critical/Important"
+  findings_summary: "stub: no open blocking finding"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 recheck__publish:
   ready: true
   action: none
-  findings_summary: "stub: no open Critical/Important"
+  findings_summary: "stub: no open blocking finding"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 # gate-ready is deliberately unstubbed: under --exec-code the real script runs,
 # proving the $corrections.output whole-ref binding on a completed loop_group.
@@ -73,12 +75,16 @@ ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
 outcome: { pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
 classify:
+  tier: full
   errors: true
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: the diff adds a retry and a fallback"
     docs: "stub: no doc-facing changes"
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: completed
-  reached: [review__errors, ci-note]
+  reached: [review__errors, review__simplify__simplify, ci-note, recheck__synthesize]
 exec-code: true

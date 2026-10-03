@@ -15,9 +15,11 @@ impl__assert-changed: "3 files changed"
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
@@ -26,19 +28,20 @@ review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
-review__code: "1 Important finding"
+review__code: "1 blocking finding"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__synthesize:
   ready: false
   action: correct
-  findings_summary: "stub: one Important finding open"
+  findings_summary: "stub: one blocking finding open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 review__publish:
   ready: false
   action: correct
-  findings_summary: "stub: one Important finding open"
+  findings_summary: "stub: one blocking finding open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-note: "CI state for this pull request (head abc123def456): No concluded failures."
 fix__implement:
@@ -74,6 +77,8 @@ ci-probe: '{"state":"concluded","detail":"all checks green"}'
 ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/7" }
 outcome: { pr_url: "https://github.com/example/repo/pull/7", summary: "https://github.com/example/repo/pull/7" }
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: completed
   reached: [gate-correction-green, flip-ready]
