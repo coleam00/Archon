@@ -21930,8 +21930,8 @@ describe('executeDagWorkflow -- loop_group node', () => {
     //
     // Cost recomposition (flaky-fan-out): executing this 2x2 nesting end-to-end forks a
     // structurally-fixed TWELVE real `bash -c` processes (seed x2 + included body x4 +
-    // inner gates x4 + outer gates x2), which consumed ~46% of Bun's 5000ms default test
-    // budget on Windows CI in a healthy run. What pins the #2623 regression is exactly
+    // inner gates x4 + outer gates x2), which consumed ~46% of the 5000ms budget Windows CI
+    // then had, in a healthy run. What pins the #2623 regression is exactly
     // WHICH scoped values the executor compiles into each gate/body invocation, so this
     // half observes every fork through the established `git.execFileAsync` seam, pins each
     // compiled script byte-for-byte, and runs zero shells. Real-parse behaviour of the

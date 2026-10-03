@@ -555,8 +555,9 @@ describe('foreground run discovery', () => {
       'console.log("startup stdout"); console.error("controlled startup failure"); process.exit(23)',
     ]);
     // Through the same helper the boot waits use, at the same deadline: the claim is
-    // that owner exit beats `RUN_BOOT_DEADLINE_MS`, and this test's own budget is Bun's
-    // 5 s default. A guard that stopped firing could only fail here, never pass slowly.
+    // that owner exit beats `RUN_BOOT_DEADLINE_MS`, and this test runs on the default
+    // per-test budget, far below that deadline. A guard that stopped firing could only
+    // fail here, never pass slowly.
     const error = await waitForRunBoot('the failed run row', () => undefined, owner).catch(
       (error: unknown) => error
     );

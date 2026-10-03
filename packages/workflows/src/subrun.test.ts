@@ -39,7 +39,7 @@ const mockLogger = {
 // (the repo's own .archon/workflows + .archon/commands) into EVERY staged source
 // capture, on every executeWorkflow level of every run in this file — e2e timing
 // evidence (#2121 Phase 2 CI) shows that uncontrolled per-run fs fan-out is what
-// pushed the specimen test past Bun's default 5000ms budget on Windows CI. #2924
+// pushed the specimen test past the 5000ms budget Windows CI then had. #2924
 // hoisted the READ and the hash of that scope out of the per-capture path, but
 // the bytes still have to land in each capture, so the writes remain and so does
 // this lever. No test here exercises bundled default CONTENT: every discovery call
@@ -3535,8 +3535,8 @@ nodes:
     // Independence: children are separate jobs, so one failing must not discard its
     // siblings. The default has to carry that — an author who writes no `join:` gets it.
     // Two items keep this e2e case's real-subprocess tree (every child is a real bash
-    // spawn plus a checkout snapshot) inside Bun's default 5000ms per-test cap on slow
-    // CI runners while pinning the same join-independence contract.
+    // spawn plus a checkout snapshot) inside the default per-test budget on slow CI
+    // runners while pinning the same join-independence contract.
     await writeWorkflow('fan-child-cond', fanChildCond);
     await writeWorkflow(
       'fan-default-join',
@@ -4021,7 +4021,7 @@ nodes:
     // cancels a sibling, so run 1 always ends index 0 completed and index 1 failed.
     // (This test used to be pinned to max_parallel: 1 purely to dodge that race.)
     // Two items keep this e2e case's real-subprocess tree (plan node + one real bash
-    // child per item, all under one clock) inside Bun's default 5000ms cap on slow CI
+    // child per item, all under one clock) inside the default per-test budget on slow CI
     // runners; one completed survivor still proves completed siblings are threaded
     // from their rows on resume, not re-driven.
     await writeWorkflow(
