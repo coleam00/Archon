@@ -318,6 +318,18 @@ export const workflowRunSchema = z.object({
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;
 
+export type WorkflowDeadlineWaitContext = Extract<WorkflowWaitContext, { resumeAt: string }>;
+
+/** The validated deadline-bearing wait for a paused run, if it has one. */
+export function pendingWorkflowWaitDeadline(
+  run: Pick<WorkflowRun, 'status' | 'metadata'>
+): WorkflowDeadlineWaitContext | undefined {
+  if (run.status !== 'paused') return undefined;
+  const wait = run.metadata.wait;
+  if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
+  return wait;
+}
+
 /**
  * Keys the sub-run machinery writes into a child run's untyped `metadata` JSONB, and the
  * shape of each value. `metadata` is `Record<string, unknown>`, so a typo in a string

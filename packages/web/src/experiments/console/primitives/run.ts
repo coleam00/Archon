@@ -49,8 +49,6 @@ export interface Run {
   workingPath: string | null;
   userMessage: string;
   activeNodes: string[];
-  /** Singular compatibility view, populated only when exactly one node is active. */
-  currentNode?: string | null;
   lastTool?: string | null;
   /**
    * Pending human gate. Null once the gate is resolved (see gateResolved).
@@ -124,7 +122,6 @@ interface RawWorkflowRun {
   codebase_name?: string | null;
   platform_type?: string | null;
   active_nodes?: string[];
-  current_step_name?: string | null;
   /** Run-tree parent id (#2121 Phase 2); null/absent for top-level runs. */
   parent_run_id?: string | null;
 }
@@ -259,7 +256,6 @@ export function toRun(raw: RawWorkflowRun): Run {
     workingPath: raw.working_path ?? null,
     userMessage: raw.user_message ?? '',
     activeNodes,
-    currentNode: activeNodes.length === 1 ? (activeNodes[0] ?? null) : null,
     lastTool: null,
     approval: parsedWait === null ? parsedApproval : null,
     wait: parsedWait,

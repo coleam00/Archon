@@ -158,11 +158,6 @@ function printUsageFor(command?: string, subcommand?: string): void {
   console.log(renderHelp(command, subcommand));
 }
 
-/** Print the global usage information (every entry, every flag, every example). */
-function printUsage(): void {
-  printUsageFor();
-}
-
 /**
  * Safely close the database connection
  */
@@ -221,7 +216,7 @@ async function main(): Promise<number> {
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-    printUsage();
+    printUsageFor();
     await shutdownTelemetry();
     return 0;
   }
@@ -260,7 +255,7 @@ async function main(): Promise<number> {
     if (json) setLogLevel('silent');
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     await fail(json, `Error parsing arguments: ${err.message}`);
-    if (!json) printUsage();
+    if (!json) printUsageFor();
     await shutdownTelemetry();
     return 1;
   }
@@ -1350,13 +1345,13 @@ async function main(): Promise<number> {
 
       default: {
         const problem = command === undefined ? 'Missing command' : `Unknown command: ${command}`;
-        // printUsage() writes human text to stdout, which would corrupt the
+        // Help text goes to stdout, which would corrupt the
         // machine-readable payload under --json.
         if (jsonFlag) {
           return await fail(true, problem);
         }
         console.error(problem);
-        printUsage();
+        printUsageFor();
         return 1;
       }
     }
