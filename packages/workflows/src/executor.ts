@@ -103,12 +103,7 @@ export type {
   ChildIsolationRequest,
   ChildIsolationResult,
 } from './child-isolation';
-import {
-  classifyError,
-  safeSendMessage,
-  runWithAdoptedRunDir,
-  type SendMessageContext,
-} from './executor-shared';
+import { safeSendMessage, runWithAdoptedRunDir, type SendMessageContext } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import {
   buildAiProfile,
@@ -169,14 +164,11 @@ async function sendCriticalMessage(
       return true;
     } catch (error) {
       const err = error as Error;
-      const errorType = classifyError(err);
-
       getLog().error(
         {
           err,
           conversationId,
           messageLength: message.length,
-          errorType,
           platformType: platform.getPlatformType(),
           ...context,
           attempt,
@@ -184,11 +176,6 @@ async function sendCriticalMessage(
         },
         'platform.critical_message_send_failed'
       );
-
-      // Don't retry fatal errors
-      if (errorType === 'FATAL') {
-        break;
-      }
 
       // Wait before retry (exponential backoff: 1s, 2s, 3s...)
       if (attempt < maxRetries) {

@@ -13289,9 +13289,9 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
               kind: 'agent',
               source: { kind: 'command', name: 'my-cmd' },
               idle_timeout: 50,
-              // Disable retries so the test doesn't wait for retry delays (the
-              // "timed out" message matches TRANSIENT patterns, which would trigger
-              // the default 2-retry / 3s-delay policy otherwise).
+              // Disable retries so the test doesn't wait for retry delays (a timeout
+              // is transient, which would trigger the default 2-retry / 3s-delay
+              // policy otherwise).
               retry: { max_attempts: 0 },
             },
           ],
@@ -17765,19 +17765,17 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
   });
 
   it.each([
-    ['records usage and an earlier authored outcome when a FATAL platform error escapes', false],
-    ['preserves the FATAL platform error when the outcome backstop also fails', true],
+    ['records usage and an earlier authored outcome when a store write escapes', false],
+    ['preserves the escaping error when the outcome backstop also fails', true],
   ])('%s', async (_label, outcomeWriteFails) => {
     // The unwind backstop exists for exactly this: a throw that skips every disposition
     // below and unwinds to executeWorkflow's catch-all, which marks the run FAILED.
     // Without this case the other three would pass with a plain success-tail call, so a
     // refactor could drop the backstop silently.
     //
-    // The reachable path is a platform whose auth dies mid-run: safeSendMessage rethrows
-    // FATAL-classified errors instead of swallowing them (`executor-shared.ts:830-832`,
-    // 'unauthorized' is in FATAL_PATTERNS). A `cancel:` node's message throws inside the
-    // per-node try; the catch's own message throws too, rejecting the node promise; the
-    // allSettled `rejected` branch then throws a third time OUTSIDE any try — out of
+    // The reachable path is a terminal status write that fails: a `halt` node's cancel
+    // write rejects, the per-node catch rethrows the TerminalStatusWriteError instead of
+    // recording a node outcome, and the layer join rethrows it OUTSIDE any try — out of
     // runLayers entirely.
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'spent before the platform died' };
@@ -17791,7 +17789,6 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     });
 
     const store = createMockStore();
-    let nodeFinished = false;
     let announceNodeFinished: (() => void) | undefined;
     const nodeFinishedSignal = new Promise<void>(resolve => {
       announceNodeFinished = resolve;
@@ -17799,16 +17796,15 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     const realPersistEvent = store.persistWorkflowEvent;
     store.persistWorkflowEvent = mock<IWorkflowStore['persistWorkflowEvent']>(data => {
       if (data.event_type === 'node_completed') {
-        nodeFinished = true;
         announceNodeFinished?.();
       }
       return realPersistEvent(data);
     });
 
     // Ordering is the real discriminator. The unwind catch runs AFTER runLayers throws, so
-    // the usage write must land after the fatal send. A write placed inside runLayers
+    // the usage write must land after the rejected cancel write. A write placed inside runLayers
     // (per-node or per-layer) would satisfy a bare "usage was persisted" assertion while
-    // recording BEFORE the send — and would not need the unwind backstop at all.
+    // recording BEFORE the throw — and would not need the unwind backstop at all.
     const order: string[] = [];
     const realUpdateRun = store.updateWorkflowRun;
     store.updateWorkflowRun = mock<IWorkflowStore['updateWorkflowRun']>((id, updates) => {
@@ -17820,18 +17816,16 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
       return realUpdateRun(id, updates);
     });
 
-    // The cancel sibling starts concurrently but waits for the selected result to finish.
-    // From that point every platform send is fatal: the cancel send rejects inside the
-    // node try, its failure notification rejects the catch, and the allSettled rejection
-    // notification rejects before the per-layer hook. The only remaining outcome write
-    // is therefore the unwind backstop.
+    // The halt sibling starts concurrently but waits for the selected result to finish
+    // before its cancel write rejects, so the only remaining outcome write is the unwind
+    // backstop.
     const platform = createMockPlatform();
     platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
       if (message.includes('Workflow cancelled')) await nodeFinishedSignal;
-      if (nodeFinished) {
-        order.push('fatal-send');
-        throw new Error('unauthorized');
-      }
+    });
+    store.cancelWorkflowRun = mock<IWorkflowStore['cancelWorkflowRun']>(() => {
+      order.push('cancel-write-rejected');
+      return Promise.reject(new Error('database unavailable'));
     });
 
     await expect(
@@ -17862,7 +17856,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
           workflowRun: makeWorkflowRun(),
         })
       )
-    ).rejects.toThrow(/authentication\/permission/i);
+    ).rejects.toMatchObject({ name: 'TerminalStatusWriteError' });
 
     // Neither terminal writer ran — the throw skipped them both — yet the spend survived.
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
@@ -17871,10 +17865,10 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
       { total_cost_usd: 0.01, total_tokens_in: 20, total_tokens_out: 2 },
     ]);
     expect(authoredOutcomeWrites(store)).toEqual(['succeeded']);
-    // Both durable backstops run only after the send that killed layer aggregation.
-    expect(order[0]).toBe('fatal-send');
-    expect(order.lastIndexOf('fatal-send')).toBeLessThan(order.indexOf('usage-write'));
-    expect(order.lastIndexOf('fatal-send')).toBeLessThan(order.indexOf('outcome-write'));
+    // Both durable backstops run only after the write that killed layer aggregation.
+    expect(order[0]).toBe('cancel-write-rejected');
+    expect(order.indexOf('cancel-write-rejected')).toBeLessThan(order.indexOf('usage-write'));
+    expect(order.indexOf('cancel-write-rejected')).toBeLessThan(order.indexOf('outcome-write'));
     expect(
       (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
         call => call[1] === 'dag.authored_outcome_persist_failed_during_unwind'

@@ -11450,8 +11450,8 @@ export async function executeDagWorkflow(
   try {
     await runLayers(runCtx);
   } catch (error) {
-    // runLayers guards almost everything, but a FATAL platform error can escape its
-    // allSettled rejection branch. Persist both durable facts before rethrowing that
+    // runLayers guards almost everything, but a failed durable write (terminal status or
+    // node event) escapes through its layer join. Persist both durable facts before rethrowing that
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
     // outcome write failure is secondary here: record it, but never let it mask the
     // execution error already in flight.
