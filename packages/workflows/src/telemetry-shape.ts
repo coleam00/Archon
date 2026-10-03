@@ -17,7 +17,7 @@ import {
 } from './defaults/bundled-defaults';
 import { expandWorkflowIncludes } from './include-expander';
 import { parseWorkflow } from './loader';
-import { parsePackagedResourceReference, qualifyWorkflowResources } from './packaged-workflow';
+import { qualifyWorkflowResources, unqualifiedResourceName } from './packaged-workflow';
 import type { DagNode } from './schemas/dag-node';
 import type { ResolvedWorkflow, WorkflowDefinition } from './schemas/workflow';
 import { telemetryNodeType } from './telemetry-node-type';
@@ -34,19 +34,13 @@ function flattenNodes(nodes: readonly DagNode[], prefix = ''): { path: string; n
   });
 }
 
-/**
- * A resource name without its package owner. Discovery qualifies a pack's commands with
- * the owner it was found under, so a project copy of a bundled pack workflow names the
- * same command differently from its original; the owner is not part of what runs.
- */
-function unqualified(name: string): string {
-  return parsePackagedResourceReference(name)?.name ?? name;
-}
-
+// A project copy of a bundled pack workflow names the same command with a different owner,
+// so telemetry counts the bare name.
 function commandOf(node: DagNode): string | undefined {
-  if (node.kind === 'agent' && node.source.kind === 'command') return unqualified(node.source.name);
+  if (node.kind === 'agent' && node.source.kind === 'command')
+    return unqualifiedResourceName(node.source.name);
   if (node.kind === 'loop' && node.loop.command !== undefined)
-    return unqualified(node.loop.command);
+    return unqualifiedResourceName(node.loop.command);
   return undefined;
 }
 
@@ -100,7 +94,7 @@ function signatureOf(workflow: Pick<ResolvedWorkflow, 'nodes'>): string[] {
       [...(node.depends_on ?? [])].sort(),
       commandOf(node) ??
         inlinePromptOf(node) ??
-        (node.kind === 'exec' ? unqualified(node.script) : null),
+        (node.kind === 'exec' ? unqualifiedResourceName(node.script) : null),
     ])
   );
 }

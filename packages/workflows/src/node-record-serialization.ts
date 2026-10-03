@@ -16,7 +16,7 @@ import {
   type ExecutionOutput,
 } from './schemas/node-execution';
 import { executionMetadata } from './node-execution';
-import { parsePackagedResourceReference } from './packaged-workflow';
+import { unqualifiedResourceName } from './packaged-workflow';
 import type { DagNode } from './schemas';
 
 /** Existing flat wire keys remain readable by older binaries. */
@@ -314,7 +314,7 @@ export function serializeNodeOutput(
  */
 export function nodeDisplayName(node: NodeDescriptor | DagNode): string {
   if (node.kind !== 'agent' || node.source.kind !== 'command') return node.id;
-  return parsePackagedResourceReference(node.source.name)?.name ?? node.source.name;
+  return unqualifiedResourceName(node.source.name);
 }
 
 export function serializeNodeTranscript(
