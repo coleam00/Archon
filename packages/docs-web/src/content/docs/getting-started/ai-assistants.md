@@ -218,7 +218,7 @@ type %USERPROFILE%\.codex\auth.json
 
 ### Set Environment Variables
 
-Set all four environment variables in your `.env`. They carry an `ARCHON_` prefix because Codex reads `CODEX_ACCESS_TOKEN` itself, so an unprefixed copy would override your own Codex login. The old `CODEX_*` names still work for one release and log a deprecation warning.
+Set all four environment variables in your `.env`. They carry an `ARCHON_` prefix because Codex reads `CODEX_ACCESS_TOKEN` itself, so an unprefixed copy would override your own Codex login. If your `.env` still has the old `CODEX_*` names from an earlier Archon, re-run `archon setup` to move them to the new names, or rename all four yourself and delete the old lines. Until the next release Archon still reads the old names, with a deprecation warning, but only when `CODEX_ID_TOKEN` is set and no `ARCHON_CODEX_*` variable is.
 
 ```ini
 ARCHON_CODEX_ID_TOKEN=eyJhbGc...
