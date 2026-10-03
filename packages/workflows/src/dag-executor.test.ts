@@ -37195,4 +37195,57 @@ describe('executeDagWorkflow -- provider session ids stay on the node record', (
     // The preview still reaches the stream.
     expect(stream).toContain(completedAttempt.slice(0, 8));
   });
+
+  it("an iteration retried after a failed attempt records only the successful attempt's session", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 2) {
+        // Iteration 2, attempt 1: names a session, then fails transiently.
+        yield {
+          type: 'result',
+          sessionId: 'failed-attempt-session',
+          isError: true,
+          errors: ['upstream overloaded'],
+          failure: { class: 'transient', evidence: 'upstream overloaded' },
+        };
+        return;
+      }
+      yield { type: 'agent_message_chunk', text: calls === 4 ? 'DONE' : 'working' };
+      // Iteration 2's successful retry (call 3) reports no session.
+      yield calls === 3
+        ? { type: 'result' }
+        : { type: 'result', sessionId: `iteration-session-${String(calls)}` };
+    });
+    const store = createMockStore();
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'iteration-retry-session',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'loop',
+                loop: { prompt: 'work', until: 'DONE', max_iterations: 5, fresh_context: true },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('iteration-retry-session-run'),
+        })
+      );
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(
+      persistedEvents(store)
+        .filter(row => row.event_type === 'loop_iteration_completed')
+        .map(row => row.data?.session_id)
+    ).toEqual(['iteration-session-1', undefined, 'iteration-session-4']);
+  });
 });

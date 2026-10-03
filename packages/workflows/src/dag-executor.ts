@@ -5627,6 +5627,8 @@ async function executeLoopNode(
     };
 
     iterationAttempt: for (let iterRetry = 0; ; iterRetry++) {
+      // A failed attempt's session is not the one the iteration completed in.
+      iterationSessionId = undefined;
       let iterationAbortController = new AbortController();
       // Mid-stream cancel-check throttle (see the check inside the stream loop).
       // The between-iteration status check just ran, so start the clock at the
