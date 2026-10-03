@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { bunTestCommand, bunTestEnv, WINDOWS_TEST_TIMEOUT_MS } from './bun-test-command';
+import { testTimeout, WINDOWS_TEST_TIMEOUT_MS } from '@archon/paths/test-utils';
+import { bunTestCommand, bunTestEnv } from './bun-test-command';
 
 describe('bunTestCommand', () => {
   it('widens the default per-test budget on Windows only', () => {
@@ -23,6 +24,14 @@ describe('bunTestCommand', () => {
       '--bail',
       'logger',
     ]);
+  });
+});
+
+describe('testTimeout', () => {
+  it('lifts an explicit budget to the Windows floor and leaves other platforms alone', () => {
+    expect(testTimeout(10_000, 'win32')).toBe(WINDOWS_TEST_TIMEOUT_MS);
+    expect(testTimeout(10_000, 'linux')).toBe(10_000);
+    expect(testTimeout(WINDOWS_TEST_TIMEOUT_MS + 1, 'win32')).toBe(WINDOWS_TEST_TIMEOUT_MS + 1);
   });
 });
 

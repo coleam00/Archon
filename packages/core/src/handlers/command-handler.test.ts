@@ -321,7 +321,7 @@ const mockDeleteWorkflowNodeSessions = mock<
 >(() => Promise.resolve({ deleted: 0 }));
 mock.module('../db/workflow-node-sessions', () => ({
   deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
-  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  listWorkflowNodeSessions: mock(() => Promise.resolve([])),
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
 }));
 

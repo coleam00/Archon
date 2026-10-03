@@ -15,7 +15,6 @@ import type {
   IAgentProvider,
   MessageChunk,
   ProviderAdmissionEvent,
-  ProviderAttemptAdmission,
   SendQueryOptions,
 } from '@archon/providers';
 import { loadProviderConcurrencyCaps } from '../config/provider-concurrency';
@@ -48,11 +47,8 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   });
 }
 
-/**
- * One `sendQuery` call's slot. Released at most once per acquisition; `releaseDuring`
- * acquires again after a provider's retry backoff.
- */
-class ProviderSlot implements ProviderAttemptAdmission {
+/** One `sendQuery` call's slot. Released at most once. */
+class ProviderSlot {
   private attemptId: string | null = null;
   private capacity = 0;
 
@@ -120,12 +116,6 @@ class ProviderSlot implements ProviderAttemptAdmission {
     getLog().debug({ provider: this.provider, attemptId }, 'provider_admission.released');
     this.emit('released', attemptId);
   }
-
-  async releaseDuring(wait: () => Promise<void>): Promise<void> {
-    await this.release();
-    await wait();
-    await this.acquire();
-  }
 }
 
 async function* admittedQuery(
@@ -144,7 +134,7 @@ async function* admittedQuery(
   }
   let failed = false;
   try {
-    yield* provider.sendQuery(prompt, cwd, resumeSessionId, { ...options, admission: slot });
+    yield* provider.sendQuery(prompt, cwd, resumeSessionId, options);
   } catch (error) {
     failed = true;
     // The attempt's own error is what the caller needs. A release failure here is

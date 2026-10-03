@@ -1,5 +1,6 @@
 import { readFile } from 'fs/promises';
 import { isAbsolute, resolve } from 'path';
+import { ClassifiedProviderError } from '../shared/failure';
 
 type EnvSource = Record<string, string | undefined>;
 
@@ -28,7 +29,8 @@ function expandEnvVarsInRecord(
   const result: Record<string, string> = {};
   for (const [key, val] of Object.entries(record)) {
     if (typeof val !== 'string') {
-      throw new Error(
+      throw new ClassifiedProviderError(
+        'misconfigured',
         `MCP config ${fieldPath}.${key} must be a string (got ${describeJsonType(val)})`
       );
     }
@@ -58,14 +60,16 @@ function expandEnvVars(
   const missingVars: string[] = [];
   for (const [serverName, serverConfig] of Object.entries(config)) {
     if (typeof serverConfig !== 'object' || serverConfig === null || Array.isArray(serverConfig)) {
-      throw new Error(
+      throw new ClassifiedProviderError(
+        'misconfigured',
         `MCP server "${serverName}" must be a JSON object (got ${describeJsonType(serverConfig)})`
       );
     }
     const server = { ...(serverConfig as Record<string, unknown>) };
     if (server.env !== undefined) {
       if (typeof server.env !== 'object' || server.env === null || Array.isArray(server.env)) {
-        throw new Error(
+        throw new ClassifiedProviderError(
+          'misconfigured',
           `MCP config ${serverName}.env must be a JSON object of string values (got ${describeJsonType(server.env)})`
         );
       }
@@ -82,7 +86,8 @@ function expandEnvVars(
         server.headers === null ||
         Array.isArray(server.headers)
       ) {
-        throw new Error(
+        throw new ClassifiedProviderError(
+          'misconfigured',
           `MCP config ${serverName}.headers must be a JSON object of string values (got ${describeJsonType(server.headers)})`
         );
       }
@@ -108,14 +113,18 @@ function normalizeMcpConfig(
   }
 
   if (keys.length > 1) {
-    throw new Error(
+    throw new ClassifiedProviderError(
+      'misconfigured',
       `MCP config cannot mix top-level "mcpServers" with other keys: ${mcpPath}. Use either a direct server map or { "mcpServers": { ... } }.`
     );
   }
 
   const servers = parsed.mcpServers;
   if (typeof servers !== 'object' || servers === null || Array.isArray(servers)) {
-    throw new Error(`MCP config field "mcpServers" must be a JSON object: ${mcpPath}`);
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `MCP config field "mcpServers" must be a JSON object: ${mcpPath}`
+    );
   }
 
   return servers as Record<string, unknown>;
@@ -137,9 +146,17 @@ export async function loadMcpConfig(
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
     if (e.code === 'ENOENT') {
-      throw new Error(`MCP config file not found: ${mcpPath} (resolved to ${fullPath})`);
+      throw new ClassifiedProviderError(
+        'misconfigured',
+        `MCP config file not found: ${mcpPath} (resolved to ${fullPath})`
+      );
     }
-    throw new Error(`Failed to read MCP config file: ${mcpPath} - ${e.message}`);
+    const message = `Failed to read MCP config file: ${mcpPath} - ${e.message}`;
+    // A path that names nothing readable is setup; EMFILE, EIO and the like can pass.
+    if (e.code === 'EACCES' || e.code === 'EISDIR' || e.code === 'ENOTDIR') {
+      throw new ClassifiedProviderError('misconfigured', message);
+    }
+    throw new Error(message);
   }
 
   let parsed: Record<string, unknown>;
@@ -147,11 +164,17 @@ export async function loadMcpConfig(
     parsed = JSON.parse(raw) as Record<string, unknown>;
   } catch (parseErr) {
     const detail = (parseErr as SyntaxError).message;
-    throw new Error(`MCP config file is not valid JSON: ${mcpPath} - ${detail}`);
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `MCP config file is not valid JSON: ${mcpPath} - ${detail}`
+    );
   }
 
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error(`MCP config must be a JSON object (Record<string, ServerConfig>): ${mcpPath}`);
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `MCP config must be a JSON object (Record<string, ServerConfig>): ${mcpPath}`
+    );
   }
 
   const normalized = normalizeMcpConfig(parsed, mcpPath);

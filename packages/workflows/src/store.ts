@@ -2,6 +2,7 @@ import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-recor
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { RunCancelReason, RunExitReason, RunStopSignal } from './schemas/run-terminal-reason';
+import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 /**
  * IWorkflowStore - trait interface for workflow database operations.
  *
@@ -130,8 +131,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',
-  'tool_called',
-  'tool_completed',
+  // #3569 — one provider event in the engine envelope (`schemas/provider-event.ts`).
+  // Read through `IWorkflowStore.listProviderEvents`.
+  'provider_event',
   'ralph_story_started',
   'ralph_story_completed',
   'approval_requested',
@@ -148,12 +150,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_artifact',
   'integration_operation',
   'node_session_resumed',
-  // Phase 2 of #975 — subagent task lifecycle (aggregated from provider
-  // task_started / task_progress / task_notification chunks). Stored
-  // alongside other workflow_events for the timeline view; the SSE bridge
-  // fans out task_activity / hook_activity to live Web UI subscribers.
-  'task_activity',
-  'hook_activity',
+  // A persisted session the node did not continue because its provider cannot fork it;
+  // continuing in place could put two runs into one provider conversation (#2667).
+  'node_session_not_continued',
   // Container isolation backend lifecycle (folder-project container runs).
   // `container_created`/`container_destroyed` bracket the run; `container_stopped`/
   // `container_resumed` bracket a suspend/resume across a pause (Phase C).
@@ -188,6 +187,17 @@ export const WORKFLOW_EVENT_TYPES = [
 ] as const;
 
 export type WorkflowEventType = (typeof WORKFLOW_EVENT_TYPES)[number];
+
+/**
+ * Rows that recorded provider activity before `provider_event` replaced them. Nothing
+ * writes them any more; `listProviderEvents` translates the ones already stored.
+ */
+export const LEGACY_PROVIDER_EVENT_TYPES = [
+  'tool_called',
+  'tool_completed',
+  'task_activity',
+  'hook_activity',
+] as const;
 
 export function isNodeStateEventType(value: WorkflowEventType): value is NodeStateEventType {
   return NODE_STATE_EVENT_TYPES.some(eventType => eventType === value);
@@ -526,6 +536,15 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
    */
   getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot>;
 
+  /**
+   * A run's provider events, one node's or all of them, as served. Records come grouped
+   * by node, and within a node in emission order (attempts in the order they started,
+   * each by `seq`). With `after`, only the node's records after that cursor.
+   * Rows written before `provider_event` existed come back translated, with a null
+   * `attemptId`. Throws on storage error.
+   */
+  listProviderEvents(runId: string, query?: ProviderEventQuery): Promise<ProviderEventRecord[]>;
+
   // Per-codebase env vars for workflow node injection
   getCodebaseEnvVars(codebaseId: string): Promise<Record<string, string>>;
 
@@ -542,23 +561,16 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   // Per-node provider sessions persisted across workflow re-runs (opt-in via
   // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
   // Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript).
-  getWorkflowNodeSession(key: WorkflowNodeSessionKey): Promise<WorkflowNodeSession | null>;
+  // The executor lists a scope's rows once at run start, so a run continues the sessions
+  // that existed when it started, never one a concurrent run wrote afterwards (#2667).
+  listWorkflowNodeSessions(scope: {
+    workflow_name: string;
+    scope_key: string;
+  }): Promise<readonly WorkflowNodeSession[]>;
   upsertWorkflowNodeSession(
     params: WorkflowNodeSessionKey & {
       provider_session_id: string;
       last_run_id: string | null;
     }
   ): Promise<void>;
-  deleteWorkflowNodeSessions(filter: {
-    workflow_name: string;
-    scope_key?: string;
-    node_id?: string;
-    /**
-     * Optional provider filter. The executor's stale-row cleanup (run finished with
-     * no sessionId) sets this so switching providers between runs doesn't clobber
-     * the prior provider's saved row. Reset surfaces (CLI/chat/REST) leave it
-     * undefined so a reset wipes every provider for the given scope.
-     */
-    provider?: string;
-  }): Promise<{ deleted: number }>;
 }

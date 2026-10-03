@@ -9,5 +9,6 @@ export {
 } from './config';
 export { PiProvider } from './provider';
 export { registerPiProvider } from './registration';
+export { beginPiExtensionTurn, claimPiExtensionProcessError } from './extension-error-broker';
 export { listPiModels, type PiModelInfo } from './model-catalog';
 export { parsePiModelRef, type PiModelRef } from './model-ref';

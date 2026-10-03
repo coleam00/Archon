@@ -31,7 +31,7 @@ import {
   claudeSkillSearchRoots,
   compileOutputSchema,
   findInstalledSkillNames,
-  findRequiredPropertyGaps,
+  findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
   skillSearchRoots,
@@ -525,13 +525,13 @@ export async function validateWorkflowResources(
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
-    // --- Strict-schema required coverage (#2945) ---
-    // A schema whose declared properties are not fully covered by 'required' is
-    // rejected by a provider that enforces OpenAI strict mode (Codex) at the
-    // first turn with HTTP 400 invalid_json_schema. Report it at validation time
-    // so `archon validate workflows` catches it before a live run burns setup
-    // costs. The set of provider-invoking kinds is the same one the launch
-    // preflight uses: every node kind that both enforces output_format
+    // --- Strict-schema compatibility (#2945, #3557) ---
+    // A schema with a bare object or incomplete 'required' coverage is rejected
+    // by a provider that enforces OpenAI strict mode (Codex) at the first turn
+    // with HTTP 400 invalid_json_schema. Report it at validation time so `archon
+    // validate workflows` catches it before a live run burns setup costs. The
+    // set of provider-invoking kinds is the same one the launch preflight uses:
+    // every node kind that both enforces output_format
     // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
     // loop; not exec/bash/script, and not a wait's engine-injected schema).
     if (
@@ -542,14 +542,24 @@ export async function validateWorkflowResources(
       node.output_format !== undefined &&
       providerCaps?.requiresAllPropertiesRequired
     ) {
-      for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'output_format',
-          message: `Node '${node.id}' declares properties not in 'required' at '${gap.schemaPath}': ${gap.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
-          hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
-        });
+      for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
+        if (issue.kind === 'missing-properties') {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'output_format',
+            message: `Node '${node.id}' declares an object schema without 'properties' at '${issue.schemaPath}'. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+            hint: 'Declare the object properties and list every property in required. When the value may be absent, use a nullable object such as type: ["object","null"].',
+          });
+        } else {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'output_format',
+            message: `Node '${node.id}' declares properties not in 'required' at '${issue.schemaPath}': ${issue.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+            hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
+          });
+        }
       }
     }
 
@@ -699,14 +709,13 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using MCP with a provider that doesn't support it
       if (providerCaps?.mcp === false) {
         issues.push({
-          level: 'warning',
+          level: 'error',
           nodeId: node.id,
           field: 'mcp',
-          message: `MCP servers are not supported by provider '${provider}' — this will be ignored`,
-          hint: 'Remove the mcp field or switch to a provider that supports MCP',
+          message: `Provider '${provider}' cannot load MCP servers — the run would fail before any node starts`,
+          hint: 'Remove the mcp field or switch to a provider whose mcp capability is true',
         });
       }
     }
@@ -782,7 +791,7 @@ export async function validateWorkflowResources(
                     : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
                 hint:
                   provider === 'claude'
-                    ? `If this is not a built-in or plugin:skill name, check the spelling or create .claude/skills/${skillName}/SKILL.md`
+                    ? `A plugin:skill name also needs its plugin under plugins:. Otherwise check the spelling or create .claude/skills/${skillName}/SKILL.md`
                     : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
               });
             }
@@ -790,19 +799,29 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using skills with a provider that doesn't support them
       if (providerCaps?.skills === false && node.skills.length > 0) {
         issues.push({
-          level: 'warning',
+          level: 'error',
           nodeId: node.id,
           field: 'skills',
-          message: `The skills field is not supported by provider '${provider}' — this will be ignored`,
+          message: `Provider '${provider}' cannot load named skills — the run would fail before any node starts`,
           hint:
             provider === 'codex'
-              ? 'Invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
-              : 'Remove the skills field or switch to a provider that supports skills',
+              ? 'Remove the skills field and invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
+              : 'Remove the skills field or switch to a provider whose skills capability is true',
         });
       }
+    }
+
+    // --- Plugins: an error like mcp and skills — the engine refuses to run it ---
+    if ('plugins' in node && node.plugins?.length && providerCaps?.plugins === false) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'plugins',
+        message: `Provider '${provider}' cannot load named plugins — the run would fail before any node starts`,
+        hint: 'Remove the plugins field or switch to a provider whose plugins capability is true',
+      });
     }
 
     // --- Capability-driven warnings for hooks and tool restrictions ---

@@ -1,4 +1,5 @@
 import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
+import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@archon/workflows/schemas/provider-event';
 /**
  * Zod schemas for workflow API endpoints.
  */
@@ -176,6 +177,40 @@ export const workflowRunDetailSchema = z
     events: z.array(workflowEventSchema),
   })
   .openapi('WorkflowRunDetail');
+
+/**
+ * One provider event as the engine recorded it: the provider's object in the engine
+ * envelope, with its run and node. Derived from the engine schema the store validates
+ * against, so the served shape cannot drift from the persisted one.
+ */
+export const providerEventRecordSchema =
+  engineProviderEventRecordSchema.openapi('ProviderEventRecord');
+
+/** GET /api/workflows/runs/:runId/provider-events query. */
+export const providerEventsQuerySchema = z
+  .object({
+    step: z.string().min(1).optional().openapi({
+      description: 'Only this node (its persisted step name).',
+    }),
+    attemptId: z.string().min(1).optional().openapi({
+      description: 'Cursor attempt. Requires `step` and `afterSeq`.',
+    }),
+    afterSeq: z.coerce.number().int().nonnegative().optional().openapi({
+      description:
+        "Cursor seq: return the attempt's events after it and every later attempt's. Requires `step` and `attemptId`.",
+    }),
+  })
+  .refine(q => (q.attemptId === undefined) === (q.afterSeq === undefined), {
+    message: 'attemptId and afterSeq must be given together',
+  })
+  .refine(q => q.attemptId === undefined || q.step !== undefined, {
+    message: 'a cursor needs step',
+  });
+
+/** GET /api/workflows/runs/:runId/provider-events response. */
+export const providerEventsResponseSchema = z
+  .object({ events: z.array(providerEventRecordSchema) })
+  .openapi('ProviderEventsResponse');
 
 /** GET /api/workflows/runs/by-worker/:platformId response. */
 export const workflowRunByWorkerResponseSchema = z

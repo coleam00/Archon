@@ -16,12 +16,12 @@ describe('withResumedOutcome', () => {
   test('passes chunks through unchanged when resumed is undefined (no resume attempted)', async () => {
     const out = await collect(
       withResumedOutcome(
-        gen({ type: 'assistant', content: 'hi' }, { type: 'result', sessionId: 's' }),
+        gen({ type: 'agent_message_chunk', text: 'hi' }, { type: 'result', sessionId: 's' }),
         undefined
       )
     );
     expect(out).toEqual([
-      { type: 'assistant', content: 'hi' },
+      { type: 'agent_message_chunk', text: 'hi' },
       { type: 'result', sessionId: 's' },
     ]);
   });
@@ -35,13 +35,13 @@ describe('withResumedOutcome', () => {
     const out = await collect(
       withResumedOutcome(
         gen(
-          { type: 'assistant', content: 'x' },
+          { type: 'agent_message_chunk', text: 'x' },
           { type: 'result', sessionId: 's', tokens: { input: 1, output: 2 } }
         ),
         false
       )
     );
-    expect(out[0]).toEqual({ type: 'assistant', content: 'x' });
+    expect(out[0]).toEqual({ type: 'agent_message_chunk', text: 'x' });
     expect(out[1]).toEqual({
       type: 'result',
       sessionId: 's',
@@ -62,9 +62,9 @@ describe('withResumedOutcome', () => {
 
   test('drops the stamp when the stream emits no result chunk (nothing to stamp)', async () => {
     const out = await collect(
-      withResumedOutcome(gen({ type: 'assistant', content: 'partial' }), false)
+      withResumedOutcome(gen({ type: 'agent_message_chunk', text: 'partial' }), false)
     );
-    expect(out).toEqual([{ type: 'assistant', content: 'partial' }]);
+    expect(out).toEqual([{ type: 'agent_message_chunk', text: 'partial' }]);
   });
 });
 

@@ -182,7 +182,11 @@ describe('MessagePersistence', () => {
     test('clears text but preserves tool calls when segment has tool calls', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'routing text');
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'ls' } });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-1',
+        name: 'bash',
+        input: { command: 'ls' },
+      });
 
       // Retract should only clear text, not the tool call
       persistence.retractLastSegment('conv-1');
@@ -216,7 +220,11 @@ describe('MessagePersistence', () => {
     test('buffers tool calls and persists them in flush metadata', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'checking file');
-      persistence.appendToolCall('conv-1', { name: 'read', input: { path: '/tmp/test.ts' } });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-2',
+        name: 'read',
+        input: { path: '/tmp/test.ts' },
+      });
       await persistence.flush('conv-1');
 
       expect(mockAddMessage).toHaveBeenCalledTimes(1);
@@ -233,9 +241,17 @@ describe('MessagePersistence', () => {
     test('finalizes previous tool duration when new tool arrives', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'working');
-      persistence.appendToolCall('conv-1', { name: 'read', input: { path: 'a.ts' } });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-3',
+        name: 'read',
+        input: { path: 'a.ts' },
+      });
       // Small delay to get measurable duration
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'ls' } });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-4',
+        name: 'bash',
+        input: { command: 'ls' },
+      });
       await persistence.flush('conv-1');
 
       const metadata = mockAddMessage.mock.calls[0][3] as {
@@ -249,7 +265,11 @@ describe('MessagePersistence', () => {
     test('text after tool call starts a new segment', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'before tool');
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'ls' } });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-5',
+        name: 'bash',
+        input: { command: 'ls' },
+      });
       persistence.appendText('conv-1', 'after tool');
       await persistence.flush('conv-1');
 
@@ -264,8 +284,12 @@ describe('MessagePersistence', () => {
     test('should include tool output when flushing to DB', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'running bash');
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'ls' } });
-      persistence.appendToolResult('conv-1', 'bash', 'file1.txt\nfile2.txt', 250);
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-6',
+        name: 'bash',
+        input: { command: 'ls' },
+      });
+      persistence.appendToolResult('conv-1', 'call-6', 'file1.txt\nfile2.txt', 250);
       await persistence.flush('conv-1');
 
       expect(mockAddMessage).toHaveBeenCalledTimes(1);
@@ -281,8 +305,12 @@ describe('MessagePersistence', () => {
     test('should persist empty-string output (not undefined)', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'running tool');
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'echo' } });
-      persistence.appendToolResult('conv-1', 'bash', '', 100);
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-7',
+        name: 'bash',
+        input: { command: 'echo' },
+      });
+      persistence.appendToolResult('conv-1', 'call-7', '', 100);
       await persistence.flush('conv-1');
 
       const metadata = mockAddMessage.mock.calls[0][3] as {
@@ -294,26 +322,48 @@ describe('MessagePersistence', () => {
 
     test('should be a no-op when no buffer exists', () => {
       // Should not throw
-      persistence.appendToolResult('nonexistent', 'bash', 'output', 100);
+      persistence.appendToolResult('nonexistent', 'call-x', 'output', 100);
     });
 
-    test('should match the last unresolved tool call by name (reverse order)', async () => {
+    test('matches the tool call by id, not by name', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'two bash calls');
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'ls' } });
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'pwd' } });
-      // appendToolResult should match the LAST unresolved 'bash' call
-      persistence.appendToolResult('conv-1', 'bash', 'output-for-second', 200);
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-8',
+        name: 'bash',
+        input: { command: 'ls' },
+      });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-9',
+        name: 'bash',
+        input: { command: 'pwd' },
+      });
+      // The earlier call finishes first; name matching would give its output to the later one.
+      persistence.appendToolResult('conv-1', 'call-8', 'output-for-first', 200);
       await persistence.flush('conv-1');
 
       const metadata = mockAddMessage.mock.calls[0][3] as {
         toolCalls?: { name: string; output?: string }[];
       };
       expect(metadata?.toolCalls).toHaveLength(2);
-      // First call should have no output (not yet resolved)
-      expect(metadata?.toolCalls?.[0]?.output).toBeUndefined();
-      // Second call should have the output
-      expect(metadata?.toolCalls?.[1]?.output).toBe('output-for-second');
+      expect(metadata?.toolCalls?.[0]?.output).toBe('output-for-first');
+      expect(metadata?.toolCalls?.[1]?.output).toBeUndefined();
+    });
+
+    test('persists how the tool call ended', async () => {
+      persistence.setConversationDbId('conv-1', 'db-uuid-1');
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-12',
+        name: 'bash',
+        input: { command: 'false' },
+      });
+      persistence.appendToolResult('conv-1', 'call-12', '', 50, { status: 'failed', exitCode: 1 });
+      await persistence.flush('conv-1');
+
+      const metadata = mockAddMessage.mock.calls[0][3] as {
+        toolCalls?: { status?: string; exitCode?: number }[];
+      };
+      expect(metadata?.toolCalls?.[0]).toMatchObject({ status: 'failed', exitCode: 1 });
     });
   });
 
@@ -321,7 +371,11 @@ describe('MessagePersistence', () => {
     test('flushes segment when last tool call never received a result', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'running tool');
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'ls' } });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-10',
+        name: 'bash',
+        input: { command: 'ls' },
+      });
       // No appendToolResult — simulates terminal tool call at turn end
 
       await persistence.flush('conv-1');
@@ -340,7 +394,11 @@ describe('MessagePersistence', () => {
     test('sets duration on the last running tool', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       persistence.appendText('conv-1', 'text');
-      persistence.appendToolCall('conv-1', { name: 'bash', input: { command: 'ls' } });
+      persistence.appendToolCall('conv-1', {
+        toolCallId: 'call-11',
+        name: 'bash',
+        input: { command: 'ls' },
+      });
       persistence.finalizeRunningTools('conv-1');
       await persistence.flush('conv-1');
 

@@ -20,6 +20,7 @@ import {
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
+import { formatDeprecationNotice } from '../deprecation';
 import {
   isExecNode,
   isIncludeDirective,
@@ -28,10 +29,11 @@ import {
   isWaitNode,
 } from '../schemas';
 import {
-  findRequiredPropertyGaps,
+  findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
   registerBuiltinProviders,
+  validateStructuredOutput,
 } from '@archon/providers';
 
 registerBuiltinProviders();
@@ -124,6 +126,32 @@ describe('bundled-defaults', () => {
         expect(diskContent).toBeDefined();
         expect(content).toBe(diskContent as string);
       }
+    });
+
+    it('every flat bundled default is in the legacy deprecation window (#2781, #3525)', () => {
+      // Pack-owned workflows are the replacement; every flat default is legacy
+      // and announces its removal. No flat default is exempt.
+      const flat = Object.keys(BUNDLED_WORKFLOWS).filter(
+        name => BUNDLED_WORKFLOW_OWNERS[name] === undefined
+      );
+      expect(flat).toContain('archon-assist');
+      for (const name of flat) {
+        const parsed = parseWorkflow(BUNDLED_WORKFLOWS[name]!, `${name}.yaml`);
+        if (parsed.error) throw new Error(`${name} failed to parse: ${parsed.error.error}`);
+        expect(parsed.workflow.deprecated, `${name} is not deprecated`).toBeDefined();
+      }
+      expect(existsSync(join(LEGACY_WORKFLOWS_DIR, 'archon-assist.yaml'))).toBe(true);
+    });
+
+    it('archon-assist announces removal with the copy escape hatch (#3525)', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-assist']!, 'archon-assist.yaml');
+      if (parsed.error) throw new Error(parsed.error.error);
+      expect(formatDeprecationNotice(parsed.workflow)).toBe(
+        '⚠️ `archon-assist` is deprecated and will be removed in an upcoming release. ' +
+          'Switch to the sdlc pack instead. ' +
+          'To keep using this workflow after removal, copy the workflow file into your project ' +
+          '`.archon/workflows/` or your global `~/.archon/workflows/`.'
+      );
     });
 
     it('packaged bundle metadata is internally consistent', () => {
@@ -435,11 +463,44 @@ describe('bundled-defaults', () => {
       expect(scope?.depends_on).toEqual(['mode']);
       expect(scope?.kind).toBe('agent');
       if (scope?.kind !== 'agent') throw new Error('scope is not an agent');
-      expect(scope.output_format).toEqual({
+      const scopeSchema = scope.output_format;
+      if (scopeSchema === undefined) throw new Error('scope has no output_format');
+      expect(scopeSchema).toEqual({
         type: 'object',
-        properties: { docs: { type: 'boolean' }, pr: { type: 'object' } },
+        properties: {
+          docs: { type: 'boolean' },
+          pr: {
+            type: ['object', 'null'],
+            properties: {
+              repo: {
+                type: 'object',
+                properties: {
+                  host: { type: 'string', pattern: '\\S' },
+                  path: { type: 'string', pattern: '\\S' },
+                },
+                required: ['host', 'path'],
+              },
+              number: { type: 'integer', minimum: 1 },
+            },
+            required: ['repo', 'number'],
+          },
+        },
         required: ['docs', 'pr'],
       });
+      expect(validateStructuredOutput({ docs: false, pr: null }, scopeSchema).valid).toBe(true);
+      expect(
+        validateStructuredOutput(
+          {
+            docs: false,
+            pr: {
+              repo: { host: 'github.com', path: 'coleam00/Archon' },
+              number: 3557,
+            },
+          },
+          scopeSchema
+        ).valid
+      ).toBe(true);
+      expect(validateStructuredOutput({ docs: false, pr: {} }, scopeSchema).valid).toBe(false);
       expect(parsed.workflow.inputs?.docs?.default).toBe('auto');
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
       expect(docs?.when).toContain("$INPUTS.docs == 'auto' && $scope.output.docs == true");
@@ -583,7 +644,7 @@ describe('bundled-defaults', () => {
     // profile: an unpinned node routes to the install's default assistant, so an install
     // pinned to Codex is the reachable strict case. A node explicitly pinned to a
     // non-enforcing provider (Claude) is the documented opt-out and is skipped.
-    it('every bundled workflow satisfies Codex strict-mode required coverage', () => {
+    it('every bundled workflow is compatible with Codex strict-mode schemas', () => {
       const violations: string[] = [];
 
       type WalkNode = NonNullable<ReturnType<typeof parseWorkflow>['workflow']>['nodes'][number];
@@ -613,9 +674,11 @@ describe('bundled-defaults', () => {
             if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) continue;
           }
           // provider === undefined routes to the install default, scanned as Codex.
-          for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
+          for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
             violations.push(
-              `${name}:${node.id} ${gap.schemaPath} missing ${gap.missing.join(', ')}`
+              issue.kind === 'missing-properties'
+                ? `${name}:${node.id} ${issue.schemaPath} missing properties`
+                : `${name}:${node.id} ${issue.schemaPath} missing required keys ${issue.missing.join(', ')}`
             );
           }
         }

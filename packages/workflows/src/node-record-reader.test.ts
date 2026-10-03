@@ -34,6 +34,27 @@ describe('readNodeRecordEvent', () => {
     expect(record?.rawUsage.tokens).toBe('bad');
   });
 
+  it('reads a failed row whose provider failure class is newer than this binary', () => {
+    // A newer binary may persist a failure class this one does not know. The row still
+    // reads with its failure kind, and only the unknown provider failure is dropped.
+    const record = readNodeRecordEvent({
+      workflow_run_id: 'run-1',
+      step_name: 'build',
+      event_type: 'node_failed',
+      data: {
+        ...metadata,
+        error: 'provider could not start',
+        failure_kind: 'fatal',
+        provider_failure: { class: 'a_class_from_a_newer_binary', evidence: 'proxy_invalid' },
+      },
+    });
+    expect(record?.metadata?.lifecycle).toEqual({
+      status: 'failed',
+      error: 'provider could not start',
+      failureKind: 'fatal',
+    });
+  });
+
   it('does not fabricate metadata for historical or cache rows', () => {
     expect(
       readNodeRecordEvent({

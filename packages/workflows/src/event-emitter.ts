@@ -12,6 +12,7 @@ import type { NodeExecutionMetadata } from './schemas/node-execution';
  */
 import { EventEmitter } from 'events';
 import type { ArtifactType, EffortLevel, NodeSkipReason, SkipCause } from './schemas';
+import type { ProviderEventEnvelope } from './schemas/provider-event';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -144,24 +145,16 @@ interface NodeSkippedPriorSuccessEvent {
   nodeName: string;
 }
 
-interface ToolStartedEvent {
-  type: 'tool_started';
+/**
+ * One provider event, in the envelope the store and the JSONL log record (see
+ * `schemas/provider-event.ts`). `stepName` is the persisted step name, so a live frame
+ * and a served record name the node the same way.
+ */
+export type ProviderEventEmitterEvent = {
+  type: 'provider_event';
   runId: string;
-  toolName: string;
   stepName: string;
-  toolCallId: string;
-}
-
-interface ToolCompletedEvent {
-  type: 'tool_completed';
-  runId: string;
-  toolName: string;
-  stepName: string;
-  durationMs: number;
-  toolCallId: string;
-  toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
-  exitCode?: number;
-}
+} & ProviderEventEnvelope;
 
 interface ApprovalPendingEvent {
   type: 'approval_pending';
@@ -175,47 +168,6 @@ interface WorkflowCancelledEvent {
   runId: string;
   nodeId: string;
   reason: string;
-}
-
-// ─── Subagent Task Lifecycle (aggregated from Claude provider task_* chunks) ──
-// Forwarded by the dag-executor whenever a `task_started` / `task_progress` /
-// `task_notification` MessageChunk arrives from the provider. The bridge maps
-// these to `workflow_task_activity` SSE events for the Web UI. `nodeId` ties
-// the task to the parent workflow node (a single node can spawn many subagents).
-interface TaskActivityEvent {
-  type: 'task_activity';
-  runId: string;
-  nodeId: string;
-  taskId: string;
-  activity: 'started' | 'progress' | 'completed' | 'failed' | 'stopped';
-  description?: string;
-  summary?: string;
-  usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
-  lastToolName?: string;
-  taskType?: string;
-  /** Transcript/output file the settled task points at (task_notification only)
-   *  — the artifact trail for delegated work (#2083). */
-  outputFile?: string;
-  /** True when SDK signaled skip_transcript (housekeeping) — propagated so the
-   *  UI / persistence layer can decide whether to surface. The provider
-   *  filters these out today, but the field is here for forward-compat. */
-  ambient?: boolean;
-}
-
-// ─── Hook Lifecycle (aggregated from Claude provider hook_* chunks) ─────
-// Same aggregation pattern as TaskActivityEvent. Maps to `workflow_hook_activity`
-// SSE events; the Web UI renders them as inline indicators under the parent
-// node (e.g. `PreToolUse(Bash) → approved`).
-interface HookActivityEvent {
-  type: 'hook_activity';
-  runId: string;
-  nodeId: string;
-  hookId: string;
-  hookName: string;
-  hookEvent: string;
-  activity: 'started' | 'response';
-  outcome?: 'success' | 'error' | 'cancelled';
-  exitCode?: number;
 }
 
 /**
@@ -252,12 +204,9 @@ export type WorkflowEmitterEvent =
   | NodeSkippedEvent
   | NodeSkippedPriorSuccessEvent
   | WorkflowArtifactEvent
-  | ToolStartedEvent
-  | ToolCompletedEvent
+  | ProviderEventEmitterEvent
   | ApprovalPendingEvent
   | WorkflowCancelledEvent
-  | TaskActivityEvent
-  | HookActivityEvent
   | ContainerLifecycleEvent;
 
 // ---------------------------------------------------------------------------

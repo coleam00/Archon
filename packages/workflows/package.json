@@ -94,6 +94,9 @@
       "src/executor-shared.test.ts"
     ],
     [
+      "src/provider-events.test.ts"
+    ],
+    [
       "src/load-command-prompt.test.ts"
     ],
     [

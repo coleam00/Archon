@@ -278,6 +278,31 @@ describe('workflow continuation scanner', () => {
     ]);
   });
 
+  test('resumes due event waits through the shared resume CAS', async () => {
+    mockListDueWorkflowContinuations.mockResolvedValue([
+      run('event-1', 'paused', {
+        wait: {
+          owner: 'node',
+          nodeId: 'await-review',
+          kind: 'event',
+          waitingSince: '2026-08-24T10:00:00.000Z',
+          resumeAt: '2026-08-24T11:00:00.000Z',
+          event: 'review.completed',
+        },
+      }),
+    ]);
+    const resume = mock(async (_run: WorkflowRun, _cursor: WorkflowResumeCursor) => true);
+
+    await expect(
+      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:01.000Z'), resume)
+    ).resolves.toBe(1);
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({ id: 'event-1' }), {
+      kind: 'wait',
+      nodeId: 'await-review',
+      resumeAt: '2026-08-24T11:00:00.000Z',
+    });
+  });
+
   test('does not schedule an action-required wait even if a malformed due query returns it', async () => {
     mockListDueWorkflowContinuations.mockResolvedValue([
       run('attention-1', 'paused', {

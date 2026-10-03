@@ -8,6 +8,7 @@ import {
 } from './prompt-builder';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
+import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 
 describe('buildRoutingRulesWithProject', () => {
   test('routing rules include --prompt in invocation format', () => {
@@ -31,6 +32,29 @@ describe('buildRoutingRulesWithProject', () => {
     expect(rules).toContain(
       '/invoke-workflow {workflow-name} --project {project-name} --prompt "{task description}"'
     );
+  });
+
+  test('routing rules never steer work into archon-assist (#3525)', () => {
+    for (const rules of [buildRoutingRulesWithProject(), buildRoutingRulesWithProject('p')]) {
+      expect(rules).not.toContain('archon-assist');
+    }
+  });
+
+  test('every workflow the routing examples name is bundled and not deprecated (#3525)', () => {
+    const rules = buildRoutingRulesWithProject();
+    // Our own prompt text, not user prose: the examples name workflows as
+    // `/invoke-workflow <name>` and `**<name>** workflow`.
+    const named = [
+      ...[...rules.matchAll(/\/invoke-workflow ([a-z0-9-]+) --project/g)].map(m => m[1]),
+      ...[...rules.matchAll(/\*\*([a-z0-9-]+)\*\* workflow/g)].map(m => m[1]),
+    ];
+    expect(named.length).toBeGreaterThan(0);
+    for (const name of named) {
+      const yaml = BUNDLED_WORKFLOWS[name];
+      expect(yaml, `${name} is not a bundled workflow`).toBeDefined();
+      const declared = Bun.YAML.parse(yaml!) as { deprecated?: unknown };
+      expect(declared.deprecated, `${name} is deprecated`).toBeUndefined();
+    }
   });
 
   test('rules state prompt must be self-contained with no conversation knowledge', () => {

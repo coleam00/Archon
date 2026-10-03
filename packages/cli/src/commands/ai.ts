@@ -56,7 +56,6 @@ import { isRegisteredProvider, getProviderInfoList } from '@archon/providers';
 import {
   TIER_NAMES,
   buildAiProfile,
-  isEffortValidForProvider,
   isTierName as isTierNameStrict,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
@@ -361,12 +360,19 @@ function validateEntryInputs(
     console.error(`Invalid effort '${effort}'.`);
     return false;
   }
-  if (effort !== undefined && !isEffortValidForProvider(provider, effort)) {
-    console.error(
-      `Invalid effort '${effort}' for provider '${provider}'. ` +
-        `Valid: ${validEffortsForProvider(provider)?.join(', ') ?? '(this provider has no effort setting)'}.`
-    );
-    return false;
+  if (effort !== undefined) {
+    const validEfforts = validEffortsForProvider(provider);
+    if (validEfforts === null) {
+      console.error(`Provider '${provider}' does not support effort.`);
+      return false;
+    }
+    if (!validEfforts.includes(effort)) {
+      console.error(
+        `Invalid effort '${effort}' for provider '${provider}'. ` +
+          `Valid: ${validEfforts.join(', ')}.`
+      );
+      return false;
+    }
   }
   return true;
 }

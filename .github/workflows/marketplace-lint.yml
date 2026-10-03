@@ -6,9 +6,6 @@ on:
     paths:
       - 'packages/docs-web/src/data/marketplace.ts'
 
-env:
-  BUN_VERSION: '1.4.2'
-
 jobs:
   lint:
     name: Validate marketplace entries
@@ -17,8 +14,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
 
       - name: Install dependencies
         run: bun install --frozen-lockfile

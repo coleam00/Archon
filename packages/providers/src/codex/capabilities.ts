@@ -9,6 +9,8 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   // `skills:` list. Workflow nodes suppress the automatic catalog and authors
   // invoke installed skills explicitly with `$skill-name` in the node body.
   skills: false,
+  // Codex nodes still load the user's Codex plugins; scoping lands with the app-server client.
+  plugins: false,
   agents: false,
   toolRestrictions: false,
   structuredOutput: 'enforced', // SDK outputSchema grammar-constrains decoding

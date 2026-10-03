@@ -14,7 +14,7 @@ mode: '{"continuation":true}'
 scope:
   docs: true
   # A standalone review of the working diff: no pull request to publish to.
-  pr: {}
+  pr: null
 review-complete: "settled"
 synthesize:
   ready: true

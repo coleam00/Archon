@@ -36,7 +36,7 @@ nodes:
 
       $ARGUMENTS
 
-      Use $remotion-best-practices for the implementation.
+      Use the remotion-best-practices skill for the implementation.
 
       Rules:
       - Use useCurrentFrame() and interpolate()/spring() for ALL animations
@@ -50,6 +50,7 @@ nodes:
 
       After writing the code, read it back to verify it looks correct.
     depends_on: [check-project]
+    provider: claude
     skills:
       - remotion-best-practices
     allowed_tools:

@@ -145,6 +145,7 @@ All nodes share these base fields:
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
 | `skills` | No | string[] | Declared skill names for this node; Claude omission/`[]` selects none |
+| `plugins` | No | string[] | Plugin ids (`name@marketplace`) this node loads; omission/`[]` loads none. Claude only; other providers fail the run |
 | `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
 
 **Script-specific fields** (required when `script:` is set):
@@ -263,7 +264,7 @@ Defined under `retry:` inside a node:
 | `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
 | `on_error` | No | `transient` | `transient` retries rate limits/network errors; `all` retries everything except fatal errors |
 
-> **Fatal errors are never retried**: auth failures, permission errors, and exhausted credit balances fail immediately regardless of retry config.
+> **Fatal errors are never retried**: auth failures, permission errors, exhausted credit balances, and configuration errors (a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config.
 
 ---
 
@@ -349,7 +350,6 @@ defaults:
 |-------|-------------|-----|
 | `Workflow "X" not found` | YAML file not discovered | Check file is in `.archon/workflows/` and `archon workflow list` shows it |
 | `Command "X" not found` | Command file missing | For a packaged workflow, check its own `commands/X.md` and run `archon validate workflows <name>`; otherwise check the shared command path and run `archon validate commands X` |
-| `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |

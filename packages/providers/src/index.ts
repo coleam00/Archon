@@ -16,7 +16,6 @@ export type {
   CredentialKind,
   CredentialSpec,
   ProviderCredentialCatalog,
-  ProviderAttemptAdmission,
   ProviderAdmissionEvent,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
@@ -48,8 +47,8 @@ export {
   compileOutputSchema,
   validateStructuredOutput,
   formatSchemaErrors,
-  findRequiredPropertyGaps,
-  type RequiredPropertyGap,
+  findStrictSchemaIssues,
+  type StrictSchemaIssue,
   type StructuredValidationResult,
 } from './shared/structured-output';
 
@@ -95,6 +94,7 @@ export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
+  claimPiExtensionProcessError,
   listPiModels,
   type PiProviderDefaults,
   type PiModelInfo,

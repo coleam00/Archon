@@ -1,3 +1,5 @@
+import { TOOL_OUTPUT_MAX_CHARS } from '@archon/provider-contract';
+
 /**
  * Maximum characters of a single tool output sent across a server → browser
  * boundary (SSE tool_result events and message-hydration metadata).
@@ -6,8 +8,11 @@
  * (ToolCallItem.tsx), so 16 KiB is invisible to display behavior while leaving
  * ~8x headroom for future renderer changes. The full output stays in the
  * database and on-disk logs — this cap is transport hygiene only.
+ *
+ * It is the contract's cap, but measured in UTF-16 units where the contract counts code
+ * points, so live output of astral characters can still be cut here on hydration.
  */
-export const MAX_TOOL_OUTPUT_CHARS = 16_384;
+export const MAX_TOOL_OUTPUT_CHARS = TOOL_OUTPUT_MAX_CHARS;
 
 /**
  * Bound tool output to MAX_TOOL_OUTPUT_CHARS for browser transport.
@@ -16,8 +21,9 @@ export const MAX_TOOL_OUTPUT_CHARS = 16_384;
  * head-slice + "(N more chars)" cap semantics) so users know truncation
  * occurred and where the full output lives.
  *
- * Apply at SSE emit time and at message-history hydration time.
- * Do NOT apply before writing to the database — the DB is the authoritative record.
+ * Apply at message-history hydration time, where older rows hold uncapped output.
+ * Live tool output is already capped by the provider (`TOOL_OUTPUT_MAX_CHARS` in
+ * `@archon/provider-contract`). Do NOT apply before writing to the database.
  */
 export function truncateToolOutput(output: string): string {
   if (output.length <= MAX_TOOL_OUTPUT_CHARS) return output;

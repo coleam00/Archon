@@ -357,7 +357,7 @@ export const LEGACY_RECURSIVE_CLEANUP: ReadonlyMap<string, number> = buildLedger
   ['packages/paths/src/tier-notice.test.ts', 1],
   ['packages/paths/src/update-check.test.ts', 2],
   ['packages/providers/src/claude/provider.test.ts', 1],
-  ['packages/providers/src/codex/provider.test.ts', 5],
+  ['packages/providers/src/codex/provider.test.ts', 4],
   ['packages/providers/src/community/opencode/provider.test.ts', 1],
   ['packages/providers/src/community/pi/model-store.integration.test.ts', 1],
   ['packages/providers/src/community/pi/options-translator.test.ts', 1],

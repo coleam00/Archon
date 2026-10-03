@@ -152,10 +152,14 @@ export class SlackWorkflowBridge {
           this.upsertNode(event.runId, event.nodeId, event.nodeName, 'skipped');
           this.scheduleStatusUpdate(event.runId);
           break;
-        case 'node_skipped_prior_success':
-          this.upsertPriorSuccessNode(event.runId, event.nodeId, event.nodeName);
+        case 'node_skipped_prior_success': {
+          const run = this.runs.get(event.runId);
+          if (run && !run.nodes.has(event.nodeId)) {
+            this.upsertNode(event.runId, event.nodeId, event.nodeName, 'completed');
+          }
           this.scheduleStatusUpdate(event.runId);
           break;
+        }
         case 'approval_pending':
           await this.onApprovalPending(event);
           break;
@@ -168,17 +172,14 @@ export class SlackWorkflowBridge {
         case 'workflow_cancelled':
           await this.onTerminal(event.runId, 'cancelled', conversationId, event.reason);
           break;
-        // Loop / tool / artifact / container-lifecycle events would surface as
+        // Loop / provider / artifact / container-lifecycle events would surface as
         // noise in-thread and aren't tied to a button or actionable state; the
         // status message already conveys run health via the DAG node states.
         case 'loop_iteration_started':
         case 'loop_iteration_completed':
         case 'loop_iteration_failed':
-        case 'tool_started':
-        case 'tool_completed':
+        case 'provider_event':
         case 'workflow_artifact':
-        case 'task_activity':
-        case 'hook_activity':
         case 'container_lifecycle':
           break;
         default: {
@@ -409,19 +410,6 @@ export class SlackWorkflowBridge {
       durationMs: extra.durationMs,
       error: extra.error,
     });
-  }
-
-  /**
-   * A prior-success replay is evidence the node already ran and succeeded, never a
-   * skip (#2978). Keep an existing entry untouched so its duration and error survive;
-   * the resume path starts from an empty run state, so a replay with no entry still
-   * records the completed node rather than dropping it.
-   */
-  private upsertPriorSuccessNode(runId: string, nodeId: string, nodeName: string): void {
-    const run = this.runs.get(runId);
-    if (!run || run.nodes.has(nodeId)) return;
-    run.nodeOrder.push(nodeId);
-    run.nodes.set(nodeId, { nodeId, nodeName, state: 'completed' });
   }
 
   private scheduleStatusUpdate(runId: string): void {

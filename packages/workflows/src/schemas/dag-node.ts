@@ -11,6 +11,7 @@
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
 import { z } from '@hono/zod-openapi';
+import type { ProviderCapabilities } from '@archon/providers/types';
 import { stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
@@ -209,6 +210,9 @@ export const dagNodeBaseSchema = z.object({
   hooks: workflowNodeHooksSchema.optional(),
   mcp: z.string().min(1, "'mcp' must be a non-empty string path").optional(),
   skills: z.array(z.string().min(1, 'each skill must be a non-empty string')).optional(),
+  // Exact provider plugin ids (Claude: `name@marketplace`). A workflow node loads
+  // only the plugins it names; the provider fails the node when it cannot.
+  plugins: z.array(z.string().trim().min(1, 'each plugin must be a non-empty string')).optional(),
   agents: z
     .record(z.string(), agentDefinitionSchema)
     // Validate agent-id keys in a superRefine rather than via a regex on the
@@ -258,10 +262,11 @@ export const dagNodeBaseSchema = z.object({
   // single checkout-scoped payload. Absent means no enforcement.
   mutates_checkout: z.boolean().optional(),
   // Persist this node's provider session ID across workflow re-runs in the same
-  // scope (typically the conversation). On the next run with the same scope, the
-  // executor loads the stored session and passes it as resumeSessionId. Requires
-  // a provider with sessionResume capability. Distinct from the Claude SDK's
-  // AgentRequestOptions.persistSession (on-disk transcript persistence).
+  // scope (typically the conversation). The next run in that scope forks the session
+  // that existed when it started; a provider without sessionFork starts fresh
+  // instead (see `persistedSessionHandling`). Requires a provider with sessionResume
+  // capability. Distinct from the Claude SDK's AgentRequestOptions.persistSession
+  // (on-disk transcript persistence).
   persist_session: z.boolean().optional(),
   // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
   // 'code', 'summary' — an open set). When set, the executor writes a typed
@@ -1008,6 +1013,7 @@ export const BASH_NODE_AI_FIELDS: readonly string[] = [
   'hooks',
   'mcp',
   'skills',
+  'plugins',
   'agents',
   'pi',
   'effort',
@@ -1782,6 +1788,7 @@ export const dagNodeSchema = z
       ...(data.hooks !== undefined ? { hooks: data.hooks } : {}),
       ...(data.mcp !== undefined ? { mcp: data.mcp.trim() } : {}),
       ...(data.skills !== undefined ? { skills: data.skills.map(s => s.trim()) } : {}),
+      ...(data.plugins !== undefined ? { plugins: data.plugins } : {}),
       ...(data.agents !== undefined ? { agents: data.agents } : {}),
       ...(data.pi !== undefined ? { pi: data.pi } : {}),
       ...(data.effort !== undefined ? { effort: data.effort } : {}),
@@ -2109,6 +2116,52 @@ export function isTriggerRule(value: unknown): value is TriggerRule {
  */
 export function isPersistableNode(node: DagNode): boolean {
   return node.kind === 'agent';
+}
+
+/**
+ * True when a node participates in cross-run session persistence: a persistable node
+ * that hasn't opted out via `context: 'fresh'`, with `persist_session: true` set
+ * directly or inherited from the workflow-level `persist_sessions` default. The
+ * loader's capability check, the executor's session lookup and upsert, the #1846
+ * scope-artifact mirror, and `runMayPersistSessions` all gate on this one predicate.
+ */
+export function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
+  if (!isPersistableNode(node)) return false;
+  if (node.context === 'fresh') return false;
+  const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
+  return nodePersist ?? workflowPersistSessions;
+}
+
+/**
+ * True when a run of this workflow may use cross-run session persistence: some node
+ * uses it, or a composed fan-out could, since its body resolves only when it runs.
+ * The executor's run-start session read, the scope-artifact dir, and run telemetry
+ * all gate on this.
+ */
+export function runMayPersistSessions(workflow: {
+  nodes: readonly (DagNode | IncludeDirective)[];
+  persist_sessions?: boolean;
+}): boolean {
+  const workflowPersistSessions = workflow.persist_sessions === true;
+  return workflow.nodes.some(
+    node =>
+      !isIncludeDirective(node) &&
+      (node.kind === 'compose_fan_out' || nodeUsesPersistedScope(node, workflowPersistSessions))
+  );
+}
+
+/**
+ * What a provider does with a session an earlier run persisted. Only a fork gives the
+ * run its own copy; a provider that resumes in place would let two concurrent runs
+ * write into one conversation, so its node starts fresh instead (`'fresh'`). The
+ * loader warns on `'fresh'` and rejects `'unsupported'`; the executor continues only
+ * on `'fork'`.
+ */
+export function persistedSessionHandling(
+  caps: Pick<ProviderCapabilities, 'sessionResume' | 'sessionFork'>
+): 'unsupported' | 'fresh' | 'fork' {
+  if (!caps.sessionResume) return 'unsupported';
+  return caps.sessionFork === true ? 'fork' : 'fresh';
 }
 
 // ---------------------------------------------------------------------------

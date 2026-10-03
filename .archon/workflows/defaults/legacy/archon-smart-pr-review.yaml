@@ -123,6 +123,7 @@ nodes:
     depends_on: [check-ntfy, synthesize, implement-fixes]
     when: "$check-ntfy.output == 'true'"
     trigger_rule: all_success
+    provider: claude
     mcp: .archon/mcp/ntfy.json
     allowed_tools: []
     prompt: |

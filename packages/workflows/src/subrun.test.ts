@@ -1,3 +1,4 @@
+import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
  *
@@ -14,7 +15,7 @@
 import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
 import { mkdir, writeFile, rm, cp, readdir, readFile } from 'fs/promises';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync } from 'fs';
 import { dirname, join, sep } from 'path';
 import { tmpdir } from 'os';
@@ -38,7 +39,7 @@ const mockLogger = {
 // (the repo's own .archon/workflows + .archon/commands) into EVERY staged source
 // capture, on every executeWorkflow level of every run in this file — e2e timing
 // evidence (#2121 Phase 2 CI) shows that uncontrolled per-run fs fan-out is what
-// pushed the specimen test past Bun's default 5000ms budget on Windows CI. #2924
+// pushed the specimen test past the 5000ms budget Windows CI then had. #2924
 // hoisted the READ and the hash of that scope out of the per-capture path, but
 // the bytes still have to land in each capture, so the writes remain and so does
 // this lever. No test here exercises bundled default CONTENT: every discovery call
@@ -497,6 +498,8 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ persisted: true });
   };
 
+  listProviderEvents: IWorkflowStore['listProviderEvents'] = () => Promise.resolve([]);
+
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<
       string,
@@ -562,13 +565,12 @@ class InMemoryStore implements IWorkflowStore {
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
   getCodebaseEnvVars = (): Promise<Record<string, string>> => Promise.resolve({});
-  getWorkflowNodeSession = (): Promise<null> => Promise.resolve(null);
+  listWorkflowNodeSessions: IWorkflowStore['listWorkflowNodeSessions'] = () => Promise.resolve([]);
   listWorkflowRunNodeSessions: IWorkflowStore['listWorkflowRunNodeSessions'] = () =>
     Promise.resolve([]);
   upsertWorkflowRunNodeSession: IWorkflowStore['upsertWorkflowRunNodeSession'] = () =>
     Promise.resolve();
   upsertWorkflowNodeSession = (): Promise<void> => Promise.resolve();
-  deleteWorkflowNodeSessions = (): Promise<{ deleted: number }> => Promise.resolve({ deleted: 0 });
   findResumableRun = (): Promise<null> => Promise.resolve(null);
 
   // --- test helpers ---
@@ -608,7 +610,7 @@ function makeProvider() {
       sandbox: true,
     }),
     sendQuery: mock(function* () {
-      yield { type: 'assistant', content: 'ai-output' };
+      yield { type: 'agent_message_chunk', text: 'ai-output' };
       yield {
         type: 'result',
         sessionId: 'sess',
@@ -622,7 +624,9 @@ function makeProvider() {
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
     store,
-    getAgentProvider: mock(() => makeProvider()) as unknown as WorkflowDeps['getAgentProvider'],
+    getAgentProvider: mock(() =>
+      settlingProvider(makeProvider())
+    ) as unknown as WorkflowDeps['getAgentProvider'],
     loadConfig: mock(
       (): Promise<WorkflowConfig> =>
         Promise.resolve({
@@ -3530,8 +3534,8 @@ nodes:
     // Independence: children are separate jobs, so one failing must not discard its
     // siblings. The default has to carry that — an author who writes no `join:` gets it.
     // Two items keep this e2e case's real-subprocess tree (every child is a real bash
-    // spawn plus a checkout snapshot) inside Bun's default 5000ms per-test cap on slow
-    // CI runners while pinning the same join-independence contract.
+    // spawn plus a checkout snapshot) inside the default per-test budget on slow CI
+    // runners while pinning the same join-independence contract.
     await writeWorkflow('fan-child-cond', fanChildCond);
     await writeWorkflow(
       'fan-default-join',
@@ -3757,13 +3761,15 @@ nodes:
         tracker.max = Math.max(tracker.max, tracker.inFlight);
         await new Promise(r => setTimeout(r, 15));
         tracker.inFlight--;
-        yield { type: 'assistant', content: 'ai-output' };
+        yield { type: 'agent_message_chunk', text: 'ai-output' };
         yield { type: 'result', sessionId: 'sess', cost: 0.01 };
       },
     };
     const deps = {
       ...makeDeps(store),
-      getAgentProvider: mock(() => slowProvider) as unknown as WorkflowDeps['getAgentProvider'],
+      getAgentProvider: mock(() =>
+        settlingProvider(slowProvider)
+      ) as unknown as WorkflowDeps['getAgentProvider'],
     };
     const parent = await discover('fan-window');
     const result = await executeWorkflow(
@@ -3793,7 +3799,7 @@ nodes:
         if (prompt.includes('CHECK_SPEND')) {
           if (prompt.includes('doomed')) throw new Error('failed after paid work');
           // The check adds no usage to the preceding paid node's accounting.
-          yield { type: 'assistant', content: 'check passed' };
+          yield { type: 'agent_message_chunk', text: 'check passed' };
           yield { type: 'result', sessionId: 'check' };
           return;
         }
@@ -3802,7 +3808,9 @@ nodes:
     };
     return {
       ...makeDeps(store),
-      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+      getAgentProvider: mock(() =>
+        settlingProvider(provider)
+      ) as unknown as WorkflowDeps['getAgentProvider'],
     };
   }
 
@@ -4012,7 +4020,7 @@ nodes:
     // cancels a sibling, so run 1 always ends index 0 completed and index 1 failed.
     // (This test used to be pinned to max_parallel: 1 purely to dodge that race.)
     // Two items keep this e2e case's real-subprocess tree (plan node + one real bash
-    // child per item, all under one clock) inside Bun's default 5000ms cap on slow CI
+    // child per item, all under one clock) inside the default per-test budget on slow CI
     // runners; one completed survivor still proves completed siblings are threaded
     // from their rows on resume, not re-driven.
     await writeWorkflow(
@@ -5045,28 +5053,30 @@ nodes:
   // fully against this test's clock: the timeout must exceed the rendezvous
   // deadline (5s) or a loaded CI run dies as a bun-test timeout instead of the
   // diagnostic rendezvous error.
-  it('GAP: concurrent fan-out cancels a sibling unless the child sets mutates_checkout:false', async () => {
-    // The path lock (executor.ts, "Siblings are intentionally NOT excluded") means two
-    // `workflow:` nodes in one layer collide on the shared checkout: the loser
-    // self-cancels and its parent node fails. This is NOT the gate-slot bug — it
-    // happens with no gates anywhere, and it makes the default fan-out layout
-    // (`plan → [worker-a, worker-b]`) fail deterministically.
-    //
-    // The escape hatch is `mutates_checkout: false` on the CHILD workflow: the author
-    // asserts the child does not write the checkout, and the lock is skipped.
-    //
-    // Consequence for fan-out designs: analysis/review peers that write only to
-    // $ARTIFACTS_DIR can run concurrently TODAY. Peers that EDIT the repo cannot —
-    // those need per-child isolation (`isolation: worktree`, reserved + rejected in
-    // slice 1). Both halves are asserted so a change to either is visible.
-    const childYaml = (name: string, extra: string): string => `
+  it(
+    'GAP: concurrent fan-out cancels a sibling unless the child sets mutates_checkout:false',
+    async () => {
+      // The path lock (executor.ts, "Siblings are intentionally NOT excluded") means two
+      // `workflow:` nodes in one layer collide on the shared checkout: the loser
+      // self-cancels and its parent node fails. This is NOT the gate-slot bug — it
+      // happens with no gates anywhere, and it makes the default fan-out layout
+      // (`plan → [worker-a, worker-b]`) fail deterministically.
+      //
+      // The escape hatch is `mutates_checkout: false` on the CHILD workflow: the author
+      // asserts the child does not write the checkout, and the lock is skipped.
+      //
+      // Consequence for fan-out designs: analysis/review peers that write only to
+      // $ARTIFACTS_DIR can run concurrently TODAY. Peers that EDIT the repo cannot —
+      // those need per-child isolation (`isolation: worktree`, reserved + rejected in
+      // slice 1). Both halves are asserted so a change to either is visible.
+      const childYaml = (name: string, extra: string): string => `
 name: ${name}
 description: fan-out child
 ${extra}nodes:
   - id: emit
     bash: echo ok
 `;
-    const parentYaml = (child: string): string => `
+      const parentYaml = (child: string): string => `
 name: parent-fanout-${child}
 description: two ${child} children in one layer
 nodes:
@@ -5077,82 +5087,84 @@ nodes:
     workflow: ${child}
     input: b
 `;
-    await writeWorkflow('racy-child', childYaml('racy-child', ''));
-    await writeWorkflow('safe-child', childYaml('safe-child', 'mutates_checkout: false\n'));
-    await writeWorkflow('parent-fanout-racy-child', parentYaml('racy-child'));
-    await writeWorkflow('parent-fanout-safe-child', parentYaml('safe-child'));
+      await writeWorkflow('racy-child', childYaml('racy-child', ''));
+      await writeWorkflow('safe-child', childYaml('safe-child', 'mutates_checkout: false\n'));
+      await writeWorkflow('parent-fanout-racy-child', parentYaml('racy-child'));
+      await writeWorkflow('parent-fanout-safe-child', parentYaml('safe-child'));
 
-    const kids = (store: InMemoryStore, name: string): string[] => {
-      const parentRun = [...store.runs.values()].find(r => r.workflow_name === name);
-      return [...store.runs.values()]
-        .filter(r => r.parent_run_id === parentRun?.id)
-        .map(r => r.status)
-        .sort();
-    };
-
-    // Default posture: the sibling is cancelled and the parent run fails.
-    // Whether the collision fires depends on both child rows coexisting in
-    // non-terminal state when either lock query runs; under CI load the children
-    // can serialize end-to-end and both succeed. This store holds each child's
-    // lock query until BOTH child rows exist and are live, so the overlap the test
-    // characterizes is a precondition instead of a chance interleaving.
-    class RendezvousStore extends InMemoryStore {
-      private overlapSeen = false;
-      getActiveWorkflowRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'] = async (
-        path,
-        self
-      ) => {
-        const selfRow = self ? this.runs.get(self.id) : undefined;
-        if (!selfRow?.parent_run_id || this.overlapSeen) {
-          return super.getActiveWorkflowRunByPath(path, self);
-        }
-        const parent = this.runs.get(selfRow.parent_run_id);
-        if (!parent) return super.getActiveWorkflowRunByPath(path, self);
-        const deadline = Date.now() + 5000;
-        for (;;) {
-          const children = await this.findChildRuns(parent.id);
-          const live = children.filter(c => holdsPathLock(c.status));
-          if (live.length >= 2) {
-            this.overlapSeen = true;
-          }
-          if (this.overlapSeen) break;
-          if (Date.now() > deadline) {
-            throw new Error(
-              `rendezvous failed: ${children.length} child rows, ${live.length} live`
-            );
-          }
-          await new Promise(resolve => setTimeout(resolve, 1));
-        }
-        return super.getActiveWorkflowRunByPath(path, self);
+      const kids = (store: InMemoryStore, name: string): string[] => {
+        const parentRun = [...store.runs.values()].find(r => r.workflow_name === name);
+        return [...store.runs.values()]
+          .filter(r => r.parent_run_id === parentRun?.id)
+          .map(r => r.status)
+          .sort();
       };
-    }
-    const racyStore = new RendezvousStore();
-    const racyResult = await executeWorkflow(
-      makeDeps(racyStore),
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      await discover('parent-fanout-racy-child'),
-      'goal',
-      'conv-db'
-    );
-    expect(racyResult.success).toBe(false);
-    expect(kids(racyStore, 'parent-fanout-racy-child')).toEqual(['cancelled', 'completed']);
 
-    // With mutates_checkout:false the lock is skipped and both children run.
-    const safeStore = new InMemoryStore();
-    const safeResult = await executeWorkflow(
-      makeDeps(safeStore),
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      await discover('parent-fanout-safe-child'),
-      'goal',
-      'conv-db'
-    );
-    expect(safeResult.success).toBe(true);
-    expect(kids(safeStore, 'parent-fanout-safe-child')).toEqual(['completed', 'completed']);
-  }, 20000);
+      // Default posture: the sibling is cancelled and the parent run fails.
+      // Whether the collision fires depends on both child rows coexisting in
+      // non-terminal state when either lock query runs; under CI load the children
+      // can serialize end-to-end and both succeed. This store holds each child's
+      // lock query until BOTH child rows exist and are live, so the overlap the test
+      // characterizes is a precondition instead of a chance interleaving.
+      class RendezvousStore extends InMemoryStore {
+        private overlapSeen = false;
+        getActiveWorkflowRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'] = async (
+          path,
+          self
+        ) => {
+          const selfRow = self ? this.runs.get(self.id) : undefined;
+          if (!selfRow?.parent_run_id || this.overlapSeen) {
+            return super.getActiveWorkflowRunByPath(path, self);
+          }
+          const parent = this.runs.get(selfRow.parent_run_id);
+          if (!parent) return super.getActiveWorkflowRunByPath(path, self);
+          const deadline = Date.now() + 5000;
+          for (;;) {
+            const children = await this.findChildRuns(parent.id);
+            const live = children.filter(c => holdsPathLock(c.status));
+            if (live.length >= 2) {
+              this.overlapSeen = true;
+            }
+            if (this.overlapSeen) break;
+            if (Date.now() > deadline) {
+              throw new Error(
+                `rendezvous failed: ${children.length} child rows, ${live.length} live`
+              );
+            }
+            await new Promise(resolve => setTimeout(resolve, 1));
+          }
+          return super.getActiveWorkflowRunByPath(path, self);
+        };
+      }
+      const racyStore = new RendezvousStore();
+      const racyResult = await executeWorkflow(
+        makeDeps(racyStore),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover('parent-fanout-racy-child'),
+        'goal',
+        'conv-db'
+      );
+      expect(racyResult.success).toBe(false);
+      expect(kids(racyStore, 'parent-fanout-racy-child')).toEqual(['cancelled', 'completed']);
+
+      // With mutates_checkout:false the lock is skipped and both children run.
+      const safeStore = new InMemoryStore();
+      const safeResult = await executeWorkflow(
+        makeDeps(safeStore),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover('parent-fanout-safe-child'),
+        'goal',
+        'conv-db'
+      );
+      expect(safeResult.success).toBe(true);
+      expect(kids(safeStore, 'parent-fanout-safe-child')).toEqual(['completed', 'completed']);
+    },
+    testTimeout(20000)
+  );
 
   it('GAP (#2180 Defect A): a GATING child loses the path lock before it ever reaches its gate', async () => {
     // Fan-out where both children would gate. What actually happens is the PATH LOCK
@@ -5521,14 +5533,16 @@ describe('workflow: runtime $INPUTS delivery and cold resume (#2470)', () => {
       ...makeProvider(),
       sendQuery: mock(function* (prompt: string) {
         prompts.push(prompt);
-        yield { type: 'assistant', content: 'ai-output' };
+        yield { type: 'agent_message_chunk', text: 'ai-output' };
         yield { type: 'result', sessionId: 'sess', cost: 0.01, tokens: { input: 7, output: 3 } };
       }),
     };
     return {
       deps: {
         ...makeDeps(store),
-        getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+        getAgentProvider: mock(() =>
+          settlingProvider(provider)
+        ) as unknown as WorkflowDeps['getAgentProvider'],
       },
       prompts,
     };
@@ -6087,17 +6101,19 @@ nodes:
 
     const store = new InMemoryStore();
     const deps = makeDeps(store);
-    deps.getAgentProvider = mock(() => ({
-      ...makeProvider(),
-      sendQuery: mock(function* () {
-        yield { type: 'assistant', content: '{"green":false}' };
-        yield {
-          type: 'result',
-          sessionId: 'sess-outcome',
-          structuredOutput: { green: false },
-        };
-      }),
-    })) as unknown as WorkflowDeps['getAgentProvider'];
+    deps.getAgentProvider = mock(() =>
+      settlingProvider({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          yield { type: 'agent_message_chunk', text: '{"green":false}' };
+          yield {
+            type: 'result',
+            sessionId: 'sess-outcome',
+            structuredOutput: { green: false },
+          };
+        }),
+      })
+    ) as unknown as WorkflowDeps['getAgentProvider'];
 
     const result = await executeWorkflow(
       deps,
@@ -6159,7 +6175,7 @@ describe('workflow: typed value transport (#2637)', () => {
       ...makeProvider(),
       sendQuery: mock(function* (prompt: string) {
         if (prompt.includes('PRODUCE')) {
-          yield { type: 'assistant', content: '{"green":true,"items":["a","b"]}' };
+          yield { type: 'agent_message_chunk', text: '{"green":true,"items":["a","b"]}' };
           yield {
             type: 'result',
             sessionId: 'sess-prod',
@@ -6171,7 +6187,7 @@ describe('workflow: typed value transport (#2637)', () => {
           // A verifier-shaped payload: top-level `error` + `status` fields as DATA —
           // the natural schema the aggregate's failure marker must stay separable from.
           if (prompt.includes('bad')) throw new Error('verifier exploded');
-          yield { type: 'assistant', content: '{"error":"none found","status":"clean"}' };
+          yield { type: 'agent_message_chunk', text: '{"error":"none found","status":"clean"}' };
           yield {
             type: 'result',
             sessionId: 'sess-verify',
@@ -6182,24 +6198,26 @@ describe('workflow: typed value transport (#2637)', () => {
         if (prompt.includes('HANDLE')) {
           if (prompt.includes('bad')) throw new Error('handler exploded');
           if (prompt.includes('plain')) {
-            yield { type: 'assistant', content: 'did:plain' };
+            yield { type: 'agent_message_chunk', text: 'did:plain' };
             yield { type: 'result', sessionId: 'sess-plain' };
             return;
           }
           const item = prompt.includes('alpha') ? 'alpha' : 'beta';
-          yield { type: 'assistant', content: `{"v":"${item}"}` };
+          yield { type: 'agent_message_chunk', text: `{"v":"${item}"}` };
           yield { type: 'result', sessionId: `sess-${item}`, structuredOutput: { v: item } };
           return;
         }
         prompts.push(prompt);
-        yield { type: 'assistant', content: 'ai-output' };
+        yield { type: 'agent_message_chunk', text: 'ai-output' };
         yield { type: 'result', sessionId: 'sess' };
       }),
     };
     return {
       deps: {
         ...makeDeps(store),
-        getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+        getAgentProvider: mock(() =>
+          settlingProvider(provider)
+        ) as unknown as WorkflowDeps['getAgentProvider'],
       },
       prompts,
     };
