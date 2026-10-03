@@ -1113,6 +1113,48 @@ describe('ClaudeProvider', () => {
       expect(types).toEqual(['agent_message_chunk', 'result', 'settled']);
     });
 
+    test('surfaces the SDK retrying a model call as a warning', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'api_retry',
+          attempt: 3,
+          max_retries: 10,
+          retry_delay_ms: 8000,
+          error_status: 529,
+          error: 'overloaded',
+        };
+        yield {
+          type: 'system',
+          subtype: 'api_retry',
+          attempt: 1,
+          max_retries: 1,
+          retry_delay_ms: 450,
+          error_status: null,
+          error: 'unknown',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        {
+          type: 'warning',
+          code: 'claude.api_retry',
+          message:
+            'Claude is retrying the model call (attempt 3 of 10, waiting 8s, HTTP 529 overloaded)',
+        },
+        {
+          type: 'warning',
+          code: 'claude.api_retry',
+          message: 'Claude is retrying the model call (attempt 1 of 1, waiting 450ms, unknown)',
+        },
+      ]);
+    });
+
     test('yields hook_started chunk from SDK system message', async () => {
       mockQuery.mockImplementation(async function* () {
         yield {
@@ -3712,6 +3754,21 @@ describe('typed failures (#1797, #3524)', () => {
             { type: 'system', subtype: 'background_tasks_changed', tasks: [] },
             { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
             { type: 'system', subtype: 'session_state_changed', state: 'idle' },
+          ]),
+        },
+        {
+          name: 'turn the SDK retried',
+          run: turn([
+            {
+              type: 'system',
+              subtype: 'api_retry',
+              attempt: 1,
+              max_retries: 10,
+              retry_delay_ms: 1000,
+              error_status: 429,
+              error: 'rate_limit',
+            },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
           ]),
         },
         {
