@@ -111,16 +111,21 @@ function merge(state: MergeState, node: unknown, value: unknown): Node {
 }
 
 /**
- * YAML requires an anchor above its aliases. After a merge that reordered nodes or removed the
- * one holding the anchor, an alias no longer has it above; such an alias is written out as the
- * value it stood for.
+ * An alias kept by merge() stays only while its anchor is above it and still holds the value
+ * the alias stood for; otherwise it is written out as that value. This runs after the whole
+ * merge because merge() visits in the definition's order, not the file's: the anchor can be
+ * edited, moved below the alias, or removed after the alias was kept.
  */
 function settleAliases({ doc, aliasValues }: MergeState): void {
   const anchorsSeen = new Set<string>();
   visit(doc, {
     Alias(_key, alias) {
-      if (anchorsSeen.has(alias.source)) return undefined;
-      return doc.createNode(aliasValues.get(alias));
+      const value = aliasValues.get(alias);
+      if (anchorsSeen.has(alias.source)) {
+        const target = alias.resolve(doc);
+        if (target && Bun.deepEquals(target.toJS(doc), value)) return undefined;
+      }
+      return doc.createNode(value);
     },
     Node(_key, node) {
       if (node.anchor) anchorsSeen.add(node.anchor);

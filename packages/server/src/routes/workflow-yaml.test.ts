@@ -213,6 +213,18 @@ describe('serializeWorkflowPreservingText', () => {
     expect(Bun.YAML.parse(text)).toEqual(definition);
   });
 
+  test('an alias sent before its edited anchor in the same map keeps its own value', () => {
+    const anchored = ['name: anchored', 'first: &shared', '  type: object', 'second: *shared', ''];
+    const definition = {
+      name: 'anchored',
+      second: { type: 'object' },
+      first: { type: 'string' },
+    };
+    const text = serializeWorkflowPreservingText(definition, anchored.join('\n'));
+    expect(Bun.YAML.parse(text)).toEqual(definition);
+    expect(text).not.toContain('*shared');
+  });
+
   test('duplicate node ids are written as sent, not folded into one node', () => {
     const definition = {
       name: 'flow',
