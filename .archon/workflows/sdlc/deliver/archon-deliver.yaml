@@ -208,11 +208,10 @@ nodes:
   # the current canonical findings, proves the correction is green, then runs a
   # fresh continuation review over the report and delta, so a blocking fix is
   # never unreviewed. The bound is a runaway backstop, not a pacing device:
-  # until_bash ends the loop the moment a recheck certifies ready. With
-  # continuation rechecks and class completion, a converging delivery needs at
-  # most three corrections; a run that needs more is finding another symptom of
-  # one class each round and will not converge by looping. A
-  # per-lane bound would need runtime-parameterized composition, which the
+  # until_bash ends the loop the moment a recheck certifies ready. Continuation
+  # rechecks and class completion make a converging delivery short; a run that
+  # keeps finding another symptom of one class each round will not converge by
+  # looping. A per-lane bound would need runtime-parameterized composition, which the
   # language deliberately does not have — the flat bound buys the same outcome.
   #
   # CI feeds the fix, without waiting: checks run on the pushed commits while
