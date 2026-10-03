@@ -215,8 +215,8 @@ function createMessageErrorHandler(
  * Exported for testability. Filters specifically for SDK cleanup races
  * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
  * a DAG node abort). Those are logged at error level but do not exit the process.
- * A stack-attested error from the one active Pi extension turn is handed back to
- * that node. Every other rejection is logged at fatal level and exits after
+ * An error whose stack names an extension loaded by a running Pi turn is handed
+ * back to that node; when several running turns loaded it, each of them fails. Every other rejection is logged at fatal level and exits after
  * queued telemetry flushes (bounded, so still Fail Fast).
  */
 export function handleUnhandledRejection(reason: unknown): void {
@@ -1106,7 +1106,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   process.once('SIGTERM', shutdown);
 
   // Guard against SDK cleanup races and hand stack-attested Pi extension
-  // failures back to their serialized node turn. When a DAG node is aborted,
+  // failures back to the Pi turns that loaded that extension. When a DAG node is aborted,
   // the Claude Agent SDK's PostToolUse hook may be in-flight. After the hook
   // returns { continue: true }, handleControlRequest() tries to write() back to
   // the subprocess pipe — but the pipe is already closed (abort fired). The
