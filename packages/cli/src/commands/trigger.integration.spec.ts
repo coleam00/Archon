@@ -105,7 +105,13 @@ function readRows<T>(databasePath: string, sql: string): T[] {
   }
 }
 
-function workflow(marker: string): string {
+/**
+ * The node holds until the test creates `release`, so the first run keeps the
+ * capacity-1 slot for exactly as long as the test needs a second start to queue
+ * behind it. Runs that start after the release pass straight through. The loop is
+ * bounded so a run the teardown fails to stop cannot outlive the job.
+ */
+function workflow(marker: string, release: string): string {
   return `name: queued-trigger-proof
 description: Durable trigger source proof.
 mutates_checkout: false
@@ -115,7 +121,8 @@ inputs:
 nodes:
   - id: hold
     bash: |
-      sleep 8
+      for _ in $(seq 240); do [ -f '${release}' ] && break; sleep 0.25; done
+      [ -f '${release}' ] || exit 1
       echo "${marker}-$INPUTS_COUNT-$TRIGGER_CONFIG_PROOF" > "$ARTIFACTS_DIR/result.txt"
 `;
 }
@@ -128,7 +135,8 @@ describe('trigger CLI durable execution', () => {
     const projectRoot = join(root, 'project');
     const workflowsDir = join(projectRoot, '.archon', 'workflows');
     mkdirSync(workflowsDir, { recursive: true });
-    writeFileSync(join(workflowsDir, 'queued-trigger-proof.yaml'), workflow('ORIGINAL'));
+    const release = join(root, 'release');
+    writeFileSync(join(workflowsDir, 'queued-trigger-proof.yaml'), workflow('ORIGINAL', release));
     const gitInit = Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot });
     expect(await gitInit.exited).toBe(0);
 
@@ -209,11 +217,12 @@ describe('trigger CLI durable execution', () => {
 
     // Change the live authoring checkout after intake. Cold drain must execute the
     // finalized capture owned by the queued request, not discover these new bytes.
-    writeFileSync(join(workflowsDir, 'queued-trigger-proof.yaml'), workflow('EDITED'));
+    writeFileSync(join(workflowsDir, 'queued-trigger-proof.yaml'), workflow('EDITED', release));
     writeFileSync(
       runConfigPath,
       JSON.stringify({ env: { TRIGGER_CONFIG_PROOF: 'edited-config' } })
     );
+    writeFileSync(release, '');
     await waitFor(() => {
       const row = readRows<RunRow>(
         databasePath,
