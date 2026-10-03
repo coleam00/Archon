@@ -1901,16 +1901,17 @@ the field and names itself in `execution.accounting` instead. The persisted
 with `data.aggregate: true`, the marker a resume folds (#3508). JSONL `workflow_complete`
 carries the successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal
 `workflow_error` carries the same aggregate when work reported usage before failure. These
-match run metadata `total_cost_usd` and `total_tokens_*`. An absent `cost_usd` means the
-provider reported no cost — Codex reports none — while `0` means it reported zero. Claude
-reports a session's running total, so Archon subtracts the total it last saw for the session
-a node resumes or forks. When that session was created by an earlier Archon process, for
-example before `archon workflow resume` or across `persist_session` invocations, the earlier
-total is unknown and the node's `cost_usd` is absent rather than over-counted. A run that
-spent nothing on AI, such as a bash-only workflow, carries no `cost_usd` rather than `0`.
-Successful loop nodes and governance nodes do not yet have complete terminal transcript-row
-coverage, so read usage from the rows that exist rather than treating an absent row as zero
-spend.
+match run metadata `total_cost_usd` and `total_tokens_*`. On a row that reports its own spend,
+an absent `cost_usd` means the provider reported no cost — Codex reports none — while `0` means
+it reported zero. On a restatement row an absent `cost_usd` means the scope's spend is on the
+rows that row names. Claude reports a session's running total, so Archon subtracts the total it
+last saw for the session a node resumes or forks. When that session was created by an earlier
+Archon process, for example before `archon workflow resume` or across `persist_session`
+invocations, the earlier total is unknown and the node's `cost_usd` is absent rather than
+over-counted. A run that spent nothing on AI, such as a bash-only workflow, carries no
+`cost_usd` rather than `0`. Successful loop nodes and governance nodes do not yet have complete
+terminal transcript-row coverage, so read usage from the rows that exist rather than treating
+an absent row as zero spend.
 
 ### Choosing the child's checkout with `isolation:`
 

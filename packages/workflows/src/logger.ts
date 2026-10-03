@@ -101,18 +101,20 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
  * marker the durable row carries and the resume fold already honours. No row restates
  * another's spend, so summing the rows that carry a `cost_usd` lands on
  * `workflow_complete.cost_usd` (#3508); count `node_error` rows in that sum, because a
- * retried attempt that already spent reports on its own.
+ * retried attempt that already spent reports on its own. So an absent `cost_usd` says one of
+ * two things, and the row's `accounting` says which: on a row that reports its own spend, the
+ * provider reported no cost; on a restatement row, that scope's spend is on the rows it names.
  *
  * Coverage is not yet complete, so do not read an absent `cost_usd` on a run's transcript
- * as "the whole run was free"; read it per row, where it means the provider reported no
- * cost. A `loop:` node's cumulative totals reach its transcript row on failure and its
- * persisted event on either outcome, but no success exit writes a terminal transcript row
- * for the loop's own id — only per-iteration rows, which carry duration and no usage.
- * Completing that coverage is #2614's audit.
+ * as "the whole run was free"; read it per row. A `loop:` node's cumulative totals reach its
+ * transcript row on failure and its persisted event on either outcome, but no success exit
+ * writes a terminal transcript row for the loop's own id — only per-iteration rows, which
+ * carry duration and no usage. Completing that coverage is #2614's audit.
  *
- * Each axis is omitted when nothing was reported for it, so an absent `cost_usd` means
- * the provider reported no cost (Codex reports none at all — #2334) and `0` means it
- * reported zero. Build it with `!== undefined` tests, never truthiness.
+ * Each axis is omitted when nothing was reported for it, so on a row that reports its own
+ * spend an absent `cost_usd` means the provider reported no cost (Codex reports none at all
+ * — #2334) and `0` means it reported zero. Build it with `!== undefined` tests, never
+ * truthiness.
  */
 export type WorkflowUsage = Pick<WorkflowEvent, 'tokens' | 'cost_usd'>;
 
