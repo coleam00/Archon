@@ -16,7 +16,12 @@ type ObjectVariantKey = ObjectVariant extends infer V
     : never
   : never;
 
-const CLASS_BY_VARIANT: Partial<Record<StringVariant, ProviderFailureClass>> = {
+/**
+ * Total over the generated variants, so a Codex bump that adds one fails type-check until
+ * it is classified here. `unknown` rows are deliberate: nothing in them says whether
+ * another attempt can help.
+ */
+const CLASS_BY_VARIANT: Record<StringVariant, ProviderFailureClass> = {
   unauthorized: 'auth',
   usageLimitExceeded: 'quota_exhausted',
   rateLimitExceeded: 'rate_limited',
@@ -25,7 +30,19 @@ const CLASS_BY_VARIANT: Partial<Record<StringVariant, ProviderFailureClass>> = {
   flexUnavailable: 'transient',
   // Codex's own per-session spend limit stopped the turn.
   sessionBudgetExceeded: 'budget_exceeded',
+  contextWindowExceeded: 'unknown',
+  cyberPolicy: 'unknown',
+  misalignmentPolicyViolation: 'unknown',
+  tooManyDenials: 'unknown',
+  badRequest: 'unknown',
+  threadRollbackFailed: 'unknown',
+  sandboxError: 'unknown',
+  other: 'unknown',
 };
+
+function isStringVariant(info: string): info is StringVariant {
+  return Object.hasOwn(CLASS_BY_VARIANT, info);
+}
 
 /** Variants that carry the HTTP status of the request that failed. */
 const HTTP_VARIANTS: ReadonlySet<string> = new Set<ObjectVariantKey>([
@@ -60,7 +77,7 @@ export function classifyTurnError(
   rateLimits: RateLimitSnapshot | undefined
 ): TurnFailureClass {
   if (typeof info === 'string') {
-    const failureClass = CLASS_BY_VARIANT[info as StringVariant] ?? 'unknown';
+    const failureClass = isStringVariant(info) ? CLASS_BY_VARIANT[info] : 'unknown';
     if (failureClass !== 'quota_exhausted') return { failureClass };
     const resetAt = exhaustedWindowReset(rateLimits);
     return resetAt ? { failureClass, resetAt } : { failureClass };

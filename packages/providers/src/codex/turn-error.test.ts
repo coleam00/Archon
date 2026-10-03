@@ -37,6 +37,8 @@ describe('classifyTurnError', () => {
     ['other', 'unknown'],
     // A variant a newer Codex may add.
     ['someFutureVariant', 'unknown'],
+    // An inherited property name is not a variant.
+    ['constructor', 'unknown'],
   ] satisfies [string, ProviderFailureClass][])('%s is %s', (info, expected) => {
     expect(classifyTurnError(info, undefined).failureClass).toBe(expected);
   });
