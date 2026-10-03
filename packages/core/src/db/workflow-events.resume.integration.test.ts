@@ -92,7 +92,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     updateWorkflowActivity: async () => {},
     completeWorkflowRun: async () => {},
     failWorkflowRun: async () => {},
-    getWorkflowNodeSession: async () => null,
+    listWorkflowNodeSessions: async () => [],
     listWorkflowRunNodeSessions: async () => [],
   };
   const config: WorkflowConfig = {

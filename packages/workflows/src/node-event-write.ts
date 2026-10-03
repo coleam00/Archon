@@ -233,7 +233,7 @@ export async function recordDerivedExecution(
 export async function recordNodeState(
   sinks: NodeStateSinks,
   record: NodeStateRecord,
-  continuation: { sessionId?: string; resumed?: boolean } = {}
+  continuation: { resumed?: boolean } = {}
 ): Promise<NodeExecutionResult> {
   await persistNodeEvent(sinks.store, serializeNodeStateRecord(record));
   await recordDerivedExecution(sinks, record);

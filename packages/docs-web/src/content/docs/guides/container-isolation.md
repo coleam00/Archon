@@ -48,7 +48,7 @@ The overlay's upper layer **is** the diff by overlayfs construction, so computin
 ```bash
 # Register the folder + run in a container in one go
 cd /path/to/ops-root
-bun run cli workflow run assist --folder --container "reorganize the invoices"
+bun run cli workflow run my-workflow --folder --container "reorganize the invoices"
 ```
 
 You'll see the container come up, nodes execute inside it, and — when the run finishes with changes — a **write-back gate**:
@@ -89,7 +89,7 @@ Precedence: `--container` flag > workflow `container.enabled` > config `containe
 | Provider | In-container | Notes |
 |----------|:---:|-------|
 | **Claude** | ✅ | Spawns its CLI via `docker exec`; the binary is baked into the runner image. |
-| **Codex** | 🔜 | Needs the Codex SDK's spawn/transport override + the binary in the image; `CODEX_HOME/auth.json` on the upper volume. Fails fast today via the `containerExec` capability. |
+| **Codex** | 🔜 | Needs an in-container spawn of `codex app-server` + the binary in the image; `CODEX_HOME/auth.json` on the upper volume. Fails fast today via the `containerExec` capability. |
 | **Pi** | 🔜 | In-process harness; needs a container tool-transport (Flue-style) or an in-image shim. |
 | **OpenCode / Copilot / community** | 🔜 | Declare `containerExec: true` and implement their own exec-in-container translation against the `ExecutionContext` contract. |
 

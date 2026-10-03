@@ -1245,7 +1245,7 @@ describe('workflow list arguments', () => {
     const { status, envelope } = spawnJsonError([
       'workflow',
       'list',
-      'archon-fix-github-issue-codex',
+      'archon-deliver',
       '--full',
       '--json',
       '--cwd',
@@ -1262,7 +1262,7 @@ describe('workflow list arguments', () => {
       errors: unknown[];
     };
     expect(output.workflows).toHaveLength(1);
-    expect(output.workflows[0].name).toBe('archon-fix-github-issue-codex');
+    expect(output.workflows[0].name).toBe('archon-deliver');
     expect(Array.from(output.workflows[0].description).length).toBeGreaterThan(160);
     expect(output.workflows[0].descriptionTruncated).toBe(false);
   });

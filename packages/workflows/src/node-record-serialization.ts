@@ -76,6 +76,8 @@ export const serializedNodeDataSchema = z.object({
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
+  /** The full provider session id; only this durable row carries it. */
+  session_id: z.string().optional(),
 });
 export type SerializedNodeData = z.infer<typeof serializedNodeDataSchema>;
 
@@ -251,6 +253,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
       ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
       ...(d?.expr !== undefined ? { expr: d.expr } : {}),
+      ...(record.sessionId !== undefined ? { session_id: record.sessionId } : {}),
     },
   };
 }
@@ -261,10 +264,9 @@ export type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
-/** Full session cursors never enter the record or its public projections. */
 export function serializeNodeOutput(
   record: NodeExecutionRecord,
-  continuation: { sessionId?: string; resumed?: boolean } = {}
+  continuation: { resumed?: boolean } = {}
 ): NodeExecutionResult {
   const common = {
     output: record.output?.text ?? '',
@@ -281,6 +283,7 @@ export function serializeNodeOutput(
       : {}),
     execution: executionMetadata(record),
   };
+  const session = record.sessionId !== undefined ? { sessionId: record.sessionId } : {};
   const lifecycle = record.lifecycle;
   switch (lifecycle.status) {
     case 'failed':
@@ -297,10 +300,10 @@ export function serializeNodeOutput(
     case 'skipped':
       return { ...common, state: 'skipped', cause: lifecycle.cause };
     case 'completed':
-      return { ...common, ...continuation, state: 'completed' };
+      return { ...common, ...session, ...continuation, state: 'completed' };
     case 'started':
     case 'suspended':
-      return { ...common, ...continuation, state: 'running' };
+      return { ...common, ...session, ...continuation, state: 'running' };
   }
 }
 

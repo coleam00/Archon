@@ -14,7 +14,7 @@ servers to individual nodes. Claude workflow nodes exclude ambient user/project/
 MCP by default, including the servers of plugins the node names with `plugins:`, and
 expose exactly the external servers in their declared file, plus
 governed native tools that Archon injects for the current workflow when applicable.
-Codex is an explicit exception: its SDK adds declared servers to ambient configuration
+Codex is an explicit exception: it adds declared servers to ambient configuration
 rather than replacing it.
 
 MCP works with Claude, Codex, and Copilot workflow nodes. On Pi and OpenCode, a
@@ -188,8 +188,8 @@ author-declared MCP servers. Archon may still inject its own governed native-too
 server for a node that requests an engine capability. This does not disable
 `CLAUDE.md`, built-in agents, or filesystem-defined agents.
 
-Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
-Codex SDK, so the servers are available for that node without requiring global
+Codex nodes pass the same MCP config as per-node `mcp_servers` overrides on the
+Codex thread, so the servers are available for that node without requiring global
 `~/.codex/config.toml` setup.
 
 ## MCP-Only Nodes
@@ -252,11 +252,11 @@ those placeholders.
 
 ### Codex ambient MCP limitation
 
-Codex's SDK applies node `mcp:` servers as additive configuration overrides. It
+Codex applies node `mcp:` servers as additive configuration overrides. It
 does not replace the ambient user/project/plugin MCP catalog: with no node `mcp:`,
 ambient servers may remain available, and with a declared file, both ambient and
 declared servers may be present. `mcp_servers={}` does not clear inherited entries,
-and the current SDK has no wildcard/default global-off control.
+and Codex has no wildcard/default global-off control.
 
 Archon therefore does not describe Codex `mcp:` as an exclusive tool boundary.
 It preserves runnable additive behavior and reports the limitation rather than
@@ -341,10 +341,10 @@ nodes:
 
 ## Push Notifications (ntfy)
 
-Some built-in workflows (like `archon-smart-pr-review`) include an optional
-notification node that sends a push notification to your phone when the workflow
-completes. It's gated behind a `when:` condition — if you haven't configured ntfy,
-the node is silently skipped.
+A workflow can end with an optional notification node that sends a push
+notification to your phone when the workflow completes. Gate it behind a `when:`
+condition so the node is skipped when ntfy isn't configured. No bundled workflow
+includes one; add the nodes below to your own workflows.
 
 ### Setup (30 seconds)
 
@@ -402,8 +402,8 @@ to generate a meaningful summary.
 # Verify your phone receives notifications
 curl -d "Hello from Archon" ntfy.sh/YOUR_TOPIC_NAME
 
-# Run a workflow with notifications
-bun run cli workflow run archon-smart-pr-review "Review PR #123"
+# Run one of your workflows that includes the notify node
+bun run cli workflow run my-workflow "Review PR #123"
 ```
 
 ## MCP vs allowed_tools/denied_tools vs hooks

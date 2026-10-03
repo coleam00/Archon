@@ -4723,7 +4723,6 @@ export interface components {
                 /** Format: date-time */
                 producedAt: string;
                 size: number;
-                sessionId?: string;
               };
             }[];
             limitations: {

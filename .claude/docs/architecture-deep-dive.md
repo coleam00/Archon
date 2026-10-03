@@ -54,7 +54,7 @@ Slack event
 
 ---
 
-## 2. Workflow Execution: `/workflow run archon-fix-github-issue #42`
+## 2. Workflow Execution: `/workflow run archon-ship #42`
 
 ```
 User message starts with /workflow

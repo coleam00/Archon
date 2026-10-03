@@ -687,6 +687,7 @@ describe('OpencodeProvider', () => {
       });
     };
     const violations = await runProviderConformance({
+      capabilities: new OpencodeProvider().getCapabilities(),
       // Only the SDK's auth discriminator and HTTP status fields carry a class; anything
       // else, including auth-sounding text, is `unknown`.
       failureCases: [

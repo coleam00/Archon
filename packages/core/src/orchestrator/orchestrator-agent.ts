@@ -18,7 +18,7 @@ import type {
   WorkflowRequest,
 } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
-import { toolCallDisplayName } from '@archon/provider-contract';
+import { sessionPreview, toolCallDisplayName } from '@archon/provider-contract';
 import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -1674,7 +1674,13 @@ async function tryPersistSessionId(
     await sessionDb.updateSession(sessionId, assistantSessionId);
   } catch (error) {
     getLog().error(
-      { err: error as Error, sessionId, persistedValue: assistantSessionId },
+      {
+        err: error as Error,
+        sessionId,
+        ...(assistantSessionId
+          ? { persistedValuePreview: sessionPreview(assistantSessionId) }
+          : {}),
+      },
       'session_id_persist_failed'
     );
   }
@@ -2760,7 +2766,7 @@ async function handleStreamMode(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
-            staleSessionId: msg.sessionId,
+            ...(msg.sessionId ? { staleSessionIdPreview: sessionPreview(msg.sessionId) } : {}),
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
@@ -2995,7 +3001,7 @@ async function handleBatchMode(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
-            staleSessionId: msg.sessionId,
+            ...(msg.sessionId ? { staleSessionIdPreview: sessionPreview(msg.sessionId) } : {}),
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
