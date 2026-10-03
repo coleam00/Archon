@@ -493,6 +493,9 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
   // is the change in the thread's `total`. A resumed thread's total already includes earlier
   // turns and is not replayed before the turn starts, so the first snapshot sets the baseline.
+  // If that first snapshot is a re-send rather than a request (a local compaction or a
+  // usage-limit failure before the first request), a resumed turn over-counts by one earlier
+  // request; Codex sends no pre-turn total on this resume path to correct it.
   let usageSpan: { first: ThreadTokenUsage; end: TokenUsageBreakdown } | undefined;
   let rateLimits: RateLimitSnapshot | undefined;
 
