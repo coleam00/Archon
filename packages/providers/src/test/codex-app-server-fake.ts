@@ -477,11 +477,15 @@ export function turnError(codexErrorInfo: CodexErrorInfo | null, message: string
   return { message, codexErrorInfo, additionalDetails: null, misalignment: null };
 }
 
-export function errorNotification(message: string, willRetry: boolean): ServerNotification {
+export function errorNotification(
+  message: string,
+  willRetry: boolean,
+  codexErrorInfo: CodexErrorInfo | null = null
+): ServerNotification {
   return {
     method: 'error',
     params: {
-      error: turnError(null, message),
+      error: turnError(codexErrorInfo, message),
       willRetry,
       threadId: THREAD_ID,
       turnId: TURN_ID,
