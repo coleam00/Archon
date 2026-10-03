@@ -632,8 +632,9 @@ function withModelAccessAdvice(
 
 /**
  * Spawn errnos that fail the same way every time: the binary path is missing, not
- * executable, the wrong architecture, or not a file. Others, such as EMFILE, EAGAIN and
- * ENOMEM, are the machine running short and may clear.
+ * executable, the wrong architecture, not a file, blocked by policy, too long or a
+ * symlink loop, or the environment is too large to exec. Others, such as EMFILE, EAGAIN
+ * and ENOMEM, are the machine running short and may clear.
  */
 const MISCONFIGURED_SPAWN_ERRNOS: ReadonlySet<string> = new Set([
   'ENOENT',
@@ -641,6 +642,10 @@ const MISCONFIGURED_SPAWN_ERRNOS: ReadonlySet<string> = new Set([
   'ENOEXEC',
   'EISDIR',
   'ENOTDIR',
+  'EPERM',
+  'E2BIG',
+  'ENAMETOOLONG',
+  'ELOOP',
 ]);
 
 /**

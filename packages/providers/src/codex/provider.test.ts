@@ -311,6 +311,10 @@ describe('CodexProvider', () => {
       ['ENOENT', 'misconfigured'],
       ['EACCES', 'misconfigured'],
       ['ENOEXEC', 'misconfigured'],
+      ['EPERM', 'misconfigured'],
+      ['E2BIG', 'misconfigured'],
+      ['ENAMETOOLONG', 'misconfigured'],
+      ['ELOOP', 'misconfigured'],
       ['EMFILE', 'transient'],
     ] satisfies [string, ProviderFailureClass][])(
       'a spawn that fails with %s is %s',
