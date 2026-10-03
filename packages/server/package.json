@@ -94,6 +94,9 @@
       "src/resolve-user-id.test.ts"
     ],
     [
+      "src/index.slack-resume.test.ts"
+    ],
+    [
       "src/boot/claude-auth-posture.test.ts",
       "src/boot/codex-auth-posture.test.ts"
     ],

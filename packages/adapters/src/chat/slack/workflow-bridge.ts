@@ -74,6 +74,13 @@ interface RunState {
  * DAGs where node transitions span seconds.
  */
 const STATUS_UPDATE_DEBOUNCE_MS = 500;
+const RESUME_NOT_ACCEPTED_NOTE =
+  'recorded — resume was not accepted; check the run status and resume it manually if still paused';
+
+export type SlackWorkflowResume = (
+  runId: string,
+  slackUserId: string | undefined
+) => Promise<boolean>;
 
 export class SlackWorkflowBridge {
   private adapter: SlackAdapter;
@@ -81,7 +88,10 @@ export class SlackWorkflowBridge {
   private unsubscribeEvents: (() => void) | null = null;
   private actionHandlersRegistered = false;
 
-  constructor(adapter: SlackAdapter) {
+  constructor(
+    adapter: SlackAdapter,
+    private readonly resumeWorkflow: SlackWorkflowResume = async () => false
+  ) {
     this.adapter = adapter;
   }
 
@@ -533,7 +543,8 @@ export class SlackWorkflowBridge {
     const parsed = parseActionId(action.action_id ?? '', decision);
     if (!parsed) return;
     const { runId, nodeId } = parsed;
-    if (!this.runs.get(runId)?.approvals.has(nodeId)) return;
+    const state = this.runs.get(runId);
+    if (state && !state.approvals.has(nodeId)) return;
 
     // Top-level try/catch: applyResolutionEdit must also be guarded because the
     // block builder or chat.update can throw. Bolt has no app.error registered,
@@ -543,23 +554,29 @@ export class SlackWorkflowBridge {
       try {
         if (decision === 'approved') {
           const result = await workflowOperations.approveWorkflow(runId);
+          const resumed = await this.tryResumeWorkflow(runId, actorId);
           // Interactive-loop approves are outcome-ambiguous from here: a gate that
           // paused after a completion condition was met finalizes on resume (no re-run, #2074);
           // otherwise the loop runs another iteration. Hedge like manage_run does —
           // this bridge approves with no comment, so both outcomes are reachable.
-          outcomeNote =
-            result.type === 'interactive_loop'
-              ? 'recorded — finalizes if the gate paused after a completion condition was met, otherwise the loop runs another iteration on resume'
-              : 'workflow resumed';
+          outcomeNote = resumed
+            ? result.type === 'interactive_loop'
+              ? 'workflow resumed — finalizes if the gate paused after a completion condition was met, otherwise the loop runs another iteration'
+              : 'workflow resumed'
+            : RESUME_NOT_ACCEPTED_NOTE;
         } else {
           const result = await workflowOperations.rejectWorkflow(runId, 'Rejected');
           outcomeNote = result.cancelled
             ? result.maxAttemptsReached
               ? 'cancelled — max reject attempts reached'
               : 'cancelled'
-            : result.newMode
-              ? 'recorded — the run continues'
-              : 'recorded — workflow will retry with feedback';
+            : (await this.tryResumeWorkflow(runId, actorId))
+              ? result.writeBack
+                ? 'recorded — workflow resumed to discard the container changes'
+                : result.newMode
+                  ? 'recorded — workflow resumed'
+                  : 'recorded — workflow resumed and will retry with feedback'
+              : RESUME_NOT_ACCEPTED_NOTE;
         }
       } catch (error) {
         const err = error as Error;
@@ -582,6 +599,18 @@ export class SlackWorkflowBridge {
         { err: error as Error, runId, nodeId, decision },
         'slack.bridge_approval_handler_failed'
       );
+    }
+  }
+
+  private async tryResumeWorkflow(
+    runId: string,
+    slackUserId: string | undefined
+  ): Promise<boolean> {
+    try {
+      return await this.resumeWorkflow(runId, slackUserId);
+    } catch (error) {
+      getLog().warn({ err: error as Error, runId }, 'slack.bridge_resume_failed');
+      return false;
     }
   }
 
