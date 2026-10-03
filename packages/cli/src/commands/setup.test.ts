@@ -605,6 +605,42 @@ describe('writeScopedEnv (#1303)', () => {
     expect(result.backupPath).not.toBeNull();
   });
 
+  it('a re-run moves an old Archon Codex setup to the new names and drops the old lines (#3562)', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(
+      envPath,
+      'CODEX_ID_TOKEN=old-id\nCODEX_ACCESS_TOKEN=old-access\nCODEX_REFRESH_TOKEN=old-rt\nCODEX_ACCOUNT_ID=old-acct\n'
+    );
+    // A re-run that does not touch Codex still migrates it; one that enters new
+    // tokens leaves no stale CODEX_ACCESS_TOKEN behind for Codex to read.
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged).toMatchObject({
+      ARCHON_CODEX_ID_TOKEN: 'old-id',
+      ARCHON_CODEX_ACCESS_TOKEN: 'old-access',
+      ARCHON_CODEX_REFRESH_TOKEN: 'old-rt',
+      ARCHON_CODEX_ACCOUNT_ID: 'old-acct',
+    });
+    expect(Object.keys(merged).filter(key => key.startsWith('CODEX_'))).toEqual([]);
+  });
+
+  it('a re-run leaves a lone CODEX_ACCESS_TOKEN alone: it is the user’s Codex auth (#3562)', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'CODEX_ACCESS_TOKEN=users-own\n');
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged.CODEX_ACCESS_TOKEN).toBe('users-own');
+    expect(merged.ARCHON_CODEX_ACCESS_TOKEN).toBeUndefined();
+  });
+
   it('merge preserves existing PostgreSQL DATABASE_URL when proposed is SQLite', () => {
     const envPath = join(HOME_DIR, '.env');
     writeFileSync(envPath, 'DATABASE_URL=postgresql://localhost:5432/mydb\n');

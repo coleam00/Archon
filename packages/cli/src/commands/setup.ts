@@ -44,7 +44,11 @@ import { randomBytes } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
 import { getRegisteredProviders } from '@archon/providers';
-import { CODEX_SETUP_ENV, readCodexSetupEnv } from '@archon/providers/codex/setup-env';
+import {
+  CODEX_SETUP_ENV,
+  migrateCodexSetupEnv,
+  readCodexSetupEnv,
+} from '@archon/providers/codex/setup-env';
 import { TIER_NAMES, buildAiProfile } from '@archon/workflows/model-validation';
 import {
   getArchonEnvPath as pathsGetArchonEnvPath,
@@ -1953,9 +1957,10 @@ export function writeScopedEnv(
     }
   } else {
     // Merge: existing non-empty values win; proposed-only keys are added;
-    // existing-only keys (user customizations) are preserved verbatim.
+    // existing-only keys (user customizations) are preserved verbatim, except
+    // an old Archon Codex setup, which moves to its new names (#3562).
     const existingRaw = readFileSync(targetPath, 'utf-8');
-    const existing = parseDotenv(existingRaw);
+    const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
     const proposed = parseDotenv(content);
     const merged: Record<string, string> = { ...existing };
     for (const [key, value] of Object.entries(proposed)) {
