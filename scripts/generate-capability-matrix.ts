@@ -51,7 +51,10 @@ const CHECK_ONLY = process.argv.includes('--check');
  */
 const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
   { key: 'sessionResume', label: 'Session resume' },
-  { key: 'sessionFork', label: 'Immutable session fork (`context.resume`)' },
+  {
+    key: 'sessionFork',
+    label: 'Immutable session fork (`context.resume`, cross-run `persist_session`)',
+  },
   { key: 'mcp', label: 'MCP servers (`mcp:`)' },
   { key: 'hooks', label: 'Hooks (`hooks:`)' },
   { key: 'skills', label: 'Skills (`skills:`)' },

@@ -691,7 +691,7 @@ This will:
 - Install via `brew tap coleam00/archon && brew install coleam00/archon/archon`
 - Verify the binary reports the correct version and `Build: binary`
 - Verify bundled workflows load
-- Verify the SDK spawn path works (a minimal assist workflow)
+- Verify the SDK spawn path works (a minimal archon-investigate run)
 - Verify the env-leak guard strips sensitive keys from a leaky .env (Test 4)
 - Uninstall cleanly
 - Produce a PASS/FAIL report

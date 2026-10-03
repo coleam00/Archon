@@ -1,5 +1,9 @@
 import { z } from '@hono/zod-openapi';
-import { providerFailureSchema, tokenUsageSchema } from '@archon/provider-contract';
+import {
+  providerFailureSchema,
+  SESSION_PREVIEW_LENGTH,
+  tokenUsageSchema,
+} from '@archon/provider-contract';
 import {
   agentNodeSchema,
   execNodeSchema,
@@ -83,7 +87,7 @@ export const executionBindingSchema = z.object({
     .optional(),
   tier: tierNameSchema.optional(),
   effort: effortLevelSchema.optional(),
-  sessionPreview: z.string().max(8).optional(),
+  sessionPreview: z.string().max(SESSION_PREVIEW_LENGTH).optional(),
   sessionOrigin: z.enum(['fresh', 'resumed', 'resume-failed-cold']).optional(),
 });
 export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
@@ -194,6 +198,12 @@ export type NodeExecutionMetadata = z.infer<typeof nodeExecutionMetadataSchema>;
 export const nodeExecutionRecordSchema = nodeExecutionMetadataSchema.extend({
   output: executionOutputSchema.optional(),
   diagnostics: executionDiagnosticsSchema.optional(),
+  /**
+   * The full provider session id this attempt ended in. It can resume the conversation,
+   * so only the durable row stores it; `executionMetadata` drops it, which keeps it out
+   * of the transcript and the emitter.
+   */
+  sessionId: z.string().min(1).optional(),
 });
 export type NodeExecutionRecord = z.infer<typeof nodeExecutionRecordSchema>;
 

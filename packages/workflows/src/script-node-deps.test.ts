@@ -45,8 +45,7 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   // This fixture has project scripts and no installed bundled source tree.
-  getDefaultCommandsPath: () => join(testDir, 'absent-bundle', 'commands', 'defaults'),
-  getDefaultWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows', 'defaults'),
+  getBundledWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows'),
 }));
 
 // --- Imports (after all mock.module calls) ---
@@ -153,11 +152,10 @@ function createMockStore(): IWorkflowStore {
     ),
     getCodebase: mock(() => Promise.resolve(null)),
     getCodebaseEnvVars: mock(() => Promise.resolve({})),
-    getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+    listWorkflowNodeSessions: mock(() => Promise.resolve([])),
     listWorkflowRunNodeSessions: mock(() => Promise.resolve([])),
     upsertWorkflowRunNodeSession: mock(() => Promise.resolve()),
     upsertWorkflowNodeSession: mock(() => Promise.resolve()),
-    deleteWorkflowNodeSessions: mock(() => Promise.resolve({ deleted: 0 })),
   };
 }
 

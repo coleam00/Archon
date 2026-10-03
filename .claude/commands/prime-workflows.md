@@ -56,11 +56,11 @@ inside this package.
 
 ### 8. See What Workflows Are Available
 
-List bundled default workflows:
-!`ls packages/workflows/src/defaults/`
+List the bundled `sdlc` pack (one folder per workflow, embedded into the binary):
+!`ls .archon/workflows/sdlc/`
 
-List repo workflows (if any):
-!`ls .archon/workflows/ 2>/dev/null || echo "(none in repo root)"`
+List the other repo workflows:
+!`ls .archon/workflows/`
 
 ### 9. Check Recent Workflow Engine Activity
 
@@ -91,6 +91,6 @@ Summarize (under 250 words):
 - `$1`, `$2`, `$ARGUMENTS`, `$PLAN`, `$ARTIFACTS_DIR`, `$WORKFLOW_ID`, `$BASE_BRANCH`
 
 ### Bundled Workflows
-- List the key default workflow names and their purposes
+- List the `sdlc` pack workflows and their purposes
 
 ### Recent Changes

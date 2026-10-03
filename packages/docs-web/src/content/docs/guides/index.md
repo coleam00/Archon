@@ -30,36 +30,26 @@ How-to guides for building and running AI coding workflows with Archon.
 
 ## Bundled Workflows
 
-Archon ships with ready-to-use workflows that cover common coding tasks. You do not need to write any YAML to use these -- just describe what you want and the router picks the right one.
+Archon ships the `sdlc` workflow pack, which covers the software development lifecycle from an incoming issue to a reviewed pull request. You do not need to write any YAML to use these -- just describe what you want and the router picks the right one.
 
 | Workflow | What It Does |
 |----------|-------------|
-| `archon-assist` | General Q&A, debugging, exploration (deprecated) |
-| `archon-fix-github-issue` | Investigate, root cause, implement fix, validate, PR |
-| `archon-create-issue` | Investigate a problem and create a GitHub issue |
-| `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |
-| `archon-piv-loop` | Guided Plan-Implement-Validate with human-in-the-loop |
-| `archon-idea-to-pr` | Feature idea, plan, implement, validate, PR, parallel reviews |
-| `archon-plan-to-pr` | Execute existing plan, implement, validate, PR, review |
-| `archon-feature-development` | Implement feature from plan, validate, create PR |
-| `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
-| `archon-smart-pr-review` | Complexity-adaptive PR review |
-| `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) |
-| `archon-validate-pr` | Thorough PR validation testing |
-| `archon-architect` | Architectural sweep, complexity reduction, codebase health |
-| `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
-| `archon-interactive-prd` | Create a PRD through guided conversation |
-| `archon-ralph-dag` | PRD implementation loop (iterate through stories until done) |
-| `archon-workflow-builder` | Generate a new Archon workflow YAML for your project |
-| `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
-| `archon-resolve-conflicts` | Detect and resolve merge conflicts in PRs |
+| `archon-ship` | Triage an issue or request, investigate or plan as needed, then deliver a reviewed PR |
+| `archon-triage` | Check an issue against the current code and decide what it needs next |
+| `archon-investigate` | Prove the root cause of a bug or open question |
+| `archon-plan` | Turn decided intent into an implementable plan |
+| `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |
+| `archon-pr` | Open a pull request for committed work |
+| `archon-deliver` | Implement, open a draft PR, review, fix findings, validate, and flip it ready |
+| `archon-review` | Review a PR or the working diff through parallel specialist lenses |
+| `archon-validate` | Run the project's own checks and report a verdict |
+| `archon-upkeep` | Update one dependency through the reviewed delivery tail |
 
-For the full list with descriptions, see the [Available Workflows table](/getting-started/overview/#available-workflows) in the Overview.
+For usage examples and guidance on which one to pick, see [The Essential Workflows](/book/essential-workflows/).
 
-To customize any bundled workflow, copy it from `.archon/workflows/defaults/` into your project's `.archon/workflows/` and modify it -- same-named files override the defaults.
+To customize the pack, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it -- same-named workflows override the bundled ones. Copy the pack rather than one workflow folder: its workflows include each other and share scripts in `sdlc/.shared/`.
 
 ## Advanced
 
 - [Global Workflows](/guides/global-workflows/) — User-level workflows that apply to every project
 - [Multi-Repo Projects](/guides/multi-repo-projects/) — Drive many service repos under one folder-project root
-- [Remotion Video Generation](/guides/remotion-workflow/) — End-to-end video creation with skills and bash render nodes

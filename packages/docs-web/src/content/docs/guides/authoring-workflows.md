@@ -35,13 +35,11 @@ nodes:
     context: fresh
 ```
 
-> **Using defaults as templates:** Archon ships default workflows in `.archon/workflows/defaults/` (21 bundled into the binary; source builds also load them from disk). Browse them for real-world examples, then copy and modify:
+> **Bundled workflows as templates:** Archon bundles the `sdlc` pack from `.archon/workflows/sdlc/` in its repository (compiled into the binary; source builds also load it from disk). Browse it for real-world examples, then copy and modify. Copy the whole pack folder: its workflows include each other and share modules in `sdlc/.shared/`.
 > ```bash
-> cp .archon/workflows/defaults/archon-fix-github-issue.yaml .archon/workflows/my-fix-issue.yaml
+> cp -R /path/to/Archon/.archon/workflows/sdlc .archon/workflows/
 > ```
-> Same-named files in `.archon/workflows/` override the bundled defaults.
-
-> **Legacy bundled defaults:** The flat `.archon/workflows/defaults/` and `.archon/commands/defaults/` directories contain Archon's existing bundled files. `defaults` is not a reserved pack name in the packaged layout below; authors may choose any safe pack and workflow directory names.
+> Same-named workflows in `.archon/workflows/` override the bundled ones. Bundled commands live inside each workflow's own `commands/` folder; there is no shared bundled command directory.
 
 ---
 
@@ -293,7 +291,7 @@ This is an exact, immutable fork contract:
 - Claude and Pi support immutable forks. Codex explicitly does not; an omitted fork capability is also unsupported.
 - A missing source handle, unavailable prior context, missing branch handle, or provider that reuses the source session fails the node. Named resume never falls back to a fresh session.
 - Two parallel consumers may name the same source; each receives its own branch while the source remains unchanged.
-- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Session IDs remain outside workflow events and API payloads.
+- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
 
 This is separate from `persist_session`: `{ resume: source }` selects ancestry within one governed run, while `persist_session` continues the same node across separate workflow invocations. If both apply to a consumer, the named source wins for the current invocation and the resulting branch is still saved for its next invocation.
 
@@ -812,6 +810,19 @@ Every built-in provider reports a typed class:
 
 Set `on_error: all` on a node that should retry `unknown` failures. Only failures the engine detects itself, such as an idle timeout or an empty response, are classified from their text.
 
+#### Pi retries inside its own runtime
+
+Pi retries a failed model call itself before Archon sees the failure. Archon reads Pi's settings from `~/.pi/agent/settings.json` and the project's `.pi/settings.json`, and does not change them:
+
+| Pi setting | Default | Effect |
+|------------|---------|--------|
+| `retry.enabled` | `true` | Pi retries a turn that failed with an error it judges transient (overload, rate limit, server error, network failure, timeout) |
+| `retry.maxRetries` | `3` | Retries per turn |
+| `retry.baseDelayMs` | `2000` | First delay, doubling each retry (2s, 4s, 8s) |
+| `retry.provider.maxRetries` | `0` | A separate HTTP-level retry, in the Anthropic, OpenAI, Azure and Google adapters, that reads the status code and honors `Retry-After`. Off by default |
+
+See Pi's [settings reference](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md#network-and-retries) for the full list. A failure that outlasts Pi's retries reaches Archon as `unknown`, so by default Archon does not retry it again. To add node-level retries on top, set `retry: { on_error: all }` on the node. The attempts then multiply: with Pi's defaults and `max_attempts: 2`, the failing model call can be sent up to 12 times (3 node attempts × 4 Pi attempts each), and each node retry also repeats the model calls the node made before it failed. To leave retrying to Archon alone, set `"retry": { "enabled": false }` in Pi's settings.
+
 ### Retry Notifications
 
 Before each retry the platform receives a message like:
@@ -894,7 +905,7 @@ On resume, `fetch-data` re-runs regardless of prior success, so `process-data` r
 
 ## Persistent Sessions Across Re-Runs
 
-Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role.
+Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role. Only a provider that can fork a session continues it; with any other provider the node starts fresh on every run (see [Concurrent runs](#concurrent-runs)).
 
 ```yaml
 name: feature-dev
@@ -924,6 +935,15 @@ Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The scope
 
 The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
 
+### Concurrent runs
+
+Two runs of the same workflow in the same scope can run at the same time. Neither waits for the other, and they never write into the same provider conversation:
+
+- When a run starts, it reads the scope's persisted sessions once. Each `persist_session` node continues from that copy, not from a session another run saved after this run started.
+- The node continues the saved session only when its provider can **fork** it (declares `sessionFork: true`). The fork is a new session with the saved history, so the saved one stays unchanged. Claude and Pi fork.
+- A provider that cannot fork would resume the saved session in place, so two runs could append to one conversation. Instead, the node does not continue it. The run records a `node_session_not_continued` workflow event naming the session it skipped (an 8-character preview) and posts a notice in the conversation. `archon validate workflows` also warns before any run, but only for a node whose provider is written in the workflow file itself; a node from an included block, or one whose provider comes from config defaults or a `model:` alias, is checked only when it runs. Codex, OpenCode and Copilot are in this group today, so their `persist_session` nodes do not carry context between runs; pass state between runs through artifacts instead.
+- When a node finishes with a session, that session becomes the saved one. With overlapping runs, the run whose node finished last wins. A node that finishes without a session id leaves the saved session as it was.
+
 ### Workflow-level default
 
 ```yaml
@@ -935,7 +955,7 @@ nodes:
 
 ### Capability requirement
 
-The resolved provider must declare `sessionResume: true` in its capabilities. The loader rejects workflows that set `persist_session: true` against a non-resume-capable provider at the explicit-provider level; the executor catches the implicit-default-provider case at runtime.
+The resolved provider must declare `sessionResume: true` in its capabilities. The loader rejects workflows that set `persist_session: true` against a non-resume-capable provider at the explicit-provider level; the executor catches the implicit-default-provider case at runtime. Continuing a session across runs also needs `sessionFork: true`; see [Concurrent runs](#concurrent-runs).
 
 ### Supported node types
 
@@ -946,6 +966,8 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 - **`loop:` / `loop_group:`** — have their own per-iteration session threading. Cross-run persistence isn't wired for them in this release; the field is warn-and-dropped on loop and loop_group nodes. Use a `prompt:` node if you need cross-run memory.
 
 When a workflow-level `persist_sessions: true` is combined with any of these node types, the capability check and persistence logic both skip the non-applicable nodes — no false validation errors, no silent runtime mistakes.
+
+To continue a node's conversation outside Archon, read its session id from `archon workflow get <run-id> --verbose` and pass it to the provider's own resume command, such as `claude --resume <id>`. Claude Code finds a session by the directory it ran in, so run that command from the node's working directory: the run's worktree when the run used one.
 
 ### `context: fresh` overrides
 
@@ -965,11 +987,11 @@ Cross-scope resets are guarded so a dropped scope can't silently wipe every conv
 
 ### Cost caveat
 
-Persistent sessions on Codex/Pi replay the full rollout on each turn, so token cost grows with iteration depth. Claude auto-compacts. If a workflow's persistent sessions get expensive, reset them and start fresh.
+Persistent sessions on Pi replay the full rollout on each turn, so token cost grows with iteration depth. Claude auto-compacts. If a workflow's persistent sessions get expensive, reset them and start fresh.
 
 ### When a resume can't be restored
 
-If the stored session is gone (Codex thread expired, Pi JSONL missing or moved, OpenCode session not found), the provider can't resume it. Rather than silently pretending nothing was lost, the provider starts a **fresh** session for that node and the executor surfaces a visible warning:
+If the stored session is gone (for example, a Pi JSONL file was moved), the provider can't resume it. Rather than silently pretending nothing was lost, the provider starts a **fresh** session for that node and the executor surfaces a visible warning:
 
 > ⚠️ Node `planner`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.
 
@@ -999,10 +1021,6 @@ Notes:
 - **Opt-in only.** Workflows without `persist_session` get no scope directory, no mirroring, and no pointer — default behavior is unchanged. Persist nodes without `output_type` keep session continuity but leave nothing behind for recovery.
 - **Last writer wins.** Concurrent runs of the same workflow in the same scope write per-node files into the shared scope directory; the most recent run's output for a given node is what a later cold resume sees.
 - **CLI caveat.** Each `archon workflow run` mints a fresh conversation UUID (a fresh scope) unless you pass `--conversation-id <id>` — the same caveat as session persistence itself.
-
-### Distinct from `AgentRequestOptions.persistSession`
-
-The Claude Agent SDK also has a `persistSession` flag controlling whether the SDK writes its session transcript to disk. That is a *different* concept — local file persistence inside the SDK. This `persist_session:` field is about Archon's database-stored cross-run session ID for workflow nodes. The two operate at different layers and don't conflict.
 
 ---
 
@@ -1167,7 +1185,7 @@ nodes:
 When a node sets `output_type`, the executor writes a typed sidecar after the node completes:
 
 - `$ARTIFACTS_DIR/nodes/<id>.md` — the node's output text
-- `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`, and `sessionId` when available)
+- `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`)
 
 That exact layout remains the contract for top-level nodes. A typed node inside a `loop_group`
 writes one pair per successful body execution instead: `nodes/loop.<owner-digest>__<body>.md` and
@@ -1177,11 +1195,11 @@ cannot alias another execution. Metadata keeps the readable provenance as
 `loopGroupPath: [{ groupId, iteration }, ...]`. A body node expanded from an `include:` retains its
 load-time `<include>__<node>` ID in metadata and as the sanitized body suffix.
 
-This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
+This works on **every** node type, `bash`/`script` included. The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 
 #### Reading typed artifacts by type
 
-Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`/`sessionId`), and `path` is relative to `$ARTIFACTS_DIR`.
+Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`), and `path` is relative to `$ARTIFACTS_DIR`.
 
 ```ts
 // A script: read the listing the same way in host or container runs.
@@ -1338,20 +1356,20 @@ own. The composing workflow contributes ordering and gates; it does not reach in
 
 ```yaml
 nodes:
-  - id: finalize-pr
-    command: archon-finalize-pr
+  - id: pr
+    include: archon-pr
 
-  # Inlines every node from archon-review-block, attached after finalize-pr.
+  # Inlines every node from archon-review, attached after pr.
   - id: review
-    include: archon-review-block
-    depends_on: [finalize-pr]
+    include: archon-review
+    depends_on: [pr]
 
   - id: summary
-    command: archon-workflow-summary
-    depends_on: [review]   # resolves to the review block's terminal node
+    prompt: "Summarize the review findings for the PR author."
+    depends_on: [review]   # resolves to the included workflow's terminal node
 ```
 
-The include target (`archon-review-block` here) is an ordinary workflow file discovered by
+The include target (`archon-review` here) is an ordinary workflow file discovered by
 name, honoring the usual precedence (`bundled` < `~/.archon/workflows/` < repo
 `.archon/workflows/`).
 
@@ -1397,8 +1415,8 @@ behave exactly as if you had written the nodes by hand. A top-level include prod
 nodes; an include in a `loop_group` body produces body-local nodes. There is no separate child run.
 
 - **Namespacing.** Each included node `n` receives id `<includeId>__<n.id>` (double
-  underscore) within that scope. Including `archon-review-block` under `id: review` yields
-  `review__verify-pr-base`, `review__sync`, `review__implement-fixes`, and so on. These
+  underscore) within that scope. Including `archon-review` under `id: review` yields
+  `review__scope`, `review__code`, `review__synthesize`, and so on. These
   namespaced ids are what appear in the event stream and in `archon workflow get <id>`;
   body-local events additionally carry their enclosing group prefix.
 - **Edges and command bodies.** Internal `depends_on` edges and `$id.output` references are
@@ -1525,7 +1543,7 @@ in the child's run metadata.
   (`A` includes `B` includes `A`) and over-deep chains are load errors that drop only the
   offending workflow — other workflows still load.
 
-A workflow used purely as a building block (like `archon-review-block`) still appears in
+A workflow used purely as a building block still appears in
 `archon workflow list`. Mark it as a building block in its `description:` so it isn't picked
 for a standalone run.
 
@@ -3305,5 +3323,5 @@ Before deploying a workflow:
 18. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
 19. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar for cross-node/cross-run lookup by type (any node type). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain)
 20. **Loop nodes** — use `loop:` within a DAG node for iterative execution until a declared completion condition is met
-21. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
+21. **Bundled workflows as templates** — browse `.archon/workflows/sdlc/` in the Archon repository for real examples to copy and modify
 22. **Test thoroughly** — each command, the artifact flow, and edge cases

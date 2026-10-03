@@ -20,7 +20,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import {
-  getWorkflowNodeSession,
+  listWorkflowNodeSessions,
   upsertWorkflowNodeSession,
   deleteWorkflowNodeSessions,
 } from './workflow-node-sessions';
@@ -31,39 +31,27 @@ describe('workflow-node-sessions', () => {
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
   });
 
-  describe('getWorkflowNodeSession', () => {
-    test('returns null when no row matches', async () => {
-      const result = await getWorkflowNodeSession({
+  describe('listWorkflowNodeSessions', () => {
+    test("returns every provider's row for one workflow scope", async () => {
+      const rows = ['claude', 'codex'].map(provider => ({
         workflow_name: 'feature-dev',
         node_id: 'planner',
         scope_key: 'conv-1',
-        provider: 'claude',
-      });
-      expect(result).toBeNull();
-      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(sql).toContain('SELECT * FROM remote_agent_workflow_node_sessions');
-      expect(params).toEqual(['feature-dev', 'planner', 'conv-1', 'claude']);
-    });
-
-    test('returns the row when matched', async () => {
-      const row = {
-        workflow_name: 'feature-dev',
-        node_id: 'planner',
-        scope_key: 'conv-1',
-        provider: 'claude',
-        provider_session_id: 'sess-abc',
+        provider,
+        provider_session_id: `sess-${provider}`,
         last_run_id: 'run-1',
         created_at: '2026-05-28T00:00:00Z',
         updated_at: '2026-05-28T00:00:00Z',
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([row]));
-      const result = await getWorkflowNodeSession({
+      }));
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+      const result = await listWorkflowNodeSessions({
         workflow_name: 'feature-dev',
-        node_id: 'planner',
         scope_key: 'conv-1',
-        provider: 'claude',
       });
-      expect(result).toEqual(row);
+      expect(result).toEqual(rows);
+      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(sql).toContain('WHERE workflow_name = $1 AND scope_key = $2');
+      expect(params).toEqual(['feature-dev', 'conv-1']);
     });
   });
 
@@ -158,22 +146,6 @@ describe('workflow-node-sessions', () => {
       const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(sql).toContain('AND node_id = $2');
       expect(params).toEqual(['feature-dev', 'planner']);
-    });
-
-    test('narrows by provider for cross-provider safety', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
-      const result = await deleteWorkflowNodeSessions({
-        workflow_name: 'feature-dev',
-        scope_key: 'conv-1',
-        node_id: 'planner',
-        provider: 'claude',
-      });
-      expect(result).toEqual({ deleted: 1 });
-      const [sql, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(sql).toContain('AND scope_key = $2');
-      expect(sql).toContain('AND node_id = $3');
-      expect(sql).toContain('AND provider = $4');
-      expect(params).toEqual(['feature-dev', 'conv-1', 'planner', 'claude']);
     });
 
     test('rowCount of null nullish-coalesces to 0', async () => {
