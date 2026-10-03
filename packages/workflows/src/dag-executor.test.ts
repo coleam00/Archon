@@ -4514,22 +4514,31 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     expect((await readFile(attempts, 'utf8')).length).toBe(3);
   });
 
-  it('bash node that times out is retried as transient', async () => {
-    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
-    const nodes: DagNode[] = [
-      {
-        id: 'slow',
-        kind: 'exec',
-        runtime: 'sh',
-        script: `printf 'a' >> '${attempts}'; sleep 5`,
-        timeout: 100,
-        retry: { max_attempts: 1, delay_ms: 1 },
-      },
-    ];
-    await runNodes(nodes);
+  it(
+    'bash node that times out is retried as transient',
+    async () => {
+      const { mockDeps } = await runNodes([
+        {
+          id: 'slow',
+          kind: 'exec',
+          runtime: 'sh',
+          script: 'sleep 5',
+          timeout: 100,
+          retry: { max_attempts: 1, delay_ms: 1 },
+        },
+      ]);
 
-    expect((await readFile(attempts, 'utf8')).length).toBe(2);
-  });
+      // Count the engine's per-attempt rows rather than a side-effect file: on a loaded
+      // runner the 100 ms timeout can fire before the shell writes anything.
+      const timedOut = (
+        mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+      ).mock.calls.filter(
+        ([event]) => event.event_type === 'node_failed' && event.data?.failure_kind === 'timeout'
+      );
+      expect(timedOut).toHaveLength(2);
+    },
+    testTimeout(10_000)
+  );
 
   it(
     'script node that times out is retried as transient',
