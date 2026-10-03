@@ -190,8 +190,6 @@ Commands:
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)
-  workflow search [query]    Search the workflow marketplace
-  workflow install <slug>    Install a workflow from the marketplace
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
                              workflow, a workflow folder or pack (by name or directory
@@ -272,7 +270,8 @@ Options:
                              persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
-  --force                    Overwrite existing file (for workflow install)
+  --force                    For 'setup': overwrite existing values instead of merging
+                             For 'complete': remove even when safety checks block it
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -296,8 +295,6 @@ Examples:
   archon skill install
   archon skill install /path/to/project
   archon plugin install coleam00/Archon/plugins/forge-github
-  archon workflow search "pr review"
-  archon workflow install archon-piv-loop
 
 `;
 

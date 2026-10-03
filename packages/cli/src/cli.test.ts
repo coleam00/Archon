@@ -1358,21 +1358,6 @@ describe('workflow list arguments', () => {
   });
 });
 
-describe('workflow search --json error envelope', () => {
-  it('emits { ok: false } on stdout when the command throws under --json', () => {
-    // An unreachable marketplace URL makes fetchMarketplace throw inside the
-    // `workflow search` handler — the only deterministic error path. The
-    // envelope, not the message, is the contract.
-    const { status, envelope } = spawnJsonError(['workflow', 'search', 'anything', '--json'], {
-      ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
-    });
-
-    expect(status).toBe(1);
-    expect(envelope).not.toThrow();
-    expect(envelope()).toMatchObject({ ok: false });
-  });
-});
-
 describe('main catch --json error envelope', () => {
   it('emits { ok: false } on stdout when an unhandled command error reaches the top-level catch', () => {
     // An unknown workflow name makes workflowRunCommand throw with no local

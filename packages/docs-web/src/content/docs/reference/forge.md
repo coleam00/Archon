@@ -19,7 +19,7 @@ Each Archon release publishes the plugin as a native executable for every platfo
 archon plugin install coleam00/Archon/plugins/forge-github
 ```
 
-This works the same for the release binary, a source checkout, and [Docker](/deployment/docker/#forge-plugins). Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
+This works the same for the release binary, a source checkout, and [Docker](/deployment/docker/#plugins). Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
 
 - resolves the tag to a commit with `git ls-remote` and reads `plugins/forge-github/archon-plugin.json` at that commit. It calls no GitHub API and needs no token.
 - downloads `archon-forge-github-<os>-<arch>[.exe]` from that release and checks it against the release's `checksums.txt`. A mismatch installs nothing.

@@ -572,15 +572,23 @@ docker compose exec app gh auth login
 
 When `GH_TOKEN` is set, the container resets the `https://github.com` git credential helper to the `GH_TOKEN` helper on every start, so a helper installed by `gh auth login` only applies without `GH_TOKEN`.
 
-### Forge plugins
+### Plugins
 
-Install the GitHub forge plugin inside the running container:
+Install plugins inside the running container. The GitHub forge plugin:
 
 ```bash
 docker compose exec -u appuser app bun run cli plugin install coleam00/Archon/plugins/forge-github
 ```
 
-It lands in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so it survives restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin).
+A workflow pack, from any GitHub repository that publishes one:
+
+```bash
+docker compose exec -u appuser app bun run cli plugin install Wirasm/archon-video
+```
+
+Both land in `/.archon/plugins`, which is on the `archon_data` volume (or your `ARCHON_DATA` bind mount), so they survive restarts and image rebuilds. `-u appuser` keeps the files owned by the user the server runs as. Update, remove and list the same way with `plugin update`, `plugin remove` and `plugin list`. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
+
+The image has `git` and Bun, but not `uv`, Python, or the tools a pack's own scripts call (such as ffmpeg). Add those in [`Dockerfile.user`](#customizing-the-image).
 
 ---
 

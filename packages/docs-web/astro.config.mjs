@@ -4,6 +4,10 @@ import starlightLlmsTxt from 'starlight-llms-txt';
 
 export default defineConfig({
   site: 'https://archon.diy',
+  // The old workflow registry lived here; links to it land on the plugin install guide.
+  redirects: {
+    '/workflows/': '/guides/global-workflows/#installed-workflow-packs',
+  },
   integrations: [
     starlight({
       title: 'Archon',
@@ -33,7 +37,6 @@ export default defineConfig({
         baseUrl: 'https://github.com/coleam00/Archon/edit/main/packages/docs-web/',
       },
       sidebar: [
-        { label: '✦  Marketplace', link: '/workflows/' },
         { label: '🗺️  Roadmap', link: '/roadmap/' },
         { label: '🎨  Brand', link: '/brand/' },
         {
@@ -126,11 +129,6 @@ export default defineConfig({
               label: 'Roadmap',
               url: 'https://archon.diy/roadmap/',
               description: 'Project roadmap and planned features',
-            },
-            {
-              label: 'Workflow Marketplace',
-              url: 'https://archon.diy/workflows/',
-              description: 'Browse and discover community workflows',
             },
           ],
 

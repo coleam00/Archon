@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- The old workflow marketplace is retired. `archon workflow search` and `archon workflow install` are removed, archon.diy no longer serves the registry or `workflows.json` (older binaries report `Marketplace fetch failed: HTTP 404`), and `archon.diy/workflows/` redirects to the installed workflow packs guide. Install someone else's workflows with `archon plugin install owner/repo[/path][@tag]`; a workflow pack is published by adding `archon-plugin.json` to its own repository. Workflows the old installer copied into `.archon/workflows/` are ordinary project files and keep loading. The CI job that auto-reviewed, merged or closed registry pull requests is gone with it. (#2376)
+
 ### Changed
 
 - `archon-assist` is deprecated like the rest of the legacy bundled workflows. Every run announces its removal in an upcoming release, and a copy in your project or global `.archon/workflows/` keeps it. The chat router no longer uses it as its example or describes it as the fallback: its examples now name `archon-ship`, `archon-plan` and `archon-investigate`, and questions still get a direct answer. (#3525)
