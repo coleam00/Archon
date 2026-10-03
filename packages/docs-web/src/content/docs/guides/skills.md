@@ -255,8 +255,9 @@ skill. Direct Codex chat and other non-workflow calls keep their normal Codex be
 - **Behavioral boundary, not filesystem security** — an explicit request for an
   ambient `$skill-name` can still activate that installed skill. Archon prevents
   automatic advertisement; it does not hide or move files.
-- **External future binaries** — if a Codex version rejects the catalog-suppression
-  config, Archon warns and continues with native discovery instead of rejecting the run.
+- **Older Codex binaries** — Archon always sends `skills.include_instructions=false`.
+  A Codex that does not know the key ignores it with a config warning, and Archon
+  does not warn on top of that, so such a binary may still advertise its catalog.
 
 Normal repository instructions such as `AGENTS.md` remain active with the catalog off.
 

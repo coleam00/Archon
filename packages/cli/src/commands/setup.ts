@@ -1055,7 +1055,7 @@ async function collectAIConfig(): Promise<SetupConfig['ai']> {
     message: 'Which AI assistant(s) will you use? (↑↓ navigate, space select, enter confirm)',
     options: [
       { value: 'claude', label: 'Claude (Recommended)', hint: 'Anthropic Claude Code SDK' },
-      { value: 'codex', label: 'Codex', hint: 'OpenAI Codex SDK' },
+      { value: 'codex', label: 'Codex', hint: 'OpenAI Codex CLI' },
       {
         value: 'pi',
         label: 'Pi (community)',

@@ -479,6 +479,7 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 | `CODEX_ACCESS_TOKEN` | Codex access token | -- |
 | `CODEX_REFRESH_TOKEN` | Codex refresh token | -- |
 | `CODEX_ACCOUNT_ID` | Codex account ID | -- |
+| `CODEX_API_KEY` | Run Codex on this OpenAI API key instead of the login in your Codex home. Held in the Codex process's memory, never written to `CODEX_HOME`. Codex does not read `OPENAI_API_KEY`. | -- |
 
 ### AI Providers -- Copilot (community)
 
