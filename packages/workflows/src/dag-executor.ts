@@ -132,6 +132,7 @@ import {
   WAIT_NODE_OUTPUT_FORMAT,
   waitUntilTimestampSchema,
   waitCondition,
+  persistScopeKey,
 } from './schemas';
 import type { BindingDirective } from './schemas';
 import { mapNodeTemplateSlots } from './template-walker';
@@ -11179,11 +11180,12 @@ export async function executeDagWorkflow(
     'dag_workflow_starting'
   );
 
-  // Per-node session persistence across workflow re-runs. Scope = the DB conversation
-  // UUID. The `?? undefined` guard keeps an empty/missing conversation_id from keying
-  // every invocation to the same blank scope — persistence is simply skipped in that case.
+  // Per-node session persistence across workflow re-runs, keyed by the thread that
+  // launched the run (see `persistScopeKey`). The `|| undefined` guard keeps an empty
+  // key from scoping every invocation to the same blank scope — persistence is simply
+  // skipped in that case.
   // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
-  const persistScopeKey: string | undefined = workflowRun.conversation_id ?? undefined;
+  const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
   const namedResumeSourceIds = new Set<string>();
   for (const node of workflow.nodes) {
@@ -11262,11 +11264,11 @@ export async function executeDagWorkflow(
     docsDir,
     configuredCommandFolder,
     issueContext,
-    persistScopeKey,
+    persistScopeKey: runPersistScopeKey,
     workflowPersistSessions,
     // Scope-keyed persistence surface: without a scope key there is no durable
     // scope to mirror into or recover from, so the dir is dropped alongside it.
-    scopeArtifactsDir: persistScopeKey !== undefined ? scopeArtifactsDir : undefined,
+    scopeArtifactsDir: runPersistScopeKey !== undefined ? scopeArtifactsDir : undefined,
     layers,
     nodeOutputs,
     afterLayer: persistAuthoredOutcome,
