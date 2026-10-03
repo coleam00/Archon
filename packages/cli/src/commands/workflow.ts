@@ -1538,11 +1538,7 @@ async function resolveRunCodebase(
   let lookupError: Error | null = null;
   let registrationError: Error | null = null;
   let registeredFolder: { name: string; defaultCwd: string } | undefined;
-  // Git prints its top level with forward slashes on Windows; canonicalize it so
-  // lookup and registration use the same `default_cwd` spelling as every other
-  // registration path.
-  const gitRoot = await git.findRepoRoot(cwd);
-  const repoRoot = gitRoot ? await archonPaths.canonicalizeProjectPath(gitRoot) : null;
+  const repoRoot = await git.findRepoRoot(cwd);
   try {
     codebase = repoRoot
       ? await findCodebaseForCheckoutPath(repoRoot)

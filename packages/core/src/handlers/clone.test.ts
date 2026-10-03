@@ -260,6 +260,31 @@ describe('findCodebaseForCheckoutPath', () => {
     return new gitUtils.CanonicalRepoPathUnavailableError(cwd, commonGitDir);
   }
 
+  test('canonicalizes a forward-slash checkout before exact lookup', async () => {
+    const gitSpelling = 'C:/workspace/primary';
+    const canonical = resolve('/canonical/primary');
+    const registered = makeCodebase({ default_cwd: canonical });
+    const realpathSpy = spyOn(fsPromises, 'realpath').mockResolvedValue(canonical);
+    const findExact = mock(async (path: string) => (path === canonical ? registered : null));
+    const getPrimary = mock(async (path: string) => path);
+    try {
+      await expect(
+        findCodebaseForCheckoutPath(
+          gitSpelling,
+          makeResolverDeps({
+            findCodebaseByDefaultCwd: findExact,
+            getCanonicalRepoPath: getPrimary,
+          })
+        )
+      ).resolves.toBe(registered);
+      expect(findExact).toHaveBeenCalledWith(canonical);
+      expect(findExact).not.toHaveBeenCalledWith(gitSpelling);
+      expect(getPrimary).not.toHaveBeenCalled();
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   test('matches an external linked worktree to its uniquely registered Git repository', async () => {
     const registered = makeCodebase({ default_cwd: '/workspace/primary' }) as Codebase;
     const separateClone = makeCodebase({
@@ -1072,6 +1097,29 @@ describe('registerRepository', () => {
       }
     }
   );
+
+  test('canonicalizes a forward-slash path before validation, lookup and persistence', async () => {
+    const gitSpelling = 'C:/workspace/myrepo';
+    const canonical = resolve('/canonical/myrepo');
+    spyFsRealpath.mockResolvedValue(canonical);
+    mockCreateCodebase.mockResolvedValue(makeCodebase({ default_cwd: canonical }));
+
+    const result = await registerRepository(gitSpelling);
+
+    expect(spyExecFileAsync).toHaveBeenCalledWith('git', [
+      '-C',
+      canonical,
+      'rev-parse',
+      '--git-dir',
+    ]);
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenCalledWith(canonical);
+    expect(mockFindCodebaseByDefaultCwd).not.toHaveBeenCalledWith(gitSpelling);
+    expect(mockCreateProjectSourceSymlink).toHaveBeenCalledWith('_local', 'myrepo', canonical);
+    expect(mockCreateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ default_cwd: canonical })
+    );
+    expect(result.defaultCwd).toBe(canonical);
+  });
 
   // ── Happy path ─────────────────────────────────────────────────────────
   test('registers a valid local git repo not yet in DB', async () => {

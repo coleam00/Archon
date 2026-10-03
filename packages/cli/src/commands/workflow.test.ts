@@ -4691,6 +4691,39 @@ describe('workflowStatusCommand', () => {
     expect(parsed.scopeFallback).toBe(false);
   });
 
+  it('scopes a Windows-spelled checkout to its canonical registration', async () => {
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const gitSpelling = 'C:/workspace/project-a';
+    const canonical = 'C:\\workspace\\project-a';
+    const findExact = codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>;
+    findExact.mockClear();
+    findExact.mockImplementation(async (path: string) =>
+      path === canonical
+        ? {
+            id: 'cb-project-a',
+            name: 'owner/project-a',
+            default_cwd: canonical,
+          }
+        : null
+    );
+    mockCanonicalizeProjectPath.mockImplementation(async (path: string) =>
+      path === gitSpelling ? canonical : path
+    );
+    mockListDashboardRuns.mockResolvedValueOnce(statusRuns([]));
+    try {
+      await workflowStatusCommand(gitSpelling, { json: true });
+      expect(findExact).toHaveBeenCalledWith(canonical);
+      expect(findExact).not.toHaveBeenCalledWith(gitSpelling);
+      expect(mockListDashboardRuns).toHaveBeenCalledWith(
+        expect.objectContaining({ codebaseId: 'cb-project-a' })
+      );
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ scopeFallback: false });
+    } finally {
+      findExact.mockReset().mockResolvedValue(null);
+      mockCanonicalizeProjectPath.mockReset().mockImplementation(async (path: string) => path);
+    }
+  });
+
   it('scopes a linked worktree to its registered primary checkout', async () => {
     const git = await import('@archon/git');
     const codebaseDb = await import('@archon/core/db/codebases');
@@ -13965,7 +13998,7 @@ describe('run codebase resolution', () => {
     expectChildExecution();
   });
 
-  it('looks up and registers the canonical spelling of the Git top level', async () => {
+  it('uses the resolver for canonical lookup and passes the Git top level to registration', async () => {
     // Git prints `C:/...` on Windows while `default_cwd` is stored canonically.
     const gitSpelling = 'C:/parent/projects/child';
     (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(gitSpelling);
@@ -13976,7 +14009,7 @@ describe('run codebase resolution', () => {
       await workflowRunCommand(`${childRoot}/tools`, 'probe', 'go', { noWorktree: true });
       expect(codebases.findCodebaseByDefaultCwd).toHaveBeenCalledWith(childRoot);
       expect(codebases.findCodebaseByDefaultCwd).not.toHaveBeenCalledWith(gitSpelling);
-      expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+      expect(core.registerRepository).toHaveBeenCalledWith(gitSpelling);
       expectChildExecution();
     } finally {
       mockCanonicalizeProjectPath.mockReset().mockImplementation(async (path: string) => path);

@@ -35,6 +35,7 @@ export async function findCodebaseForCheckoutPath(
   cwd: string,
   deps: CodebaseCheckoutResolverDeps = defaultDeps
 ): Promise<Codebase | null> {
+  cwd = await canonicalizeProjectPath(cwd);
   const exact = await deps.findCodebaseByDefaultCwd(cwd);
   if (exact) return exact;
 
