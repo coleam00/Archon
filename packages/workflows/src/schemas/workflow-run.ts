@@ -875,12 +875,6 @@ export function isGateResolved(approval: ApprovalContext): boolean {
 }
 
 /**
- * Type guard for ApprovalContext.
- * Validates that the value is an object with the required nodeId and message fields.
- * Use before accessing `workflowRun.metadata.approval` to prevent runtime throws on
- * malformed metadata (e.g., stale data from older runs where metadata shape differs).
- */
-/**
  * Run metadata as API clients see it. The wait and approval cursors' session ids resume
  * a paused loop, so they stay in the engine; node records carry each node's session id.
  */
@@ -899,6 +893,12 @@ export function withoutSessionCursors(metadata: Record<string, unknown>): Record
   };
 }
 
+/**
+ * Type guard for ApprovalContext.
+ * Validates that the value is an object with the required nodeId and message fields.
+ * Use before accessing `workflowRun.metadata.approval` to prevent runtime throws on
+ * malformed metadata (e.g., stale data from older runs where metadata shape differs).
+ */
 export function isApprovalContext(val: unknown): val is ApprovalContext {
   return (
     typeof val === 'object' &&
