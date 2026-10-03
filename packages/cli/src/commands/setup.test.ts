@@ -111,6 +111,21 @@ ARCHON_CODEX_ACCOUNT_ID=account1
       }
     });
 
+    it('counts an old Archon Codex setup, but not a lone CODEX_ACCESS_TOKEN (#3562)', () => {
+      const envDir = join(TEST_DIR, '.archon-codex-legacy');
+      mkdirSync(envDir, { recursive: true });
+      const envPath = join(envDir, '.env');
+
+      writeFileSync(
+        envPath,
+        'CODEX_ID_TOKEN=id\nCODEX_ACCESS_TOKEN=access\nCODEX_REFRESH_TOKEN=rt\nCODEX_ACCOUNT_ID=acct\n'
+      );
+      expect(checkExistingConfig(envPath)?.hasCodex).toBe(true);
+
+      writeFileSync(envPath, 'CODEX_ACCESS_TOKEN=users-own\n');
+      expect(checkExistingConfig(envPath)?.hasCodex).toBe(false);
+    });
+
     it('detects existing Pi configuration from a Pi API key env var', () => {
       const envDir = join(TEST_DIR, '.archon-pi');
       mkdirSync(envDir, { recursive: true });
