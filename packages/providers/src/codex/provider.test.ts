@@ -689,6 +689,27 @@ describe('CodexProvider', () => {
       expect(server.processes[0].methods).not.toContain('turn/start');
     });
 
+    test('a configured server Codex still reports live fails, though the thread config named it', async () => {
+      const { provider } = providerWith({
+        configuredServers: ['posthog'],
+        mcpStatusPages: [[{ name: 'posthog', pluginId: null, runtimeStatus: 'connected' }]],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
+    test('a status this Codex version does not list counts as live', async () => {
+      const { provider } = providerWith({
+        mcpStatusPages: [
+          // A status a newer Codex might add; the generated union does not have it.
+          [{ name: 'posthog', pluginId: null, runtimeStatus: 'suspended' as 'disabled' }],
+        ],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
     test('a declared live server passes the check', async () => {
       const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-scope-')));
       await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));

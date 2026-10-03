@@ -40,7 +40,7 @@ import {
   type Spawner,
 } from './app-server';
 import { classifyTurnError, describeErrorInfo } from './turn-error';
-import { applyNodeScope, checkThreadMcpScope, declaredServers, readCodexInventory } from './scope';
+import { applyNodeScope, checkThreadMcpScope, readCodexInventory } from './scope';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
@@ -470,16 +470,17 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   }
 
   let { threadParams } = request;
+  // Set only for a workflow node: the MCP server names its thread may run.
+  let declared: string[] | undefined;
   if (nodePlugins) {
     const inventory = await readCodexInventory(connection, {
       cwd: request.cwd,
       plugins: nodePlugins,
       codexHome: codexHomeOf(initialized),
     });
-    threadParams = {
-      ...threadParams,
-      config: applyNodeScope(threadParams.config ?? {}, inventory, nodePlugins),
-    };
+    const scope = applyNodeScope(threadParams.config ?? {}, inventory, nodePlugins);
+    threadParams = { ...threadParams, config: scope.config };
+    declared = scope.declared;
   }
   // A resumed thread needs the same config: Codex does not store it with the thread.
   const threadResponse = request.resumeSessionId
@@ -493,13 +494,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const threadId = idAt(threadResponse, 'thread');
   if (!threadId) throw new Error('Codex app-server returned a thread without an id');
   request.onThread(threadId);
-  if (nodePlugins) {
-    await checkThreadMcpScope(
-      connection,
-      threadId,
-      Object.keys(declaredServers(request.threadParams.config ?? {}))
-    );
-  }
+  if (declared) await checkThreadMcpScope(connection, threadId, declared);
   getLog().debug(
     { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
     'codex.thread_ready'

@@ -24,6 +24,12 @@ import { z } from 'zod';
 import { ClassifiedProviderError } from '../shared/failure';
 import { JsonRpcError, type AppServerConnection, type ParamsOf } from './app-server';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
+import type { ListMcpServerStatusResponse } from './protocol/v2/ListMcpServerStatusResponse';
+import type { McpServerConnectionStatus } from './protocol/v2/McpServerConnectionStatus';
+import type { McpServerStatus } from './protocol/v2/McpServerStatus';
+import type { PluginDetail } from './protocol/v2/PluginDetail';
+import type { PluginMarketplaceEntry } from './protocol/v2/PluginMarketplaceEntry';
+import type { PluginSummary } from './protocol/v2/PluginSummary';
 
 /** A thread's `config` overrides, as `thread/start` and `thread/resume` take them. */
 type ThreadConfig = NonNullable<ParamsOf<'thread/start'>['config']>;
@@ -41,11 +47,18 @@ export interface CodexInventory {
   namedPluginServers: Record<string, string[]>;
 }
 
-// Only the fields Archon reads; Codex adds fields freely, and they are ignored.
+// Only the fields Archon reads; Codex adds fields freely, and they are ignored. Each schema
+// is typed against the response Codex generates (`scripts/generate-codex-protocol.ts`), so a
+// renamed or retyped field fails the build when the protocol is regenerated. Codex types its
+// config as an open map, so `mcp_servers` has no generated shape to bind to.
 const configReadSchema = z.object({
   config: z.object({ mcp_servers: z.record(z.string(), z.unknown()).nullish() }),
 });
-const pluginInstalledSchema = z.object({
+const pluginInstalledSchema: z.ZodType<{
+  marketplaces: (Pick<PluginMarketplaceEntry, 'name' | 'path'> & {
+    plugins: Pick<PluginSummary, 'id' | 'name' | 'installed'>[];
+  })[];
+}> = z.object({
   marketplaces: z.array(
     z.object({
       name: z.string(),
@@ -55,10 +68,35 @@ const pluginInstalledSchema = z.object({
   ),
 });
 type Marketplace = z.infer<typeof pluginInstalledSchema>['marketplaces'][number];
-const pluginReadSchema = z.object({ plugin: z.object({ mcpServers: z.array(z.string()) }) });
-const mcpStatusSchema = z.object({
+const pluginReadSchema: z.ZodType<{ plugin: Pick<PluginDetail, 'mcpServers'> }> = z.object({
+  plugin: z.object({ mcpServers: z.array(z.string()) }),
+});
+
+/** Every status Codex reports; the record makes a regenerated union fail the build until listed. */
+const CONNECTION_STATUSES: Record<McpServerConnectionStatus, true> = {
+  notStarted: true,
+  starting: true,
+  connected: true,
+  authenticationRequired: true,
+  failed: true,
+  cancelled: true,
+  disabled: true,
+};
+type McpStatusPage = Pick<ListMcpServerStatusResponse, 'nextCursor'> & {
+  data: Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus'>[];
+};
+const mcpStatusSchema: z.ZodType<McpStatusPage> = z.object({
   data: z.array(
-    z.object({ name: z.string(), pluginId: z.string().nullable(), runtimeStatus: z.unknown() })
+    z.object({
+      name: z.string(),
+      pluginId: z.string().nullable(),
+      // A status this Codex version does not list reads as unknown (null), which the check
+      // treats as live: it can pass only for a declared server.
+      runtimeStatus: z
+        .enum(Object.keys(CONNECTION_STATUSES) as [McpServerConnectionStatus])
+        .nullable()
+        .catch(null),
+    })
   ),
   nextCursor: z.string().nullable(),
 });
@@ -155,7 +193,8 @@ export async function readCodexInventory(
 /**
  * The thread config with the node's scope applied: ChatGPT apps off; every plugin off
  * unless named, and a named plugin's MCP servers off; every configured MCP server the
- * node does not declare off. Declared servers are the `mcp_servers` already in `config`.
+ * node does not declare off. Declared servers are the `mcp_servers` already in `config`;
+ * their names come back with the config, for {@link checkThreadMcpScope} to allow.
  *
  * A declared server whose name the user's or project's config.toml also uses fails
  * `misconfigured`: Codex deep-merges the two tables, so the thread would get neither
@@ -165,7 +204,7 @@ export function applyNodeScope(
   config: ThreadConfig,
   inventory: CodexInventory,
   plugins: readonly string[]
-): ThreadConfig {
+): { config: ThreadConfig; declared: string[] } {
   const declared = declaredServers(config);
   const collisions = inventory.configuredServers.filter(name => name in declared);
   if (collisions.length > 0) {
@@ -198,11 +237,11 @@ export function applyNodeScope(
     }
     scoped.plugins = pluginSwitches;
   }
-  return scoped;
+  return { config: scoped, declared: Object.keys(declared) };
 }
 
 /** The MCP servers the node declares: the `mcp_servers` the provider built from its `mcp:` file. */
-export function declaredServers(config: ThreadConfig): JsonObject {
+function declaredServers(config: ThreadConfig): JsonObject {
   const servers = config.mcp_servers;
   return typeof servers === 'object' && servers !== null && !Array.isArray(servers) ? servers : {};
 }
@@ -223,7 +262,7 @@ export async function checkThreadMcpScope(
   const unexpected: string[] = [];
   let cursor: string | null = null;
   do {
-    const page: z.infer<typeof mcpStatusSchema> = await requestScoped(
+    const page: McpStatusPage = await requestScoped(
       connection,
       'mcpServerStatus/list',
       { threadId, detail: 'toolsAndAuthOnly', cursor },
