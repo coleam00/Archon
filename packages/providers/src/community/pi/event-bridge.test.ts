@@ -18,6 +18,7 @@ import {
   tryParseStructuredOutput,
   usageToTokens,
 } from './event-bridge';
+import { beginPiExtensionTurn } from './extension-error-broker';
 import { createArchonUIBridge, createArchonUIContext } from './ui-context-stub';
 
 // ─── AsyncQueue ────────────────────────────────────────────────────────────
@@ -572,6 +573,49 @@ describe('tryParseStructuredOutput', () => {
 // ─── bridgeSession cleanup ─────────────────────────────────────────────────
 
 describe('bridgeSession cleanup', () => {
+  test('throws an externally reported extension error unchanged', async () => {
+    const turn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+    let abortCount = 0;
+    let disposeCount = 0;
+    const session = {
+      sessionId: 'test-session-id',
+      prompt: () => new Promise<void>(() => {}),
+      dispose: () => {
+        disposeCount++;
+      },
+      subscribe: () => () => {},
+      abort: async () => {
+        abortCount++;
+      },
+    } as unknown as AgentSession;
+    const failure = new Error('extension timer failed');
+    failure.stack =
+      'Error: extension timer failed\n    at callback (/extensions/fake-extension.ts:4:2)';
+
+    queueMicrotask(() => turn.report(failure, '/extensions/fake-extension.ts'));
+    let caught: Error | undefined;
+    try {
+      for await (const _chunk of bridgeSession(
+        session,
+        'prompt',
+        undefined,
+        undefined,
+        undefined,
+        turn
+      )) {
+        // The external failure arrives before the session emits a chunk.
+      }
+    } catch (error) {
+      caught = error as Error;
+    } finally {
+      turn.close();
+    }
+
+    expect(caught).toBe(failure);
+    expect(abortCount).toBe(1);
+    expect(disposeCount).toBe(1);
+  });
+
   // Regression for #1561: when the consumer throws mid-iteration, bridgeSession's
   // finally block calls session.dispose() and used to await the prompt promise
   // for a "settle so callers see no dangling work" guarantee. That guarantee
@@ -640,7 +684,7 @@ describe('bridgeSession cleanup', () => {
     // 200ms is generous for scheduling overhead while still catching any
     // future regression that re-introduces an await on promptPromise.
     expect(elapsed).toBeLessThan(200);
-  }, 5_000);
+  });
 
   test('a late prompt() rejection does not become an unhandled rejection', async () => {
     // The .then() handlers in bridgeSession should preclude promptPromise
@@ -693,7 +737,7 @@ describe('bridgeSession cleanup', () => {
     rejectPrompt(new Error('late pi error'));
     // Yield to let the microtask queue drain so the .catch() runs.
     await new Promise(resolve => setTimeout(resolve, 10));
-  }, 5_000);
+  });
 });
 
 // ─── streaming tail completion ────────────────────────────────────────────────────────────────────

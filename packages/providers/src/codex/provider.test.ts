@@ -755,6 +755,7 @@ describe('CodexProvider', () => {
         completion: { status: 'failed', error: turnError(info, message) },
       });
       const violations = await runProviderConformance({
+        capabilities: new CodexProvider().getCapabilities(),
         turns: [{ name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) }],
         failureCases: [
           {

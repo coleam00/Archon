@@ -4,7 +4,7 @@
 
 import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
-import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
@@ -2526,10 +2526,10 @@ async function runWorkflowWithOwnedSource(
   }
 
   // A --folder registration failure must be fatal regardless of the workflow's
-  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow (e.g.
-  // the bundled `archon-assist`, the flagship `--folder` example), wantsIsolation
-  // is false, so the later isolation fail-fast branch never fires and the run
-  // would silently proceed against the bare cwd with no registered project.
+  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow,
+  // wantsIsolation is false, so the later isolation fail-fast branch never fires
+  // and the run would silently proceed against the bare cwd with no registered
+  // project.
   if (options.folder && !codebase && codebaseRegistrationError) {
     throw buildFolderRegistrationFailureError(codebaseRegistrationError);
   }
@@ -3759,6 +3759,8 @@ export interface NodeSummary {
   blockedOnChildRunId?: string;
   cause?: SkipCause;
   execution?: NodeExecutionMetadata;
+  /** Every provider session id the node's attempts and loop iterations recorded, in order. */
+  sessionIds?: string[];
 }
 
 function formatSkipCause(cause: SkipCause): string {
@@ -3794,12 +3796,25 @@ function outputPreviewOf(rawOutput: unknown): string | undefined {
 export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
   const summaries = new Map<string, NodeSummary>();
+  // Kept apart from `summaries`, which a retry's node_started resets: earlier attempts'
+  // sessions stay listed.
+  const sessionIds = new Map<string, string[]>();
+  const recordSession = (nodeId: string, sessionId: unknown): void => {
+    if (typeof sessionId !== 'string') return;
+    const ids = sessionIds.get(nodeId) ?? [];
+    if (!ids.includes(sessionId)) sessionIds.set(nodeId, [...ids, sessionId]);
+  };
 
   for (const event of events) {
     const nodeId = event.step_name;
     if (!nodeId) continue;
+    if (event.event_type === 'loop_iteration_completed') {
+      recordSession(nodeId, readNodeRecordData(event.data).session_id);
+      continue;
+    }
     const record = readNodeRecordEvent(event);
     if (!record) continue;
+    recordSession(nodeId, record.data.session_id);
     const execution = record.metadata;
 
     switch (record.eventType) {
@@ -3886,7 +3901,10 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
     }
   }
 
-  return [...summaries.values()];
+  return [...summaries.values()].map(summary => {
+    const ids = sessionIds.get(summary.nodeId);
+    return ids === undefined ? summary : { ...summary, sessionIds: ids };
+  });
 }
 
 /**
@@ -3947,6 +3965,10 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
     }
     if (node.error !== undefined) {
       console.log(`        Error:  ${node.error}`);
+    }
+    if (node.sessionIds !== undefined) {
+      const label = node.sessionIds.length === 1 ? 'Session' : 'Sessions';
+      console.log(`        ${label}: ${node.sessionIds.join(', ')}`);
     }
     if (node.blockedOnChildRunId !== undefined) {
       const abandon = spellWorkflowCommand(

@@ -253,3 +253,46 @@ describe('buildNodeSummaries durations', () => {
     expect(summary?.durationMs).toBe(7_200_000);
   });
 });
+
+describe('buildNodeSummaries session ids', () => {
+  const at = (second: number): string => `2026-10-03T10:00:${String(second).padStart(2, '0')}.000Z`;
+
+  it('lists every attempt’s session in order, surviving the retry’s reset', () => {
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'plan', at(0)),
+      event('2', 'node_failed', 'plan', at(1), { error: 'overloaded', session_id: 'attempt-1' }),
+      event('3', 'node_started', 'plan', at(2)),
+      event('4', 'node_completed', 'plan', at(3), { session_id: 'attempt-2' }),
+    ]);
+    expect(summary).toMatchObject({ state: 'completed', sessionIds: ['attempt-1', 'attempt-2'] });
+  });
+
+  it('lists a fresh-context loop’s iterations once each', () => {
+    // The loop's node_completed repeats its last iteration's session.
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'work', at(0)),
+      event('2', 'loop_iteration_completed', 'work', at(1), { iteration: 1, session_id: 'it-1' }),
+      event('3', 'loop_iteration_completed', 'work', at(2), { iteration: 2, session_id: 'it-2' }),
+      event('4', 'node_completed', 'work', at(3), { session_id: 'it-2' }),
+    ]);
+    expect(summary?.sessionIds).toEqual(['it-1', 'it-2']);
+  });
+
+  it('lists a loop that continues one session once', () => {
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'work', at(0)),
+      event('2', 'loop_iteration_completed', 'work', at(1), { iteration: 1, session_id: 'same' }),
+      event('3', 'loop_iteration_completed', 'work', at(2), { iteration: 2, session_id: 'same' }),
+      event('4', 'node_completed', 'work', at(3), { session_id: 'same' }),
+    ]);
+    expect(summary?.sessionIds).toEqual(['same']);
+  });
+
+  it('adds nothing for a run recorded before session ids were stored', () => {
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'plan', at(0)),
+      event('2', 'node_completed', 'plan', at(1), { node_output: 'done' }),
+    ]);
+    expect(summary).not.toHaveProperty('sessionIds');
+  });
+});

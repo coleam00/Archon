@@ -314,7 +314,7 @@ assistants:
 
 | Feature | Support | Notes |
 |---|---|---|
-| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
+| Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
 | MCP servers | ❌ | Not translated to an OpenCode request yet; a node naming `mcp:` fails the run at start |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
@@ -430,6 +430,8 @@ assistants:
     enableExtensions: false   # skip extension discovery entirely
     # interactive: false       # keep extensions loaded, but give them no UI bridge
 ```
+
+Pi nodes that discover extension code run one at a time within an Archon process. Detached extension callbacks carry a stack but no session identifier, so this keeps any escaped exception attributable to exactly one node. Pi nodes with no discovered extensions, including nodes with `enableExtensions: false`, keep their normal concurrency.
 
 Most extensions need three config surfaces:
 
@@ -753,7 +755,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 
 | Feature | Support | Notes |
 |---|---|---|
-| Session resume | ✅ | Returns `sessionId`; reused on resume |
+| Session resume | ✅ | Returns `sessionId`; reused on resume. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
 | Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max`, `ultra`, and `persistent` map to SDK `xhigh`, while `minimal` maps to `low` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |

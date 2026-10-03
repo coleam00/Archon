@@ -19,7 +19,8 @@ import {
   isWorkflowNode,
   isIncludeDirective,
   isComposeFanOutNode,
-  isPersistableNode,
+  nodeUsesPersistedScope,
+  persistedSessionHandling,
   isNodeContextResume,
 } from './schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
@@ -1593,43 +1594,41 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
     }
 
     // persist_session capability gating: when the effective provider is known at
-    // load time (explicit at node or workflow level), reject the workflow if the
-    // provider doesn't support session resume. When the provider is implicit (set
-    // via .archon/config.yaml defaults), the check defers to runtime in
-    // dag-executor.
+    // load time (explicit at node or workflow level), reject a provider without session
+    // resume, and warn for one that cannot fork: the executor never continues its
+    // persisted session, so each run of that node starts fresh. Both outcomes come from
+    // `persistedSessionHandling`, the same answer the executor acts on. When the
+    // provider is implicit (set via .archon/config.yaml defaults), the check defers to
+    // runtime in dag-executor.
     //
-    // Only command + prompt nodes participate in cross-run session persistence today
-    // (see `isPersistableNode` for the exclusion list):
-    //   - bash / script / approval / cancel nodes don't invoke a provider at all.
-    //   - loop nodes manage their own per-iteration session threading; cross-run
-    //     persistence for loops isn't wired. `parseDagNode` emits a
-    //     `loop_node_ai_fields_ignored` warning when `persist_session` appears on one.
-    //   - context:'fresh' nodes explicitly bypass persistence in the executor.
-    // Skipping these here prevents false validation failures when a workflow opts
-    // in via workflow-level `persist_sessions: true` and contains, e.g., a bash node.
+    // `nodeUsesPersistedScope` skips nodes that never use a persisted session (non-agent
+    // nodes, context: 'fresh'), so workflow-level `persist_sessions: true` next to,
+    // e.g., a bash node does not fail validation.
     const workflowPersistSessions = raw.persist_sessions === true;
     for (const node of dagNodes) {
       if (isIncludeDirective(node)) continue;
-      if (!isPersistableNode(node)) continue;
-      if ('context' in node && node.context === 'fresh') continue;
-
-      const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
-      const effectivePersist = nodePersist ?? workflowPersistSessions;
-      if (!effectivePersist) continue;
+      if (!nodeUsesPersistedScope(node, workflowPersistSessions)) continue;
 
       const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
-      if (explicitProvider && isRegisteredProvider(explicitProvider)) {
-        const caps = getProviderCapabilities(explicitProvider);
-        if (!caps.sessionResume) {
-          return {
-            workflow: null,
-            error: {
-              filename,
-              error: `Node '${node.id}' has persist_session: true but provider '${explicitProvider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`,
-              errorType: 'validation_error',
-            },
-          };
-        }
+      if (!explicitProvider || !isRegisteredProvider(explicitProvider)) continue;
+      const handling = persistedSessionHandling(getProviderCapabilities(explicitProvider));
+      if (handling === 'unsupported') {
+        return {
+          workflow: null,
+          error: {
+            filename,
+            error: `Node '${node.id}' has persist_session: true but provider '${explicitProvider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`,
+            errorType: 'validation_error',
+          },
+        };
+      }
+      if (handling === 'fresh') {
+        const message = `Node '${node.id}': provider '${explicitProvider}' cannot fork a session, so persist_session never continues an earlier run's session and every run starts fresh. Use a provider with sessionFork, or pass state between runs through artifacts.`;
+        parseWarnings.push(message);
+        getLog().debug(
+          { id: node.id, provider: explicitProvider },
+          'persist_session_not_continued'
+        );
       }
     }
 

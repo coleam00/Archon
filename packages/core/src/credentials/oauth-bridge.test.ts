@@ -1,4 +1,5 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import { testTimeout } from '@archon/paths/test-utils';
 import { createMockQuery, mockPostgresDialect } from '../test/mocks/database';
 
 process.env.TOKEN_ENCRYPTION_KEY = 'a'.repeat(64);
@@ -317,31 +318,35 @@ describe('oauth-bridge', () => {
     expect(pollOAuth(b.sessionId, 'bob').status).toBe('connected');
   });
 
-  test('a login impl that ignores the cancel entirely cannot permanently break later starts (#1963 regression)', async () => {
-    // Worst case: login neither honors the abort signal nor consumes the
-    // manual-code deferred, and never settles. The bridge waits a bounded
-    // settle window, then proceeds with the new login.
-    loginImpl = async cb => {
-      cb.onAuth({ url: 'https://wedged' });
-      await new Promise<never>(() => {}); // never settles
-      return {};
-    };
-    const first = await startOAuth('u1', 'claude');
-    expect(first.url).toBe('https://wedged');
+  test(
+    'a login impl that ignores the cancel entirely cannot permanently break later starts (#1963 regression)',
+    async () => {
+      // Worst case: login neither honors the abort signal nor consumes the
+      // manual-code deferred, and never settles. The bridge waits a bounded
+      // settle window, then proceeds with the new login.
+      loginImpl = async cb => {
+        cb.onAuth({ url: 'https://wedged' });
+        await new Promise<never>(() => {}); // never settles
+        return {};
+      };
+      const first = await startOAuth('u1', 'claude');
+      expect(first.url).toBe('https://wedged');
 
-    let received: string | undefined;
-    loginImpl = async cb => {
-      cb.onAuth({ url: 'https://fresh' });
-      received = await cb.onManualCodeInput!();
-      return { access: 'a', refresh: 'r', expires: 1 };
-    };
-    const second = await startOAuth('u2', 'claude');
-    expect(second.url).toBe('https://fresh');
-    pollOAuth(second.sessionId, 'u2', 'CODE');
-    await tick();
-    expect(received).toBe('CODE');
-    expect(pollOAuth(second.sessionId, 'u2').status).toBe('connected');
-  }, 10000);
+      let received: string | undefined;
+      loginImpl = async cb => {
+        cb.onAuth({ url: 'https://fresh' });
+        received = await cb.onManualCodeInput!();
+        return { access: 'a', refresh: 'r', expires: 1 };
+      };
+      const second = await startOAuth('u2', 'claude');
+      expect(second.url).toBe('https://fresh');
+      pollOAuth(second.sessionId, 'u2', 'CODE');
+      await tick();
+      expect(received).toBe('CODE');
+      expect(pollOAuth(second.sessionId, 'u2').status).toBe('connected');
+    },
+    testTimeout(10000)
+  );
 
   test('EADDRINUSE at start surfaces an actionable retryable error, not an opaque failure (#1963)', async () => {
     loginImpl = async () => {

@@ -14,7 +14,11 @@ import type {
   ProviderCapabilities,
   CodexProviderDefaults,
 } from '../types';
-import { truncateToolOutput, type ProviderFailureClass } from '@archon/provider-contract';
+import {
+  sessionPreview,
+  truncateToolOutput,
+  type ProviderFailureClass,
+} from '@archon/provider-contract';
 import { failureClassOfThrown, failureResult } from '../shared/failure';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
@@ -461,7 +465,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const threadId = idAt(threadResponse, 'thread');
   if (!threadId) throw new Error('Codex app-server returned a thread without an id');
   request.onThread(threadId);
-  getLog().debug({ threadId, resumed: !!request.resumeSessionId }, 'codex.thread_ready');
+  getLog().debug(
+    { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
+    'codex.thread_ready'
+  );
 
   const turnResponse = await connection.request('turn/start', {
     threadId,
@@ -718,7 +725,12 @@ export class CodexProvider implements IAgentProvider {
             })
           : Promise.resolve();
       void settlesWithin(interrupt, this.shutdownGraceMs).then(answered => {
-        if (!answered) getLog().warn({ threadId, turnId }, 'codex.interrupt_unanswered');
+        if (!answered) {
+          getLog().warn(
+            { sessionIdPreview: threadId && sessionPreview(threadId), turnId },
+            'codex.interrupt_unanswered'
+          );
+        }
         return open.shutdown(this.shutdownGraceMs);
       });
     };

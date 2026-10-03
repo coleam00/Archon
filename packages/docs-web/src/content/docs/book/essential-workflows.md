@@ -71,9 +71,9 @@ What do you want to do?
 
 #### `archon-assist`
 
-The starting point for anything that doesn't fit elsewhere. It runs a single full-capability Claude Code session against your codebase.
+Deprecated: it will be removed in an upcoming release. It runs a single full-capability Claude Code session against your live checkout, with no gates or review.
 
-**When to use it**: Questions about the codebase, debugging sessions, one-off tasks, general help when no other workflow applies.
+**When to use it**: Questions about the codebase, debugging sessions, one-off tasks. In chat you rarely need it: questions get a direct answer without starting a workflow.
 
 ```bash
 archon workflow run archon-assist "What does the orchestrator do?"

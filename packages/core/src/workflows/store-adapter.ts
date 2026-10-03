@@ -107,9 +107,8 @@ export function createWorkflowStore(): IWorkflowStore {
     listProviderEvents: workflowEventDb.listProviderEvents,
     getCodebase: codebaseDb.getCodebase,
     getCodebaseEnvVars: envVarDb.getCodebaseEnvVars,
-    getWorkflowNodeSession: workflowNodeSessionDb.getWorkflowNodeSession,
+    listWorkflowNodeSessions: workflowNodeSessionDb.listWorkflowNodeSessions,
     upsertWorkflowNodeSession: workflowNodeSessionDb.upsertWorkflowNodeSession,
-    deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRunNodeSessions,
     upsertWorkflowRunNodeSession,
   };
