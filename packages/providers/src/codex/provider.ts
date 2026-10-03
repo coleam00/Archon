@@ -623,16 +623,35 @@ function withModelAccessAdvice(evidence: string, model: string | undefined): str
 }
 
 /**
+ * Spawn errnos that fail the same way every time: the binary path is missing, not
+ * executable, the wrong architecture, or not a file. Others, such as EMFILE, EAGAIN and
+ * ENOMEM, are the machine running short and may clear.
+ */
+const MISCONFIGURED_SPAWN_ERRNOS: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'EACCES',
+  'ENOEXEC',
+  'EISDIR',
+  'ENOTDIR',
+]);
+
+/**
  * The class of a failure that ended a turn before `turn/completed`, from how the process
  * ended. A process that exits on its own before answering any request never ran a turn:
  * the binary has no `app-server` or rejects a flag, and another attempt fails the same
  * way. Any other process end is a process failure, which is what `transient` names.
+ *
+ * JSON-RPC errors are not classified by code: Codex answers an unknown method, a missing
+ * thread and a config it cannot load all with -32600, so the code says nothing about
+ * whether the setup must change.
  */
 function failureClassOfStop(error: unknown): ProviderFailureClass {
   if (!(error instanceof ConnectionClosedError)) return failureClassOfThrown(error);
   const { end } = error;
   if (end.kind === 'spawn_failed') {
-    return end.error.code === 'ENOENT' ? 'misconfigured' : 'transient';
+    return end.error.code !== undefined && MISCONFIGURED_SPAWN_ERRNOS.has(end.error.code)
+      ? 'misconfigured'
+      : 'transient';
   }
   return error.beforeFirstResponse && end.signal === null ? 'misconfigured' : 'transient';
 }

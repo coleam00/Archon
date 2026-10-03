@@ -13,7 +13,7 @@ mock.module('@archon/paths', () => ({
   getArchonHome: () => '/tmp/archon-home-unused',
 }));
 
-import { TOOL_OUTPUT_MAX_CHARS } from '@archon/provider-contract';
+import { TOOL_OUTPUT_MAX_CHARS, type ProviderFailureClass } from '@archon/provider-contract';
 import { runProviderConformance } from '@archon/provider-contract/conformance';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
@@ -306,12 +306,20 @@ describe('CodexProvider', () => {
       expect(server.processes).toHaveLength(2);
     });
 
-    test('a binary that vanishes before spawn is misconfigured', async () => {
-      const { provider } = providerWith({ spawnError: 'ENOENT' });
-      const result = resultOf(await run(provider));
-      expect(result.failure?.class).toBe('misconfigured');
-      expect(result.failure?.evidence).toContain('ENOENT');
-    });
+    test.each([
+      ['ENOENT', 'misconfigured'],
+      ['EACCES', 'misconfigured'],
+      ['ENOEXEC', 'misconfigured'],
+      ['EMFILE', 'transient'],
+    ] satisfies [string, ProviderFailureClass][])(
+      'a spawn that fails with %s is %s',
+      async (errno, expected) => {
+        const { provider } = providerWith({ spawnError: errno });
+        const result = resultOf(await run(provider));
+        expect(result.failure?.class).toBe(expected);
+        expect(result.failure?.evidence).toContain(errno);
+      }
+    );
   });
 
   describe('tool calls', () => {

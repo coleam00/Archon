@@ -233,7 +233,7 @@ By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`)
 
 ### How Archon runs Codex
 
-Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, `AGENTS.md` guidance and MCP servers load as they do for `codex` itself. A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `transient` for overload, network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a missing binary or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, `AGENTS.md` guidance and MCP servers load as they do for `codex` itself. A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `transient` for overload, network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
 
 ### Codex Configuration Options
 
