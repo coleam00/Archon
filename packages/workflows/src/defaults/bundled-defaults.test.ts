@@ -593,6 +593,9 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('$ARTIFACTS_DIR/review/findings.json');
       expect(synthesize).toContain('{id, severity, sources, claim, status, round}');
+      // polish-scope reads these exact values to decide whether open notes remain.
+      expect(synthesize).toContain('`severity` is `blocking` or `note`');
+      expect(synthesize).toContain('`status` is `open`, `fixed`, `declined`');
       // Carried-forward findings keep the lens that found them, or a multi-round review
       // reattributes every surviving finding to its last round.
       expect(synthesize).toContain('keeping the `sources` it was first attributed to');
