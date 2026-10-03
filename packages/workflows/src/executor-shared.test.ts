@@ -24,7 +24,6 @@ import { nodeFailureKindSchema } from './schemas/node-execution';
 import {
   substituteWorkflowVariables,
   buildPromptWithContext,
-  detectCreditExhaustion,
   detectCompletionSignal,
   describeUnmetCompletion,
   stripCompletionTags,
@@ -638,64 +637,6 @@ describe('buildPromptWithContext', () => {
       'test prompt'
     );
     expect(result).toBe('Do the thing');
-  });
-});
-
-describe('detectCreditExhaustion', () => {
-  it('detects "You\'re out of extra usage" (exact SDK phrase)', () => {
-    const result = detectCreditExhaustion("You're out of extra usage · resets in 2h");
-    expect(result).toBe('Credit exhaustion detected — resume when credits reset');
-  });
-
-  it('detects "out of credits" phrase', () => {
-    expect(detectCreditExhaustion('Sorry, you are out of credits.')).not.toBeNull();
-  });
-
-  it('detects "credit balance" phrase', () => {
-    expect(detectCreditExhaustion('Your credit balance is too low.')).not.toBeNull();
-  });
-
-  it('returns null for normal output', () => {
-    expect(detectCreditExhaustion('Here is the investigation summary...')).toBeNull();
-  });
-
-  it('detects "insufficient credit" phrase', () => {
-    expect(detectCreditExhaustion('Insufficient credit to continue.')).not.toBeNull();
-  });
-
-  it('is case-insensitive', () => {
-    expect(detectCreditExhaustion("YOU'RE OUT OF EXTRA USAGE")).not.toBeNull();
-  });
-
-  it('detects "You\'ve hit your session limit" and includes reset time', () => {
-    const result = detectCreditExhaustion(
-      "You've hit your session limit · resets 3am (America/Mexico_City)"
-    );
-    expect(result).not.toBeNull();
-    expect(result).toContain('session limit');
-    expect(result).toContain('3am (America/Mexico_City)');
-  });
-
-  it('returns generic session limit message when no reset time found', () => {
-    const result = detectCreditExhaustion("You've hit your session limit.");
-    expect(result).not.toBeNull();
-    expect(result).toContain('session limit');
-  });
-
-  it('detects "hit your session limit" variant (case-insensitive)', () => {
-    expect(detectCreditExhaustion("YOU'VE HIT YOUR SESSION LIMIT · resets noon")).not.toBeNull();
-  });
-
-  it('detects "session limit reached" variant', () => {
-    const result = detectCreditExhaustion('session limit reached');
-    expect(result).not.toBeNull();
-    expect(result).toContain('session limit');
-  });
-
-  it('detects "session limit has been reached" variant', () => {
-    const result = detectCreditExhaustion('Session limit has been reached.');
-    expect(result).not.toBeNull();
-    expect(result).toContain('session limit');
   });
 });
 
