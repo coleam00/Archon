@@ -15,7 +15,7 @@ import { settlingProvider } from './test-settling-provider';
 import { readBundleIndex } from './defaults/bundle-inventory';
 import { describe, it, expect, beforeEach, afterEach, afterAll, mock } from 'bun:test';
 import { mkdir, writeFile, rm, cp, readdir, readFile } from 'fs/promises';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync } from 'fs';
 import { dirname, join, sep } from 'path';
 import { tmpdir } from 'os';
@@ -5054,28 +5054,30 @@ nodes:
   // fully against this test's clock: the timeout must exceed the rendezvous
   // deadline (5s) or a loaded CI run dies as a bun-test timeout instead of the
   // diagnostic rendezvous error.
-  it('GAP: concurrent fan-out cancels a sibling unless the child sets mutates_checkout:false', async () => {
-    // The path lock (executor.ts, "Siblings are intentionally NOT excluded") means two
-    // `workflow:` nodes in one layer collide on the shared checkout: the loser
-    // self-cancels and its parent node fails. This is NOT the gate-slot bug — it
-    // happens with no gates anywhere, and it makes the default fan-out layout
-    // (`plan → [worker-a, worker-b]`) fail deterministically.
-    //
-    // The escape hatch is `mutates_checkout: false` on the CHILD workflow: the author
-    // asserts the child does not write the checkout, and the lock is skipped.
-    //
-    // Consequence for fan-out designs: analysis/review peers that write only to
-    // $ARTIFACTS_DIR can run concurrently TODAY. Peers that EDIT the repo cannot —
-    // those need per-child isolation (`isolation: worktree`, reserved + rejected in
-    // slice 1). Both halves are asserted so a change to either is visible.
-    const childYaml = (name: string, extra: string): string => `
+  it(
+    'GAP: concurrent fan-out cancels a sibling unless the child sets mutates_checkout:false',
+    async () => {
+      // The path lock (executor.ts, "Siblings are intentionally NOT excluded") means two
+      // `workflow:` nodes in one layer collide on the shared checkout: the loser
+      // self-cancels and its parent node fails. This is NOT the gate-slot bug — it
+      // happens with no gates anywhere, and it makes the default fan-out layout
+      // (`plan → [worker-a, worker-b]`) fail deterministically.
+      //
+      // The escape hatch is `mutates_checkout: false` on the CHILD workflow: the author
+      // asserts the child does not write the checkout, and the lock is skipped.
+      //
+      // Consequence for fan-out designs: analysis/review peers that write only to
+      // $ARTIFACTS_DIR can run concurrently TODAY. Peers that EDIT the repo cannot —
+      // those need per-child isolation (`isolation: worktree`, reserved + rejected in
+      // slice 1). Both halves are asserted so a change to either is visible.
+      const childYaml = (name: string, extra: string): string => `
 name: ${name}
 description: fan-out child
 ${extra}nodes:
   - id: emit
     bash: echo ok
 `;
-    const parentYaml = (child: string): string => `
+      const parentYaml = (child: string): string => `
 name: parent-fanout-${child}
 description: two ${child} children in one layer
 nodes:
@@ -5086,82 +5088,84 @@ nodes:
     workflow: ${child}
     input: b
 `;
-    await writeWorkflow('racy-child', childYaml('racy-child', ''));
-    await writeWorkflow('safe-child', childYaml('safe-child', 'mutates_checkout: false\n'));
-    await writeWorkflow('parent-fanout-racy-child', parentYaml('racy-child'));
-    await writeWorkflow('parent-fanout-safe-child', parentYaml('safe-child'));
+      await writeWorkflow('racy-child', childYaml('racy-child', ''));
+      await writeWorkflow('safe-child', childYaml('safe-child', 'mutates_checkout: false\n'));
+      await writeWorkflow('parent-fanout-racy-child', parentYaml('racy-child'));
+      await writeWorkflow('parent-fanout-safe-child', parentYaml('safe-child'));
 
-    const kids = (store: InMemoryStore, name: string): string[] => {
-      const parentRun = [...store.runs.values()].find(r => r.workflow_name === name);
-      return [...store.runs.values()]
-        .filter(r => r.parent_run_id === parentRun?.id)
-        .map(r => r.status)
-        .sort();
-    };
-
-    // Default posture: the sibling is cancelled and the parent run fails.
-    // Whether the collision fires depends on both child rows coexisting in
-    // non-terminal state when either lock query runs; under CI load the children
-    // can serialize end-to-end and both succeed. This store holds each child's
-    // lock query until BOTH child rows exist and are live, so the overlap the test
-    // characterizes is a precondition instead of a chance interleaving.
-    class RendezvousStore extends InMemoryStore {
-      private overlapSeen = false;
-      getActiveWorkflowRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'] = async (
-        path,
-        self
-      ) => {
-        const selfRow = self ? this.runs.get(self.id) : undefined;
-        if (!selfRow?.parent_run_id || this.overlapSeen) {
-          return super.getActiveWorkflowRunByPath(path, self);
-        }
-        const parent = this.runs.get(selfRow.parent_run_id);
-        if (!parent) return super.getActiveWorkflowRunByPath(path, self);
-        const deadline = Date.now() + 5000;
-        for (;;) {
-          const children = await this.findChildRuns(parent.id);
-          const live = children.filter(c => holdsPathLock(c.status));
-          if (live.length >= 2) {
-            this.overlapSeen = true;
-          }
-          if (this.overlapSeen) break;
-          if (Date.now() > deadline) {
-            throw new Error(
-              `rendezvous failed: ${children.length} child rows, ${live.length} live`
-            );
-          }
-          await new Promise(resolve => setTimeout(resolve, 1));
-        }
-        return super.getActiveWorkflowRunByPath(path, self);
+      const kids = (store: InMemoryStore, name: string): string[] => {
+        const parentRun = [...store.runs.values()].find(r => r.workflow_name === name);
+        return [...store.runs.values()]
+          .filter(r => r.parent_run_id === parentRun?.id)
+          .map(r => r.status)
+          .sort();
       };
-    }
-    const racyStore = new RendezvousStore();
-    const racyResult = await executeWorkflow(
-      makeDeps(racyStore),
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      await discover('parent-fanout-racy-child'),
-      'goal',
-      'conv-db'
-    );
-    expect(racyResult.success).toBe(false);
-    expect(kids(racyStore, 'parent-fanout-racy-child')).toEqual(['cancelled', 'completed']);
 
-    // With mutates_checkout:false the lock is skipped and both children run.
-    const safeStore = new InMemoryStore();
-    const safeResult = await executeWorkflow(
-      makeDeps(safeStore),
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      await discover('parent-fanout-safe-child'),
-      'goal',
-      'conv-db'
-    );
-    expect(safeResult.success).toBe(true);
-    expect(kids(safeStore, 'parent-fanout-safe-child')).toEqual(['completed', 'completed']);
-  }, 20000);
+      // Default posture: the sibling is cancelled and the parent run fails.
+      // Whether the collision fires depends on both child rows coexisting in
+      // non-terminal state when either lock query runs; under CI load the children
+      // can serialize end-to-end and both succeed. This store holds each child's
+      // lock query until BOTH child rows exist and are live, so the overlap the test
+      // characterizes is a precondition instead of a chance interleaving.
+      class RendezvousStore extends InMemoryStore {
+        private overlapSeen = false;
+        getActiveWorkflowRunByPath: IWorkflowStore['getActiveWorkflowRunByPath'] = async (
+          path,
+          self
+        ) => {
+          const selfRow = self ? this.runs.get(self.id) : undefined;
+          if (!selfRow?.parent_run_id || this.overlapSeen) {
+            return super.getActiveWorkflowRunByPath(path, self);
+          }
+          const parent = this.runs.get(selfRow.parent_run_id);
+          if (!parent) return super.getActiveWorkflowRunByPath(path, self);
+          const deadline = Date.now() + 5000;
+          for (;;) {
+            const children = await this.findChildRuns(parent.id);
+            const live = children.filter(c => holdsPathLock(c.status));
+            if (live.length >= 2) {
+              this.overlapSeen = true;
+            }
+            if (this.overlapSeen) break;
+            if (Date.now() > deadline) {
+              throw new Error(
+                `rendezvous failed: ${children.length} child rows, ${live.length} live`
+              );
+            }
+            await new Promise(resolve => setTimeout(resolve, 1));
+          }
+          return super.getActiveWorkflowRunByPath(path, self);
+        };
+      }
+      const racyStore = new RendezvousStore();
+      const racyResult = await executeWorkflow(
+        makeDeps(racyStore),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover('parent-fanout-racy-child'),
+        'goal',
+        'conv-db'
+      );
+      expect(racyResult.success).toBe(false);
+      expect(kids(racyStore, 'parent-fanout-racy-child')).toEqual(['cancelled', 'completed']);
+
+      // With mutates_checkout:false the lock is skipped and both children run.
+      const safeStore = new InMemoryStore();
+      const safeResult = await executeWorkflow(
+        makeDeps(safeStore),
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        await discover('parent-fanout-safe-child'),
+        'goal',
+        'conv-db'
+      );
+      expect(safeResult.success).toBe(true);
+      expect(kids(safeStore, 'parent-fanout-safe-child')).toEqual(['completed', 'completed']);
+    },
+    testTimeout(20000)
+  );
 
   it('GAP (#2180 Defect A): a GATING child loses the path lock before it ever reaches its gate', async () => {
     // Fan-out where both children would gate. What actually happens is the PATH LOCK

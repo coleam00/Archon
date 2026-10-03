@@ -640,7 +640,7 @@ describe('bridgeSession cleanup', () => {
     // 200ms is generous for scheduling overhead while still catching any
     // future regression that re-introduces an await on promptPromise.
     expect(elapsed).toBeLessThan(200);
-  }, 5_000);
+  });
 
   test('a late prompt() rejection does not become an unhandled rejection', async () => {
     // The .then() handlers in bridgeSession should preclude promptPromise
@@ -693,7 +693,7 @@ describe('bridgeSession cleanup', () => {
     rejectPrompt(new Error('late pi error'));
     // Yield to let the microtask queue drain so the .catch() runs.
     await new Promise(resolve => setTimeout(resolve, 10));
-  }, 5_000);
+  });
 });
 
 // ─── streaming tail completion ────────────────────────────────────────────────────────────────────
