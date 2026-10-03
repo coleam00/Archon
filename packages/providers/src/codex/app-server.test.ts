@@ -19,16 +19,18 @@ import {
 function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => undefined): {
   spawner: Spawner;
   child: ChildProcessWithoutNullStreams;
+  stderr: PassThrough;
   sent: () => Record<string, unknown>[];
   reply: (frame: object) => void;
   calls: { args: string[]; env: Record<string, string> }[];
 } {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
+  const stderr = new PassThrough();
   const child = Object.assign(new EventEmitter(), {
     stdin,
     stdout,
-    stderr: new PassThrough(),
+    stderr,
     pid: 7,
     kill: (signal: string) => {
       onKill(child, signal);
@@ -46,6 +48,7 @@ function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => 
       return child;
     }) as Spawner,
     child,
+    stderr,
     sent: () =>
       written
         .split('\n')
@@ -127,6 +130,26 @@ describe('AppServerConnection', () => {
     const error = await pending.catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ConnectionClosedError);
     expect((error as Error).message).toContain('exited (code 1)');
+  });
+
+  test('a process ending keeps the tail of its stderr as evidence, off the error message', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const pending = connection.request('initialize', {
+      clientInfo: { name: 'archon', title: null, version: '0' },
+      capabilities: null,
+    });
+    fake.stderr.write('x'.repeat(10_000));
+    fake.stderr.write('Error: stdin is not a terminal\n');
+    await tick();
+    fake.child.emit('close', 1, null);
+
+    const error = (await pending.catch((e: unknown) => e)) as ConnectionClosedError;
+    expect(error.beforeFirstResponse).toBe(true);
+    expect(error.message).not.toContain('stdin is not a terminal');
+    expect(error.evidence).toContain('exited (code 1)');
+    expect(error.evidence).toContain('Error: stdin is not a terminal');
+    expect(error.evidence.length).toBeLessThan(5_000);
   });
 
   test('shutdown closes stdin and sends SIGTERM only when the process does not exit', async () => {

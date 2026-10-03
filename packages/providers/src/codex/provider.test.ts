@@ -630,6 +630,20 @@ describe('CodexProvider', () => {
       expect(result.failure?.evidence).toContain('Reconnecting... 1/5');
     });
 
+    test('a process that exits before answering anything is misconfigured, with its stderr as evidence', async () => {
+      const result = resultOf(
+        await streamOf({
+          startupFailure: {
+            code: 2,
+            stderr: "error: unexpected argument '--bogus' found\n",
+          },
+        })
+      );
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('exited (code 2)');
+      expect(result.failure?.evidence).toContain("unexpected argument '--bogus'");
+    });
+
     test('a turn interrupted by someone other than Archon is unknown', async () => {
       const result = resultOf(await streamOf({ completion: { status: 'interrupted' } }));
       expect(result.failure?.class).toBe('unknown');
@@ -679,6 +693,12 @@ describe('CodexProvider', () => {
               notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
               exitCode: 137,
             }),
+          },
+          {
+            name: 'binary that exits before answering',
+            expected: 'misconfigured',
+            evidence: 'stdin is not a terminal',
+            run: turn({ startupFailure: { code: 1, stderr: 'Error: stdin is not a terminal' } }),
           },
           {
             name: 'binary pin that does not exist',

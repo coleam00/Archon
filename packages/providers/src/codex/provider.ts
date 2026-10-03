@@ -558,7 +558,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         break;
     }
   }
-  throw new ConnectionClosedError(await connection.ended, errors);
+  throw connection.closedError(await connection.ended, errors);
 }
 
 function* completeTurn(
@@ -623,14 +623,18 @@ function withModelAccessAdvice(evidence: string, model: string | undefined): str
 }
 
 /**
- * The class of a failure that ended a turn before `turn/completed`. The process ending is
- * itself the structured signal: a process failure is what `transient` names.
+ * The class of a failure that ended a turn before `turn/completed`, from how the process
+ * ended. A process that exits on its own before answering any request never ran a turn:
+ * the binary has no `app-server` or rejects a flag, and another attempt fails the same
+ * way. Any other process end is a process failure, which is what `transient` names.
  */
 function failureClassOfStop(error: unknown): ProviderFailureClass {
   if (!(error instanceof ConnectionClosedError)) return failureClassOfThrown(error);
-  return error.end.kind === 'spawn_failed' && error.end.error.code === 'ENOENT'
-    ? 'misconfigured'
-    : 'transient';
+  const { end } = error;
+  if (end.kind === 'spawn_failed') {
+    return end.error.code === 'ENOENT' ? 'misconfigured' : 'transient';
+  }
+  return error.beforeFirstResponse && end.signal === null ? 'misconfigured' : 'transient';
 }
 
 // ─── Codex Provider ──────────────────────────────────────────────────────
@@ -784,7 +788,10 @@ export class CodexProvider implements IAgentProvider {
         const result = failureResult(
           failureClass,
           subtype,
-          withModelAccessAdvice((error as Error).message, model)
+          withModelAccessAdvice(
+            error instanceof ConnectionClosedError ? error.evidence : (error as Error).message,
+            model
+          )
         );
         if (threadId) result.sessionId = threadId;
         yield result;

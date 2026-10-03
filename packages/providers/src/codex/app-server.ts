@@ -48,15 +48,35 @@ export type ConnectionEnd =
   | { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null }
   | { kind: 'spawn_failed'; error: NodeJS.ErrnoException };
 
+/** How much of Codex's stderr a connection keeps for a failure's evidence. */
+const STDERR_TAIL_CHARS = 4000;
+
 /** A request that could not complete because the process ended first. */
 export class ConnectionClosedError extends Error {
-  /** @param errors the turn's `error` notifications, kept as evidence. */
+  readonly #stderr: string;
+
+  /**
+   * @param beforeFirstResponse the process ended without answering any request.
+   * @param stderr the tail of Codex's stderr.
+   * @param errors the turn's `error` notifications, kept as evidence.
+   */
   constructor(
     readonly end: ConnectionEnd,
+    readonly beforeFirstResponse: boolean,
+    stderr: string,
     errors: readonly string[] = []
   ) {
     super([`Codex app-server ${describeEnd(end)} before the turn completed`, ...errors].join('\n'));
     this.name = 'ConnectionClosedError';
+    this.#stderr = stderr.trim();
+  }
+
+  /**
+   * The message plus Codex's stderr tail, for the operator. Evidence only: nothing
+   * classifies from it. Kept off `message` so logging the error does not copy stderr.
+   */
+  get evidence(): string {
+    return this.#stderr ? `${this.message}\nstderr:\n${this.#stderr}` : this.message;
   }
 }
 
@@ -97,6 +117,8 @@ export class AppServerConnection {
   private readonly queue: ServerNotification[] = [];
   private wake: (() => void) | undefined;
   private endedWith: ConnectionEnd | undefined;
+  private responded = false;
+  private stderrTail = '';
   private readonly endSignal = Promise.withResolvers<ConnectionEnd>();
   /** Resolves once the process is gone, however it ended. */
   readonly ended = this.endSignal.promise;
@@ -114,8 +136,12 @@ export class AppServerConnection {
         newline = buffered.indexOf('\n');
       }
     });
-    // Codex logs to stderr; reading it keeps the pipe from filling and blocking the server.
-    child.stderr.resume();
+    // Codex logs to stderr. Reading it keeps the pipe from filling and blocking the server,
+    // and its tail is the only account of why a process exited early.
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk: string) => {
+      this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
+    });
     // A write after the process died fails here; the exit handler reports the end.
     child.stdin.on('error', error => {
       getLog().debug({ err: error }, 'codex.app_server_stdin_error');
@@ -150,7 +176,7 @@ export class AppServerConnection {
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
   request<M extends Method>(method: M, params: ParamsOf<M>): Promise<unknown> {
-    if (this.endedWith) return Promise.reject(new ConnectionClosedError(this.endedWith));
+    if (this.endedWith) return Promise.reject(this.closedError(this.endedWith));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { method, resolve, reject });
@@ -212,6 +238,7 @@ export class AppServerConnection {
     }
     const { id, method } = message;
     if (typeof id === 'number' && typeof method !== 'string') {
+      this.responded = true;
       const request = this.pending.get(id);
       if (!request) return;
       this.pending.delete(id);
@@ -242,6 +269,11 @@ export class AppServerConnection {
     this.wakeReader();
   }
 
+  /** The error for work cut short by `end`, with the turn's `error` notifications. */
+  closedError(end: ConnectionEnd, errors: readonly string[] = []): ConnectionClosedError {
+    return new ConnectionClosedError(end, !this.responded, this.stderrTail, errors);
+  }
+
   private wakeReader(): void {
     const wake = this.wake;
     this.wake = undefined;
@@ -252,7 +284,7 @@ export class AppServerConnection {
   private close(end: ConnectionEnd): void {
     if (this.endedWith) return;
     this.endedWith = end;
-    for (const request of this.pending.values()) request.reject(new ConnectionClosedError(end));
+    for (const request of this.pending.values()) request.reject(this.closedError(end));
     this.pending.clear();
     this.wakeReader();
     this.endSignal.resolve(end);
