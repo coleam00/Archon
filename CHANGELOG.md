@@ -54,8 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Codex title generation now starts with no ambient skills catalogue, plugins, apps or MCP servers and a read-only sandbox. Native guidance and provider settings still load; failures still fall back to a truncated message title. (#3626)
-
+- Codex title generation now starts with no ambient skills catalog, plugins, apps or MCP servers and a read-only sandbox. Native guidance and provider settings still load; failures still fall back to a truncated message title. (#3626)
 - Parallel nodes that all declare `mutates_checkout: false` now run in parallel instead of one at a time. When one of them changes the checkout, every guarded node running at that moment fails, and the error names the other guarded nodes that ran in the layer, since the change may not be the failing node's alone. A layer that mixes guarded nodes with any node that isn't checkout-guarded still runs one node at a time. (#3606)
 - Two overlapping runs of one workflow in one conversation no longer share a persisted session. Each run's `persist_session` nodes continue from the session saved when that run started, never from one a sibling run saved later, and a node that finishes without a session id no longer erases the saved one. (#2667)
 

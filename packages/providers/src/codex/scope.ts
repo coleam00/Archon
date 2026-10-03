@@ -1,13 +1,14 @@
 /**
  * Capability scoping for Codex workflow nodes and title requests.
  *
- * Title requests reuse the empty node scope. A workflow node loads only the plugins
- * and MCP servers it names. Codex already has the switches, per thread: `features.plugins`, `plugins."<id>".enabled`, a plugin's
- * `mcp_servers.<name>.enabled`, `features.apps`, and `mcp_servers.<name>.enabled` for a
- * user or project server. They ride in the thread's `config`, which Codex merges over
- * the user's own config.toml without replacing it, so the user's AGENTS.md, hooks and
- * other settings keep loading. The thread config is not stored with the thread: every
- * `thread/start`, `thread/resume` and `thread/fork` must carry it again.
+ * A workflow node loads only the plugins and MCP servers it names. Title requests reuse
+ * the empty node scope. Codex already has the switches, per thread: `features.plugins`,
+ * `plugins."<id>".enabled`, a plugin's `mcp_servers.<name>.enabled`, `features.apps`,
+ * and `mcp_servers.<name>.enabled` for a user or project server. They ride in the
+ * thread's `config`, which Codex merges over the user's own config.toml without
+ * replacing it, so the user's AGENTS.md, hooks and other settings keep loading. The
+ * thread config is not stored with the thread: every `thread/start`, `thread/resume`
+ * and `thread/fork` must carry it again.
  *
  * {@link readCodexInventory} reads what the switches must name from Codex itself, over
  * the same app-server connection. {@link applyNodeScope} turns that into the switches.

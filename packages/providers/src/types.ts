@@ -546,7 +546,10 @@ export interface ProviderAdmissionEvent {
  * The workflow path additionally passes nodeConfig and assistantConfig.
  */
 export interface SendQueryOptions extends AgentRequestOptions {
-  /** Codex titles use empty capability declarations and a read-only sandbox. */
+  /**
+   * Honored by Codex only: titles use empty capability declarations and a read-only
+   * sandbox. Claude and Pi ignore it.
+   */
   purpose?: 'title-generation';
   /** Observer for capped-provider admission transitions (queue visibility, #2817). */
   onAdmission?: (event: ProviderAdmissionEvent) => void;
