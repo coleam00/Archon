@@ -4199,7 +4199,6 @@ export type TranscriptFormat = 'jsonl' | 'text';
 interface TranscriptReadState {
   offset: number;
   decoder: TextDecoder;
-  hasContent: boolean;
   output: TranscriptOutput;
 }
 
@@ -4476,7 +4475,6 @@ async function drainTranscript(
       const { bytesRead } = await file.read(buffer, 0, bytesToRead, state.offset);
       if (bytesRead === 0) break;
       state.offset += bytesRead;
-      state.hasContent = true;
       const text = state.decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
       if (text.length > 0) await state.output.write(text);
     }
@@ -4530,13 +4528,12 @@ export async function workflowLogsCommand(
     const state: TranscriptReadState = {
       offset: 0,
       decoder: new TextDecoder(),
-      hasContent: false,
       output: transcriptOutput(format),
     };
 
     if (!follow) {
       const exists = await drainTranscript(transcriptPath, state);
-      if (!exists || !state.hasContent) {
+      if (!exists || state.offset === 0) {
         await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, false)}\n`);
         return 1;
       }
@@ -4552,7 +4549,7 @@ export async function workflowLogsCommand(
 
       if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
         await drainTranscript(transcriptPath, state);
-        if (!state.hasContent) {
+        if (state.offset === 0) {
           await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, true)}\n`);
           return 1;
         }
