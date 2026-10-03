@@ -9576,6 +9576,16 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(sessions[2]).toBeUndefined();
       expect(sessions[3]).toBe('thread-2');
       expect(sessions[3]).not.toBe('throwaway');
+      // The iteration's row and the node's row name attempt 0's session, never the reask's.
+      const rows = persistedEvents(mockDeps.store);
+      expect(
+        rows
+          .filter(row => row.event_type === 'loop_iteration_completed')
+          .map(row => row.data?.session_id)
+      ).toEqual(['thread-1', 'thread-2', 'thread-3']);
+      expect(
+        rows.filter(row => row.event_type === 'node_completed').map(row => row.data?.session_id)
+      ).toEqual(['thread-3']);
     });
 
     it('keeps threading when the re-ask happens on iteration 1', async () => {
@@ -14257,6 +14267,12 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     // 1: classify attempt 0. 2: the reask, deliberately fresh. 3: the next node.
     expect(sessions).toEqual([undefined, undefined, 'real']);
+    // The node record names attempt 0's session, never the reask's.
+    expect(
+      persistedEvents(mockDeps.store)
+        .filter(row => row.event_type === 'node_completed' && row.step_name === 'classify')
+        .map(row => row.data?.session_id)
+    ).toEqual(['real']);
   });
 
   it('flags the run total when only a middle node is silent about cache', async () => {
