@@ -10,10 +10,6 @@ on:
 env:
   BUN_VERSION: '1.4.2'
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   test:
     strategy:
