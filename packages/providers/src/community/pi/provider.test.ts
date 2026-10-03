@@ -2772,6 +2772,41 @@ describe('PiProvider', () => {
     expect(mockCreateAgentSession).not.toHaveBeenCalled();
   });
 
+  test('a caller that aborts during the credential check gets Query aborted, not an auth failure', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const controller = new AbortController();
+    let entered: () => void = () => undefined;
+    const checking = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    mockCheckAuth.mockImplementationOnce((async (
+      _providerId: string,
+      options?: { signal?: AbortSignal }
+    ) => {
+      entered();
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(new Error('The operation was aborted.'));
+        });
+      });
+    }) as unknown as typeof mockCheckAuth);
+    resetScript(scriptedAgentEnd());
+
+    const pending = consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        abortSignal: controller.signal,
+      })
+    );
+    await checking;
+    controller.abort();
+    const result = await pending;
+
+    expect(result.error?.message).toBe('Query aborted');
+    expect(result.failure).toBeUndefined();
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
   test('Pi structured extension errors fail the turn with the supplied stack', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const extensionPath = '/extensions/fake-extension.ts';
