@@ -1,5 +1,5 @@
 import { providerFailureClassSchema } from '@archon/provider-contract';
-import { describe, it, expect, mock } from 'bun:test';
+import { describe, it, expect, mock, type Mock } from 'bun:test';
 
 // Mock logger before importing module under test
 const mockLogFn = mock(() => {});
@@ -1015,15 +1015,36 @@ describe('typed provider failures decide retry — #3520', () => {
 });
 
 describe('safeSendMessage', () => {
-  it('suppresses a send failure whatever it says', async () => {
+  const platformThat = (send: () => Promise<void>): IWorkflowPlatform =>
+    ({
+      sendMessage: mock(send),
+      getPlatformType: mock(() => 'test'),
+    }) as unknown as IWorkflowPlatform;
+
+  it('returns true when the platform accepts the message', async () => {
+    expect(
+      await safeSendMessage(
+        platformThat(() => Promise.resolve()),
+        'conv-1',
+        'hello'
+      )
+    ).toBe(true);
+  });
+
+  it('logs and suppresses a send failure whatever it says', async () => {
     for (const message of ['401 unauthorized', 'timeout connecting', 'some unclassified glitch']) {
-      const platform = {
-        sendMessage: mock(() => Promise.reject(new Error(message))),
-        getPlatformType: mock(() => 'test'),
-      };
+      mockLogFn.mockClear();
+      const sent = await safeSendMessage(
+        platformThat(() => Promise.reject(new Error(message))),
+        'conv-1',
+        'hello'
+      );
+      expect(sent).toBe(false);
       expect(
-        await safeSendMessage(platform as unknown as IWorkflowPlatform, 'conv-1', 'hello')
-      ).toBe(false);
+        (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
+          call => call[1] === 'platform_message_send_failed'
+        )
+      ).toBe(true);
     }
   });
 });
