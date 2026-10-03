@@ -886,6 +886,24 @@ const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 const STRUCTURED_OUTPUT_MAX_REASKS = 3;
 
 /**
+ * The session one structured-output pass resumes, and whether the session it ends in
+ * becomes the node's thread. A reask runs in a fresh throwaway session so an invalid
+ * turn is never carried forward. That session holds one repaired turn and none of the
+ * node's work, so it never becomes the thread: attempt 0's session stays the one the
+ * next iteration, the next node, and the node record continue (#2563, #3584). A named
+ * `context: resume` is the exception: every pass forks the declared source itself and
+ * must prove that fork on its own, so each pass ends in a real fork of the source.
+ */
+function structuredOutputPass(
+  reaskAttempt: number,
+  resumeSessionId: string | undefined,
+  forksNamedSource: boolean
+): { resumeSessionId: string | undefined; threadsSession: boolean } {
+  const threadsSession = forksNamedSource || reaskAttempt === 0;
+  return { resumeSessionId: threadsSession ? resumeSessionId : undefined, threadsSession };
+}
+
+/**
  * Get effective retry config for a DAG node.
  */
 function getEffectiveNodeRetryConfig(node: DagNode): {
@@ -2224,12 +2242,14 @@ async function executeNodeInternal(
   // — those failures are never reasked).
   const runStreamPass = async (
     attemptPrompt: string,
-    attemptResumeId: string | undefined
+    pass: ReturnType<typeof structuredOutputPass>
   ): Promise<void> => {
     nodeOutputText = '';
     structuredOutput = undefined;
-    newSessionId = undefined;
-    nodeResumed = undefined;
+    if (pass.threadsSession) {
+      newSessionId = undefined;
+      nodeResumed = undefined;
+    }
     batchMessages.length = 0; // else a failed attempt's prose flushes during reask
     nodeCostUsd = undefined;
     nodeTokens = undefined;
@@ -2267,7 +2287,7 @@ async function executeNodeInternal(
       },
     });
     for await (const msg of withIdleTimeout(
-      aiClient.sendQuery(attemptPrompt, cwd, attemptResumeId, nodeOptionsWithAbort),
+      aiClient.sendQuery(attemptPrompt, cwd, pass.resumeSessionId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
       () => {
         nodeIdleTimedOut = true;
@@ -2337,8 +2357,10 @@ async function executeNodeInternal(
       }
 
       if (msg.type === 'result') {
-        if (msg.sessionId) newSessionId = msg.sessionId;
-        if (msg.resumed !== undefined) nodeResumed = msg.resumed;
+        if (pass.threadsSession) {
+          if (msg.sessionId) newSessionId = msg.sessionId;
+          if (msg.resumed !== undefined) nodeResumed = msg.resumed;
+        }
         if (msg.tokens !== undefined) {
           nodeTokens = sumTokenUsage([msg.tokens], { nodeId: node.id });
         }
@@ -2471,13 +2493,11 @@ async function executeNodeInternal(
       await emitReask(reaskAttempt);
     };
     while (true) {
-      // Legacy reasks use a fresh throwaway session so an invalid turn is not carried
-      // forward. Named resume is stricter: every accepted pass must independently fork
-      // the declared source rather than inheriting stale attestation from an earlier pass.
-      const reaskResumeSessionId =
-        namedResumeSourceNodeId !== undefined || reaskAttempt === 0 ? resumeSessionId : undefined;
       try {
-        await runStreamPass(reaskPrompt, reaskResumeSessionId);
+        await runStreamPass(
+          reaskPrompt,
+          structuredOutputPass(reaskAttempt, resumeSessionId, namedResumeSourceNodeId !== undefined)
+        );
       } finally {
         await watchdogResets.flush();
         if (nodeCostUsd !== undefined) {
@@ -5740,12 +5760,11 @@ async function executeLoopNode(
             abortSignal: iterationAbortController.signal,
           };
 
-          // Reask attempts start a FRESH session (mirrors runStreamPass in
-          // executeNodeInternal) so an invalid turn is not carried forward as context.
+          const pass = structuredOutputPass(reaskAttempt, resumeSessionId, false);
           const generator = aiClient.sendQuery(
             finalPrompt,
             cwd,
-            reaskAttempt === 0 ? resumeSessionId : undefined,
+            pass.resumeSessionId,
             iterationOptions
           );
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
@@ -5813,17 +5832,13 @@ async function executeLoopNode(
             }
 
             if (msg.type === 'result') {
-              // Session threading follows attempt 0 ONLY (#2563). A reask deliberately
-              // runs in a throwaway session so an invalid turn is not carried forward as
-              // context — which makes that session the wrong thing to thread the NEXT
-              // iteration from: it holds one repaired turn and none of the run's history,
-              // so adopting it would silently discard iterations 1…N and break the
+              // A reask's throwaway session is not the thread (structuredOutputPass):
+              // adopting it would silently discard iterations 1…N and break the
               // `fresh_context: false` contract ("each iteration resumes the prior
-              // conversation"). Attempt 0's session is the loop's conversation and stays
-              // the thread; the repaired answer still reaches the next iteration through
-              // $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
+              // conversation"). The repaired answer still reaches the next iteration
+              // through $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
               if (msg.sessionId) {
-                if (reaskAttempt === 0) {
+                if (pass.threadsSession) {
                   currentSessionId = msg.sessionId;
                 } else if (currentSessionId !== msg.sessionId) {
                   getLog().debug(
