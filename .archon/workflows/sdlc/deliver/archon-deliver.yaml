@@ -14,9 +14,11 @@ description: |
   NOT for: deciding what to build, or merging (always human).
 
 # Review establishes the first verdict. When blockers remain, a bounded static
-# body repeats fix → light review, so every correction is independently checked
-# and a clean review stops immediately. Exhausting the bound fails truthfully
-# with the PR still draft and the canonical report carrying the open findings.
+# body repeats fix → light review, so every blocking correction is independently
+# checked and a clean review stops immediately. Exhausting the bound fails
+# truthfully with the PR still draft and the canonical report carrying the open
+# findings. The polish and CI-fix passes after convergence get no review round:
+# CI on their pushed head is their only proof.
 
 requires: [github]
 
