@@ -9317,12 +9317,12 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
     // Build a thunk per node so the layer can run either concurrently or strictly
     // sequentially. The `mutates_checkout: false` assertion snapshots before and
     // asserts after a node's own execution, so when a guarded node shares the layer
-    // with a node that may write (any unguarded node, including loop/loop_group/
-    // workflow siblings whose internal execution would overlap the window), that
-    // sibling's legitimate write would be blamed on the guarded node: such a mixed
-    // layer runs sequentially. A layer of guarded nodes only runs concurrently, since
-    // no node in it may write: the writer still sees its own write and fails, and a
-    // sibling whose window overlapped fails with it, its error naming the siblings.
+    // with any node that isn't checkout-guarded (including loop/loop_group/workflow
+    // siblings whose internal execution would overlap the window), that sibling's
+    // legitimate write would be blamed on the guarded node: such a mixed layer runs
+    // sequentially. A layer of guarded nodes only runs concurrently, since no node in
+    // it may write: the writer still sees its own write and fails, and a sibling
+    // whose window overlapped fails with it, its error naming the siblings.
     const guardedCount = layer.filter(isCheckoutGuarded).length;
     const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
     const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
