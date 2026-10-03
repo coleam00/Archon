@@ -881,7 +881,7 @@ describe('CodexProvider', () => {
       expect(server.processes[0].methods).toContain('turn/interrupt');
       expect(server.processes[0].stdinEnded).toBe(true);
       expect(server.processes[0].signals).toEqual(['SIGTERM']);
-    }, 2000);
+    });
 
     test('an abort while the turn is being set up stops the process before any turn starts', async () => {
       const controller = new AbortController();
