@@ -30,6 +30,9 @@ function initRepo(repo: string, remote: string, file: string): void {
     `name: probe\ndescription: Probe checkout\nnodes:\n  - id: probe\n    bash: cat ${file}\n`
   );
   git(repo, ['init', '-qb', 'main']);
+  // Windows runners default to core.autocrlf=true, which would check the file
+  // out as CRLF in the run's worktree.
+  git(repo, ['config', 'core.autocrlf', 'false']);
   git(repo, ['add', '.']);
   git(repo, [
     '-c',
