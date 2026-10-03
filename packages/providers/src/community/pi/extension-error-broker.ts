@@ -30,15 +30,18 @@ const activeTurns = new Map<PiExtensionTurn, ActiveTurn>();
 // Pi's crash-log.findExtensionStackMatches is the reference; its matcher is not
 // exported through the SDK. Normalize here without importing Pi at startup.
 function normalizeStackPath(value: string): string {
-  try {
-    value = decodeURI(value);
-  } catch {
-    // A literal percent sign need not be URI encoding; Pi also keeps it intact.
-  }
   return value
     .replace(/\\/g, '/')
-    .replace(/file:\/\/\/(?=[a-z]:\/)/gi, '')
-    .replace(/file:\/\//g, '')
+    .replace(/file:\/\/([^\s)]+)/gi, (_url, pathname: string) => {
+      const location = /:\d+(?::\d+)?$/.exec(pathname)?.[0] ?? '';
+      let path = pathname.slice(0, pathname.length - location.length);
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        // Some stack URLs contain a literal, unescaped percent sign.
+      }
+      return path.replace(/^\/(?=[a-z]:\/)/i, '') + location;
+    })
     .replace(/\b[A-Z](?=:\/)/g, drive => drive.toLowerCase());
 }
 
