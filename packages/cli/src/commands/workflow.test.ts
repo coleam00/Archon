@@ -197,9 +197,12 @@ const mockIsDocker = (env: NodeJS.ProcessEnv = process.env): boolean =>
   env.ARCHON_DOCKER === 'true';
 const mockExpandTilde = (path: string): string =>
   path.startsWith('~') ? join(homedir(), path.slice(1).replace(/^[/\\]/, '')) : path;
+// Identity by default: fixture paths are fake and must keep their spelling on Windows.
+const mockCanonicalizeProjectPath = mock(async (path: string) => path);
 
 // Mock @archon/paths (createLogger moved here from @archon/core)
 mock.module('@archon/paths', () => ({
+  canonicalizeProjectPath: mockCanonicalizeProjectPath,
   captureApprovalResolved: () => undefined,
   createLogger: mock(() => mockLogger),
   expandTilde: mockExpandTilde,
@@ -13810,6 +13813,24 @@ describe('run codebase resolution', () => {
     await workflowRunCommand(`${worktree}/tools`, 'probe', 'go', { noWorktree: true });
     expect(core.registerRepository).not.toHaveBeenCalled();
     expectChildExecution();
+  });
+
+  it('looks up and registers the canonical spelling of the Git top level', async () => {
+    // Git prints `C:/...` on Windows while `default_cwd` is stored canonically.
+    const gitSpelling = 'C:/parent/projects/child';
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(gitSpelling);
+    mockCanonicalizeProjectPath.mockImplementation(async (path: string) =>
+      path === gitSpelling ? childRoot : path
+    );
+    try {
+      await workflowRunCommand(`${childRoot}/tools`, 'probe', 'go', { noWorktree: true });
+      expect(codebases.findCodebaseByDefaultCwd).toHaveBeenCalledWith(childRoot);
+      expect(codebases.findCodebaseByDefaultCwd).not.toHaveBeenCalledWith(gitSpelling);
+      expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+      expectChildExecution();
+    } finally {
+      mockCanonicalizeProjectPath.mockReset().mockImplementation(async (path: string) => path);
+    }
   });
 
   it('retains prefix resolution for a non-Git folder subdirectory', async () => {
