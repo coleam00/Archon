@@ -9,9 +9,6 @@ on:
       - 'packages/providers/src/community/_template/capabilities.ts'
   workflow_dispatch:
 
-env:
-  BUN_VERSION: '1.4.2'
-
 permissions:
   contents: read
   pages: write
@@ -30,8 +27,6 @@ jobs:
         with:
           node-version: 22
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Build docs
