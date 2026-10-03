@@ -14993,15 +14993,18 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     }
   });
 
-  it('marks node as failed when assistant output contains credit exhaustion text', async () => {
-    const creditExhaustedQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
-      async function* (_prompt, _cwd, _resumeSessionId, _options) {
-        yield { type: 'agent_message_chunk', text: "You're out of extra usage · resets in 2h" };
+  it.each([
+    'The error message "Your credit balance is too low" is what the API returns when funds run out.',
+    "A user once saw: You've hit your session limit · resets 3am. Handle it in the UI.",
+  ])('a node whose output only mentions a credit or session limit completes: %s', async text => {
+    const sendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
+      async function* () {
+        yield { type: 'agent_message_chunk', text };
         yield { type: 'result', sessionId: 'dag-session-credit' };
       }
     );
     mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: creditExhaustedQuery,
+      sendQuery,
       checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
@@ -15034,26 +15037,12 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       })
     );
 
-    // node_failed (not node_completed) must have been stored
     const eventCalls = (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>)
       .mock.calls;
-    const events = eventCalls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
-    expect(events).toContain('node_failed');
-    expect(events).not.toContain('node_completed');
-    const failedEvent = eventCalls.find(
-      (c: unknown[]) => (c[0] as { event_type: string }).event_type === 'node_failed'
-    );
-    expect(
-      typeof (failedEvent?.[0] as { data?: { duration_ms?: unknown } }).data?.duration_ms
-    ).toBe('number');
-
-    const transcriptFailures = (await readTranscript(logDir, workflowRun.id)).filter(
-      row => row.type === 'node_error' && row.step === 'investigate'
-    );
-    expect(transcriptFailures).toHaveLength(1);
-
-    // Overall workflow should be marked failed
-    expect(store.failWorkflowRun).toHaveBeenCalled();
+    const events = eventCalls.map(c => c[0].event_type);
+    expect(events).toContain('node_completed');
+    expect(events).not.toContain('node_failed');
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   /** A provider turn that ends in a typed quota failure. */
@@ -15073,6 +15062,57 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       };
     });
   }
+
+  it.each(['2099-10-03T23:00:00.000Z', undefined])(
+    'a typed quota failure fails the node with its reset time when present: %s',
+    async resetAt => {
+      const sendQuery = quotaExhaustedQuery(resetAt);
+      mockGetAgentProviderDag.mockReturnValue({
+        sendQuery,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
+        getType: () => 'claude',
+        getCapabilities: mockClaudeCapabilities,
+      });
+      const store = createMockStore();
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-credit',
+          cwd: testDir,
+          workflow: {
+            name: 'credit-test',
+            nodes: [
+              {
+                id: 'investigate',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'Investigate the issue' },
+                retry: { max_attempts: 3, delay_ms: 1, on_error: 'all' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('typed-credit-failure-run'),
+        })
+      );
+
+      const eventCalls = (store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>)
+        .mock.calls;
+      const events = eventCalls.map(c => c[0].event_type);
+      expect(events).toContain('node_failed');
+      expect(events).not.toContain('node_completed');
+      const failedEvent = eventCalls.find(c => c[0].event_type === 'node_failed');
+      expect(failedEvent?.[0].data?.error).toBe(
+        `Node 'investigate' failed: the provider's usage or credit limit is used up${resetAt !== undefined ? ` (resets ${resetAt})` : ''}. Resume the run once it reopens: You've hit your session limit`
+      );
+      expect(failedEvent?.[0].data?.provider_failure).toEqual({
+        class: 'quota_exhausted',
+        evidence: "You've hit your session limit",
+        ...(resetAt !== undefined ? { resetAt } : {}),
+      });
+      expect(sendQuery).toHaveBeenCalledTimes(1);
+      expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
+    }
+  );
 
   function quotaConfig(
     workflows: Partial<NonNullable<WorkflowConfig['workflows']>>

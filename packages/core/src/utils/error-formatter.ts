@@ -106,7 +106,7 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
   ) {
     // Anchor on · (Claude format: "... · resets 4:50pm (UTC)"); stop at · or newline so "p.m." isn't truncated.
     // The no-· fallback also drops any follow-on sentence (period + capital letter), so shapes like
-    // "Claude session limit reached — resets 3:20pm (UTC). Abandon this run…" yield just the reset clause.
+    // "usage limit hit — resets 3:20pm (UTC). Try again later." yield just the reset clause.
     const reset =
       /·\s*(resets[^·\n]*)/i.exec(message)?.[1]?.trim() ??
       /resets[^·\n]*/i

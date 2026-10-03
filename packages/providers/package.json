@@ -115,7 +115,8 @@
       "src/community/pi/event-bridge.test.ts"
     ],
     [
-      "src/community/pi/extension-error-broker.test.ts"
+      "src/community/pi/extension-error-broker.test.ts",
+      "src/community/pi/semaphore.test.ts"
     ],
     [
       "src/community/pi/options-translator.test.ts"

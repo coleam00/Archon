@@ -574,7 +574,7 @@ describe('tryParseStructuredOutput', () => {
 
 describe('bridgeSession cleanup', () => {
   test('throws an externally reported extension error unchanged', async () => {
-    const turn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+    const turn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     let abortCount = 0;
     let disposeCount = 0;
     const session = {
@@ -737,6 +737,70 @@ describe('bridgeSession cleanup', () => {
     rejectPrompt(new Error('late pi error'));
     // Yield to let the microtask queue drain so the .catch() runs.
     await new Promise(resolve => setTimeout(resolve, 10));
+  });
+
+  // The engine's idle watchdog aborts and walks away with one next() still pending.
+  // A chunk that resolves that next() parks the bridge at a yield nobody consumes,
+  // so its finally (session dispose, extension-turn close) never runs.
+  test('an aborted caller gets no further chunk and the session is disposed', async () => {
+    let listenerRef: ((e: AgentSessionEvent) => void) | undefined;
+    let resolvePrompt!: () => void;
+    let disposeCount = 0;
+    const session = {
+      sessionId: 'test-session-id',
+      prompt: () =>
+        new Promise<void>(resolve => {
+          resolvePrompt = resolve;
+        }),
+      dispose: () => {
+        disposeCount++;
+      },
+      subscribe: (l: (e: AgentSessionEvent) => void) => {
+        listenerRef = l;
+        return () => {
+          listenerRef = undefined;
+        };
+      },
+      abort: async () => {},
+    } as unknown as AgentSession;
+    const controller = new AbortController();
+
+    const pending = bridgeSession(session, 'prompt', controller.signal).next();
+    controller.abort();
+    listenerRef?.({
+      type: 'tool_execution_start',
+      toolName: 'echo',
+      toolCallId: 'tc1',
+      args: {},
+    } as unknown as AgentSessionEvent);
+    resolvePrompt();
+
+    await expect(pending).rejects.toThrow('Query aborted');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(disposeCount).toBe(1);
+  });
+
+  test('a caller aborted before the bridge starts never sends the prompt', async () => {
+    let promptCount = 0;
+    let disposeCount = 0;
+    const session = {
+      sessionId: 'test-session-id',
+      prompt: async () => {
+        promptCount++;
+      },
+      dispose: () => {
+        disposeCount++;
+      },
+      subscribe: () => () => {},
+      abort: async () => {},
+    } as unknown as AgentSession;
+
+    const gen = bridgeSession(session, 'prompt', AbortSignal.abort());
+
+    await expect(gen.next()).rejects.toThrow('Query aborted');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(promptCount).toBe(0);
+    expect(disposeCount).toBe(1);
   });
 });
 
