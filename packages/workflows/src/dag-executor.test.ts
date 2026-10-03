@@ -36681,7 +36681,7 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     const writerError = nodeFailedError(deps, 'writer');
     expect(writerError).toContain('stray.txt');
     expect(writerError).toContain('guarded siblings `reader`');
-    expect(writerError).toContain('cannot be attributed to this node alone');
+    expect(writerError).toContain("may not be this node's alone");
     // The innocent reader fails too: one repo-wide snapshot cannot tell whose write it saw.
     const readerError = nodeFailedError(deps, 'reader');
     expect(readerError).toContain('stray.txt');

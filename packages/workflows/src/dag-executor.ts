@@ -1198,7 +1198,7 @@ async function assertCheckoutUntouched(
   const error =
     concurrentGuardedSiblings.length === 0
       ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
-      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed while it ran in parallel with the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')}, so the change cannot be attributed to this node alone: ${changedPaths}`;
+      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed; the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')} also ran in this parallel layer, so the change may not be this node's alone: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
   if (result.execution === undefined) {
     throw new Error(`Node '${node.id}' completed without its execution record`);
@@ -9070,7 +9070,8 @@ interface RunLayersContext extends RunInputs, RunDerived {
   /**
    * Ids of the nodes in this concurrent layer that have taken their
    * `mutates_checkout: false` snapshot in this run, shared by the layer's nodes. A
-   * violation names the others as possible writers; a node that was skipped or
+   * violation names the others as nodes that also ran in the layer; add-only, so a
+   * named node may have finished before the write. A node that was skipped or
    * reused from a prior run never snapshots and is never named. Undefined when the
    * layer runs sequentially. Set per layer; never inherited.
    */
