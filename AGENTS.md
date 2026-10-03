@@ -87,7 +87,7 @@ This file is the canonical project guidance for coding agents. Keep it short, du
 ### Preserve provider configuration; scope capabilities
 
 - Provider integrations must preserve the provider's native user and project configuration, including its global and project guidance files. The user's provider configuration owns whether those sources load; Archon must not replace a provider home directory or add a parallel context switch.
-- Workflow AI nodes start without ambient skills, skill-like plugins, or MCP servers. A node receives only the skills, plugins, and MCP servers it explicitly names. Enforce that boundary without hiding unrelated provider settings.
+- Workflow AI nodes start without ambient skills, plugins, or MCP servers. A node receives only the skills, plugins, and MCP servers it explicitly names. Enforce that boundary without hiding unrelated provider settings.
 - Pi extensions are user-owned provider configuration, not Archon-managed plugins. Load them as Pi configures them; any tools or MCP clients an extension exposes are the user's responsibility.
 - Leave native prompt templates and commands under provider control unless the provider automatically advertises them to the model as a skill-like capability. In that case they follow the same explicit node-scoping rule as skills and plugins.
 - Preserve the selected agent provider's native authentication contract. A Claude Code subscription runs through the Claude Agent SDK; using an Anthropic model through another provider is not Claude Code subscription support. Do not reroute or relabel provider identity to reuse credentials.

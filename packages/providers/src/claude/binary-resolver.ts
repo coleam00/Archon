@@ -27,6 +27,7 @@ import {
   classifyBinaryPath,
   type BinaryPathKind,
 } from '../shared/binary-resolution';
+import { ClassifiedProviderError } from '../shared/failure';
 
 /** Wrapper for existsSync — enables spyOn in tests (direct imports can't be spied on). */
 export function fileExists(path: string): boolean {
@@ -85,7 +86,8 @@ function validateAndExpand(
       'from the curl/PowerShell installer, or cli.js from an npm global install).';
   }
 
-  throw new Error(
+  throw new ClassifiedProviderError(
+    'misconfigured',
     appendBinaryCandidateHint(message, {
       candidatePath: findCandidate?.(),
       binaryLabel: 'Claude Code',
@@ -211,5 +213,5 @@ export async function resolveClaudeBinaryWithSource(
   }
 
   // 4. Not found — throw with install instructions
-  throw new Error(INSTALL_INSTRUCTIONS);
+  throw new ClassifiedProviderError('misconfigured', INSTALL_INSTRUCTIONS);
 }

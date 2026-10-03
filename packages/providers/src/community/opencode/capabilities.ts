@@ -27,6 +27,7 @@ export const OPENCODE_CAPABILITIES: ProviderCapabilities = {
   mcp: false, // top-level nodeConfig.mcp has no OpenCode request translation yet
   hooks: false,
   skills: false, // top-level nodeConfig.skills has no OpenCode request translation yet
+  plugins: false,
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'enforced', // sends format:{json_schema}; reads info.structured_output

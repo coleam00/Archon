@@ -145,6 +145,7 @@ All nodes share these base fields:
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
 | `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
 | `skills` | No | string[] | Declared skill names for this node; Claude omission/`[]` selects none |
+| `plugins` | No | string[] | Plugin ids (`name@marketplace`) this node loads; omission/`[]` loads none. Claude only; other providers fail the run |
 | `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
 
 **Script-specific fields** (required when `script:` is set):
@@ -263,7 +264,7 @@ Defined under `retry:` inside a node:
 | `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
 | `on_error` | No | `transient` | `transient` retries rate limits/network errors; `all` retries everything except fatal errors |
 
-> **Fatal errors are never retried**: auth failures, permission errors, and exhausted credit balances fail immediately regardless of retry config.
+> **Fatal errors are never retried**: auth failures, permission errors, exhausted credit balances, and configuration errors (a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config.
 
 ---
 

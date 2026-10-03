@@ -88,10 +88,22 @@ nodes:
       type: object
       properties:
         docs: { type: boolean }
-        # The qualified pull request this round reviewed, or `{}` for a working
+        # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
-        # comment can never land on an ambient branch→PR mapping.
-        pr: { type: object }
+        # comment can never land on an ambient branch→PR mapping. The bounds match
+        # parseQualifiedPr in .shared/forge.ts, which publish runs on this value:
+        # non-blank host and path, a positive number.
+        pr:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string, pattern: '\S' }
+                path: { type: string, pattern: '\S' }
+              required: [host, path]
+            number: { type: integer, minimum: 1 }
+          required: [repo, number]
       required: [docs, pr]
 
   # ── Default-on lenses ─────────────────────────────────────────────

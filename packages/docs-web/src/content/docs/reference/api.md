@@ -265,7 +265,8 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 |--------|------|-------------|
 | POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart) |
 | GET | `/api/workflows/runs` | List workflow runs |
-| GET | `/api/workflows/runs/{runId}` | Get run details with events |
+| GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below) |
+| GET | `/api/workflows/runs/{runId}/provider-events` | The run's provider events as `{events: ProviderEventRecord[]}`: each is `{runId, stepName, attemptId, seq, observedAt, event}`, grouped by node and in emission order within one. `?step=` limits it to one node. `?attemptId=&afterSeq=` (both, and with `step`) returns only the events after that one: the attempt's later events and every later attempt's. Rows written before the engine recorded envelopes come back translated, with `attemptId: null`. Returns **400** for a partial cursor |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |

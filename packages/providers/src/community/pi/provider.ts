@@ -21,6 +21,8 @@ import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
 import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
+import { closeOpenToolCalls } from '../../shared/tool-calls';
+import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -287,7 +289,39 @@ Guidelines:
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
+  /**
+   * One call is one Pi prompt. A failure, including one thrown while setting the
+   * session up, ends in a `result` carrying a typed `failure`, and the engine decides
+   * whether to try again. Every turn ends in `settled`. Cancellation still throws.
+   */
   async *sendQuery(
+    prompt: string,
+    cwd: string,
+    resumeSessionId?: string,
+    requestOptions?: SendQueryOptions
+  ): AsyncGenerator<MessageChunk> {
+    let resultReported = false;
+    try {
+      for await (const chunk of closeOpenToolCalls(
+        this.streamTurn(prompt, cwd, resumeSessionId, requestOptions),
+        { resultEndsTurn: true }
+      )) {
+        if (chunk.type === 'result') resultReported = true;
+        yield chunk;
+      }
+    } catch (error) {
+      if (requestOptions?.abortSignal?.aborted === true) throw error;
+      const err = error as Error;
+      // The turn already reported its one result; a later error does not change it.
+      if (resultReported) getLog().error({ err }, 'pi.error_after_result');
+      else yield failureResult(failureClassOfThrown(err), 'pi_query_failed', err.message);
+    }
+    // The bridge ends when `prompt()` resolves, after every run of Pi's agent loop
+    // (auto-retry, compaction, queued follow-ups) has finished: nothing more runs.
+    yield { type: 'settled' };
+  }
+
+  private async *streamTurn(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
@@ -395,7 +429,8 @@ export class PiProvider implements IAgentProvider {
       }
     }
     if (!modelRef) {
-      throw new Error(
+      throw new ClassifiedProviderError(
+        'misconfigured',
         'Pi provider requires a model. Set `model` on the workflow node or `assistants.pi.model` in .archon/config.yaml, ' +
           'or select a default model in the `pi` CLI (writes defaultProvider/defaultModel to ~/.pi/agent/settings.json). ' +
           "Format: '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro')."
@@ -403,7 +438,8 @@ export class PiProvider implements IAgentProvider {
     }
     const parsed = parsePiModelRef(modelRef);
     if (!parsed) {
-      throw new Error(
+      throw new ClassifiedProviderError(
+        'misconfigured',
         `Invalid Pi model ref: '${modelRef}'. Expected format '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro').`
       );
     }
@@ -462,6 +498,8 @@ export class PiProvider implements IAgentProvider {
     } catch (err) {
       const e = err as Error;
       getLog().error({ err: e, piProvider: parsed.provider }, 'pi.auth_storage_init_failed');
+      // Unclassified: this step both reads the operator's files and writes a per-call
+      // temp file, and this catch does not tell those failures apart.
       throw new Error(
         `Pi auth storage init failed: ${e.message}. Check that ~/.pi/agent/auth.json ` +
           '(or $PI_CODING_AGENT_DIR/auth.json) is valid JSON and readable.'
@@ -561,7 +599,8 @@ export class PiProvider implements IAgentProvider {
             : envVarName;
           const envHint = `Set ${varHint} in the environment or codebase env vars (.archon/config.yaml env: section).`;
           const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
-          throw new Error(
+          throw new ClassifiedProviderError(
+            'auth',
             `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
           );
         }
@@ -591,7 +630,7 @@ export class PiProvider implements IAgentProvider {
     //    4a. thinkingLevel: Pi's native representation of Archon's `effort` field.
     const { level: thinkingLevel, warning: thinkingWarning } = resolvePiThinkingLevel(nodeConfig);
     if (thinkingWarning) {
-      yield { type: 'system', content: `⚠️ ${thinkingWarning}` };
+      yield { type: 'warning', code: 'pi.thinking_level_ignored', message: thinkingWarning };
     }
 
     //    4b. tools: covers allowed_tools / denied_tools. `undefined` leaves Pi
@@ -607,8 +646,9 @@ export class PiProvider implements IAgentProvider {
     );
     if (unknownTools.length > 0) {
       yield {
-        type: 'system',
-        content: `⚠️ Pi ignored unknown tool names: ${unknownTools.join(', ')}. Pi's built-in tools: read, bash, edit, write, grep, find, ls.`,
+        type: 'warning',
+        code: 'pi.unknown_tools',
+        message: `Pi ignored unknown tool names: ${unknownTools.join(', ')}. Pi's built-in tools: read, bash, edit, write, grep, find, ls.`,
       };
     }
 
@@ -656,8 +696,9 @@ export class PiProvider implements IAgentProvider {
     const { paths: skillPaths, missing: missingSkills } = resolvePiSkills(cwd, nodeConfig?.skills);
     if (missingSkills.length > 0) {
       yield {
-        type: 'system',
-        content: `⚠️ Pi could not resolve skill names: ${missingSkills.join(', ')}. Searched .agents/skills and .claude/skills (project + user-global). Each must be a directory containing SKILL.md.`,
+        type: 'warning',
+        code: 'pi.skills_unresolved',
+        message: `Pi could not resolve skill names: ${missingSkills.join(', ')}. Searched .agents/skills and .claude/skills (project + user-global). Each must be a directory containing SKILL.md.`,
       };
     }
 
@@ -675,8 +716,9 @@ export class PiProvider implements IAgentProvider {
     );
     if (resumeFailed) {
       yield {
-        type: 'system',
-        content: '⚠️ Could not resume Pi session. Starting fresh conversation.',
+        type: 'warning',
+        code: 'pi.resume_failed',
+        message: 'Could not resume Pi session. Starting fresh conversation.',
       };
     }
 
@@ -877,7 +919,7 @@ export class PiProvider implements IAgentProvider {
 
     // Extension models aren't in the static catalog — skip the fallback warning.
     if (modelFallbackMessage && model) {
-      yield { type: 'system', content: `⚠️ ${modelFallbackMessage}` };
+      yield { type: 'warning', code: 'pi.model_fallback', message: modelFallbackMessage };
     }
 
     // 4e. Extension flag pass-through. Must happen before bindExtensions
@@ -924,7 +966,8 @@ export class PiProvider implements IAgentProvider {
               'provider extension, install that extension (e.g. `pi install npm:pi-provider-kiro`) ' +
               'and set `enableExtensions: true` in .archon/config.yaml. If it is a catalog provider, ' +
               'refresh the catalog with `pi update --models`.';
-        throw new Error(
+        throw new ClassifiedProviderError(
+          'misconfigured',
           `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ${remedy}`
         );
       }

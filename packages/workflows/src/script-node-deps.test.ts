@@ -1,3 +1,4 @@
+import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
@@ -139,6 +140,7 @@ function createMockStore(): IWorkflowStore {
     createWorkflowEvent: mock(() => Promise.resolve()),
     persistWorkflowEvent: mock(() => Promise.resolve()),
     persistWorkflowEventIfRunning: mock(() => Promise.resolve({ persisted: true })),
+    listProviderEvents: mock(() => Promise.resolve([])),
     getDagResumeSnapshot: mock(() =>
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
@@ -160,7 +162,7 @@ function createMockStore(): IWorkflowStore {
 
 const mockSendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
   async function* (_prompt, _cwd, _resumeSessionId, _options) {
-    yield { type: 'assistant', content: 'AI response' };
+    yield { type: 'agent_message_chunk', text: 'AI response' };
     yield { type: 'result', sessionId: 'session-id' };
   }
 );
@@ -173,6 +175,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
     mcp: true,
     hooks: true,
     skills: true,
+    plugins: false,
     agents: true,
     toolRestrictions: true,
     structuredOutput: 'enforced' as const,
@@ -192,7 +195,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
 function createMockDeps(): WorkflowDeps {
   return {
     store: createMockStore(),
-    getAgentProvider: mockGetAgentProvider,
+    getAgentProvider: provider => settlingProvider(mockGetAgentProvider(provider)),
     loadConfig: mock(() =>
       Promise.resolve({
         assistant: 'claude' as const,

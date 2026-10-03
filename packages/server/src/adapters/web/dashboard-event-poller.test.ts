@@ -181,7 +181,7 @@ describe('mapWorkflowEventRow', () => {
   });
 
   test('high-frequency / internal events are skipped (null)', () => {
-    expect(mapWorkflowEventRow(row({ event_type: 'tool_called' }))).toBeNull();
+    expect(mapWorkflowEventRow(row({ event_type: 'provider_event' }))).toBeNull();
     expect(mapWorkflowEventRow(row({ event_type: 'tool_completed' }))).toBeNull();
     expect(mapWorkflowEventRow(row({ event_type: 'node_session_resumed' }))).toBeNull();
     expect(mapWorkflowEventRow(row({ event_type: 'workflow_artifact' }))).toBeNull();

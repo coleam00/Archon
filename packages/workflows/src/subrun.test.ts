@@ -1,3 +1,4 @@
+import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
  *
@@ -496,6 +497,8 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ persisted: true });
   };
 
+  listProviderEvents: IWorkflowStore['listProviderEvents'] = () => Promise.resolve([]);
+
   getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
     const completedNodeOutputs = new Map<
       string,
@@ -607,7 +610,7 @@ function makeProvider() {
       sandbox: true,
     }),
     sendQuery: mock(function* () {
-      yield { type: 'assistant', content: 'ai-output' };
+      yield { type: 'agent_message_chunk', text: 'ai-output' };
       yield {
         type: 'result',
         sessionId: 'sess',
@@ -621,7 +624,9 @@ function makeProvider() {
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
     store,
-    getAgentProvider: mock(() => makeProvider()) as unknown as WorkflowDeps['getAgentProvider'],
+    getAgentProvider: mock(() =>
+      settlingProvider(makeProvider())
+    ) as unknown as WorkflowDeps['getAgentProvider'],
     loadConfig: mock(
       (): Promise<WorkflowConfig> =>
         Promise.resolve({
@@ -3756,13 +3761,15 @@ nodes:
         tracker.max = Math.max(tracker.max, tracker.inFlight);
         await new Promise(r => setTimeout(r, 15));
         tracker.inFlight--;
-        yield { type: 'assistant', content: 'ai-output' };
+        yield { type: 'agent_message_chunk', text: 'ai-output' };
         yield { type: 'result', sessionId: 'sess', cost: 0.01 };
       },
     };
     const deps = {
       ...makeDeps(store),
-      getAgentProvider: mock(() => slowProvider) as unknown as WorkflowDeps['getAgentProvider'],
+      getAgentProvider: mock(() =>
+        settlingProvider(slowProvider)
+      ) as unknown as WorkflowDeps['getAgentProvider'],
     };
     const parent = await discover('fan-window');
     const result = await executeWorkflow(
@@ -3792,7 +3799,7 @@ nodes:
         if (prompt.includes('CHECK_SPEND')) {
           if (prompt.includes('doomed')) throw new Error('failed after paid work');
           // The check adds no usage to the preceding paid node's accounting.
-          yield { type: 'assistant', content: 'check passed' };
+          yield { type: 'agent_message_chunk', text: 'check passed' };
           yield { type: 'result', sessionId: 'check' };
           return;
         }
@@ -3801,7 +3808,9 @@ nodes:
     };
     return {
       ...makeDeps(store),
-      getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+      getAgentProvider: mock(() =>
+        settlingProvider(provider)
+      ) as unknown as WorkflowDeps['getAgentProvider'],
     };
   }
 
@@ -5520,14 +5529,16 @@ describe('workflow: runtime $INPUTS delivery and cold resume (#2470)', () => {
       ...makeProvider(),
       sendQuery: mock(function* (prompt: string) {
         prompts.push(prompt);
-        yield { type: 'assistant', content: 'ai-output' };
+        yield { type: 'agent_message_chunk', text: 'ai-output' };
         yield { type: 'result', sessionId: 'sess', cost: 0.01, tokens: { input: 7, output: 3 } };
       }),
     };
     return {
       deps: {
         ...makeDeps(store),
-        getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+        getAgentProvider: mock(() =>
+          settlingProvider(provider)
+        ) as unknown as WorkflowDeps['getAgentProvider'],
       },
       prompts,
     };
@@ -6086,17 +6097,19 @@ nodes:
 
     const store = new InMemoryStore();
     const deps = makeDeps(store);
-    deps.getAgentProvider = mock(() => ({
-      ...makeProvider(),
-      sendQuery: mock(function* () {
-        yield { type: 'assistant', content: '{"green":false}' };
-        yield {
-          type: 'result',
-          sessionId: 'sess-outcome',
-          structuredOutput: { green: false },
-        };
-      }),
-    })) as unknown as WorkflowDeps['getAgentProvider'];
+    deps.getAgentProvider = mock(() =>
+      settlingProvider({
+        ...makeProvider(),
+        sendQuery: mock(function* () {
+          yield { type: 'agent_message_chunk', text: '{"green":false}' };
+          yield {
+            type: 'result',
+            sessionId: 'sess-outcome',
+            structuredOutput: { green: false },
+          };
+        }),
+      })
+    ) as unknown as WorkflowDeps['getAgentProvider'];
 
     const result = await executeWorkflow(
       deps,
@@ -6158,7 +6171,7 @@ describe('workflow: typed value transport (#2637)', () => {
       ...makeProvider(),
       sendQuery: mock(function* (prompt: string) {
         if (prompt.includes('PRODUCE')) {
-          yield { type: 'assistant', content: '{"green":true,"items":["a","b"]}' };
+          yield { type: 'agent_message_chunk', text: '{"green":true,"items":["a","b"]}' };
           yield {
             type: 'result',
             sessionId: 'sess-prod',
@@ -6170,7 +6183,7 @@ describe('workflow: typed value transport (#2637)', () => {
           // A verifier-shaped payload: top-level `error` + `status` fields as DATA —
           // the natural schema the aggregate's failure marker must stay separable from.
           if (prompt.includes('bad')) throw new Error('verifier exploded');
-          yield { type: 'assistant', content: '{"error":"none found","status":"clean"}' };
+          yield { type: 'agent_message_chunk', text: '{"error":"none found","status":"clean"}' };
           yield {
             type: 'result',
             sessionId: 'sess-verify',
@@ -6181,24 +6194,26 @@ describe('workflow: typed value transport (#2637)', () => {
         if (prompt.includes('HANDLE')) {
           if (prompt.includes('bad')) throw new Error('handler exploded');
           if (prompt.includes('plain')) {
-            yield { type: 'assistant', content: 'did:plain' };
+            yield { type: 'agent_message_chunk', text: 'did:plain' };
             yield { type: 'result', sessionId: 'sess-plain' };
             return;
           }
           const item = prompt.includes('alpha') ? 'alpha' : 'beta';
-          yield { type: 'assistant', content: `{"v":"${item}"}` };
+          yield { type: 'agent_message_chunk', text: `{"v":"${item}"}` };
           yield { type: 'result', sessionId: `sess-${item}`, structuredOutput: { v: item } };
           return;
         }
         prompts.push(prompt);
-        yield { type: 'assistant', content: 'ai-output' };
+        yield { type: 'agent_message_chunk', text: 'ai-output' };
         yield { type: 'result', sessionId: 'sess' };
       }),
     };
     return {
       deps: {
         ...makeDeps(store),
-        getAgentProvider: mock(() => provider) as unknown as WorkflowDeps['getAgentProvider'],
+        getAgentProvider: mock(() =>
+          settlingProvider(provider)
+        ) as unknown as WorkflowDeps['getAgentProvider'],
       },
       prompts,
     };

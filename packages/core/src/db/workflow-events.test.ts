@@ -114,6 +114,33 @@ describe('workflow-events', () => {
         event_type: 'loop_iteration_started',
       });
     });
+
+    test('a lost provider event is logged with its node, attempt and seq', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('database is locked'));
+      mockLogger.error.mockClear();
+
+      await createWorkflowEvent({
+        workflow_run_id: 'run-456',
+        event_type: 'provider_event',
+        step_name: 'implement',
+        data: {
+          attemptId: 'attempt-1',
+          seq: 7,
+          observedAt: '2026-10-02T10:00:00.000Z',
+          event: { type: 'agent_message_chunk', text: 'hi' },
+        },
+      });
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-456',
+          stepName: 'implement',
+          attemptId: 'attempt-1',
+          seq: 7,
+        }),
+        'db.workflow_event_create_failed'
+      );
+    });
   });
 
   describe('persistWorkflowEventIfRunning', () => {

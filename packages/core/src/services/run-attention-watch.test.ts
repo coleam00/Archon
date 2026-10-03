@@ -39,7 +39,6 @@ mock.module('@archon/paths', () => ({
 }));
 
 let reachableOwners: Set<string> | null = null;
-const RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS = 10_000;
 const ownerEvents = new Map<
   string,
   (event: 'attention' | 'control_handoff' | 'disconnected') => void
@@ -55,11 +54,12 @@ const mockWatchRunLiveOwner = mock(
   }
 );
 mock.module('./run-live-owner', () => ({
-  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
   watchRunLiveOwner: mockWatchRunLiveOwner,
 }));
 
 const { waitForRunAttention } = await import('./run-attention-watch');
+const { DETACHED_RUN_STOP_HANDOFF_GRACE_MS, DETACHED_RUN_TERMINATION_MAX_MS } =
+  await import('./run-stop-bounds');
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -235,6 +235,38 @@ describe('waitForRunAttention', () => {
     });
   });
 
+  test('a stop handoff outlasts the slowest stop the controller can still finish', async () => {
+    // A Windows stop can list the process table several times after the owner is gone,
+    // each listing bounded only by its command timeout. A waiter that gave up before the
+    // controller's own bound would report owner_lost for a run that ends cancelled.
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      putRun('r1', { status: 'running' });
+      let settled = false;
+      const pending = waitForRunAttention('r1', { pollIntervalMs: 5 }).finally(() => {
+        settled = true;
+      });
+      await waitForOwner('r1');
+      ownerEvents.get('r1')?.('control_handoff');
+      reachableOwners = new Set();
+      ownerEvents.get('r1')?.('disconnected');
+
+      now += DETACHED_RUN_TERMINATION_MAX_MS;
+      await Bun.sleep(20);
+      expect(settled).toBe(false);
+      putRun('r1', { status: 'cancelled', completed_at: new Date() });
+
+      expect(await pending).toMatchObject({
+        kind: 'attention',
+        attention: { kind: 'terminal', status: 'cancelled' },
+      });
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   test('a stop handoff expires when the controller never persists a transition', async () => {
     const realNow = Date.now;
     let now = realNow();
@@ -252,7 +284,7 @@ describe('waitForRunAttention', () => {
 
       await Bun.sleep(20);
       expect(settled).toBe(false);
-      now += RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS + 1;
+      now += DETACHED_RUN_STOP_HANDOFF_GRACE_MS + 1;
 
       expect(await pending).toEqual({
         kind: 'owner_lost',

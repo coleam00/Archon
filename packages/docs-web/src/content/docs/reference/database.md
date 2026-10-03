@@ -106,7 +106,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 
 6. **`remote_agent_workflow_events`** - Step-level workflow event log
    - Records step transitions, artifacts, and errors per workflow run
-   - Lean UI-relevant events (verbose logs stored in JSONL files)
+   - Every provider event a workflow node streams, as `provider_event` rows: the engine envelope (`attemptId`, `seq`, `observedAt`, `event`) in `data`, the node in `step_name`. The same envelope is a `provider_event` line in the run's JSONL log. `GET /api/workflows/runs/{runId}/provider-events` serves them; the run-detail route leaves them out
    - Enables workflow run detail views and debugging
    - Indexed on `created_at` (`idx_workflow_events_created_at`) for the dashboard event poller's cross-run tail. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).
 
@@ -135,7 +135,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 
 11. **`remote_agent_workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs
     - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
-    - `scope_key` is typically the conversation UUID
+    - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`)
     - No FK on `scope_key`, so a conversation delete does not cascade here. Soft delete plus a never-reused UUID makes the leftovers harmless; a future hard-delete must delete by `scope_key` itself — the mirror of the cascade caveat on `remote_agent_workflow_runs` above.
 
 12. **`remote_agent_user_github_tokens`** - Per-user GitHub device-flow tokens

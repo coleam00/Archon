@@ -152,6 +152,18 @@ describe('readPiAuthValidity', () => {
     expect(result.status).toBe('unreadable');
   });
 
+  test('a store written with a UTF-8 BOM is read like the SDK reads it', () => {
+    const expiresAt = Date.UTC(2027, 0, 1);
+    writeFileSync(
+      join(dir, 'auth.json'),
+      '\uFEFF' + JSON.stringify({ anthropic: oauthEntry(expiresAt) })
+    );
+
+    const result = readPiAuthValidity(join(dir, 'auth.json'), { now: Date.UTC(2026, 8, 10) });
+
+    expect(result.status).toBe('valid');
+  });
+
   test('an empty object reports missing credentials without claiming validity', () => {
     writeFileSync(join(dir, 'auth.json'), JSON.stringify({}));
 

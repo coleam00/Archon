@@ -5,7 +5,7 @@ mode: '{"continuation":false}'
 scope:
   docs: false
   # A standalone review of the working diff: no pull request to publish to.
-  pr: {}
+  pr: null
 code: "0 findings"
 seams: "0 findings"
 simplify: "0 findings"

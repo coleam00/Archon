@@ -114,10 +114,11 @@ mock.module('@archon/core/db/users', () => ({
 mock.module('./auth', () => ({ resolveCliUserId: () => 'cli-alice' }));
 mock.module('@archon/paths', () => ({ createLogger: noopLogger }));
 
-// @archon/providers is NOT mocked — register builtins so isRegisteredProvider()
-// (used by the tier/default commands) resolves claude/codex/etc.
-import { registerBuiltinProviders } from '@archon/providers';
+// @archon/providers is NOT mocked — register the providers exercised by the
+// tier/default commands so isRegisteredProvider() resolves them.
+import { registerBuiltinProviders, registerOpencodeProvider } from '@archon/providers';
 registerBuiltinProviders();
+registerOpencodeProvider();
 
 import {
   aiKeySetCommand,
@@ -347,6 +348,14 @@ describe('aiTierSetCommand', () => {
   it('invalid effort for the provider → 1, no write', async () => {
     expect(await aiTierSetCommand('large', 'claude', 'opus', 'extreme')).toBe(1);
     expect(out()).toContain('Invalid effort');
+    expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  it('effort for a provider without reasoning control → 1, no write', async () => {
+    expect(await aiTierSetCommand('large', 'opencode', 'anthropic/claude-sonnet-4-6', 'high')).toBe(
+      1
+    );
+    expect(out()).toContain("Provider 'opencode' does not support effort");
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
   });
 

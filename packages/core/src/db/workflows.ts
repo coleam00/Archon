@@ -2351,26 +2351,6 @@ export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
 }
 
 /**
- * Update parent_conversation_id on a workflow run.
- * Non-critical — logs error but does not throw.
- */
-export async function updateWorkflowRunParent(
-  runId: string,
-  parentConversationId: string
-): Promise<void> {
-  try {
-    await pool.query(
-      'UPDATE remote_agent_workflow_runs SET parent_conversation_id = $1 WHERE id = $2',
-      [parentConversationId, runId]
-    );
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, runId, parentConversationId }, 'db.workflow_run_update_parent_failed');
-    // Non-critical — don't throw
-  }
-}
-
-/**
  * Update last_activity_at timestamp for a workflow run.
  * Used for activity-based staleness detection.
  * Throws on failure so callers can track consecutive failures.

@@ -5,13 +5,24 @@
 import type { EffortRung } from '@archon/paths/effort';
 import type {
   ProviderCapabilities,
+  ProviderChunk,
+  ProviderEvent,
   ProviderResult,
+  ProviderWarning,
   ResolvedModel,
   TokenUsage,
 } from '@archon/provider-contract';
 
 // The contract package owns these shapes; they are re-exported so existing imports keep one type.
-export type { ProviderCapabilities, ProviderResult, ResolvedModel, TokenUsage };
+export type {
+  ProviderCapabilities,
+  ProviderChunk,
+  ProviderEvent,
+  ProviderResult,
+  ProviderWarning,
+  ResolvedModel,
+  TokenUsage,
+};
 
 // ─── Provider Config Defaults ──────────────────────────────────────────────
 // Canonical definitions — @archon/core/config/config-types.ts imports from here.
@@ -225,117 +236,16 @@ export function mergeTokenUsage(usages: readonly TokenUsage[]): TokenUsage | und
 }
 
 /**
- * Message chunk from AI assistant.
- * Discriminated union with per-type required fields for type safety.
+ * Everything a provider's stream yields, owned by `@archon/provider-contract`: its events,
+ * then `result`, then `settled`.
  */
-export type MessageChunk =
-  | {
-      type: 'assistant';
-      content: string;
-      /** When true, batch-mode adapters flush pending content and this chunk
-       *  to the platform immediately. Used by Pi's `notify()` so URLs the
-       *  user must act on (e.g. plannotator review) surface before the node
-       *  blocks for input. */
-      flush?: boolean;
-    }
-  | { type: 'system'; content: string }
-  | { type: 'thinking'; content: string }
-  | ({ type: 'result' } & ProviderResult)
-  | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
-  | {
-      type: 'tool';
-      toolName: string;
-      toolInput?: Record<string, unknown>;
-      /** Stable per-call ID from the underlying SDK (e.g. Claude `tool_use_id`).
-       *  When present, the platform adapter uses it directly instead of generating
-       *  one — guarantees `tool_call`/`tool_result` pair correctly even when
-       *  multiple tools with the same name run concurrently. */
-      toolCallId?: string;
-    }
-  | {
-      type: 'tool_result';
-      toolName: string;
-      toolOutput: string;
-      /** Matching ID for the originating `tool` chunk. See `tool` variant above. */
-      toolCallId?: string;
-      /**
-       * Known statuses are provider-reported. `unknown` covers two distinct
-       * cases that share one property — no authoritative status exists:
-       *   1. the provider completed the tool but reports no status (e.g. Codex
-       *      web_search, provider.ts:591), and
-       *   2. a synthetic closure emitted with no provider result at all.
-       * Never inferred from formatted output: a tool whose text merely looks
-       * like an error is still `unknown`, because guessing here would put a
-       * fabricated status next to reported ones and make neither trustworthy.
-       */
-      toolOutcome?: 'success' | 'error' | 'interrupted' | 'unknown';
-      /** Provider-reported process exit code, when the tool exposes one. */
-      exitCode?: number;
-    }
-  // ─── Subagent Task Lifecycle (Claude SDK `system` subtypes) ────────────
-  // Forwarded by the Claude provider from SDKTaskStartedMessage /
-  // SDKTaskProgressMessage / SDKTaskNotificationMessage. Downstream (workflow
-  // executor → SSE bridge) aggregates these into `task_activity` emitter
-  // events so the Web UI can render subagent visibility per workflow node.
-  // `skip_transcript` housekeeping tasks are filtered out at the provider
-  // boundary and never reach this surface.
-  | {
-      type: 'task_started';
-      taskId: string;
-      description: string;
-      taskType?: string;
-      prompt?: string;
-      toolUseId?: string;
-    }
-  | {
-      type: 'task_progress';
-      taskId: string;
-      description: string;
-      summary?: string;
-      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
-      lastToolName?: string;
-      toolUseId?: string;
-    }
-  | {
-      type: 'task_notification';
-      taskId: string;
-      status: 'completed' | 'failed' | 'stopped';
-      summary: string;
-      outputFile: string;
-      usage?: { total_tokens: number; tool_uses: number; duration_ms: number };
-      toolUseId?: string;
-    }
-  // Forwarded from SDKBackgroundTasksChangedMessage (`background_tasks_changed`,
-  // Claude SDK v0.3.209+): the FULL set of live background tasks, emitted
-  // whenever membership changes. Level signal with REPLACE semantics — consumers
-  // swap their set for each payload (an empty array means no background work is
-  // running). The dag-executor gates node completion on this: a `result` chunk
-  // that arrives while the set is non-empty must not tear down the stream, or
-  // the SDK subprocess (and the tasks' pending artifacts) get killed (#2083).
-  | {
-      type: 'background_tasks';
-      tasks: { taskId: string; taskType: string; description: string }[];
-    }
-  // ─── Hook Lifecycle (Claude SDK `system` subtypes) ─────────────────────
-  // Forwarded by the Claude provider from SDKHookStartedMessage /
-  // SDKHookResponseMessage. Same aggregation path as task_* above; the bridge
-  // emits `hook_activity` for inline indicators like
-  // `PreToolUse(Bash) → approved` under the parent node.
-  | {
-      type: 'hook_started';
-      hookId: string;
-      hookName: string;
-      hookEvent: string;
-    }
-  | {
-      type: 'hook_response';
-      hookId: string;
-      hookName: string;
-      hookEvent: string;
-      outcome: 'success' | 'error' | 'cancelled';
-      exitCode?: number;
-    }
-  | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
+export type MessageChunk = ProviderChunk;
+
+/**
+ * The terminal `result` chunk. Providers build it by assignment on a value of this type
+ * rather than from conditional spreads, so a misspelled key fails to compile.
+ */
+export type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
 
 /**
  * System prompt input accepted by all providers. Mirrors the Claude Agent SDK
@@ -554,6 +464,8 @@ export interface NodeConfig {
   mcp?: string;
   hooks?: unknown;
   skills?: string[];
+  /** Exact provider plugin ids the node loads; every other user-installed plugin stays off. */
+  plugins?: string[];
   /**
    * Inline sub-agent definitions (keyed by kebab-case agent ID).
    *
@@ -613,31 +525,11 @@ export interface NodeConfig {
   /**
    * Per-node override for Claude's `agentProgressSummaries` flag (Phase 4 of #975).
    * When unset, workflow nodes default to `true` (so the Web UI gets AI-generated
-   * `summary` fields on `task_progress` every ~30s). Authors can explicitly set
+   * `summary` fields on running `subtask` events every ~30s). Authors can explicitly set
    * `false` to opt out for a specific node.
    */
   agentProgressSummaries?: boolean;
   [key: string]: unknown;
-}
-
-/**
- * Extended options for sendQuery, adding workflow-specific context.
- * The orchestrator path uses base AgentRequestOptions fields only.
- * The workflow path additionally passes nodeConfig and assistantConfig.
- */
-/**
- * The install-wide provider slot held by the current `sendQuery` call. Archon core
- * sets it only when the operator configured a cap for this provider; a provider with
- * no internal retry loop can ignore it, because core already releases the slot when
- * the `sendQuery` stream closes.
- */
-export interface ProviderAttemptAdmission {
-  /**
-   * Release the slot for a provider-internal retry backoff, run `wait`, then wait for
-   * a slot again before the next attempt. Rejects when the request is aborted while
-   * waiting for the slot, leaving no slot held.
-   */
-  releaseDuring(wait: () => Promise<void>): Promise<void>;
 }
 
 /** Typed admission transitions for one capped provider attempt. */
@@ -650,9 +542,12 @@ export interface ProviderAdmissionEvent {
   capacity: number;
 }
 
+/**
+ * Extended options for sendQuery, adding workflow-specific context.
+ * The orchestrator path uses base AgentRequestOptions fields only.
+ * The workflow path additionally passes nodeConfig and assistantConfig.
+ */
 export interface SendQueryOptions extends AgentRequestOptions {
-  /** Set by Archon core admission; callers do not supply it. */
-  admission?: ProviderAttemptAdmission;
   /** Observer for capped-provider admission transitions (queue visibility, #2817). */
   onAdmission?: (event: ProviderAdmissionEvent) => void;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */

@@ -1,8 +1,10 @@
 import { createLogger } from '@archon/paths';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
-import type { AssistantMessage, Usage } from '@earendil-works/pi-ai';
+import type { AssistantMessage, StopReason, Usage } from '@earendil-works/pi-ai';
+import { truncateToolOutput, type ProviderStopReason } from '@archon/provider-contract';
 
-import type { MessageChunk, TokenUsage } from '../../types';
+import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
+import { unknownFailureResult } from '../../shared/failure';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -198,17 +200,33 @@ function sumPromptUsage(
   });
 }
 
+/** Pi's stop reason in ACP's names; `undefined` for one ACP has no name for. */
+function piStopReason(reason: StopReason): ProviderStopReason | undefined {
+  switch (reason) {
+    case 'stop':
+      return 'end_turn';
+    case 'length':
+      return 'max_tokens';
+    case 'aborted':
+      return 'cancelled';
+    default:
+      // ACP has no name for it (e.g. `toolUse`); the native value stays in the log.
+      getLog().debug({ stopReason: reason }, 'pi.stop_reason_unmapped');
+      return undefined;
+  }
+}
+
 /**
  * Build the terminal `result` chunk from every message the prompt produced.
  * Usage and cost are summed over all assistant messages plus `sideCalls`, the usage of
  * model calls that added no message (see sumPromptUsage); stopReason, model and error
- * come from the last assistant message. When the agent ended in error, surfaces it as
- * `isError: true`.
+ * come from the last assistant message. When the agent ended in error, the chunk
+ * carries a typed `failure`.
  */
 export function buildResultChunk(
   messages: readonly unknown[],
   sideCalls: readonly Usage[] = []
-): MessageChunk {
+): ResultChunk {
   const assistants = messages.filter(isAssistantMessage);
   const last = assistants.at(-1);
   if (!last) {
@@ -217,35 +235,31 @@ export function buildResultChunk(
     // rather than a silent success so orchestrators don't treat a broken
     // session as a clean completion.
     getLog().warn('pi.event-bridge.result_missing_assistant_message');
-    return { type: 'result', isError: true, errorSubtype: 'missing_assistant_message' };
+    return unknownFailureResult(
+      'missing_assistant_message',
+      'Pi ended the turn without an assistant message'
+    );
   }
 
   const tokens = sumPromptUsage(assistants, sideCalls);
   const isError = last.stopReason === 'error' || last.stopReason === 'aborted';
 
-  const chunk: MessageChunk = {
-    type: 'result',
-    ...(tokens ? { tokens } : {}),
-    ...(tokens?.cost !== undefined ? { cost: tokens.cost } : {}),
-    ...(last.stopReason ? { stopReason: last.stopReason } : {}),
-    ...(typeof last.responseModel === 'string' && last.responseModel.length > 0
-      ? { resolvedModel: { id: last.responseModel } }
-      : {}),
-    ...(isError
-      ? {
-          isError: true,
-          errorSubtype: last.stopReason,
-          // Surfacing errorMessage in errors[] is what makes the executor's
-          // transient-error classifier (which pattern-matches on the thrown
-          // message) able to retry Pi-side 429/overload failures.
-          ...(last.errorMessage ? { errors: [last.errorMessage] } : {}),
-        }
-      : {}),
-  };
+  // Built by assignment on a typed value so a misspelled key fails to compile.
+  // Unclassified: Pi folds a setup `ModelsError` into this message's text, so its
+  // `code` never reaches Archon.
+  const chunk: ResultChunk = isError
+    ? unknownFailureResult(last.stopReason, last.errorMessage)
+    : { type: 'result' };
+  if (tokens) chunk.tokens = tokens;
+  if (tokens?.cost !== undefined) chunk.cost = tokens.cost;
+  const stopReason = piStopReason(last.stopReason);
+  if (stopReason !== undefined) chunk.stopReason = stopReason;
+  if (typeof last.responseModel === 'string' && last.responseModel.length > 0) {
+    chunk.resolvedModel = { id: last.responseModel };
+  }
   if (isError) {
-    // Intentional design: error chunks are yielded, not thrown. isError:true in the chunk
-    // is the signal — callers (bridgeSession, dag-executor) check result.isError to classify
-    // failures and still receive full token/stopReason context from the same chunk.
+    // Error chunks are yielded, not thrown: the failure and the turn's usage travel on
+    // the same chunk.
     getLog().error(
       { stopReason: last.stopReason, errorMessage: last.errorMessage },
       'pi.result_chunk_error'
@@ -263,17 +277,17 @@ export { tryParseStructuredOutput };
 /**
  * Pure mapper from Pi's `AgentSessionEvent` → zero-or-more Archon `MessageChunk`s.
  *
- * Most Pi events map 1:1 or are skipped. Tool execution is split across
- * `tool_execution_start` / `tool_execution_end`; the start yields `tool` with
- * `toolCallId`, the end yields `tool_result` matched by the same id.
+ * Most Pi events map 1:1 or are skipped. Text and thinking deltas map to one chunk per
+ * delta; `bridgeSession` coalesces them into whole blocks before yielding. Tool
+ * execution is split across `tool_execution_start` / `tool_execution_end`, matched by
+ * Pi's `toolCallId`.
  *
  * `agent_end` is not mapped here: its result chunk needs every message of the
  * prompt, which only `bridgeSession` holds.
  *
- * Events deliberately skipped in v1:
+ * Events deliberately skipped:
  *  - turn_start / turn_end, message_start / message_end (redundant with deltas)
  *  - text_start / text_end / thinking_start / thinking_end (boundaries only)
- *  - compaction_start / compaction_end (bridgeSession reads compaction_end only for its usage)
  *  - queue_update (single-prompt sessions only)
  *  - auto_retry_end (retry_start communicates the retry sufficiently)
  */
@@ -281,50 +295,62 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
   switch (event.type) {
     case 'message_update': {
       const amEvent = event.assistantMessageEvent;
-      if (amEvent.type === 'text_delta') {
-        return [{ type: 'assistant', content: amEvent.delta }];
+      if (amEvent.type === 'text_delta' && amEvent.delta) {
+        return [{ type: 'agent_message_chunk', text: amEvent.delta }];
       }
-      if (amEvent.type === 'thinking_delta') {
-        return [{ type: 'thinking', content: amEvent.delta }];
+      if (amEvent.type === 'thinking_delta' && amEvent.delta) {
+        return [{ type: 'agent_thought_chunk', text: amEvent.delta }];
       }
       return [];
     }
-    case 'tool_execution_start':
+    case 'tool_execution_start': {
+      const call: MessageChunk = {
+        type: 'tool_call',
+        toolCallId: event.toolCallId,
+        name: event.toolName,
+      };
+      if (typeof event.args === 'object' && event.args !== null) {
+        call.rawInput = event.args as Record<string, unknown>;
+      }
+      return [call];
+    }
+    case 'tool_execution_end':
       return [
         {
-          type: 'tool',
-          toolName: event.toolName,
-          toolInput:
-            typeof event.args === 'object' && event.args !== null
-              ? (event.args as Record<string, unknown>)
-              : {},
+          type: 'tool_call_update',
           toolCallId: event.toolCallId,
+          status: event.isError ? 'failed' : 'completed',
+          ...truncateToolOutput(serializeToolResult(event.result)),
         },
       ];
-    case 'tool_execution_end': {
-      const chunks: MessageChunk[] = [];
-      if (event.isError) {
-        chunks.push({
-          type: 'system',
-          content: `⚠️ Tool ${event.toolName} failed`,
-        });
-      }
-      chunks.push({
-        type: 'tool_result',
-        toolName: event.toolName,
-        toolOutput: serializeToolResult(event.result),
-        toolCallId: event.toolCallId,
-        toolOutcome: event.isError ? 'error' : 'success',
-      });
-      return chunks;
-    }
     case 'auto_retry_start':
       return [
         {
-          type: 'system',
-          content: `⚠️ retry ${event.attempt}/${event.maxAttempts}: ${event.errorMessage}`,
+          type: 'warning',
+          code: 'pi.auto_retry',
+          message: `retry ${String(event.attempt)}/${String(event.maxAttempts)}: ${event.errorMessage}`,
         },
       ];
+    case 'compaction_start':
+      return [
+        {
+          type: 'compaction',
+          phase: 'started',
+          trigger: event.reason === 'manual' ? 'manual' : 'auto',
+        },
+      ];
+    case 'compaction_end':
+      // An aborted or failed compaction has no result; the session goes on uncompacted.
+      return event.result
+        ? [
+            {
+              type: 'compaction',
+              phase: 'completed',
+              trigger: event.reason === 'manual' ? 'manual' : 'auto',
+              tokensBefore: event.result.tokensBefore,
+            },
+          ]
+        : [];
     default:
       return [];
   }
@@ -365,30 +391,37 @@ export async function* bridgeSession(
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
 
-  // ── Assistant-chunk coalescing (#1814) ─────────────────────────────────
-  // Pi streams assistant text as many tiny `text_delta` events (often a few
-  // characters each). Downstream, the DAG executor treats every `assistant`
-  // chunk as a discrete message block — batch mode joins them with "\n\n",
-  // stream mode sends each one separately. That is correct for Claude/Codex,
-  // which each yield one chunk per *complete* text block, but it shatters Pi's
-  // char-level deltas into fragmented "С\n\nег\n\nод\n\nня" output. We coalesce
-  // consecutive deltas into one block-level chunk and flush it only at natural
-  // boundaries (turn start, text-block end, before any non-assistant chunk, and
-  // at end-of-stream/error), so Pi matches the one-chunk-per-block contract the
-  // executor already expects. `currentTurnText`/`assistantBuffer` still
-  // accumulate every delta, so streaming-tail detection and structured-output
-  // buffering are unaffected.
-  let pendingAssistant = '';
-  const flushPendingAssistant = (): void => {
-    if (pendingAssistant.length === 0) return;
-    queue.push({ kind: 'chunk', chunk: { type: 'assistant', content: pendingAssistant } });
-    pendingAssistant = '';
+  // ── Text-block coalescing (#1814) ──────────────────────────────────────
+  // Pi streams text and thinking as many tiny deltas (often a few characters
+  // each). The contract's text events carry a whole block, so consecutive deltas
+  // of one kind are coalesced and flushed only at natural boundaries (turn start,
+  // block end, a switch between text and thinking, before any other chunk, and at
+  // end-of-stream/error). `currentTurnText`/`assistantBuffer` still accumulate
+  // every text delta, so streaming-tail detection and structured-output buffering
+  // are unaffected.
+  let pending: { type: 'agent_message_chunk' | 'agent_thought_chunk'; text: string } | undefined;
+  const takePending = (): MessageChunk | undefined => {
+    const block = pending;
+    pending = undefined;
+    return block;
+  };
+  const flushPending = (): void => {
+    const block = takePending();
+    if (block) queue.push({ kind: 'chunk', chunk: block });
+  };
+  const appendPending = (
+    type: 'agent_message_chunk' | 'agent_thought_chunk',
+    text: string
+  ): void => {
+    if (pending?.type !== type) flushPending();
+    if (pending) pending.text += text;
+    else pending = { type, text };
   };
 
   uiBridge?.setEmitter(chunk => {
-    // A notify() chunk (flush:true) must surface immediately and in order, so
-    // drain any buffered assistant text ahead of it.
-    flushPendingAssistant();
+    // A notify() warning must surface immediately and in order, so drain any
+    // buffered text ahead of it.
+    flushPending();
     queue.push({ kind: 'chunk', chunk });
   });
   // Best-effort structured-output buffer. Only accumulates when the caller
@@ -404,9 +437,9 @@ export async function* bridgeSession(
   // than once (auto-retry after a retryable error, compact-and-continue after a
   // recoverable `length` stop or context overflow, queued follow-ups), and each run
   // ends with its own agent_end carrying only that run's new messages. The single
-  // result chunk is emitted when prompt() resolves: the executor treats the first
-  // result as terminal and stops reading, so a result per agent_end would end the
-  // node on an intermediate run and drop the rest of its output and usage.
+  // result chunk is emitted when prompt() resolves: a turn reports its outcome once,
+  // so a result per agent_end would report an intermediate run as the outcome and
+  // split the prompt's usage across several results.
   const promptMessages: unknown[] = [];
   // Usage of model calls that add no message, such as Pi's cache-warming refreshes.
   const promptSideCalls: Usage[] = [];
@@ -416,7 +449,7 @@ export async function* bridgeSession(
     try {
       if (event.type === 'turn_start') {
         // A new turn begins: the previous turn's text block is complete.
-        flushPendingAssistant();
+        flushPending();
         currentTurnText = '';
       }
       // Billed model calls that add no assistant message. Pi announces each one exactly
@@ -449,7 +482,7 @@ export async function* bridgeSession(
           assembled.startsWith(currentTurnText)
         ) {
           const tail = assembled.slice(currentTurnText.length);
-          pendingAssistant += tail;
+          appendPending('agent_message_chunk', tail);
           if (wantsStructured) assistantBuffer += tail;
           getLog().warn(
             {
@@ -460,31 +493,37 @@ export async function* bridgeSession(
             'pi.event-bridge.streaming_tail_completed'
           );
         }
-        flushPendingAssistant();
+        flushPending();
         currentTurnText = '';
         promptMessages.push(...event.messages);
         sawAgentEnd = true;
         return;
       }
       for (const chunk of mapPiEvent(event)) {
-        if (chunk.type === 'assistant') {
+        if (chunk.type === 'agent_message_chunk') {
           // Coalesce char-level deltas; hold them until a boundary flush so the
           // executor receives one block-level chunk instead of dozens of tiny
           // ones. The accumulators below still observe every delta.
-          currentTurnText += chunk.content;
-          if (wantsStructured) assistantBuffer += chunk.content;
-          pendingAssistant += chunk.content;
+          currentTurnText += chunk.text;
+          if (wantsStructured) assistantBuffer += chunk.text;
+          appendPending(chunk.type, chunk.text);
+        } else if (chunk.type === 'agent_thought_chunk') {
+          appendPending(chunk.type, chunk.text);
         } else {
-          // Any non-assistant chunk (tool, tool_result, system, result) is a
-          // boundary: drain buffered text first so ordering is preserved.
-          flushPendingAssistant();
+          // Any other chunk is a boundary: drain buffered text first so ordering
+          // is preserved.
+          flushPending();
           queue.push({ kind: 'chunk', chunk });
         }
       }
-      // A completed text block flushes promptly so stream-mode consumers see
-      // each block as it finishes rather than waiting for the terminal result.
-      if (event.type === 'message_update' && event.assistantMessageEvent.type === 'text_end') {
-        flushPendingAssistant();
+      // A completed block flushes promptly so stream-mode consumers see each
+      // block as it finishes rather than waiting for the terminal result.
+      if (
+        event.type === 'message_update' &&
+        (event.assistantMessageEvent.type === 'text_end' ||
+          event.assistantMessageEvent.type === 'thinking_end')
+      ) {
+        flushPending();
       }
     } catch (err) {
       queue.push({ kind: 'error', error: err as Error });
@@ -510,7 +549,7 @@ export async function* bridgeSession(
   const promptPromise = session.prompt(prompt).then(
     () => {
       if (sawAgentEnd) {
-        flushPendingAssistant();
+        flushPending();
         queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages, promptSideCalls) });
       }
       queue.push({ kind: 'done' });
@@ -525,19 +564,15 @@ export async function* bridgeSession(
       if (item.kind === 'done') {
         // Buffered text is flushed ahead of the result chunk when an agent_end
         // was seen; a prompt that resolved without one can still strand text.
-        if (pendingAssistant.length > 0) {
-          yield { type: 'assistant', content: pendingAssistant };
-          pendingAssistant = '';
-        }
+        const stranded = takePending();
+        if (stranded) yield stranded;
         return;
       }
       if (item.kind === 'error') {
         // Preserve partial output: emit whatever text was buffered before the
         // failure so it still reaches the user instead of being discarded.
-        if (pendingAssistant.length > 0) {
-          yield { type: 'assistant', content: pendingAssistant };
-          pendingAssistant = '';
-        }
+        const stranded = takePending();
+        if (stranded) yield stranded;
         throw item.error;
       }
       // Annotate the terminal result chunk with Pi's session UUID so Archon's
@@ -546,10 +581,9 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
-        let terminal: MessageChunk = item.chunk;
-        if (session.sessionId) {
-          terminal = { ...terminal, sessionId: session.sessionId };
-        }
+        // The chunk was built for this turn by buildResultChunk; annotate it in place.
+        const terminal = item.chunk;
+        if (session.sessionId) terminal.sessionId = session.sessionId;
         // Best-effort structured output: parse the accumulated assistant
         // transcript as JSON and attach. On parse failure, leave it off —
         // the dag-executor's existing dag.structured_output_missing path
@@ -558,7 +592,7 @@ export async function* bridgeSession(
         if (wantsStructured) {
           const parsed = tryParseStructuredOutput(assistantBuffer);
           if (parsed !== undefined) {
-            terminal = { ...terminal, structuredOutput: parsed };
+            terminal.structuredOutput = parsed;
           } else {
             getLog().warn(
               { bufferLength: assistantBuffer.length },

@@ -10,6 +10,10 @@ import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resumeWorkflow } from '@archon/core/operations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type {
+  ProviderEventQuery,
+  ProviderEventRecord,
+} from '@archon/workflows/schemas/provider-event';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
@@ -47,7 +51,13 @@ const mockListDashboardRuns = makeListDashboardRunsMock();
 const mockGetWorkflowRunByWorkerPlatformId = mock(
   async (_id: string) => null as null | MockWorkflowRun
 );
-const mockListWorkflowEvents = mock(async (_runId: string) => [] as MockWorkflowEvent[]);
+const mockListWorkflowEvents = mock(
+  async (_runId: string, _options?: { excludeEventTypes?: readonly string[] }) =>
+    [] as MockWorkflowEvent[]
+);
+const mockListProviderEvents = mock(
+  async (_runId: string, _query?: ProviderEventQuery): Promise<ProviderEventRecord[]> => []
+);
 const mockGetConversationById = mock(
   async (_id: string) =>
     null as null | { id: string; platform_conversation_id: string; platform_type: string }
@@ -379,6 +389,14 @@ const mockCreateWorkflowEvent = mock(async (_event: unknown) => {});
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,
   createWorkflowEvent: mockCreateWorkflowEvent,
+  listProviderEvents: mockListProviderEvents,
+  PROVIDER_EVENT_ROW_TYPES: [
+    'provider_event',
+    'tool_called',
+    'tool_completed',
+    'task_activity',
+    'hook_activity',
+  ],
 }));
 
 mock.module('@archon/core/db/messages', () => ({
@@ -1469,6 +1487,72 @@ describe('GET /api/workflows/runs', () => {
 // Tests: GET /api/workflows/runs/:runId
 // ---------------------------------------------------------------------------
 
+describe('GET /api/workflows/runs/:runId/provider-events', () => {
+  const record: ProviderEventRecord = {
+    runId: 'run-uuid-1',
+    stepName: 'plan',
+    attemptId: 'attempt-1',
+    seq: 0,
+    observedAt: '2026-10-02T10:00:00.000Z',
+    event: {
+      type: 'tool_call_update',
+      toolCallId: 'call-1',
+      status: 'completed',
+      output: 'x'.repeat(16_384),
+      outputTruncated: true,
+    },
+  };
+
+  beforeEach(() => {
+    mockGetWorkflowRun.mockReset();
+    mockListProviderEvents.mockReset();
+  });
+
+  test('serves the store records unchanged, filtered by step and cursor', async () => {
+    mockGetWorkflowRun.mockImplementation(async () => MOCK_RUNNING_RUN);
+    mockListProviderEvents.mockImplementation(async () => [record]);
+    const { app } = makeApp();
+
+    const all = await app.request('/api/workflows/runs/run-uuid-1/provider-events');
+    expect(all.status).toBe(200);
+    expect(await all.json()).toEqual({ events: [record] });
+    expect(mockListProviderEvents).toHaveBeenLastCalledWith('run-uuid-1', { stepName: undefined });
+
+    await app.request('/api/workflows/runs/run-uuid-1/provider-events?step=plan');
+    expect(mockListProviderEvents).toHaveBeenLastCalledWith('run-uuid-1', { stepName: 'plan' });
+
+    await app.request(
+      '/api/workflows/runs/run-uuid-1/provider-events?step=plan&attemptId=attempt-1&afterSeq=3'
+    );
+    expect(mockListProviderEvents).toHaveBeenLastCalledWith('run-uuid-1', {
+      stepName: 'plan',
+      after: { attemptId: 'attempt-1', seq: 3 },
+    });
+  });
+
+  test('rejects a half-given cursor and a cursor without a step', async () => {
+    mockGetWorkflowRun.mockImplementation(async () => MOCK_RUNNING_RUN);
+    const { app } = makeApp();
+    for (const query of [
+      'step=plan&attemptId=attempt-1',
+      'step=plan&afterSeq=1',
+      'attemptId=attempt-1&afterSeq=1',
+      'step=plan&attemptId=attempt-1&afterSeq=-1',
+    ]) {
+      const response = await app.request(`/api/workflows/runs/run-uuid-1/provider-events?${query}`);
+      expect(response.status).toBe(400);
+    }
+    expect(mockListProviderEvents).not.toHaveBeenCalled();
+  });
+
+  test('returns 404 for an unknown run', async () => {
+    mockGetWorkflowRun.mockImplementation(async () => null);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/missing/provider-events');
+    expect(response.status).toBe(404);
+  });
+});
+
 describe('GET /api/workflows/runs/:runId', () => {
   beforeEach(() => {
     mockGetWorkflowRun.mockReset();
@@ -1498,7 +1582,10 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(Array.isArray(body.events)).toBe(true);
     expect(body.events.length).toBe(3);
     expect(body.events[0]?.event_type).toBe('step_started');
-    expect(body.events[2]?.event_type).toBe('tool_called');
+    // Provider activity has its own route; the detail payload leaves it out.
+    expect(mockListWorkflowEvents).toHaveBeenCalledWith('run-uuid-1', {
+      excludeEventTypes: expect.arrayContaining(['provider_event', 'tool_called']),
+    });
   });
 
   test('exposes the persisted terminal record and suppresses it during resumed execution', async () => {

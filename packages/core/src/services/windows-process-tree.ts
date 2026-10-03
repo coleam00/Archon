@@ -22,6 +22,13 @@ const COMMAND_TIMEOUT_MS = 30_000;
  */
 const MAX_CONFIRM_ROUNDS = 5;
 
+/**
+ * The longest {@link terminateWindowsProcessTree} runs before it returns or throws: one
+ * listing before `taskkill`, `taskkill` itself, then one listing per confirm round, each
+ * bounded by its command timeout.
+ */
+export const WINDOWS_PROCESS_TREE_STOP_MAX_MS = COMMAND_TIMEOUT_MS * (2 + MAX_CONFIRM_ROUNDS);
+
 export interface WindowsProcessRow {
   readonly pid: number;
   readonly parentPid: number;
@@ -185,7 +192,8 @@ export async function terminateWindowsProcessTree(
 
   // The owner's lease socket closes when the owner exits, so a lease still open after
   // the listing proves the listed root is the owner and not a later holder of its PID.
-  // The first listing can take seconds, which is long enough for the lease to lapse.
+  // The first listing can take seconds; the lease has no idle timeout, so only the
+  // owner's exit or its own shutdown closes it in that time.
   if (!ownsLiveLease()) {
     throw new Error(
       `Detached workflow owner ${String(pid)} released its termination lease before it was stopped`

@@ -179,7 +179,7 @@ describe('CopilotProvider hardening', () => {
     const gen = p.sendQuery('hi', '/repo', undefined, { model: '  gpt-5-mini  ' });
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'ok' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'ok' }));
     session.resolveSend(undefined);
     await firstNext;
     await collect(gen);
@@ -199,7 +199,7 @@ describe('CopilotProvider hardening', () => {
     });
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'ok' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'ok' }));
     session.resolveSend(undefined);
     await firstNext;
     await collect(gen);
@@ -232,17 +232,9 @@ describe('CopilotProvider hardening', () => {
     expect(error).toBeUndefined();
     // The fallback content reached the consumer as an assistant chunk —
     // either via the safety-net path or the streaming path.
-    expect(chunks).toContainEqual(
-      expect.objectContaining({ type: 'assistant', content: 'FALLBACK' })
-    );
-    // The session-error must NOT produce a system warning when fallback
-    // content was delivered.
-    expect(chunks).not.toContainEqual(
-      expect.objectContaining({
-        type: 'system',
-        content: expect.stringContaining('some transient error'),
-      })
-    );
+    expect(chunks).toContainEqual({ type: 'agent_message_chunk', text: 'FALLBACK' });
+    // The session-error must NOT produce a warning when fallback content was delivered.
+    expect(chunks).not.toContainEqual(expect.objectContaining({ type: 'warning' }));
   });
 
   test('cleanup failure in disconnect does not mask the primary result', async () => {
@@ -256,7 +248,7 @@ describe('CopilotProvider hardening', () => {
     const gen = p.sendQuery('hi', '/repo', undefined, { model: 'gpt-5' });
     const firstNext = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
-    session.fire(evt('assistant.message_delta', { messageId: 'm', deltaContent: 'hello' }));
+    session.fire(evt('assistant.message', { messageId: 'm', content: 'hello' }));
     session.resolveSend(undefined);
     await firstNext;
     const { chunks, error } = await collect(gen);
@@ -265,7 +257,7 @@ describe('CopilotProvider hardening', () => {
     expect(chunks).toContainEqual(expect.objectContaining({ type: 'result' }));
   });
 
-  test('cleanup failure in client.stop does not mask the friendly primary error', async () => {
+  test('cleanup failure in client.stop does not mask the friendly primary failure', async () => {
     const session = makeFakeSession('sess-stop-fails');
     nextCreateSessionResult = session;
     stopImpl = async (): Promise<Error[]> => {
@@ -278,20 +270,16 @@ describe('CopilotProvider hardening', () => {
     await new Promise(resolve => setTimeout(resolve, 5));
     session.rejectSend(new Error('Model not available'));
 
-    let primaryError: Error | undefined;
-    try {
-      await firstNext;
-    } catch (e) {
-      primaryError = e as Error;
-    }
-    if (!primaryError) {
-      // The error may surface from subsequent generator iteration.
-      const { error } = await collect(gen);
-      primaryError = error;
-    }
+    const head = await firstNext;
+    const { chunks, error } = await collect(gen);
+    expect(error).toBeUndefined();
+    const result = [head.value, ...chunks].find(
+      (c): c is { type: 'result'; failure?: { evidence: string } } =>
+        typeof c === 'object' && c !== null && (c as { type?: unknown }).type === 'result'
+    );
 
-    // The friendly model-access error must survive the stop() throw.
-    expect(primaryError?.message).toMatch(/Copilot model access error/i);
-    expect(primaryError?.message ?? '').not.toContain('client.stop blew up');
+    // The friendly model-access error is the failure's evidence, not the stop() throw.
+    expect(result?.failure?.evidence).toMatch(/Copilot model access error/i);
+    expect(result?.failure?.evidence ?? '').not.toContain('client.stop blew up');
   });
 });

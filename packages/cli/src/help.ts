@@ -22,9 +22,9 @@ interface FlagOwner {
 interface FlagHelp {
   spec: string;
   description: string;
-  // Each (command, subcommand?) tuple that owns this flag. Empty means
-  // "global": appears in `archon --help` only, never in any scoped slice.
-  owners: FlagOwner[];
+  // Each (command, subcommand?) tuple that owns this flag. Scoped-only flags
+  // omit owners because their enclosing entry owns them; empty means "global".
+  owners?: FlagOwner[];
 }
 
 interface ExampleHelp {
@@ -32,13 +32,6 @@ interface ExampleHelp {
   // The (command, subcommand?) tuple this example belongs to. An example
   // appears in `archon --help` iff its owner is selected.
   owner: FlagOwner;
-}
-
-// A scoped-only flag has no `owners` — the owning entry is implicit (the
-// entry it hangs off). It appears only when that entry's slice renders.
-interface ScopedFlagHelp {
-  spec: string;
-  description: string;
 }
 
 interface HelpEntry {
@@ -55,7 +48,7 @@ interface HelpEntry {
   // --merged`) rather than as a standalone Options entry, so the global
   // Options block stays byte-identical to the pre-refactor text while
   // scoped help can still surface every flag the entry actually accepts.
-  scopedFlags?: ScopedFlagHelp[];
+  scopedFlags?: FlagHelp[];
 }
 
 // One entry per Commands-block line, in global-help order. `renderHelp()`
@@ -73,7 +66,10 @@ const commandHelp: HelpEntry[] = [
     spec: 'forge resolve',
     description: 'Resolve an explicit remote through optional forge plugins',
     scopedFlags: [
-      { spec: '--data <json>', description: 'JSON object with remote (URL/SSH syntax or null)' },
+      {
+        spec: '--data <json>',
+        description: 'JSON object with remote (URL/SSH syntax or null)',
+      },
     ],
   },
   {
@@ -82,7 +78,10 @@ const commandHelp: HelpEntry[] = [
     spec: 'forge checks',
     description: 'Observe checks for an explicit qualified pull request',
     scopedFlags: [
-      { spec: '--data <json>', description: 'JSON object with ref: {repo: {host, path}, number}' },
+      {
+        spec: '--data <json>',
+        description: 'JSON object with ref: {repo: {host, path}, number}',
+      },
     ],
   },
   {
@@ -415,7 +414,10 @@ const scopedOnlyHelp: HelpEntry[] = [
     spec: `forge ${subcommand}`,
     description,
     scopedFlags: [
-      { spec: '--data <json>', description: 'Structured request without operationId or op' },
+      {
+        spec: '--data <json>',
+        description: 'Structured request without operationId or op',
+      },
       {
         spec: '--data-file <path>',
         description: 'Read that request from a file, keeping authored content out of argv',
@@ -535,9 +537,18 @@ const scopedOnlyHelp: HelpEntry[] = [
     spec: 'workflow event emit',
     description: 'Emit a workflow event into a run',
     scopedFlags: [
-      { spec: '--run-id <id>', description: 'Target run for the event (required)' },
-      { spec: '--type <event-type>', description: 'Event type to emit (required)' },
-      { spec: '--data <json>', description: 'JSON payload for the event (optional)' },
+      {
+        spec: '--run-id <id>',
+        description: 'Target run for the event (required)',
+      },
+      {
+        spec: '--type <event-type>',
+        description: 'Event type to emit (required)',
+      },
+      {
+        spec: '--data <json>',
+        description: 'JSON payload for the event (optional)',
+      },
     ],
   },
 ];
@@ -725,6 +736,12 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'logs' }],
   },
   {
+    spec: '--format <jsonl|text>',
+    description:
+      "For 'workflow logs': jsonl (default) prints the exact transcript;\ntext renders it as progress lines for a human",
+    owners: [{ command: 'workflow', subcommand: 'logs' }],
+  },
+  {
     spec: '--conversation-id <id>',
     description:
       'Reuse a stable conversation scope across runs (enables\npersist_session resume between separate CLI invocations)',
@@ -792,6 +809,10 @@ const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'logs' },
   },
   {
+    text: 'archon workflow logs <run-id> --follow --format text',
+    owner: { command: 'workflow', subcommand: 'logs' },
+  },
+  {
     text: 'archon workflow wait <run-id> --json',
     owner: { command: 'workflow', subcommand: 'wait' },
   },
@@ -852,7 +873,7 @@ function ownerKey(owner: FlagOwner): string {
   return `${owner.command}|${owner.subcommand ?? ''}`;
 }
 
-function selectFlagsFor(selected: HelpEntry[], scopedOnly: ScopedFlagHelp[] = []): FlagHelp[] {
+function selectFlagsFor(selected: HelpEntry[], scopedOnly: FlagHelp[] = []): FlagHelp[] {
   const keys = new Set(selected.map(e => ownerKey(e)));
   const seen = new Set<string>();
   const out: FlagHelp[] = [];
@@ -861,10 +882,10 @@ function selectFlagsFor(selected: HelpEntry[], scopedOnly: ScopedFlagHelp[] = []
   for (const f of scopedOnly) {
     if (seen.has(f.spec)) continue;
     seen.add(f.spec);
-    out.push({ ...f, owners: [] });
+    out.push(f);
   }
   for (const f of orderedFlags) {
-    if (!f.owners.some(o => keys.has(ownerKey(o)))) continue;
+    if (!f.owners?.some(o => keys.has(ownerKey(o)))) continue;
     if (seen.has(f.spec)) continue;
     seen.add(f.spec);
     out.push(f);
