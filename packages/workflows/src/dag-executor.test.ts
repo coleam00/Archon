@@ -15758,6 +15758,45 @@ describe('executeDagWorkflow -- approval node', () => {
     });
   });
 
+  it('fails the approval node instead of pausing when its prompt cannot be delivered', async () => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
+      if (message.includes('Approval required')) throw new Error('401 unauthorized');
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        conversationId: 'conv-approval',
+        cwd: testDir,
+        workflow: {
+          name: 'approval-undelivered',
+          nodes: [
+            {
+              id: 'review',
+              kind: 'gate',
+              message: 'Approve?',
+              decisions: [{ id: 'approve' }, { id: 'reject' }],
+              captureResponse: false,
+              decisionsAuthored: false,
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    // Nobody was told how to approve, so the run must not wait for an approval.
+    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+    expect(failed?.data?.error).toBe(
+      "Approval message failed to deliver for node 'review' — cannot pause safely"
+    );
+    expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
   it('approval node without capture_response stores empty node output', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);

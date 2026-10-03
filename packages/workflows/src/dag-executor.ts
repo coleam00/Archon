@@ -5068,7 +5068,7 @@ async function executeLoopGroupBody(
           state: 'failed',
           output: lastIterationOutput,
           failureKind: 'unknown',
-          error: `Loop-group gate message failed to deliver for node '${node.id}' — cannot pause safely`,
+          error: undeliveredGatePromptError('Loop-group gate', node.id),
         };
       }
       deps.store
@@ -6554,17 +6554,14 @@ async function executeLoopNode(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_node.gate_message_send_failed'
         );
-        return failLoopNode(
-          `Loop gate message failed to deliver for node '${node.id}' — cannot pause safely`,
-          {
-            failureKind: 'unknown',
-            output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-            loopIterations: i,
-            data: { iteration: i },
-          }
-        );
+        return failLoopNode(undeliveredGatePromptError('Loop gate', node.id), {
+          failureKind: 'unknown',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          data: { iteration: i },
+        });
       }
       deps.store
         .createWorkflowEvent({
@@ -6636,6 +6633,18 @@ async function executeLoopNode(
     loopIterations: loop.max_iterations,
     data: { maxIterations: loop.max_iterations },
   });
+}
+
+/**
+ * The failure of a gate whose prompt could not be delivered. The prompt is the only place
+ * a human learns how to resume, so a gate that cannot send it fails its node instead of
+ * pausing a run nobody was told about.
+ */
+function undeliveredGatePromptError(
+  gate: 'Approval' | 'Loop gate' | 'Loop-group gate',
+  nodeId: string
+): string {
+  return `${gate} message failed to deliver for node '${nodeId}' — cannot pause safely`;
 }
 
 /**
@@ -7102,7 +7111,24 @@ async function executeApprovalNode(
     `Run ID: \`${workflowRun.id}\`\n` +
     `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
     `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  await safeSendMessage(platform, conversationId, approvalMsg, msgContext);
+  if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
+    getLog().error(
+      { nodeId: node.id, workflowRunId: workflowRun.id },
+      'approval_node.gate_message_send_failed'
+    );
+    return recordNodeState(
+      { store: deps.store, logDir: ctx.logDir },
+      finishNodeExecution(
+        execution,
+        {
+          status: 'failed',
+          error: undeliveredGatePromptError('Approval', node.id),
+          failureKind: 'unknown',
+        },
+        { output: { text: '' }, diagnostics: { iteration } }
+      )
+    );
+  }
 
   deps.store
     .createWorkflowEvent({
