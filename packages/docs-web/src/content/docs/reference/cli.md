@@ -851,7 +851,7 @@ archon workflow wake schedule install --interval 5 --json
 archon workflow wake schedule remove --json
 ```
 
-The interval is a positive integer in seconds, defaulting to 5. The job invokes `workflow wake --json`, runs at load, and records an absolute executable, working directory, and `ARCHON_HOME`. Reinstalling identical configuration is safe. Remove then install to change its interval or executable. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
+The interval is a positive integer in seconds, defaulting to 5. The job invokes `workflow wake --json`, runs at load, and records an absolute executable, working directory, and `ARCHON_HOME`. Reinstalling identical configuration verifies that its launchd job is registered and fails if registration cannot be verified. Remove then install to change its interval or executable. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
 
 On Linux, run a one-pass command from cron (this example checks each minute):
 
