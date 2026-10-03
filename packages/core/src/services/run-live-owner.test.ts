@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { testTimeout } from '@archon/paths/test-utils';
 import {
   chmodSync,
   existsSync,
@@ -232,7 +233,7 @@ describe('run live owner', () => {
         await owner.close();
       }
     },
-    SLOW_STOP_IDLE_MS + 5_000
+    testTimeout(SLOW_STOP_IDLE_MS + 5_000)
   );
 
   test('bounds close while a controller retains an uncommitted stop lease', async () => {

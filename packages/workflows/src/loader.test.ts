@@ -7534,7 +7534,7 @@ nodes:
      * both a looser unit and heavy enough to starve the other package test
      * processes running in parallel (`bun --filter '*' --parallel test`). It
      * measurably did: on a 2-core Windows CI runner it pushed an unrelated
-     * SQLite test from 250 ms past Bun's 5000 ms per-test timeout.
+     * SQLite test from 250 ms past the 5000 ms per-test timeout Windows then had.
      */
     const KNOWN_BAD = new Set([
       // `agent:` at workflow and node level — a real bug, silently dropped since
