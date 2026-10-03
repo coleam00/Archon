@@ -60,13 +60,7 @@ export const FATAL_PATTERNS = [
 /** Ambiguous fatal patterns that yield to concrete transient evidence. */
 const FALLBACK_FATAL_PATTERNS = ['auth error'];
 
-/**
- * Rate/concurrency pressure (429, provider overload) — a subset of TRANSIENT that
- * sheds load on a minutes-scale window, so it earns its own patient backoff policy
- * (see {@link getRetryDelayMs}) instead of the generic short exponential one (#2706).
- * Defined first so {@link TRANSIENT_PATTERNS} derives from it: a pattern can never
- * widen the rate-limit budget while classifyError treats it as non-transient.
- */
+/** Rate/concurrency pressure (429, provider overload), a subset of TRANSIENT. */
 export const RATE_LIMIT_PATTERNS = [
   '429',
   'rate limit',
@@ -127,11 +121,6 @@ export const RATE_LIMIT_MAX_RETRIES = 5;
 /** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
 export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
 
-export function isRateLimitError(error: string): boolean {
-  const message = error.toLowerCase();
-  return RATE_LIMIT_PATTERNS.some(pattern => message.includes(pattern));
-}
-
 /**
  * Delay before retry attempt N for a failed attempt of this retry class.
  *
@@ -152,32 +141,11 @@ export function getRetryDelayMs(
   return baseDelayMs * Math.pow(2, attempt);
 }
 
-/** The failure kinds a provider error can have. Each one decides retry by itself. */
+/** How retry treats a failure; also the failure kinds a provider error can have. */
 export type RetryClass = Extract<
   NodeFailureKind,
   'fatal' | 'transient' | 'rate_limited' | 'unknown'
 >;
-
-/**
- * Failure kind of an untyped provider error, classified once from its text. This is the
- * fallback for providers that do not report a typed `ProviderFailure` yet; a typed failure
- * goes through {@link nodeFailureKindOf} instead.
- */
-export function providerFailureKind(error: Error): RetryClass {
-  const errorType = classifyError(error);
-  switch (errorType) {
-    case 'FATAL':
-      return 'fatal';
-    case 'TRANSIENT':
-      return isRateLimitError(error.message) ? 'rate_limited' : 'transient';
-    case 'UNKNOWN':
-      return 'unknown';
-    default: {
-      const exhaustive: never = errorType;
-      return exhaustive;
-    }
-  }
-}
 
 /** The node failure kind a provider's typed failure class maps to. */
 export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
@@ -199,24 +167,37 @@ export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
 }
 
 /**
- * How retry treats a failed attempt. A provider-error kind recorded at the failure site is
- * the answer. Engine-detected kinds (timeout, exec_failed, config and the rest) and records
- * without a kind still classify their error text, as they did before provider failures were
- * typed: giving each engine kind its own retry rule is a separate decision.
+ * The retry class of every failure kind. Retry reads only the kind recorded where the
+ * failure happened, never the error text: for an exec node that text is the script's own
+ * output, so matching it would let whatever a script prints decide whether it re-runs.
  */
-export function retryClassOf(failure: {
-  failureKind?: NodeFailureKind;
-  error: string;
-}): RetryClass {
-  switch (failure.failureKind) {
-    case 'fatal':
-    case 'transient':
-    case 'rate_limited':
-    case 'unknown':
-      return failure.failureKind;
-    default:
-      return providerFailureKind(new Error(failure.error));
-  }
+const RETRY_CLASS = {
+  fatal: 'fatal',
+  transient: 'transient',
+  rate_limited: 'rate_limited',
+  unknown: 'unknown',
+  // A silent provider stream or a hung subprocess; a fresh attempt is the remedy. Each
+  // retry of a hung AI node can wait another full idle_timeout.
+  timeout: 'transient',
+  // A script's exit is no evidence a re-run helps; `on_error: all` opts in.
+  exec_failed: 'unknown',
+  // A fresh AI attempt can produce valid output under `on_error: all`. An exec contract
+  // failure is never retried: it records `retryable: false`.
+  output_contract: 'unknown',
+  // `fatal` is the class retry never re-runs, even under `on_error: all`.
+  config: 'fatal',
+  cancelled: 'fatal',
+  // Loop and child failures never reach a retry decision; listed for totality.
+  max_iterations: 'unknown',
+  child_failed: 'unknown',
+} as const satisfies Record<NodeFailureKind, RetryClass>;
+
+/**
+ * How retry treats a failed attempt of this kind. A record without a kind (written before
+ * `failureKind` existed) is `unknown`: retried only under `on_error: all`.
+ */
+export function retryClassOf(kind: NodeFailureKind | undefined): RetryClass {
+  return RETRY_CLASS[kind ?? 'unknown'];
 }
 
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────

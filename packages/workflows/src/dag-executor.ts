@@ -201,7 +201,6 @@ import {
   currentAdoptedRunDir,
   getRetryDelayMs,
   RATE_LIMIT_MAX_RETRIES,
-  providerFailureKind,
   detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
@@ -954,10 +953,10 @@ function getExplicitNodeRetryConfig(
  * `undefined` when it does not.
  *
  * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
- * cannot drift. The class comes from {@link retryClassOf}: a provider failure is
- * decided by the kind recorded where it failed, never by its text. Fatal failures
- * (credentials, authorization, quota and spend windows) are never retried, even
- * when `on_error: all`; `unknown` is retried only under `on_error: all`.
+ * cannot drift. The class comes from {@link retryClassOf}: the kind recorded where
+ * the node failed decides, never its error text. Fatal failures (credentials, quota
+ * and spend windows, config errors, cancellation) are never retried, even when
+ * `on_error: all`; `unknown` is retried only under `on_error: all`.
  */
 function retryableFailureClass(
   output: NodeOutput,
@@ -968,10 +967,9 @@ function retryableFailureClass(
   // here too so `output.error` type-checks and the helper is safe standalone.
   if (output.state !== 'failed') return undefined;
   // A producer that diagnosed its own output (an exec contract failure, #2453) says so
-  // in the type; its error text quotes stdout, so classifying that text would let a
-  // transient-looking excerpt re-run a script whose stdout is deterministically wrong.
+  // in the type: its stdout is deterministically wrong, so no class re-runs it.
   if (output.retryable === false) return undefined;
-  const retryClass = retryClassOf(output);
+  const retryClass = retryClassOf(output.failureKind);
   if (retryClass === 'fatal') return undefined;
   if (retryClass === 'unknown' && onError !== 'all') return undefined;
   return retryClass;
@@ -2771,7 +2769,7 @@ async function executeNodeInternal(
       ? 'cancelled'
       : err instanceof NodeFailure
         ? err.kind
-        : providerFailureKind(err);
+        : 'unknown';
     const providerFailure =
       !cancelled && err instanceof NodeFailure ? err.providerFailure : undefined;
     return failAgentNode(failureMessage, failureKind, {
@@ -5604,7 +5602,7 @@ async function executeLoopNode(
       failure: { failureKind: NodeFailureKind; error: string },
       attempt: number
     ): Promise<boolean> => {
-      const retryClass = retryClassOf(failure);
+      const retryClass = retryClassOf(failure.failureKind);
       if (retryClass === 'rate_limited') iterSawRateLimit = true;
       if (retryClass !== 'transient' && retryClass !== 'rate_limited') return false;
       const message = failure.error;
@@ -5985,8 +5983,7 @@ async function executeLoopNode(
             .catch((evtErr: Error) => {
               logEventStoreError(evtErr, i);
             });
-          const failureKind: NodeFailureKind =
-            err instanceof NodeFailure ? err.kind : providerFailureKind(err);
+          const failureKind: NodeFailureKind = err instanceof NodeFailure ? err.kind : 'unknown';
           if (await tryIterationTransientRetry({ failureKind, error: err.message }, iterRetry)) {
             continue iterationAttempt;
           }
