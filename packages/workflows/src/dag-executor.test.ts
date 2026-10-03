@@ -36666,12 +36666,26 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     expect(nodeFailedError(deps, 'second')).toBeUndefined();
   });
 
-  it('a write in a concurrent guarded layer fails the writer, naming its guarded siblings', async () => {
+  it('a write in a concurrent guarded layer fails every guarded node whose window it landed in', async () => {
     await initRepo(testDir);
-    const deps = await runGuardedLayer({ writer: 'touch stray.txt', reader: 'echo read-only' });
-    const error = nodeFailedError(deps, 'writer');
-    expect(error).toContain('stray.txt');
-    expect(error).toContain('guarded siblings `reader`');
+    // The writer writes only after the reader has started, and the reader exits only
+    // after the write, so the write lands inside both nodes' windows.
+    const deps = await runGuardedLayer({
+      writer:
+        'i=0; while [ ! -f "$ARTIFACTS_DIR/reader" ]; do i=$((i+1)); ' +
+        '[ $i -gt 40 ] && exit 1; sleep 0.1; done; touch stray.txt',
+      reader:
+        'mkdir -p "$ARTIFACTS_DIR" && touch "$ARTIFACTS_DIR/reader" && i=0; ' +
+        'while [ ! -f stray.txt ]; do i=$((i+1)); [ $i -gt 40 ] && exit 1; sleep 0.1; done',
+    });
+    const writerError = nodeFailedError(deps, 'writer');
+    expect(writerError).toContain('stray.txt');
+    expect(writerError).toContain('guarded siblings `reader`');
+    expect(writerError).toContain('cannot be attributed to this node alone');
+    // The innocent reader fails too: one repo-wide snapshot cannot tell whose write it saw.
+    const readerError = nodeFailedError(deps, 'reader');
+    expect(readerError).toContain('stray.txt');
+    expect(readerError).toContain('guarded siblings `writer`');
   });
 
   it('a violation on resume names no sibling reused from the prior run', async () => {

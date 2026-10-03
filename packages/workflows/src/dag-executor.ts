@@ -1198,7 +1198,7 @@ async function assertCheckoutUntouched(
   const error =
     concurrentGuardedSiblings.length === 0
       ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
-      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed while it ran beside the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')}: ${changedPaths}`;
+      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed while it ran in parallel with the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')}, so the change cannot be attributed to this node alone: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
   if (result.execution === undefined) {
     throw new Error(`Node '${node.id}' completed without its execution record`);
