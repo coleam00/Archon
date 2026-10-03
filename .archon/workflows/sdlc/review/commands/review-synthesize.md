@@ -15,7 +15,7 @@ There are two modes in `$ARTIFACTS_DIR/review/scope.md`:
 4. Read every producer record under `$ARTIFACTS_DIR/discoveries/`, when that directory exists. Its absence means no producer recorded a discovery. Each file is independent evidence; never delete or replace these raw files.
 5. On this run's first round — no `report-round-*.md` exists yet in `$ARTIFACTS_DIR/review/` — read `$ARTIFACTS_DIR/shape.md` and `$ARTIFACTS_DIR/shape-dispositions.md` when they exist. They record a structure pass that ran before the pull request opened and how the implementation disposed of each of its findings. Label every finding it declined by the severity rule below and judge the decline by the decline rule, the same as a correction's. A declined finding whose decline does not hold becomes an open finding of this round with `sources: [simplify]`; one whose decline holds is recorded as `declined` or `disproved`. An adopted finding needs no record: the diff you review already carries it. When `shape.md` reports findings and `shape-dispositions.md` is missing or leaves one out, treat each unaccounted finding as declined without a reason.
 
-In full mode, the lenses this round enabled are required: `seams` always; `focused` when the tier is `focused`, otherwise `code` and `tests` (tier: **$INPUTS.tier**); `simplify` when its input is true (**$INPUTS.simplify**); `errors` and `docs` only when their inputs are true. A focused reviewer that reports the change engages a risk the lenses scale on means the classification was wrong: that is incomplete review, so the verdict is `ready: false` with the gap named. A missing or empty report for an enabled lens means that lens failed to report and blocks readiness. In continuation mode, the prior report's review-coverage section is authoritative for the concerns the accepted review covered; do not reconstruct it from current optional inputs or simulate separate reviewers.
+In full mode, the lenses this round enabled are required: `seams` always; `focused` when the tier is `focused`, otherwise `code` and `tests` (tier: **$INPUTS.tier**); `simplify` when its input is true (**$INPUTS.simplify**); `errors` when its input is true (**$INPUTS.errors**); `docs` when its input is true, or when it is `auto` and scope.md selected it (**$INPUTS.docs**). A focused reviewer that reports the change engages a risk the lenses scale on means the classification was wrong: that is incomplete review, and no correction can supply the missing lenses, so the verdict is `ready: false` with action `replan`, the gap named, and the full-tier review that would close it. A missing or empty report for an enabled lens means that lens failed to report and blocks readiness. In continuation mode, the prior report's review-coverage section is authoritative for the concerns the accepted review covered; do not reconstruct it from current optional inputs or simulate separate reviewers.
 
 ## Continuation judgment
 
@@ -103,7 +103,7 @@ Create parent directories as needed, then write both:
 
 Write an empty array and a short "No proved unrelated discoveries" document when no records survive. An `unrelated` record never affects readiness. You file nothing yourself: delivery files each accepted record as a tracker issue after the review converges, so a record belongs in the file only when it is real, proved, and worth an issue of its own. A `scope_conflict` accompanies `replan` only when the conflict is necessary to the requested outcome; otherwise it remains non-blocking.
 
-If the verdict requires `replan`, the consolidated artifacts must contain its proved `scope_conflict`. When no producer wrote that raw record, write `$ARTIFACTS_DIR/discoveries/review-synthesize.json` from the accepted finding's already-verified evidence, then include it in both consolidated files. Never emit `replan` from an unsupported discovery.
+If the verdict requires `replan` for a proved blocker, the consolidated artifacts must contain its proved `scope_conflict`; a classification gap needs none. When no producer wrote that raw record, write `$ARTIFACTS_DIR/discoveries/review-synthesize.json` from the accepted finding's already-verified evidence, then include it in both consolidated files. Never emit `replan` from an unsupported discovery.
 
 ## Verdict
 
@@ -113,7 +113,7 @@ Set `action` from that verdict and the accepted contract:
 
 - `none` exactly when `ready: true`;
 - `correct` when every open blocker can be corrected inside the accepted contract;
-- `replan` when a proved blocker is necessary to the requested outcome but its correction would cross an explicit boundary or materially redefine the work.
+- `replan` when a proved blocker is necessary to the requested outcome but its correction would cross an explicit boundary or materially redefine the work, or when a focused review reported a misclassified change.
 
 Never emit `ready:true` with `correct` or `replan`, or `ready:false` with `none`.
 
