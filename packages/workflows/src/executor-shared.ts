@@ -2,7 +2,7 @@
  * Shared helpers for executor.ts and dag-executor.ts.
  *
  * Extracted here once the Rule of Three was met — both files had
- * identical copies of these error-classification and prompt-building
+ * identical copies of these retry and prompt-building
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
@@ -33,104 +33,13 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-// ─── Error Classification ────────────────────────────────────────────────────
-
-/** Result of error classification */
-export type ErrorType = 'TRANSIENT' | 'FATAL' | 'UNKNOWN';
-
-const QUOTA_EXHAUSTION_PATTERNS = [
-  'session limit',
-  'usage limit reached',
-  'credit exhaustion',
-  'credit balance',
-] as const;
-
-/** Fatal errors: authentication/authorization failures plus quota exhaustion. */
-export const FATAL_PATTERNS = [
-  'unauthorized',
-  'forbidden',
-  'invalid token',
-  'authentication failed',
-  'permission denied',
-  '401',
-  '403',
-  ...QUOTA_EXHAUSTION_PATTERNS,
-];
-
-/** Ambiguous fatal patterns that yield to concrete transient evidence. */
-const FALLBACK_FATAL_PATTERNS = ['auth error'];
-
-/**
- * Rate/concurrency pressure (429, provider overload) — a subset of TRANSIENT that
- * sheds load on a minutes-scale window, so it earns its own patient backoff policy
- * (see {@link getRetryDelayMs}) instead of the generic short exponential one (#2706).
- * Defined first so {@link TRANSIENT_PATTERNS} derives from it: a pattern can never
- * widen the rate-limit budget while classifyError treats it as non-transient.
- */
-export const RATE_LIMIT_PATTERNS = [
-  '429',
-  'rate limit',
-  'too many requests',
-  'overloaded', // Anthropic/Minimax overload message text
-  'at capacity', // Codex/OpenAI model-level saturation
-] as const;
-
-/** Transient error patterns - temporary issues that may resolve with retry */
-export const TRANSIENT_PATTERNS = [
-  'timeout',
-  'econnrefused',
-  'econnreset',
-  'etimedout',
-  ...RATE_LIMIT_PATTERNS,
-  '503',
-  '502',
-  '529', // Anthropic HTTP 529 = service overloaded
-  'network error',
-  'stream closed without yielding content', // empty provider stream (#2706): silent rejection or interruption, not a node defect
-  'socket hang up',
-  'exited with code',
-  'claude code crash',
-];
-
-/**
- * Check if error message matches any pattern in the list.
- */
-export function matchesPattern(message: string, patterns: string[]): boolean {
-  return patterns.some(pattern => message.includes(pattern));
-}
-
-/**
- * Classify an error to determine if it's transient (can retry) or fatal (should fail).
- * Decisive FATAL patterns take priority over TRANSIENT patterns to prevent an error
- * containing both (e.g. "unauthorized: process exited with code 1") from being retried.
- * Ambiguous provider wrapper text such as "auth error" is fatal only when no concrete
- * transient signal matches.
- */
-export function classifyError(error: Error): ErrorType {
-  const message = error.message.toLowerCase();
-
-  if (matchesPattern(message, FATAL_PATTERNS)) {
-    return 'FATAL';
-  }
-  if (matchesPattern(message, TRANSIENT_PATTERNS)) {
-    return 'TRANSIENT';
-  }
-  if (matchesPattern(message, FALLBACK_FATAL_PATTERNS)) {
-    return 'FATAL';
-  }
-  return 'UNKNOWN';
-}
+// ─── Retry Classification ────────────────────────────────────────────────────
 
 /** Retry budget for rate-limited failures, replacing the node's own maxRetries when one is seen. */
 export const RATE_LIMIT_MAX_RETRIES = 5;
 
 /** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
 export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
-
-export function isRateLimitError(error: string): boolean {
-  const message = error.toLowerCase();
-  return RATE_LIMIT_PATTERNS.some(pattern => message.includes(pattern));
-}
 
 /**
  * Delay before retry attempt N for a failed attempt of this retry class.
@@ -152,32 +61,11 @@ export function getRetryDelayMs(
   return baseDelayMs * Math.pow(2, attempt);
 }
 
-/** The failure kinds a provider error can have. Each one decides retry by itself. */
+/** How retry treats a failure; also the failure kinds a provider error can have. */
 export type RetryClass = Extract<
   NodeFailureKind,
   'fatal' | 'transient' | 'rate_limited' | 'unknown'
 >;
-
-/**
- * Failure kind of an untyped provider error, classified once from its text. This is the
- * fallback for providers that do not report a typed `ProviderFailure` yet; a typed failure
- * goes through {@link nodeFailureKindOf} instead.
- */
-export function providerFailureKind(error: Error): RetryClass {
-  const errorType = classifyError(error);
-  switch (errorType) {
-    case 'FATAL':
-      return 'fatal';
-    case 'TRANSIENT':
-      return isRateLimitError(error.message) ? 'rate_limited' : 'transient';
-    case 'UNKNOWN':
-      return 'unknown';
-    default: {
-      const exhaustive: never = errorType;
-      return exhaustive;
-    }
-  }
-}
 
 /** The node failure kind a provider's typed failure class maps to. */
 export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
@@ -199,24 +87,37 @@ export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
 }
 
 /**
- * How retry treats a failed attempt. A provider-error kind recorded at the failure site is
- * the answer. Engine-detected kinds (timeout, exec_failed, config and the rest) and records
- * without a kind still classify their error text, as they did before provider failures were
- * typed: giving each engine kind its own retry rule is a separate decision.
+ * The retry class of every failure kind. Retry reads only the kind recorded where the
+ * failure happened, never the error text: for an exec node that text is the script's own
+ * output, so matching it would let whatever a script prints decide whether it re-runs.
  */
-export function retryClassOf(failure: {
-  failureKind?: NodeFailureKind;
-  error: string;
-}): RetryClass {
-  switch (failure.failureKind) {
-    case 'fatal':
-    case 'transient':
-    case 'rate_limited':
-    case 'unknown':
-      return failure.failureKind;
-    default:
-      return providerFailureKind(new Error(failure.error));
-  }
+const RETRY_CLASS = {
+  fatal: 'fatal',
+  transient: 'transient',
+  rate_limited: 'rate_limited',
+  unknown: 'unknown',
+  // A silent provider stream or a hung subprocess; a fresh attempt is the remedy. Each
+  // retry of a hung AI node can wait another full idle_timeout.
+  timeout: 'transient',
+  // A script's exit is no evidence a re-run helps; `on_error: all` opts in.
+  exec_failed: 'unknown',
+  // A fresh AI attempt can produce valid output under `on_error: all`. An exec contract
+  // failure is never retried: it records `retryable: false`.
+  output_contract: 'unknown',
+  // `fatal` is the class retry never re-runs, even under `on_error: all`.
+  config: 'fatal',
+  cancelled: 'fatal',
+  // Loop and child failures never reach a retry decision; listed for totality.
+  max_iterations: 'unknown',
+  child_failed: 'unknown',
+} as const satisfies Record<NodeFailureKind, RetryClass>;
+
+/**
+ * How retry treats a failed attempt of this kind. A record without a kind (written before
+ * `failureKind` existed) is `unknown`: retried only under `on_error: all`.
+ */
+export function retryClassOf(kind: NodeFailureKind | undefined): RetryClass {
+  return RETRY_CLASS[kind ?? 'unknown'];
 }
 
 // ─── Subprocess Failure Formatting ───────────────────────────────────────────
@@ -339,58 +240,6 @@ export function formatSubprocessFailure(
       stdoutTail,
     },
   };
-}
-
-// ─── Credit/Limit Exhaustion Detection ──────────────────────────────────────
-
-/** Patterns that indicate a subscription session limit in streamed assistant output */
-const SESSION_LIMIT_OUTPUT_PATTERNS = [
-  'hit your session limit',
-  'session limit reached',
-  'session limit has been reached',
-];
-
-/** Patterns that indicate pay-per-token credit exhaustion in streamed assistant output */
-const CREDIT_EXHAUSTION_OUTPUT_PATTERNS = [
-  "you're out of extra usage",
-  'out of credits',
-  'credit balance',
-  'insufficient credit',
-];
-
-/** Extract a reset-time clause from a session-limit message, e.g. "resets 3am (America/Mexico_City)". */
-function extractResetTime(text: string): string | null {
-  const match = /resets\s+([^\n·.!]+)/i.exec(text);
-  return match ? match[1].trim() : null;
-}
-
-/**
- * Detect credit/session-limit exhaustion in streamed node output text.
- *
- * The Claude SDK surfaces both subscription session limits and pay-per-token
- * credit exhaustion as normal assistant text messages rather than thrown errors.
- * This function checks the accumulated output for known phrases and returns an
- * actionable error string, or null if no limit is detected.
- *
- * @returns null if no limit detected; a session-limit string (instructs user to
- * abandon and retry after reset) or a credit-exhaustion string (instructs user
- * to resume when credits refill).
- */
-export function detectCreditExhaustion(text: string): string | null {
-  const lower = text.toLowerCase();
-
-  if (SESSION_LIMIT_OUTPUT_PATTERNS.some(p => lower.includes(p))) {
-    const resetTime = extractResetTime(text);
-    return resetTime
-      ? `Claude session limit reached — resets ${resetTime}. Abandon this run and retry after reset.`
-      : 'Claude session limit reached — abandon this run and retry when the session resets.';
-  }
-
-  if (CREDIT_EXHAUSTION_OUTPUT_PATTERNS.some(p => lower.includes(p))) {
-    return 'Credit exhaustion detected — resume when credits reset';
-  }
-
-  return null;
 }
 
 // ─── Command Loading ─────────────────────────────────────────────────────────
@@ -987,73 +836,35 @@ export interface SendMessageContext {
   nodeName?: string;
 }
 
-/** Threshold for consecutive UNKNOWN errors before aborting */
-const UNKNOWN_ERROR_THRESHOLD = 3;
-
-/** Mutable counter for tracking consecutive unknown errors across calls */
-export interface UnknownErrorTracker {
-  count: number;
-}
-
 /**
- * Safely send a message to the platform without crashing on failure.
- * Returns true if message was sent successfully, false otherwise.
- * Only suppresses transient/unknown errors; fatal errors are rethrown.
- * When unknownErrorTracker is provided, consecutive UNKNOWN errors are tracked
- * and the workflow is aborted after UNKNOWN_ERROR_THRESHOLD consecutive failures.
+ * Send a message to the platform without failing the run when the send fails.
+ * Returns true if the message was sent, false otherwise. A send failure is logged and
+ * suppressed whatever it says: no adapter reports a typed send failure, and the run's
+ * results persist whether or not the platform heard about them.
  */
 export async function safeSendMessage(
   platform: IWorkflowPlatform,
   conversationId: string,
   message: string,
   context?: SendMessageContext,
-  metadata?: WorkflowMessageMetadata,
-  unknownErrorTracker?: UnknownErrorTracker
+  metadata?: WorkflowMessageMetadata
 ): Promise<boolean> {
   try {
     await platform.sendMessage(conversationId, message, metadata);
-    if (unknownErrorTracker) unknownErrorTracker.count = 0;
     return true;
   } catch (error) {
     const err = error as Error;
-    const errorType = classifyError(err);
-
     getLog().error(
       {
         err,
         conversationId,
         messageLength: message.length,
-        errorType,
         platformType: platform.getPlatformType(),
         ...context,
         stack: err.stack,
       },
       'platform_message_send_failed'
     );
-
-    // Reset tracker on any non-UNKNOWN outcome — only *consecutive* UNKNOWN
-    // errors should trip the threshold (e.g. UNKNOWN→TRANSIENT→UNKNOWN→UNKNOWN
-    // is two separate runs, not three in a row).
-    if (unknownErrorTracker && errorType !== 'UNKNOWN') {
-      unknownErrorTracker.count = 0;
-    }
-
-    // Fatal errors should not be suppressed - they indicate configuration issues
-    if (errorType === 'FATAL') {
-      throw new Error(`Platform authentication/permission error: ${err.message}`);
-    }
-
-    // Track consecutive UNKNOWN errors - abort if threshold exceeded
-    if (errorType === 'UNKNOWN' && unknownErrorTracker) {
-      unknownErrorTracker.count++;
-      if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
-        throw new Error(
-          `${String(UNKNOWN_ERROR_THRESHOLD)} consecutive unrecognized errors - aborting workflow: ${err.message}`
-        );
-      }
-    }
-
-    // Transient errors (and below-threshold unknown errors) suppressed to allow workflow to continue
     return false;
   }
 }

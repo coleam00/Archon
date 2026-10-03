@@ -2351,21 +2351,6 @@ describe('PiProvider', () => {
     expect(violations).toEqual([]);
   });
 
-  test('pre-aborted signal triggers session.abort before any yielding', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-    const controller = new AbortController();
-    controller.abort();
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        abortSignal: controller.signal,
-      })
-    );
-    expect(mockAbort).toHaveBeenCalled();
-  });
-
   test('abort signal mid-stream calls session.abort', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const controller = new AbortController();
@@ -2681,6 +2666,67 @@ describe('PiProvider', () => {
     expect(result.chunks.at(-1)).toEqual({ type: 'settled' });
     expect(mockAbort).toHaveBeenCalledTimes(1);
     expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('two extension-enabled turns run at the same time', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    const extensionPath = '/extensions/fake-extension.ts';
+    mockGetExtensions.mockImplementation(
+      () =>
+        ({
+          extensions: [{ path: extensionPath, resolvedPath: extensionPath }],
+          errors: [],
+          runtime: mockLoaderRuntime,
+        }) as unknown as ReturnType<typeof mockGetExtensions>
+    );
+    let releaseFirst!: () => void;
+    mockPrompt.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          releaseFirst = resolve;
+        })
+    );
+    try {
+      const first = consume(
+        new PiProvider().sendQuery('first', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+      // The second turn must finish while the first is still mid-prompt.
+      const second = await Promise.race([
+        consume(
+          new PiProvider().sendQuery('second', '/tmp', undefined, {
+            model: 'google/gemini-2.5-pro',
+          })
+        ),
+        new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 500)),
+      ]);
+      releaseFirst();
+      await first;
+
+      expect(second).not.toBe('blocked');
+      expect(mockPrompt).toHaveBeenCalledTimes(2);
+    } finally {
+      mockGetExtensions.mockImplementation(() => ({
+        extensions: [],
+        errors: [],
+        runtime: mockLoaderRuntime,
+      }));
+    }
+  });
+
+  test('a caller that aborted before the session starts never creates one', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const result = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        abortSignal: AbortSignal.abort(),
+      })
+    );
+
+    expect(result.error?.message).toBe('Query aborted');
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
   });
 
   test('Pi structured extension errors fail the turn with the supplied stack', async () => {
@@ -3008,6 +3054,47 @@ describe('PiProvider', () => {
       c => c[1] === 'pi.semaphore_initialized'
     );
     expect(initCalls).toHaveLength(0);
+  });
+
+  test('a caller that aborts while waiting for a maxConcurrent slot disposes its session', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
+    const releases: (() => void)[] = [];
+    const holdSlot = (): Promise<void> =>
+      new Promise<void>(resolve => {
+        releases.push(resolve);
+      });
+    mockPrompt.mockImplementationOnce(holdSlot).mockImplementationOnce(holdSlot);
+    const options = { model: 'google/gemini-2.5-pro', assistantConfig: { maxConcurrent: 2 } };
+    const holders = [
+      consume(new PiProvider().sendQuery('one', '/tmp', undefined, options)),
+      consume(new PiProvider().sendQuery('two', '/tmp', undefined, options)),
+    ];
+    const acquiring = (): number =>
+      (mockLogger.debug.mock.calls as unknown[][]).filter(c => c[0] === 'pi.semaphore_acquiring')
+        .length;
+    const controller = new AbortController();
+    try {
+      while (releases.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
+      const waiter = consume(
+        new PiProvider().sendQuery('three', '/tmp', undefined, {
+          ...options,
+          abortSignal: controller.signal,
+        })
+      );
+      while (acquiring() < 3) await new Promise(resolve => setTimeout(resolve, 1));
+      controller.abort();
+      const result = await waiter;
+
+      expect(result.error).toBeDefined();
+      // Only the waiter's session is gone; both slot holders are still mid-prompt.
+      expect(mockDispose).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).toHaveBeenCalledTimes(2);
+    } finally {
+      for (const release of releases) release();
+      await Promise.all(holders);
+    }
   });
 
   test('settings: create(cwd) called, inMemory seeded with pre-merged global+project (empty project → just global)', async () => {

@@ -109,14 +109,14 @@ archon setup --spawn              # open in a new terminal window
 
 ### `doctor`
 
-Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, Codex binary resolution (env → config → vendor → autodetect, reporting which source resolved), gh CLI auth, Pi auth (when Pi is configured as default), OpenCode runtime SDK presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials (connected provider count, best-effort), and adapter token pings (Slack/Telegram, best-effort).
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, Codex binary resolution (env → config → vendor → autodetect, reporting which source resolved), gh CLI auth, Pi auth (when Pi is configured as default), OpenCode runtime SDK presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials connected in Archon, and adapter token pings (Slack/Telegram, best-effort).
 
 ```bash
 archon doctor
 archon doctor --full   # also probe the OpenCode runtime SDK even when it isn't the configured assistant
 ```
 
-The Codex check skips (never fails) when Codex isn't the configured assistant anywhere and no OpenAI credential is connected, so Claude-only users aren't nagged about a binary they'll never use. The OpenCode check only probes that the embedded runtime SDK module resolves — it never boots the runtime (which spawns a child process and binds a port) — and skips unless OpenCode is the configured assistant or `--full` is passed.
+The Codex check skips (never fails) when Codex isn't the configured assistant anywhere and no OpenAI credential is connected, so Claude-only users aren't nagged about a binary they'll never use. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The OpenCode check only probes that the embedded runtime SDK module resolves — it never boots the runtime (which spawns a child process and binds a port) — and skips unless OpenCode is the configured assistant or `--full` is passed.
 
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
@@ -517,6 +517,7 @@ List recent runs of **every** status (completed, failed, cancelled, running, pau
 ```bash
 archon workflow runs
 archon workflow runs --json
+archon workflow runs --json --verbose  # add per-node state and attention to each run
 archon workflow runs --status failed   # filter to one status
 archon workflow runs --limit 50        # cap rows (default 20)
 archon workflow runs --all             # list across all projects (ignore cwd scope)
@@ -528,6 +529,22 @@ The run-list JSON uses the same `active_nodes` contract as `workflow status`. Th
 fields are compatibility fields: `current_step_name` and `current_step_status` are populated only
 when exactly one node is active, and are `null` for zero or concurrent active nodes. `total_steps`
 is always `null` because lifecycle events do not own a truthful declared DAG total.
+
+`--json --verbose` adds two fields to every run, including `--open` rows:
+
+- `nodes`: every node the run declared, in declared order, followed by any node that ran
+  without being declared (a loop body such as `candidates.step`) in the order it first ran. A
+  declared node no event has reached is `{ "nodeId": "...", "state": "pending" }`; every other
+  entry has the same shape as the `nodes` array of `workflow status`/`get --json --verbose`. A
+  run with no recorded graph (it has not started executing, or an older Archon ran it) lists
+  only the nodes that ran.
+- `attention`: what the run needs from outside, if anything: `null`, or an object whose `kind`
+  is `terminal`, `awaiting_response` (an approval or response gate), `action_required` (a
+  `wait:` on attention), `blocked_on_child` (the child run is the one to inspect), or `unreadable`.
+  It is read from the run row alone.
+
+The node events for every listed run are read in one query, so the cost does not grow with
+one query per run.
 
 The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any directory. Short ids from `--all` rows belonging to *other* projects can't be resolved — use the full id from `--json` for those.
 

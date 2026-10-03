@@ -635,6 +635,120 @@
           "$ref": "#/$defs/ProviderSettled"
         }
       ]
+    },
+    "CredentialStatus": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "usable"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_connected"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "unusable"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "state",
+            "source",
+            "evidence"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "check_failed"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "state",
+            "source",
+            "evidence"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_checked"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "source"
+          ]
+        }
+      ]
     }
   }
 }

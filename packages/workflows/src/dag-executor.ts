@@ -39,6 +39,10 @@ import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -197,8 +201,6 @@ import {
   currentAdoptedRunDir,
   getRetryDelayMs,
   RATE_LIMIT_MAX_RETRIES,
-  providerFailureKind,
-  detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -950,10 +952,10 @@ function getExplicitNodeRetryConfig(
  * `undefined` when it does not.
  *
  * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
- * cannot drift. The class comes from {@link retryClassOf}: a provider failure is
- * decided by the kind recorded where it failed, never by its text. Fatal failures
- * (credentials, authorization, quota and spend windows) are never retried, even
- * when `on_error: all`; `unknown` is retried only under `on_error: all`.
+ * cannot drift. The class comes from {@link retryClassOf}: the kind recorded where
+ * the node failed decides, never its error text. Fatal failures (credentials, quota
+ * and spend windows, config errors, cancellation) are never retried, even when
+ * `on_error: all`; `unknown` is retried only under `on_error: all`.
  */
 function retryableFailureClass(
   output: NodeOutput,
@@ -964,10 +966,9 @@ function retryableFailureClass(
   // here too so `output.error` type-checks and the helper is safe standalone.
   if (output.state !== 'failed') return undefined;
   // A producer that diagnosed its own output (an exec contract failure, #2453) says so
-  // in the type; its error text quotes stdout, so classifying that text would let a
-  // transient-looking excerpt re-run a script whose stdout is deterministically wrong.
+  // in the type: its stdout is deterministically wrong, so no class re-runs it.
   if (output.retryable === false) return undefined;
-  const retryClass = retryClassOf(output);
+  const retryClass = retryClassOf(output.failureKind);
   if (retryClass === 'fatal') return undefined;
   if (retryClass === 'unknown' && onError !== 'all') return undefined;
   return retryClass;
@@ -1136,6 +1137,29 @@ async function snapshotCheckout(
 }
 
 /**
+ * Take a `mutates_checkout: false` node's pre-run snapshot and record it in its
+ * concurrent layer's snapshot set, so a sibling's violation can name it. Returns
+ * `undefined` for an undeclared node: nothing to assert.
+ */
+async function snapshotGuardedNode(
+  ctx: Pick<RunLayersContext, 'cwd' | 'guardedLayerSnapshots'>,
+  node: DagNode,
+  excludeDirs: readonly string[]
+): Promise<string | undefined> {
+  if (node.mutates_checkout !== false) return undefined;
+  ctx.guardedLayerSnapshots?.add(node.id);
+  return snapshotCheckout(ctx.cwd, excludeDirs);
+}
+
+/**
+ * A node whose `mutates_checkout: false` the engine enforces: exec and agent nodes.
+ * Every other node may write to the checkout as far as layer scheduling knows.
+ */
+function isCheckoutGuarded(node: DagNode): boolean {
+  return node.mutates_checkout === false && (isExecNode(node) || isAgentNode(node));
+}
+
+/**
  * Enforce a node's `mutates_checkout: false` declaration (#2771): when the node ran
  * successfully but the pre-run snapshot changed, rewrite its result to a failure that
  * names the node and lists what moved, and persist the standard `node_failed` event so
@@ -1151,7 +1175,8 @@ async function assertCheckoutUntouched(
   before: string | undefined,
   result: NodeExecutionResult,
   deps: WorkflowDeps,
-  logDir: string
+  logDir: string,
+  guardedLayerSnapshots: ReadonlySet<string> | undefined
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -1166,7 +1191,11 @@ async function assertCheckoutUntouched(
     .flatMap(porcelainPaths)
     .slice(0, 10)
     .join(', ');
-  const error = `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`;
+  const concurrentGuardedSiblings = [...(guardedLayerSnapshots ?? [])].filter(id => id !== node.id);
+  const error =
+    concurrentGuardedSiblings.length === 0
+      ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
+      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed; the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')} also ran in this parallel layer, so the change may not be this node's alone: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
   if (result.execution === undefined) {
     throw new Error(`Node '${node.id}' completed without its execution record`);
@@ -2650,15 +2679,6 @@ async function executeNodeInternal(
       await safeSendMessage(platform, conversationId, batchContent, nodeContext);
     }
 
-    // Detect credit exhaustion: SDK returns it as assistant text, not a thrown error.
-    const creditError = detectCreditExhaustion(nodeOutputText);
-
-    if (creditError) {
-      const duration = Date.now() - nodeStartTime;
-      getLog().warn({ nodeId: node.id, durationMs: duration }, 'dag.node_credit_exhausted');
-      return { state: 'failed', output: nodeOutputText, error: creditError, failureKind: 'fatal' };
-    }
-
     // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
     if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
       const duration = Date.now() - nodeStartTime;
@@ -2739,7 +2759,7 @@ async function executeNodeInternal(
       ? 'cancelled'
       : err instanceof NodeFailure
         ? err.kind
-        : providerFailureKind(err);
+        : 'unknown';
     const providerFailure =
       !cancelled && err instanceof NodeFailure ? err.providerFailure : undefined;
     return failAgentNode(failureMessage, failureKind, {
@@ -2861,36 +2881,6 @@ function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
   return error.killed === true && error.code === null;
 }
 
-const CREDENTIAL_ENV_KEY_SUFFIX = /(?:TOKEN|KEY|SECRET|PASSWORD)$/i;
-const CREDENTIAL_ENV_KEYS = new Set(['DATABASE_URL']);
-
-function collectSubprocessCredentialValues(
-  env: NodeJS.ProcessEnv,
-  protectedEnvKeys: readonly string[] | undefined,
-  protectedCredentialValues: readonly string[] | undefined
-): string[] {
-  const explicitlyProtected = new Set(protectedEnvKeys);
-  const values = Object.entries(env).flatMap(([key, value]) =>
-    value &&
-    (explicitlyProtected.has(key) ||
-      CREDENTIAL_ENV_KEYS.has(key) ||
-      CREDENTIAL_ENV_KEY_SUFFIX.test(key))
-      ? [value]
-      : []
-  );
-  return [...new Set([...values, ...(protectedCredentialValues ?? [])])]
-    .filter(value => value.length > 0)
-    .sort((a, b) => b.length - a.length);
-}
-
-function redactCredentialValues(input: string, credentialValues: readonly string[]): string {
-  let result = input;
-  for (const value of credentialValues) {
-    result = result.replaceAll(value, '[REDACTED]');
-  }
-  return result;
-}
-
 /**
  * Scrub credentials from every subprocess rejection field that can carry
  * subprocess text. The exact values come from the engine's injected-credential
@@ -2898,7 +2888,7 @@ function redactCredentialValues(input: string, credentialValues: readonly string
  * removed even when the failed process echoes them without their env key.
  *
  * Mutates in place rather than returning a fresh Error: callers classify the
- * rejection by reading `killed` (timeout) and `code`/`message` (ENOENT/EACCES) off
+ * rejection by reading `killed` (timeout) and `code` (ENOENT/EACCES) off
  * the original object, and a replacement would silently drop those and turn every
  * timeout into a generic failure.
  *
@@ -2970,7 +2960,7 @@ async function runSubprocess(
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
-  const credentialValues = collectSubprocessCredentialValues(
+  const credentialValues = collectCredentialValues(
     subprocessEnv,
     options.protectedEnvKeys,
     options.protectedCredentialValues
@@ -3192,15 +3182,21 @@ function providerReportedFailure(
   maxBudgetUsd: number | undefined,
   logContext: Record<string, unknown>
 ): NodeFailure {
-  if (failure.class === 'budget_exceeded') {
-    getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+  let message: string;
+  switch (failure.class) {
+    case 'budget_exceeded':
+      getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+      message = `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`;
+      break;
+    case 'misconfigured':
+      message = `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`;
+      break;
+    case 'quota_exhausted':
+      message = `${subject} failed: the provider's usage or credit limit is used up${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Resume the run once it reopens: ${failure.evidence}`;
+      break;
+    default:
+      message = `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   }
-  const message =
-    failure.class === 'budget_exceeded'
-      ? `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`
-      : failure.class === 'misconfigured'
-        ? `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`
-        : `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   return new NodeFailure(nodeFailureKindOf(failure), message, failure);
 }
 
@@ -3833,9 +3829,9 @@ async function executeScriptNode(
       errorMsg = err.message;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
-    } else if (err.message?.includes('ENOENT')) {
+    } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
-    } else if (err.message?.includes('EACCES')) {
+    } else if (execContext.kind === 'host' && err.code === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;
@@ -5068,7 +5064,7 @@ async function executeLoopGroupBody(
           state: 'failed',
           output: lastIterationOutput,
           failureKind: 'unknown',
-          error: `Loop-group gate message failed to deliver for node '${node.id}' — cannot pause safely`,
+          error: undeliveredGatePromptError('Loop-group gate', node.id),
         };
       }
       deps.store
@@ -5602,7 +5598,7 @@ async function executeLoopNode(
       failure: { failureKind: NodeFailureKind; error: string },
       attempt: number
     ): Promise<boolean> => {
-      const retryClass = retryClassOf(failure);
+      const retryClass = retryClassOf(failure.failureKind);
       if (retryClass === 'rate_limited') iterSawRateLimit = true;
       if (retryClass !== 'transient' && retryClass !== 'rate_limited') return false;
       const message = failure.error;
@@ -5983,8 +5979,7 @@ async function executeLoopNode(
             .catch((evtErr: Error) => {
               logEventStoreError(evtErr, i);
             });
-          const failureKind: NodeFailureKind =
-            err instanceof NodeFailure ? err.kind : providerFailureKind(err);
+          const failureKind: NodeFailureKind = err instanceof NodeFailure ? err.kind : 'unknown';
           if (await tryIterationTransientRetry({ failureKind, error: err.message }, iterRetry)) {
             continue iterationAttempt;
           }
@@ -6555,17 +6550,14 @@ async function executeLoopNode(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_node.gate_message_send_failed'
         );
-        return failLoopNode(
-          `Loop gate message failed to deliver for node '${node.id}' — cannot pause safely`,
-          {
-            failureKind: 'unknown',
-            output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-            loopIterations: i,
-            data: { iteration: i },
-          }
-        );
+        return failLoopNode(undeliveredGatePromptError('Loop gate', node.id), {
+          failureKind: 'unknown',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          data: { iteration: i },
+        });
       }
       deps.store
         .createWorkflowEvent({
@@ -6637,6 +6629,18 @@ async function executeLoopNode(
     loopIterations: loop.max_iterations,
     data: { maxIterations: loop.max_iterations },
   });
+}
+
+/**
+ * The failure of a gate whose prompt could not be delivered. The prompt is the only place
+ * a human learns how to resume, so a gate that cannot send it fails its node instead of
+ * pausing a run nobody was told about.
+ */
+function undeliveredGatePromptError(
+  gate: 'Approval' | 'Loop gate' | 'Loop-group gate',
+  nodeId: string
+): string {
+  return `${gate} message failed to deliver for node '${nodeId}' — cannot pause safely`;
 }
 
 /**
@@ -7103,7 +7107,24 @@ async function executeApprovalNode(
     `Run ID: \`${workflowRun.id}\`\n` +
     `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
     `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  await safeSendMessage(platform, conversationId, approvalMsg, msgContext);
+  if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
+    getLog().error(
+      { nodeId: node.id, workflowRunId: workflowRun.id },
+      'approval_node.gate_message_send_failed'
+    );
+    return recordNodeState(
+      { store: deps.store, logDir: ctx.logDir },
+      finishNodeExecution(
+        execution,
+        {
+          status: 'failed',
+          error: undeliveredGatePromptError('Approval', node.id),
+          failureKind: 'unknown',
+        },
+        { output: { text: '' }, diagnostics: { iteration } }
+      )
+    );
+  }
 
   deps.store
     .createWorkflowEvent({
@@ -9065,6 +9086,15 @@ interface RunLayersContext extends RunInputs, RunDerived {
   nodeInvocation?: NodeInvocation;
   /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
   currentExecution?: NodeExecutionRecord;
+  /**
+   * Ids of the nodes in this concurrent layer that have taken their
+   * `mutates_checkout: false` snapshot in this run, shared by the layer's nodes. A
+   * violation names the others as nodes that also ran in the layer; add-only, so a
+   * named node may have finished before the write. A node that was skipped or
+   * reused from a prior run never snapshots and is never named. Undefined when the
+   * layer runs sequentially. Set per layer; never inherited.
+   */
+  guardedLayerSnapshots?: Set<string>;
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
@@ -9304,19 +9334,25 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
       ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
     }
 
-    // Build a thunk per node so the layer can run either concurrently or, when any
-    // node guards its checkout, strictly sequentially: the `mutates_checkout: false`
-    // assertion snapshots before and asserts after a node's own execution, so a
-    // concurrent sibling's write landing inside that window would be falsely
-    // attributed to the guarded node. Serializing the whole layer keeps that window
-    // exclusive — including loop/loop_group/workflow siblings whose internal
-    // execution would otherwise overlap it.
+    // Build a thunk per node so the layer can run either concurrently or strictly
+    // sequentially. The `mutates_checkout: false` assertion snapshots before and
+    // asserts after a node's own execution, so when a guarded node shares the layer
+    // with any node that isn't checkout-guarded (including loop/loop_group/workflow
+    // siblings whose internal execution would overlap the window), that sibling's
+    // legitimate write would be blamed on the guarded node: such a mixed layer runs
+    // sequentially. A layer of guarded nodes only runs concurrently, since no node in
+    // it may write: the writer still sees its own write and fails, and a sibling
+    // whose window overlapped fails with it, its error naming the siblings.
+    const guardedCount = layer.filter(isCheckoutGuarded).length;
+    const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
+    const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
     const nodeThunks = layer.map(
       (node): (() => Promise<LayerNodeResult>) =>
         async (): Promise<LayerNodeResult> => {
           const ctx: RunLayersContext = {
             ...parentCtx,
             currentExecution: undefined,
+            guardedLayerSnapshots,
             nodeInvocation:
               parentCtx.unfinishedInvocations?.get(
                 nodeInvocationKey(parentCtx.stepNamePrefix + node.id, parentCtx.loopGroupPath)
@@ -9609,10 +9645,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.stateDir,
                     ctx.logDir
                   );
-                  const treeBefore =
-                    node.mutates_checkout === false
-                      ? await snapshotCheckout(ctx.cwd, excludes)
-                      : undefined;
+                  const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                   const output = await runDeterministicNodeWithRetry(
                     node,
                     ctx.platform,
@@ -9639,7 +9672,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       treeBefore,
                       output,
                       ctx.deps,
-                      ctx.logDir
+                      ctx.logDir,
+                      ctx.guardedLayerSnapshots
                     ),
                   };
                 }
@@ -9650,10 +9684,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.stateDir,
                   ctx.logDir
                 );
-                const treeBefore =
-                  node.mutates_checkout === false
-                    ? await snapshotCheckout(ctx.cwd, excludes)
-                    : undefined;
+                const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                 const output = await runDeterministicNodeWithRetry(
                   node,
                   ctx.platform,
@@ -9680,7 +9711,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     treeBefore,
                     output,
                     ctx.deps,
-                    ctx.logDir
+                    ctx.logDir,
+                    ctx.guardedLayerSnapshots
                   ),
                 };
               }
@@ -10055,10 +10087,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.stateDir,
               ctx.logDir
             );
-            const treeBefore =
-              node.mutates_checkout === false
-                ? await snapshotCheckout(ctx.cwd, checkoutExcludes)
-                : undefined;
+            const treeBefore = await snapshotGuardedNode(ctx, node, checkoutExcludes);
             const retriedOutput = await runNodeRetryLoop(
               node,
               ctx.platform,
@@ -10100,7 +10129,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               treeBefore,
               retriedOutput,
               ctx.deps,
-              ctx.logDir
+              ctx.logDir,
+              ctx.guardedLayerSnapshots
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
@@ -10234,9 +10264,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
           }
         }
     );
-    // A guarded node in the layer forces fully sequential execution (see the thunk
-    // comment above); an unguarded layer keeps the concurrent `allSettled` path.
-    const layerResults = layer.some(node => node.mutates_checkout === false)
+    // A layer mixing guarded and unguarded nodes runs sequentially (see the thunk
+    // comment above); every other layer keeps the concurrent `allSettled` path.
+    const layerResults = serializeLayer
       ? await settleSequentially(nodeThunks)
       : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
@@ -11442,8 +11472,8 @@ export async function executeDagWorkflow(
   try {
     await runLayers(runCtx);
   } catch (error) {
-    // runLayers guards almost everything, but a FATAL platform error can escape its
-    // allSettled rejection branch. Persist both durable facts before rethrowing that
+    // runLayers guards almost everything, but a failed durable write (terminal status or
+    // node event) escapes through its layer join. Persist both durable facts before rethrowing that
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
     // outcome write failure is secondary here: record it, but never let it mask the
     // execution error already in flight.

@@ -421,26 +421,7 @@ async function main(): Promise<number> {
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).
 
-    // Marketplace search doesn't need a git repo — handle before git validation
-    if (command === 'workflow' && subcommand === 'search') {
-      const query = positionals[2];
-      try {
-        const { workflowSearchCommand } = await loadRoute(() => import('./commands/workflow'));
-        await workflowSearchCommand(query, jsonFlag);
-      } catch (error) {
-        const err = error as Error;
-        if (jsonFlag) {
-          await writeJsonLine({ ok: false, error: err.message });
-        } else {
-          console.error(`Error: ${err.message}`);
-        }
-        return 1;
-      }
-      return 0;
-    }
-
-    // Fixture testing reads workflow files only — handle before git validation,
-    // like marketplace search above.
+    // Fixture testing reads workflow files only — handle before git validation.
     if (command === 'workflow' && subcommand === 'test') {
       const target = positionals[2];
       try {
@@ -647,7 +628,6 @@ async function main(): Promise<number> {
           workflowCleanupCommand,
           workflowResetSessionsCommand,
           workflowEventEmitCommand,
-          workflowInstallCommand,
           isValidEventType,
         } = await loadRoute(() => import('./commands/workflow'), {
           // `resume`, `approve`, `reject`, and `respond` all reach `workflowRunCommand`,
@@ -917,6 +897,7 @@ async function main(): Promise<number> {
               status: values.status as string | undefined,
               limit,
               open: values.open as boolean | undefined,
+              verbose: values.verbose as boolean | undefined,
             });
             break;
           }
@@ -1102,16 +1083,6 @@ async function main(): Promise<number> {
             break;
           }
 
-          case 'install': {
-            const installSlug = positionals[2];
-            if (!installSlug) {
-              return await fail(jsonFlag, 'Usage: archon workflow install <slug> [--force]');
-            }
-            const forceFlag = values.force as boolean | undefined;
-            await workflowInstallCommand(installSlug, effectiveCwd, forceFlag);
-            break;
-          }
-
           default: {
             const problem =
               subcommand === undefined
@@ -1119,7 +1090,7 @@ async function main(): Promise<number> {
                 : `Unknown workflow subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: list, run, status, get, wait, runs, resume, cancel, abandon, approve, reject, cleanup, event, search, install`
+              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, cleanup, reset-sessions, event`
             );
           }
         }

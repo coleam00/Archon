@@ -95,8 +95,9 @@ export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
 /**
  * Why a node failed, recorded where the failure is known rather than re-read from
  * `error` prose later. `fatal`/`transient`/`rate_limited`/`unknown` classify a provider
- * error and decide its retry; the rest name engine-detected causes. Absent on records
- * written before this field existed.
+ * error; the rest name engine-detected causes. Every kind maps to a retry class in
+ * `executor-shared.ts`. Absent on records written before this field existed; retry
+ * treats an absent kind as `unknown`.
  */
 export const nodeFailureKindSchema = z.enum([
   'fatal',

@@ -25,6 +25,7 @@ import {
   sealWorkflowRunConfig,
 } from '@archon/core/config';
 import {
+  NODE_STATE_EVENT_TYPES,
   WORKFLOW_EVENT_TYPES,
   isNodeStateEventType,
   type WorkflowEventType,
@@ -141,6 +142,7 @@ import {
   isScheduledWorkflowResume,
   readRunStopReason,
   skipCauseSchema,
+  runAttention,
   SUBRUN_METADATA_KEYS,
   CONTINUATION_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
@@ -148,8 +150,10 @@ import type {
   WorkflowRun,
   WorkflowRunStatus,
   ContinuationMode,
+  RunAttention,
   SkipCause,
 } from '@archon/workflows/schemas/workflow-run';
+import { RUN_GRAPH_METADATA_KEY, runGraphSchema } from '@archon/workflows/schemas/terminal-record';
 import {
   TERMINAL_WORKFLOW_STATUSES,
   isTerminalRunStatus,
@@ -3788,10 +3792,20 @@ function outputPreviewOf(rawOutput: unknown): string | undefined {
 }
 
 /**
+ * The event types `buildNodeSummaries` reads: every node-state record
+ * `readNodeRecordEvent` accepts, plus loop iterations for their session ids. A caller
+ * that fetches only these gets the same summaries as one that fetches the whole log.
+ */
+export const NODE_SUMMARY_EVENT_TYPES = [
+  ...NODE_STATE_EVENT_TYPES,
+  'loop_iteration_completed',
+] as const satisfies readonly WorkflowEventType[];
+
+/**
  * Derive per-node summaries from a run's workflow events.
  * Processes node_started / node_completed / node_failed / node_skipped /
  * node_skipped_prior_success events — the last two mean opposite things and are
- * handled separately.
+ * handled separately — and loop iterations' session ids.
  */
 export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
@@ -3918,6 +3932,53 @@ function listRunEvents(runId: string, rawEvents: boolean): Promise<WorkflowEvent
     : workflowEventsDb.listWorkflowEvents(runId, {
         excludeEventTypes: workflowEventsDb.PROVIDER_EVENT_ROW_TYPES,
       });
+}
+
+/** A node in the run's declared graph that no lifecycle event has reached yet. */
+export interface PendingNodeSummary {
+  nodeId: string;
+  state: 'pending';
+}
+
+export type RunNodeSummary = NodeSummary | PendingNodeSummary;
+
+/**
+ * Per-node state for `workflow runs --json --verbose`: every node the run declared in
+ * its `terminal_graph`, in declared order and `pending` until an event reaches it,
+ * folded with `buildNodeSummaries`. A node that ran but is not declared (a loop body
+ * such as `candidates.step`) follows the declared ones in first-event order — the same
+ * ordering `buildTerminalRecord` gives finished runs. A run without a recorded graph
+ * reports only the nodes its events reached.
+ */
+export function buildRunNodes(
+  run: Pick<WorkflowRun, 'metadata'>,
+  events: WorkflowEventRow[]
+): RunNodeSummary[] {
+  const nodes = new Map<string, RunNodeSummary>();
+  const graph = runGraphSchema.safeParse(run.metadata[RUN_GRAPH_METADATA_KEY]);
+  if (graph.success)
+    for (const nodeId of graph.data.node_ids) nodes.set(nodeId, { nodeId, state: 'pending' });
+  for (const summary of buildNodeSummaries(events)) nodes.set(summary.nodeId, summary);
+  return [...nodes.values()];
+}
+
+/**
+ * `workflow runs --json --verbose` adds `nodes` and `attention` to each run. Node
+ * events for every listed run come from one query, filtered to the types
+ * `buildNodeSummaries` reads.
+ */
+async function withRunDetail<
+  Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
+>(runs: Run[]): Promise<(Run & { nodes: RunNodeSummary[]; attention: RunAttention | null })[]> {
+  const eventsByRun = await workflowEventsDb.listEventsForRuns(
+    runs.map(run => run.id),
+    NODE_SUMMARY_EVENT_TYPES
+  );
+  return runs.map(run => ({
+    ...run,
+    nodes: buildRunNodes(run, eventsByRun.get(run.id) ?? []),
+    attention: runAttention(run),
+  }));
 }
 
 /**
@@ -5009,10 +5070,18 @@ function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
  * way `workflow run` does, then lists that project's recent runs of every
  * status. `--all` drops the project scope (lists across all projects);
  * `--status` filters to one status; `--limit` caps the count (default 20).
+ * `--json --verbose` adds each run's `nodes` and `attention` (see `withRunDetail`).
  */
 export async function workflowRunsCommand(
   cwd: string,
-  opts: { json?: boolean; all?: boolean; status?: string; limit?: number; open?: boolean } = {}
+  opts: {
+    json?: boolean;
+    all?: boolean;
+    status?: string;
+    limit?: number;
+    open?: boolean;
+    verbose?: boolean;
+  } = {}
 ): Promise<void> {
   // Open-work inbox (#2747): terminal failed runs nothing has adopted or
   // superseded — the operator's "what ended with work on the table" query.
@@ -5039,7 +5108,11 @@ export async function workflowRunsCommand(
       limit: opts.limit ?? 20,
     });
     if (opts.json) {
-      await writeJsonLine({ runs, total: runs.length, scopeFallback: !opts.all && !codebase });
+      await writeJsonLine({
+        runs: opts.verbose ? await withRunDetail(runs) : runs,
+        total: runs.length,
+        scopeFallback: !opts.all && !codebase,
+      });
       return;
     }
     if (runs.length === 0) {
@@ -5115,7 +5188,13 @@ export async function workflowRunsCommand(
   const scopeFallback = !opts.all && !codebase;
 
   if (opts.json) {
-    await writeJsonLine({ ...result, scopeFallback });
+    if (!opts.verbose) {
+      await writeJsonLine({ ...result, scopeFallback });
+      return;
+    }
+    // An events-query failure propagates to the CLI's `{ok:false}` handler, as it does
+    // on the `--open` path: runs with silently empty `nodes` would read as unstarted.
+    await writeJsonLine({ ...result, runs: await withRunDetail(result.runs), scopeFallback });
     return;
   }
 
@@ -6088,338 +6167,4 @@ export async function workflowEventEmitCommand(
   // createWorkflowEvent is non-throwing (fire-and-forget) — the event may not
   // have been persisted if the DB was unavailable. Check server logs if missing.
   console.log(`Event submitted (best-effort): ${eventType} for run ${resolvedId}`);
-}
-
-// ─── Marketplace commands ────────────────────────────────────────────────────
-
-interface MarketplaceEntryJson {
-  slug: string;
-  name: string;
-  author: string;
-  description: string;
-  sourceUrl: string;
-  sha: string;
-  tags: string[];
-  archonVersionCompat: string;
-  featured?: boolean;
-}
-
-const DEFAULT_MARKETPLACE_URL = 'https://archon.diy/workflows.json';
-
-async function fetchMarketplace(): Promise<MarketplaceEntryJson[]> {
-  const url = process.env.ARCHON_MARKETPLACE_URL ?? DEFAULT_MARKETPLACE_URL;
-  let res: Response;
-  try {
-    res = await fetch(url);
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Cannot reach marketplace at ${url}: ${err.message}`);
-  }
-  if (!res.ok) {
-    throw new Error(`Marketplace fetch failed: HTTP ${String(res.status)} from ${url}`);
-  }
-  const raw: unknown = await res.json();
-  if (!Array.isArray(raw)) {
-    throw new Error('Unexpected marketplace response format (expected array)');
-  }
-  for (const item of raw) {
-    if (
-      typeof item !== 'object' ||
-      item === null ||
-      typeof (item as Record<string, unknown>).slug !== 'string' ||
-      typeof (item as Record<string, unknown>).sourceUrl !== 'string' ||
-      !Array.isArray((item as Record<string, unknown>).tags)
-    ) {
-      throw new Error('Marketplace response contains invalid entries');
-    }
-  }
-  return raw as MarketplaceEntryJson[];
-}
-
-export async function workflowSearchCommand(query?: string, json?: boolean): Promise<void> {
-  const entries = await fetchMarketplace();
-
-  const results = query
-    ? entries.filter(e => {
-        const q = query.toLowerCase();
-        return (
-          e.name.toLowerCase().includes(q) ||
-          e.author.toLowerCase().includes(q) ||
-          e.description.toLowerCase().includes(q) ||
-          e.tags.some(t => t.toLowerCase().includes(q))
-        );
-      })
-    : entries;
-
-  if (json) {
-    await writeJsonLine(results);
-    return;
-  }
-
-  if (results.length === 0) {
-    console.log(query ? `No workflows matching "${query}".` : 'Marketplace is empty.');
-    console.log('Browse at https://archon.diy/workflows/');
-    return;
-  }
-
-  console.log(
-    `\nWorkflow Marketplace${query ? ` — results for "${query}"` : ''} (${String(results.length)})\n`
-  );
-  for (const e of results) {
-    const tags = e.tags.join(', ');
-    const desc = e.description.length > 80 ? e.description.slice(0, 77) + '...' : e.description;
-    console.log(`  ${e.slug}`);
-    console.log(`    Name:   ${e.name}`);
-    console.log(`    Author: @${e.author}`);
-    console.log(`    Tags:   ${tags}`);
-    console.log(`    ${desc}`);
-    console.log('');
-  }
-  console.log('Install: archon workflow install <slug>');
-}
-
-/** Detect whether a sourceUrl points to a directory (tree URL) or a single file (blob URL). */
-function isDirectoryUrl(sourceUrl: string): boolean {
-  return sourceUrl.includes('/tree/');
-}
-
-/**
- * Validate that a path component from an external source is safe to use in a filesystem path.
- * Rejects names containing path separators, traversal sequences, or non-portable characters.
- */
-function isSafePathComponent(name: string): boolean {
-  return name !== '.' && name !== '..' && /^[a-zA-Z0-9._-]+$/.test(name);
-}
-
-/** Parse owner/repo and path from a GitHub blob or tree URL. */
-function parseGitHubUrl(sourceUrl: string): { owner: string; repo: string; path: string } {
-  // https://github.com/owner/repo/blob/ref/path or https://github.com/owner/repo/tree/ref/path
-  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(blob|tree)\/[^/]+\/(.+)$/.exec(
-    sourceUrl
-  );
-  if (!match) {
-    throw new Error(`Cannot parse GitHub URL: ${sourceUrl}`);
-  }
-  return { owner: match[1], repo: match[2], path: match[4] };
-}
-
-interface GitHubContentItem {
-  name: string;
-  type: 'file' | 'dir';
-  download_url: string | null;
-  path: string;
-}
-
-/** Fetch directory listing from GitHub Contents API at a pinned SHA. */
-async function fetchGitHubDirectory(
-  owner: string,
-  repo: string,
-  path: string,
-  sha: string
-): Promise<GitHubContentItem[]> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${sha}`;
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: { Accept: 'application/vnd.github.v3+json' } });
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Cannot reach GitHub API: ${err.message}`);
-  }
-  if (!res.ok) {
-    throw new Error(`GitHub API error: HTTP ${String(res.status)} from ${url}`);
-  }
-  const data: unknown = await res.json();
-  if (!Array.isArray(data)) {
-    throw new Error(`Expected directory listing from ${url}, got a single file`);
-  }
-  return data as GitHubContentItem[];
-}
-
-/** Download a file from raw.githubusercontent.com at a pinned SHA. */
-async function downloadRawFile(
-  owner: string,
-  repo: string,
-  filePath: string,
-  sha: string
-): Promise<string> {
-  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${sha}/${filePath}`;
-  let res: Response;
-  try {
-    res = await fetch(rawUrl);
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Cannot fetch ${rawUrl}: ${err.message}`);
-  }
-  if (!res.ok) {
-    throw new Error(`Source fetch failed: HTTP ${String(res.status)} from ${rawUrl}`);
-  }
-  return res.text();
-}
-
-export async function workflowInstallCommand(
-  slug: string,
-  cwd: string,
-  force?: boolean
-): Promise<void> {
-  const entries = await fetchMarketplace();
-  const entry = entries.find(e => e.slug === slug);
-
-  if (!entry) {
-    console.error(`Error: Workflow '${slug}' not found in marketplace.`);
-    console.error("Run 'archon workflow search' to browse available workflows.");
-    throw new Error(`Workflow '${slug}' not found`);
-  }
-
-  if (!entry.sourceUrl.startsWith('https://github.com/')) {
-    throw new Error(
-      `Untrusted source URL for '${slug}': ${entry.sourceUrl}\nOnly github.com sources are permitted.`
-    );
-  }
-
-  if (!/^[a-z0-9-]+$/.test(slug)) {
-    throw new Error(`Invalid slug '${slug}': must be lowercase alphanumeric with hyphens only.`);
-  }
-
-  const { findRepoRoot } = await import('@archon/git');
-  const repoRoot = await findRepoRoot(cwd);
-  if (!repoRoot) {
-    throw new Error('Not in a git repository. Run archon workflow install from within a git repo.');
-  }
-
-  const { existsSync, mkdirSync, writeFileSync } = await import('node:fs');
-  const archonDir = join(repoRoot, '.archon');
-
-  if (isDirectoryUrl(entry.sourceUrl)) {
-    await installDirectory(entry, slug, archonDir, force, existsSync, mkdirSync, writeFileSync);
-  } else {
-    await installSingleFile(entry, slug, archonDir, force, existsSync, mkdirSync, writeFileSync);
-  }
-
-  console.log(`Run with: archon workflow run ${slug} "<message>"`);
-}
-
-async function installSingleFile(
-  entry: MarketplaceEntryJson,
-  slug: string,
-  archonDir: string,
-  force: boolean | undefined,
-  existsSync: (p: string) => boolean,
-  mkdirSync: (p: string, opts: { recursive: boolean }) => void,
-  writeFileSync: (p: string, data: string) => void
-): Promise<void> {
-  const { owner, repo, path } = parseGitHubUrl(entry.sourceUrl);
-  const content = await downloadRawFile(owner, repo, path, entry.sha);
-
-  if (!content.trim()) {
-    throw new Error(`Downloaded YAML is empty for '${slug}'`);
-  }
-
-  const workflowsDir = join(archonDir, 'workflows');
-  const destPath = join(workflowsDir, `${slug}.yaml`);
-
-  if (existsSync(destPath) && !force) {
-    throw new Error(`Workflow '${slug}' already exists at ${destPath}.\nUse --force to overwrite.`);
-  }
-
-  mkdirSync(workflowsDir, { recursive: true });
-  writeFileSync(destPath, content);
-  console.log(`Installed '${entry.name}' to ${destPath}`);
-}
-
-async function installDirectory(
-  entry: MarketplaceEntryJson,
-  slug: string,
-  archonDir: string,
-  force: boolean | undefined,
-  existsSync: (p: string) => boolean,
-  mkdirSync: (p: string, opts: { recursive: boolean }) => void,
-  writeFileSync: (p: string, data: string) => void
-): Promise<void> {
-  const { owner, repo, path } = parseGitHubUrl(entry.sourceUrl);
-  const items = await fetchGitHubDirectory(owner, repo, path, entry.sha);
-
-  // Identify the main workflow YAML (named <slug>.yaml or the only .yaml in root)
-  const yamlFiles = items.filter(f => f.type === 'file' && f.name.endsWith('.yaml'));
-  const mainYaml =
-    yamlFiles.find(f => f.name === `${slug}.yaml`) ??
-    (yamlFiles.length === 1 ? yamlFiles[0] : undefined);
-
-  if (!mainYaml) {
-    throw new Error(
-      `Cannot identify main workflow YAML in directory. Expected '${slug}.yaml' or a single .yaml file.`
-    );
-  }
-
-  const workflowsDir = join(archonDir, 'workflows');
-  const destWorkflow = join(workflowsDir, `${slug}.yaml`);
-
-  if (existsSync(destWorkflow) && !force) {
-    throw new Error(
-      `Workflow '${slug}' already exists at ${destWorkflow}.\nUse --force to overwrite.`
-    );
-  }
-
-  // Install the main workflow YAML
-  const mainContent = await downloadRawFile(owner, repo, mainYaml.path, entry.sha);
-  mkdirSync(workflowsDir, { recursive: true });
-  writeFileSync(destWorkflow, mainContent);
-  console.log(`  Workflow: ${destWorkflow}`);
-
-  // Install supporting files by convention
-  const subdirs = items.filter(f => f.type === 'dir');
-  let installedCount = 1;
-
-  for (const subdir of subdirs) {
-    if (!isSafePathComponent(subdir.name)) {
-      console.log(`  Skipped (unsafe directory name): ${subdir.name}`);
-      continue;
-    }
-
-    const subItems = await fetchGitHubDirectory(owner, repo, subdir.path, entry.sha);
-    const files = subItems.filter(f => f.type === 'file');
-
-    let targetDir: string;
-    if (subdir.name === 'commands') {
-      targetDir = join(archonDir, 'commands');
-    } else if (subdir.name === 'scripts') {
-      targetDir = join(archonDir, 'scripts');
-    } else {
-      // Other subdirs (e.g. skills) go under .archon/<dirname>
-      targetDir = join(archonDir, subdir.name);
-    }
-
-    mkdirSync(targetDir, { recursive: true });
-
-    for (const file of files) {
-      if (!isSafePathComponent(file.name)) {
-        console.log(`  Skipped (unsafe filename): ${file.name}`);
-        continue;
-      }
-      const destFile = join(targetDir, file.name);
-      if (existsSync(destFile) && !force) {
-        console.log(`  Skipped (exists): ${destFile}`);
-        continue;
-      }
-      const content = await downloadRawFile(owner, repo, file.path, entry.sha);
-      writeFileSync(destFile, content);
-      console.log(`  Installed: ${destFile}`);
-      installedCount++;
-    }
-  }
-
-  // Also install any other root-level non-YAML files (e.g. README)
-  const otherRootFiles = items.filter(f => f.type === 'file' && !f.name.endsWith('.yaml'));
-  for (const file of otherRootFiles) {
-    if (!isSafePathComponent(file.name)) {
-      console.log(`  Skipped (unsafe filename): ${file.name}`);
-      continue;
-    }
-    const destFile = join(workflowsDir, file.name);
-    if (existsSync(destFile) && !force) continue;
-    const content = await downloadRawFile(owner, repo, file.path, entry.sha);
-    writeFileSync(destFile, content);
-    installedCount++;
-  }
-
-  console.log(`Installed '${entry.name}' (${String(installedCount)} files)`);
 }

@@ -109,11 +109,9 @@ describe('classifyAndFormatError', () => {
       );
     });
 
-    test('drops the follow-on sentence from the workflow session-limit FATAL shape (#2181)', () => {
+    test('drops a follow-on sentence after the reset clause', () => {
       const result = classifyAndFormatError(
-        new Error(
-          'Claude session limit reached — resets 3:20pm (UTC). Abandon this run and retry after reset.'
-        )
+        new Error('usage limit hit — resets 3:20pm (UTC). Try again later.')
       );
       expect(result).toBe(
         '⚠️ AI usage limit reached (resets 3:20pm (UTC)). Please wait and try again.'

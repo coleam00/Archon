@@ -19,7 +19,7 @@ Set these in your shell or `.env` file:
 | `CLAUDE_CODE_OAUTH_TOKEN` | No | OAuth token from `claude setup-token` (alternative to global auth) |
 | `CLAUDE_API_KEY` | No | Anthropic API key for pay-per-use (alternative to global auth) |
 | `CODEX_BIN_PATH` | No | Absolute path to the Codex CLI binary. Overrides auto-detection in compiled Archon builds. |
-| `CODEX_ACCESS_TOKEN` | Yes (for Codex) | Codex access token (see [AI Assistants](/getting-started/ai-assistants/)) |
+| `ARCHON_CODEX_ACCESS_TOKEN` | Yes (for Codex) | Codex access token (see [AI Assistants](/getting-started/ai-assistants/)) |
 | `DATABASE_URL` | No | PostgreSQL connection string (default: SQLite) |
 | `GH_TOKEN` | No | GitHub personal access token — used to authenticate when cloning private GitHub repos |
 | `GITLAB_TOKEN` | No | GitLab personal/project access token — used to authenticate when cloning private GitLab repos (also used by the GitLab adapter) |

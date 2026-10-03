@@ -143,9 +143,9 @@ All nodes share these base fields:
 | `idle_timeout` | No | number | Per-node idle timeout in milliseconds (default: 5 minutes) |
 | `retry` | No | object | Retry configuration for transient failures (see Retry Options). **Hard error on loop nodes** |
 | `hooks` | No | object | SDK hook callbacks (Claude only; see Hook Schema) |
-| `mcp` | No | string | Path to MCP server config JSON file (Claude only) |
+| `mcp` | No | string | Path to MCP server config JSON file (Claude, Codex and Copilot; other providers fail the run) |
 | `skills` | No | string[] | Declared skill names for this node; Claude omission/`[]` selects none |
-| `plugins` | No | string[] | Plugin ids (`name@marketplace`) this node loads; omission/`[]` loads none. Claude only; other providers fail the run |
+| `plugins` | No | string[] | Plugin ids (`name@marketplace`) this node loads; omission/`[]` loads none. Claude and Codex; other providers fail the run |
 | `agents` | No | object | Inline sub-agent definitions keyed by kebab-case ID. Claude only |
 
 **Script-specific fields** (required when `script:` is set):
@@ -262,9 +262,9 @@ Defined under `retry:` inside a node:
 |-------|----------|---------|-------------|
 | `max_attempts` | Yes | — | Retry attempts after the initial failure (max: 5) |
 | `delay_ms` | No | 3000 | Initial delay in milliseconds; doubles each attempt (1000-60000) |
-| `on_error` | No | `transient` | `transient` retries rate limits/network errors; `all` retries everything except fatal errors |
+| `on_error` | No | `transient` | `transient` retries transient and rate-limited failures and timeouts; `all` retries everything except fatal errors |
 
-> **Fatal errors are never retried**: auth failures, permission errors, exhausted credit balances, and configuration errors (a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config.
+> **Fatal errors are never retried**: auth failures, exhausted credit balances, cancellation, and configuration errors (a missing command file, a missing or too-old CLI, a bad proxy URL, an unknown model, an unreadable MCP config file) fail immediately regardless of retry config. Retry follows the kind of failure Archon recorded, never the error message.
 
 ---
 
