@@ -19,6 +19,7 @@ import {
 function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => undefined): {
   spawner: Spawner;
   child: ChildProcessWithoutNullStreams;
+  stdout: PassThrough;
   stderr: PassThrough;
   sent: () => Record<string, unknown>[];
   reply: (frame: object) => void;
@@ -48,6 +49,7 @@ function rawChild(onKill: (child: EventEmitter, signal: string) => void = () => 
       return child;
     }) as Spawner,
     child,
+    stdout,
     stderr,
     sent: () =>
       written
@@ -84,6 +86,18 @@ describe('AppServerConnection', () => {
 
     fake.reply({ id: 2, result: 'second' });
     fake.reply({ id: 1, result: 'first' });
+    expect(await first).toBe('first');
+    expect(await second).toBe('second');
+  });
+
+  test('frames split across reads, or sharing one, are each read whole', async () => {
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], {}, fake.spawner);
+    const first = connection.request('thread/start', {});
+    const second = connection.request('account/read', {});
+    fake.stdout.write('{"id":1,"result":"fi');
+    await tick();
+    fake.stdout.write('rst"}\n{"id":2,"result":"second"}\n');
     expect(await first).toBe('first');
     expect(await second).toBe('second');
   });

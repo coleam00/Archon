@@ -31,6 +31,7 @@ import {
   rateLimits,
   reasoning,
   tokenUsage,
+  turnCompleted,
   turnError,
   webSearch,
   type FakeTurnScript,
@@ -211,6 +212,31 @@ describe('CodexProvider', () => {
         excludeTurns: true,
       });
       expect(resultOf(chunks)).toMatchObject({ sessionId: 'existing-thread', resumed: true });
+    });
+
+    test('a resumed thread gets the same settings a new one would', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-resume-')));
+      await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));
+      const options: SendQueryOptions = {
+        model: 'gpt-request',
+        assistantConfig: { webSearchMode: 'live', additionalDirectories: ['/extra'] },
+        nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
+      };
+      const { provider, server } = providerWith();
+      for await (const _ of provider.sendQuery('p', dir, undefined, options)) {
+        // consume
+      }
+      const started = paramsOf(server, 'thread/start');
+      for await (const _ of provider.sendQuery('p', dir, 'existing-thread', options)) {
+        // consume
+      }
+      const { threadId, excludeTurns, ...resumed } = paramsOf(server, 'thread/resume') ?? {};
+      expect({ threadId, excludeTurns }).toEqual({
+        threadId: 'existing-thread',
+        excludeTurns: true,
+      });
+      expect(started).toBeDefined();
+      expect(resumed).toEqual(started ?? {});
     });
 
     test('a thread that cannot be resumed fails the turn with Codex’s words', async () => {
@@ -642,6 +668,31 @@ describe('CodexProvider', () => {
       expect(result.failure?.class).toBe('misconfigured');
       expect(result.failure?.evidence).toContain('exited (code 2)');
       expect(result.failure?.evidence).toContain("unexpected argument '--bogus'");
+    });
+
+    test('a process that exits mid-turn still reports the thread, so the next attempt can resume it', async () => {
+      const result = resultOf(await streamOf({ exitCode: 1 }));
+      expect(result.sessionId).toBe(THREAD_ID);
+    });
+
+    test('errors Codex recovered from leave a completed turn clean', async () => {
+      const chunks = await streamOf({
+        notifications: [errorNotification('Reconnecting... 1/5', true), agentMessage('done')],
+      });
+      expect(resultOf(chunks)).toEqual({ type: 'result', sessionId: THREAD_ID });
+    });
+
+    test('a replayed completion of an earlier turn does not end this one', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          turnCompleted('failed', turnError('other', 'earlier failure'), 'earlier-turn'),
+          agentMessage('done'),
+        ],
+      });
+      expect(chunks).toEqual([
+        { type: 'agent_message_chunk', text: 'done' },
+        { type: 'result', sessionId: THREAD_ID },
+      ]);
     });
 
     test('a turn interrupted by someone other than Archon is unknown', async () => {
