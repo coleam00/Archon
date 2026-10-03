@@ -11,6 +11,7 @@ import { createLogger } from '@archon/paths';
 // Type-only import — erased by TS, so it does NOT trigger Pi's config.js
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
+import type { ModelsErrorCode } from '@earendil-works/pi-ai';
 import type {
   DefaultResourceLoader,
   ExtensionError,
@@ -316,28 +317,49 @@ function resolvePiModel(
   return parsed;
 }
 
-export async function resolvePiAuthStatus(
+/**
+ * Whether `error` is pi-ai's `ModelsError` with `code`. Matched on its `name` and `code`
+ * tokens, not `instanceof`: the coding agent can load its own copy of pi-ai (the install
+ * resolves one per peer set), and an error from that copy is not an instance of ours.
+ */
+function isPiModelsError(error: unknown, code: ModelsErrorCode): boolean {
+  return (
+    error instanceof Error &&
+    error.name === 'ModelsError' &&
+    (error as Error & { code?: unknown }).code === code
+  );
+}
+
+/**
+ * Pi's own credential for `providerId`, resolved the way a turn resolves it. `checkAuth`
+ * says whether a credential is configured; `getAuth` then resolves it, which refreshes an
+ * OAuth grant and runs a command-backed key. `checkAuth` alone reports a models.json key
+ * command as configured without running it, so a failing command would pass the check.
+ * `apiKey` is the resolved key, for a turn that needs to inspect it.
+ */
+export async function resolvePiAuth(
   runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth'>,
   providerId: string,
-  mapped: boolean,
   signal?: AbortSignal
-): Promise<CredentialStatus> {
-  const piAi = await import('@earendil-works/pi-ai');
+): Promise<{ status: CredentialStatus; apiKey?: string }> {
+  // Without an Archon env mapping the provider may be a local one that needs no credential.
+  const missing: CredentialStatus = {
+    state: PI_PROVIDER_ENV_VARS[providerId] ? 'not_connected' : 'not_checked',
+    source: 'native',
+  };
   try {
     signal?.throwIfAborted();
-    const auth = await runtime.checkAuth(providerId, { signal });
-    if (!auth) return { state: mapped ? 'not_connected' : 'not_checked', source: 'native' };
-    if (auth.type === 'oauth') {
-      const resolution = await runtime.getAuth(providerId, { signal });
-      if (!resolution) return { state: 'not_connected', source: 'native' };
-    }
-    return { state: 'usable', source: 'native' };
+    if (!(await runtime.checkAuth(providerId, { signal }))) return { status: missing };
+    const resolution = await runtime.getAuth(providerId, { signal });
+    if (!resolution) return { status: { state: 'not_connected', source: 'native' } };
+    return { status: { state: 'usable', source: 'native' }, apiKey: resolution.auth.apiKey };
   } catch (error) {
     return {
-      state:
-        error instanceof piAi.ModelsError && error.code === 'auth' ? 'unusable' : 'check_failed',
-      source: 'native',
-      evidence: error instanceof Error ? error.message : String(error),
+      status: {
+        state: isPiModelsError(error, 'auth') ? 'unusable' : 'check_failed',
+        source: 'native',
+        evidence: error instanceof Error ? error.message : String(error),
+      },
     };
   }
 }
@@ -433,12 +455,7 @@ export class PiProvider implements IAgentProvider {
         refreshOnCreate: false,
       });
       await applyPiEnvOverride(runtime, parsed.provider, env);
-      const status = await resolvePiAuthStatus(
-        runtime,
-        parsed.provider,
-        Boolean(PI_PROVIDER_ENV_VARS[parsed.provider]),
-        signal
-      );
+      const { status } = await resolvePiAuth(runtime, parsed.provider, signal);
       return 'evidence' in status
         ? {
             ...status,
@@ -627,10 +644,9 @@ export class PiProvider implements IAgentProvider {
     });
     let resolvedKey: string | undefined;
     if (model || parsed.provider === 'anthropic') {
-      const authStatus = await resolvePiAuthStatus(
+      const { status: authStatus, apiKey } = await resolvePiAuth(
         modelRuntime,
         parsed.provider,
-        Boolean(envVarName),
         requestOptions?.abortSignal
       );
       switch (authStatus.state) {
@@ -653,11 +669,7 @@ export class PiProvider implements IAgentProvider {
           getLog().info({ piProvider: parsed.provider }, 'pi.auth_missing');
           break;
         case 'usable':
-          if (parsed.provider === 'anthropic') {
-            resolvedKey = (
-              await modelRuntime.getAuth(parsed.provider, { signal: requestOptions?.abortSignal })
-            )?.auth.apiKey;
-          }
+          resolvedKey = apiKey;
           break;
       }
     }

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
-import { PiProvider, resolvePiAuthStatus } from './provider';
+import { PiProvider, resolvePiAuth } from './provider';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { ModelsError } from '@earendil-works/pi-ai';
 
@@ -175,6 +175,23 @@ describe('Pi native credentials', () => {
     expect(existsSync(marker)).toBe(true);
     expect(readFileSync(marker, 'utf8')).toBe('ran');
   });
+  test('a failing models.json key command fails the check and the turn alike', async () => {
+    const marker = join(root, 'command-ran');
+    writeFileSync(
+      join(root, 'models.json'),
+      JSON.stringify({ providers: { anthropic: { apiKey: `!printf ran > '${marker}'; exit 1` } } })
+    );
+    expect(await check()).toMatchObject({ state: 'unusable', source: 'native' });
+    expect(readFileSync(marker, 'utf8')).toBe('ran');
+    const chunks = [];
+    for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
+      model: 'anthropic/claude-sonnet-4-6',
+    }))
+      chunks.push(chunk);
+    expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+      failure: { class: 'auth' },
+    });
+  });
   test('checks only the selected provider command-backed key', async () => {
     const selected = join(root, 'selected');
     const unrelated = join(root, 'unrelated');
@@ -195,10 +212,8 @@ describe('Pi native credentials', () => {
       new ModelsError('auth', 'fixture rejection')
     );
     try {
-      expect(await resolvePiAuthStatus(runtime, 'anthropic', true)).toEqual({
-        state: 'unusable',
-        source: 'native',
-        evidence: 'fixture rejection',
+      expect(await resolvePiAuth(runtime, 'anthropic')).toEqual({
+        status: { state: 'unusable', source: 'native', evidence: 'fixture rejection' },
       });
     } finally {
       auth.mockRestore();
