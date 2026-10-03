@@ -10,7 +10,7 @@
  * a merge that produced a different document fails the save instead of being written.
  */
 import { Document, isAlias, isMap, isNode, isScalar, isSeq, parseDocument, visit } from 'yaml';
-import type { Node } from 'yaml';
+import type { Alias, Node } from 'yaml';
 
 type Plain = Record<string, unknown>;
 
@@ -29,14 +29,24 @@ function itemId(value: unknown): string | undefined {
   return isPlainObject(value) && typeof value.id === 'string' ? value.id : undefined;
 }
 
+interface MergeState {
+  doc: Document;
+  /** The value each kept alias stands for, for settleAliases to write out if it must. */
+  aliasValues: Map<Alias, unknown>;
+}
+
 /** Merge `value` into `node` in place when the shapes match; return the node to keep. */
-function merge(doc: Document, node: unknown, value: unknown): Node {
+function merge(state: MergeState, node: unknown, value: unknown): Node {
+  const { doc } = state;
   // The definition arrives as JSON, so an alias comes back as a copy of its anchor's value. While
-  // the copy still equals the anchored node (already merged: anchors precede their aliases), the
-  // alias stays; once it differs, the alias is replaced by its own value.
+  // the copy still equals the anchored node, the alias stays; once it differs, the alias is
+  // replaced by its own value.
   if (isAlias(node)) {
     const target = node.resolve(doc);
-    if (target && Bun.deepEquals(target.toJS(doc), value)) return node;
+    if (target && Bun.deepEquals(target.toJS(doc), value)) {
+      state.aliasValues.set(node, value);
+      return node;
+    }
     return doc.createNode(value);
   }
 
@@ -59,7 +69,7 @@ function merge(doc: Document, node: unknown, value: unknown): Node {
     }
     for (const [key, child] of Object.entries(value)) {
       if (child === undefined) continue;
-      node.set(key, merge(doc, node.get(key, true), child));
+      node.set(key, merge(state, node.get(key, true), child));
     }
     return node;
   }
@@ -72,10 +82,15 @@ function merge(doc: Document, node: unknown, value: unknown): Node {
       if (typeof id === 'string') byId.set(id, item);
     }
     // DAG nodes are matched by id, so reordering or removing one keeps the others' comments.
+    // An old item is merged into once: a second item that maps to it (a duplicate id) is
+    // written as a new node, so the file says what was sent and validation can name the fault.
+    const claimed = new Set<unknown>();
     node.items = value.map((child, index) => {
       const id = itemId(child);
-      const previous = id !== undefined ? byId.get(id) : oldItems[index];
-      return merge(doc, previous, child);
+      const candidate = id !== undefined ? byId.get(id) : oldItems[index];
+      const previous = claimed.has(candidate) ? undefined : candidate;
+      claimed.add(candidate);
+      return merge(state, previous, child);
     });
     // The library attaches the comment above the first item to the sequence itself; when that
     // item moves, its comment goes with it.
@@ -96,25 +111,16 @@ function merge(doc: Document, node: unknown, value: unknown): Node {
 }
 
 /**
- * After a merge that reordered nodes, an alias can precede its anchor, which YAML forbids.
- * Such an alias is written out as the value it stood for.
+ * YAML requires an anchor above its aliases. After a merge that reordered nodes or removed the
+ * one holding the anchor, an alias no longer has it above; such an alias is written out as the
+ * value it stood for.
  */
-function settleAliases(doc: Document): void {
-  // Collected up front: Alias.resolve() only finds anchors above the alias.
-  const anchored = new Map<string, Node>();
-  visit(doc, {
-    Node(_key, node) {
-      if (node.anchor) anchored.set(node.anchor, node);
-      return undefined;
-    },
-  });
+function settleAliases({ doc, aliasValues }: MergeState): void {
   const anchorsSeen = new Set<string>();
   visit(doc, {
     Alias(_key, alias) {
       if (anchorsSeen.has(alias.source)) return undefined;
-      const target = anchored.get(alias.source);
-      // A kept alias always has a target: merge() replaces those whose anchor is gone.
-      return target ? doc.createNode(target.toJS(doc)) : undefined;
+      return doc.createNode(aliasValues.get(alias));
     },
     Node(_key, node) {
       if (node.anchor) anchorsSeen.add(node.anchor);
@@ -168,8 +174,9 @@ function render(definition: Record<string, unknown>, existingText: string | unde
     const doc: Document = parseDocument(existingText.replace(/\r\n/g, '\n'));
     if (doc.errors.length === 0 && isMap(doc.contents)) {
       if (Bun.deepEquals(doc.toJS(), definition)) return existingText;
-      doc.contents = merge(doc, doc.contents, definition);
-      settleAliases(doc);
+      const state: MergeState = { doc, aliasValues: new Map() };
+      doc.contents = merge(state, doc.contents, definition);
+      settleAliases(state);
       return doc.toString(TO_STRING).replace(/\n/g, eol);
     }
     // An unparseable file on disk has no text worth keeping; the save replaces it.

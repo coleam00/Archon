@@ -171,6 +171,69 @@ describe('serializeWorkflowPreservingText', () => {
     expect(text).toContain('&gate');
   });
 
+  test('an alias whose anchor node was removed is written out as its value', () => {
+    const anchored = [
+      'name: anchored',
+      'nodes:',
+      '  - id: a',
+      '    output_format: &gate',
+      '      type: object',
+      '  - id: b',
+      '    output_format: *gate',
+      '',
+    ].join('\n');
+    const text = serializeWorkflowPreservingText(
+      { name: 'anchored', nodes: [{ id: 'b', output_format: { type: 'object' } }] },
+      anchored
+    );
+    expect(text).toBe(
+      'name: anchored\nnodes:\n  - id: b\n    output_format:\n      type: object\n'
+    );
+  });
+
+  test('an alias moved above an anchor that also changed keeps its own value', () => {
+    const anchored = [
+      'name: anchored',
+      'nodes:',
+      '  - id: a',
+      '    output_format: &gate',
+      '      type: object',
+      '  - id: b',
+      '    output_format: *gate',
+      '',
+    ].join('\n');
+    const definition = {
+      name: 'anchored',
+      nodes: [
+        { id: 'b', output_format: { type: 'object' } },
+        { id: 'a', output_format: { type: 'string' } },
+      ],
+    };
+    const text = serializeWorkflowPreservingText(definition, anchored);
+    expect(Bun.YAML.parse(text)).toEqual(definition);
+  });
+
+  test('duplicate node ids are written as sent, not folded into one node', () => {
+    const definition = {
+      name: 'flow',
+      nodes: [
+        { id: 'a', command: 'first' },
+        { id: 'a', command: 'second' },
+      ],
+    };
+    const text = serializeWorkflowPreservingText(definition, authored);
+    expect(Bun.YAML.parse(text)).toEqual(definition);
+  });
+
+  test('a node without an id does not take over a node that another item matches by id', () => {
+    const definition = {
+      name: 'flow',
+      nodes: [{ command: 'anonymous' }, { id: 'a', command: 'a' }],
+    };
+    const text = serializeWorkflowPreservingText(definition, authored);
+    expect(Bun.YAML.parse(text)).toEqual(definition);
+  });
+
   test('a CRLF file stays CRLF and valid when its commented nodes are reordered', () => {
     const crlf = authored.replace(/\n/g, '\r\n');
     const definition = {
