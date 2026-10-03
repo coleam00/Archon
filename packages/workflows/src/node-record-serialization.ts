@@ -128,6 +128,21 @@ function outputFields(
   };
 }
 
+/**
+ * Whether this record's spend is its own, or a restatement of spend rows the same run
+ * already carries. `accounting` is the seam: a `loop_group` roll-up sums its body rows, a
+ * composed fan-out wrapper sums its instances, an instance terminal sums its own leaves,
+ * and an amendment re-states the attempt it amends. `serializeNodeStateRecord` marks every
+ * of them `aggregate: true` and the resume fold skips marked rows, so the durable row, the
+ * transcript and the emitter all report spend on the same terms — no row restates another's,
+ * and a reader summing what the rows report lands on the run total (#3508).
+ * `serializeNodeOutput` is deliberately not gated: the run total is fed by exactly one
+ * aggregation point, and the scope totals it reads are already this record's own.
+ */
+function reportsOwnSpend(record: NodeExecutionRecord): boolean {
+  return record.accounting === 'node';
+}
+
 export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {
   const identity = { workflow_run_id: record.runId, step_name: record.path };
   if ('cache' in record) {
@@ -213,7 +228,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
             },
           }
         : {}),
-      ...(accounting !== 'node' ? { aggregate: true } : {}),
+      ...(!reportsOwnSpend(record) ? { aggregate: true } : {}),
       ...(lifecycle.status === 'failed'
         ? {
             error: lifecycle.error,
@@ -327,10 +342,14 @@ export function serializeNodeTranscript(
   const lifecycle = record.lifecycle;
   const execution = executionMetadata(record);
   const base = { step: record.node.id, execution };
-  const usage = {
-    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-    ...(record.spend.costUsd.source === 'provider' ? { cost_usd: record.spend.costUsd.value } : {}),
-  };
+  const usage = reportsOwnSpend(record)
+    ? {
+        ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
+        ...(record.spend.costUsd.source === 'provider'
+          ? { cost_usd: record.spend.costUsd.value }
+          : {}),
+      }
+    : {};
   const content =
     record.node.kind === 'agent'
       ? record.node.source.kind === 'command'
@@ -396,7 +415,7 @@ export function serializeNodeEmitter(
         execution,
         type: 'node_completed',
         ...(record.timing.durationMs !== undefined ? { duration: record.timing.durationMs } : {}),
-        ...(record.spend.costUsd.source === 'provider'
+        ...(reportsOwnSpend(record) && record.spend.costUsd.source === 'provider'
           ? { costUsd: record.spend.costUsd.value }
           : {}),
         ...(record.spend.stopReason.source === 'provider'
