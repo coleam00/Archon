@@ -1,5 +1,6 @@
 import { createChildWorktreeResolver, createWorkflowDeps } from '@archon/core';
 import * as codebaseDb from '@archon/core/db/codebases';
+import * as conversationDb from '@archon/core/db/conversations';
 import * as workflowDb from '@archon/core/db/workflows';
 import { resumeWorkflow } from '@archon/core/operations';
 import { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
@@ -90,6 +91,33 @@ export function workflowResumeTargetForConversation(
           : {}),
     },
   };
+}
+
+export async function workflowResumeTargetForRun(
+  run: WorkflowRun,
+  platforms: ReadonlyMap<string, IWorkflowPlatform>
+): Promise<WorkflowResumeTarget> {
+  const conversation = await conversationDb.getConversationById(workflowResumeConversationId(run));
+  if (!conversation) {
+    return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
+  }
+  if (run.parent_conversation_id === null) {
+    return workflowResumeTargetForConversation(conversation, platforms);
+  }
+
+  const parent = await conversationDb.getConversationById(run.parent_conversation_id);
+  if (!parent?.platform_conversation_id) {
+    return { kind: 'unavailable', reason: 'parent conversation no longer exists' };
+  }
+  if (!conversation.platform_conversation_id) {
+    return { kind: 'unavailable', reason: 'worker conversation has no platform id' };
+  }
+  return workflowResumeTargetForConversation(
+    parent,
+    platforms,
+    conversation.platform_conversation_id,
+    parent.platform_conversation_id
+  );
 }
 
 /** Resume one persisted run through the same frozen-source path used by the API. */

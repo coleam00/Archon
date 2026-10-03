@@ -92,10 +92,10 @@ import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './route
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
 import {
+  resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
-  workflowResumeConversationId,
-  workflowResumeTargetForConversation,
+  workflowResumeTargetForRun,
 } from './services/workflow-resume-service';
 import {
   handleMessage,
@@ -123,7 +123,7 @@ import {
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
-import * as conversationDb from '@archon/core/db/conversations';
+import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
   createLogger,
@@ -407,6 +407,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const workflowBridge = new WorkflowEventBridge(transport);
   const webAdapter = new WebAdapter(transport, persistence, workflowBridge);
   await webAdapter.start();
+  const workflowPlatforms = new Map<string, IWorkflowPlatform>([
+    [webAdapter.getPlatformType(), webAdapter],
+  ]);
   persistence.startPeriodicFlush();
 
   // Stream workflow runs started in ANY process (incl. the `archon` CLI / `--detach`)
@@ -505,6 +508,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getUserToken,
       });
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub (App)');
       getLog().info(
         { slug: githubAppAuthProvider.slug, defaultInstallationId },
@@ -521,6 +525,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const auth: GitHubAuth = { kind: 'pat', token: patToken };
       github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub');
       getLog().info('github.adapter_mode_pat');
     } else {
@@ -539,6 +544,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         giteaBotMention
       );
       await gitea.start();
+      workflowPlatforms.set(gitea.getPlatformType(), gitea);
       activePlatforms.push('Gitea');
     } else {
       getLog().info('gitea_adapter_skipped');
@@ -556,6 +562,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         gitlabBotMention
       );
       await gitlab.start();
+      workflowPlatforms.set(gitlab.getPlatformType(), gitlab);
       activePlatforms.push('GitLab');
     } else {
       getLog().info('gitlab_adapter_skipped');
@@ -631,6 +638,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // unrelated bot misconfiguration. See #1365.
       try {
         await discord.start();
+        workflowPlatforms.set(discord.getPlatformType(), discord);
         activePlatforms.push('Discord');
       } catch (error) {
         const err = error as Error;
@@ -705,7 +713,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
       // refuses new event-handler registrations once the connection is open,
       // so `app.action(...)` calls inside the bridge must run first.
-      slackBridge = new SlackWorkflowBridge(slack);
+      workflowPlatforms.set(slack.getPlatformType(), slack);
+      slackBridge = new SlackWorkflowBridge(slack, async (runId, slackUserId) => {
+        const run = await workflowDb.getWorkflowRun(runId);
+        if (!run) return false;
+        const actorUserId = await resolveUserId('slack', slackUserId, undefined);
+        const target = await workflowResumeTargetForRun(run, workflowPlatforms);
+        return resumeWorkflowRunFromServer(run, actorUserId, target);
+      });
       slackBridge.attach();
 
       await slack.start();
@@ -1010,6 +1025,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     try {
       await telegramAdapter.start();
+      workflowPlatforms.set(telegramAdapter.getPlatformType(), telegramAdapter);
       activePlatforms.push('Telegram');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1024,34 +1040,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // adapter is initialized. Web background runs execute against a hidden worker
   // conversation but deliver to their visible parent; other runs use their owning
   // conversation directly.
-  const workflowPlatforms = new Map<string, IWorkflowPlatform>();
-  for (const platform of [webAdapter, github, gitea, gitlab, discord, slack, telegram]) {
-    if (platform !== null) workflowPlatforms.set(platform.getPlatformType(), platform);
-  }
-  startWorkflowContinuationScheduler(async run => {
-    const conversation = await conversationDb.getConversationById(
-      workflowResumeConversationId(run)
-    );
-    if (!conversation) {
-      return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
-    }
-    if (run.parent_conversation_id !== null) {
-      const parent = await conversationDb.getConversationById(run.parent_conversation_id);
-      if (!parent?.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'parent conversation no longer exists' };
-      }
-      if (!conversation.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'worker conversation has no platform id' };
-      }
-      return workflowResumeTargetForConversation(
-        parent,
-        workflowPlatforms,
-        conversation.platform_conversation_id,
-        parent.platform_conversation_id
-      );
-    }
-    return workflowResumeTargetForConversation(conversation, workflowPlatforms);
-  }, requestResourceStartDrain);
+  startWorkflowContinuationScheduler(
+    run => workflowResumeTargetForRun(run, workflowPlatforms),
+    requestResourceStartDrain
+  );
   if (resourceStartHostId)
     getLog().info({ hostId: resourceStartHostId }, 'resource_start_host_enabled');
 
