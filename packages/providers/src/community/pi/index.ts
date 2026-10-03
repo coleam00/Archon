@@ -14,7 +14,6 @@ export {
   claimPiExtensionProcessError,
   piExtensionFailureEvidence,
   type PiExtensionTurn,
-  type PiStructuredExtensionError,
 } from './extension-error-broker';
 export { listPiModels, type PiModelInfo } from './model-catalog';
 export { parsePiModelRef, type PiModelRef } from './model-ref';

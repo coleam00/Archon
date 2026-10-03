@@ -7,6 +7,7 @@ import type {
   AgentSessionEvent,
   CreateAgentSessionOptions,
   CreateAgentSessionResult,
+  ExtensionError,
   ModelRegistry,
 } from '@earendil-works/pi-coding-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
@@ -2694,16 +2695,7 @@ describe('PiProvider', () => {
     mockGetExtensions.mockImplementationOnce(loadedExtension);
     const extensionStack = `Error: extension handler failed\n    at handler (${extensionPath}:9:3)`;
     mockBindExtensions.mockImplementationOnce(async bindings => {
-      const onError = (
-        bindings as {
-          onError?: (error: {
-            extensionPath: string;
-            event: string;
-            error: string;
-            stack?: string;
-          }) => void;
-        }
-      ).onError;
+      const onError = (bindings as { onError?: (error: ExtensionError) => void }).onError;
       onError?.({
         extensionPath,
         event: 'session_start',

@@ -218,6 +218,7 @@ function createMessageErrorHandler(
  * queued telemetry flushes (bounded, so still Fail Fast).
  */
 export function handleUnhandledRejection(reason: unknown): void {
+  if (claimPiExtensionProcessError(reason)) return;
   const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
   // SDK cleanup race: PostToolUse hook writes to a closed pipe after a DAG node
   // abort. Safe to absorb — these are transient artifacts, not application bugs.
@@ -225,7 +226,6 @@ export function handleUnhandledRejection(reason: unknown): void {
     getLog().error({ reason }, 'unhandled_rejection.sdk_cleanup_race');
     return;
   }
-  if (claimPiExtensionProcessError(reason)) return;
   // All other unhandled rejections are unexpected — crash loudly so they are
   // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');

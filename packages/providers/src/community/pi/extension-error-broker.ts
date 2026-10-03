@@ -1,4 +1,5 @@
 import { createLogger } from '@archon/paths';
+import type { ExtensionError } from '@earendil-works/pi-coding-agent';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -25,17 +26,10 @@ class TurnGate {
   }
 }
 
-export interface PiStructuredExtensionError {
-  extensionPath: string;
-  event: string;
-  error: string;
-  stack?: string;
-}
-
 export interface PiExtensionTurn {
   onError(listener: (error: Error) => void): () => void;
   report(error: Error, extensionPath: string, evidence?: string): void;
-  reportStructured(error: PiStructuredExtensionError): void;
+  reportStructured(error: ExtensionError): void;
   throwIfFailed(): void;
   /** End process-error attribution before a successful terminal result becomes visible. */
   stopAccepting(): void;

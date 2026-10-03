@@ -6,7 +6,7 @@ import { createLogger } from '@archon/paths';
 // Type-only import — erased by TS, so it does NOT trigger Pi's config.js
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
-import type { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
+import type { DefaultResourceLoader, ExtensionError } from '@earendil-works/pi-coding-agent';
 
 import type {
   IAgentProvider,
@@ -23,11 +23,7 @@ import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
-import {
-  beginPiExtensionTurn,
-  piExtensionFailureEvidence,
-  type PiStructuredExtensionError,
-} from './extension-error-broker';
+import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-error-broker';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -962,7 +958,7 @@ export class PiProvider implements IAgentProvider {
       //     for LOOKUP-2: they call registerProvider() on our modelRegistry during session_start.
       const uiBridge = interactive ? createArchonUIBridge() : undefined;
       const onExtensionError = extensionTurn
-        ? (error: PiStructuredExtensionError): void => {
+        ? (error: ExtensionError): void => {
             extensionTurn.reportStructured(error);
           }
         : undefined;

@@ -61,14 +61,17 @@ describe('exitAfterTelemetryFlush', () => {
     turn.onError(error => received.push(error));
     const rejection = new Error('extension rejection');
     rejection.stack = `Error: extension rejection\n    at callback (${extensionPath}:4:2)`;
+    const cleanupNamedRejection = new Error('Operation aborted');
+    cleanupNamedRejection.stack = `Error: Operation aborted\n    at callback (${extensionPath}:8:2)`;
     const exception = new Error('extension exception');
-    exception.stack = `Error: extension exception\n    at callback (${extensionPath}:8:2)`;
+    exception.stack = `Error: extension exception\n    at callback (${extensionPath}:12:2)`;
     try {
+      handleUnhandledRejection(cleanupNamedRejection);
       handleUnhandledRejection(rejection);
       handleUncaughtException(exception, 'uncaughtException');
       await Promise.resolve();
 
-      expect(received).toEqual([rejection]);
+      expect(received).toEqual([cleanupNamedRejection]);
       expect(exitSpy).not.toHaveBeenCalled();
       expect(order).toEqual([]);
     } finally {
