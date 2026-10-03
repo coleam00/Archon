@@ -16,12 +16,11 @@ import { markPrReady, viewPr } from '../../.shared/pr.ts';
 import { emit, note, refuse } from '../../.shared/io.ts';
 
 const boundPr = process.env.INPUTS_PR;
-const selected = process.env.ARCHON_SDLC_FORGE;
 
 function preflight(): QualifiedPr | undefined {
   try {
     const pr = parseQualifiedPr(boundPr);
-    const read = readPrChecks(pr, selected);
+    const read = readPrChecks(pr);
     const state = gateState(read.units);
     if (state !== 'green' && state !== 'none') {
       const notGreen = read.units.filter(unit => unit.state !== 'green');
@@ -40,7 +39,7 @@ function flipReady(): void {
   const pr = preflight();
   if (pr === undefined) return;
   try {
-    const source = forgeSource(selected);
+    const source = forgeSource();
     const observed = viewPr(pr, source).pr;
     if (observed.state === 'merged') {
       note('flip-ready: the PR was already merged, so no flip was needed.');
