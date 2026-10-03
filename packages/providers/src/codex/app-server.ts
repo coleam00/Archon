@@ -66,6 +66,23 @@ function describeEnd(end: ConnectionEnd): string {
     : `exited (${end.signal ? `signal ${end.signal}` : `code ${String(end.code)}`})`;
 }
 
+/** Whether `promise` settles within `ms`. A rejection counts as settled. */
+export async function settlesWithin(promise: Promise<unknown>, ms: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<false>(resolve => {
+    timer = setTimeout(() => {
+      resolve(false);
+    }, ms);
+  });
+  const settled = promise.then(
+    () => true as const,
+    () => true as const
+  );
+  const result = await Promise.race([settled, timeout]);
+  clearTimeout(timer);
+  return result;
+}
+
 /** The env key that holds PATH: `Path` on Windows when the parent spelled it so. */
 function pathKey(env: Record<string, string>): string {
   return Object.keys(env).find(key => key.toUpperCase() === 'PATH') ?? 'PATH';
@@ -175,16 +192,8 @@ export class AppServerConnection {
     }
   }
 
-  private async exitsWithin(ms: number): Promise<boolean> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<false>(resolve => {
-      timer = setTimeout(() => {
-        resolve(false);
-      }, ms);
-    });
-    const exited = await Promise.race([this.ended.then(() => true as const), timeout]);
-    clearTimeout(timer);
-    return exited;
+  private exitsWithin(ms: number): Promise<boolean> {
+    return settlesWithin(this.ended, ms);
   }
 
   // Outgoing frames are never logged: the API-key login request carries the key.

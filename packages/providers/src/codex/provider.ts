@@ -31,6 +31,7 @@ import {
   AppServerConnection,
   ConnectionClosedError,
   JsonRpcError,
+  settlesWithin,
   type ParamsOf,
   type Spawner,
 } from './app-server';
@@ -51,7 +52,10 @@ function getLog(): ReturnType<typeof createLogger> {
 
 type CodexConfig = Record<string, JsonValue>;
 
-/** How long the app-server gets to exit after stdin closes, and again after SIGTERM. */
+/**
+ * How long the app-server gets to answer a cancel's interrupt, then to exit after stdin
+ * closes, then again after SIGTERM.
+ */
 const SHUTDOWN_GRACE_MS = 3000;
 
 /**
@@ -632,8 +636,14 @@ function failureClassOfStop(error: unknown): ProviderFailureClass {
 // ─── Codex Provider ──────────────────────────────────────────────────────
 
 export class CodexProvider implements IAgentProvider {
-  /** @param spawner starts the app-server process; tests pass a fake. */
-  constructor(private readonly spawner?: Spawner) {}
+  /**
+   * @param spawner starts the app-server process; tests pass a fake.
+   * @param shutdownGraceMs each cancel and shutdown wait; tests shorten it.
+   */
+  constructor(
+    private readonly spawner?: Spawner,
+    private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS
+  ) {}
 
   getCapabilities(): ProviderCapabilities {
     return CODEX_CAPABILITIES;
@@ -657,7 +667,8 @@ export class CodexProvider implements IAgentProvider {
     let connection: AppServerConnection | undefined;
 
     // Cancel: interrupt the turn so Codex stops its command, then end the process. The
-    // stream below sees the process end and throws `Query aborted`.
+    // stream below sees the process end and throws `Query aborted`. A Codex that does not
+    // answer the interrupt within the grace period is shut down anyway.
     const onAbort = (): void => {
       const open = connection;
       if (!open) return;
@@ -667,7 +678,10 @@ export class CodexProvider implements IAgentProvider {
               getLog().debug({ err: error }, 'codex.interrupt_failed');
             })
           : Promise.resolve();
-      void interrupt.then(() => open.shutdown(SHUTDOWN_GRACE_MS));
+      void settlesWithin(interrupt, this.shutdownGraceMs).then(answered => {
+        if (!answered) getLog().warn({ threadId, turnId }, 'codex.interrupt_unanswered');
+        return open.shutdown(this.shutdownGraceMs);
+      });
     };
 
     const codexConfig = parseCodexConfig(requestOptions?.assistantConfig ?? {});
@@ -777,7 +791,7 @@ export class CodexProvider implements IAgentProvider {
       }
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
-      await connection?.shutdown(SHUTDOWN_GRACE_MS);
+      await connection?.shutdown(this.shutdownGraceMs);
     }
     // A Codex turn has no background work: once its result is in, nothing more runs.
     yield { type: 'settled' };

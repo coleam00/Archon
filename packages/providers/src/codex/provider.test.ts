@@ -738,6 +738,32 @@ describe('CodexProvider', () => {
       expect(process0.signals).toEqual([]);
     });
 
+    test('a Codex that answers neither the interrupt nor stdin close is stopped with SIGTERM', async () => {
+      const server = createFakeAppServer(() => ({
+        notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
+        completion: null,
+        ignoreInterrupt: true,
+        ignoreStdinClose: true,
+      }));
+      const provider = new CodexProvider(server, 20);
+      const controller = new AbortController();
+      let error: Error | undefined;
+      try {
+        for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+          abortSignal: controller.signal,
+        })) {
+          if (chunk.type === 'tool_call') controller.abort();
+        }
+      } catch (e) {
+        error = e as Error;
+      }
+
+      expect(error?.message).toBe('Query aborted');
+      expect(server.processes[0].methods).toContain('turn/interrupt');
+      expect(server.processes[0].stdinEnded).toBe(true);
+      expect(server.processes[0].signals).toEqual(['SIGTERM']);
+    }, 2000);
+
     test('an abort while the turn is being set up stops the process before any turn starts', async () => {
       const controller = new AbortController();
       const server = createFakeAppServer();
