@@ -261,7 +261,9 @@ describe('CodexProvider', () => {
       expect(env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
     });
 
-    test('a user’s own CODEX_ACCESS_TOKEN reaches Codex beside Archon’s setup variable (#3562)', async () => {
+    // #3562 renamed Archon's setup variables instead of stripping Codex's own names
+    // here. This fails if the provider starts filtering CODEX_ACCESS_TOKEN out.
+    test('the Codex env is not stripped of a user’s own CODEX_ACCESS_TOKEN (#3562)', async () => {
       const original = process.env.CODEX_ACCESS_TOKEN;
       process.env.CODEX_ACCESS_TOKEN = 'user-codex-token';
       try {
