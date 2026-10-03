@@ -1,7 +1,8 @@
-import type {
-  IWorkflowPlatform,
-  WorkflowMessageMetadata,
-  WorkflowCommandSurface,
+import {
+  spellWorkflowCommand,
+  type IWorkflowPlatform,
+  type WorkflowMessageMetadata,
+  type WorkflowCommandSurface,
 } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
 import { toPersistedMessageMetadata } from '../types';
@@ -27,7 +28,7 @@ export class HeadlessPlatform implements IWorkflowPlatform {
   ) {}
 
   formatWorkflowCommand(command: string): string {
-    return this.surface.formatWorkflowCommand?.(command) ?? `/workflow ${command}`;
+    return spellWorkflowCommand(this.surface, command);
   }
 
   async sendMessage(
