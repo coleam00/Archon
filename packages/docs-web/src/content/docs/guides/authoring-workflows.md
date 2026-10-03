@@ -1880,10 +1880,10 @@ Workflow JSONL `node_complete.tokens` and persisted `node_completed.data.tokens`
 input, including cache reads and cache writes. When both cache fields are present,
 uncached input is `input - cacheRead - cacheWrite`. An absent cache field means the
 provider did not report it; `0` means the provider reported zero. Which rows carry the
-field at all follows the rule the cost paragraph below states: the transcript carries it
-only on a row that reports its own spend, and the persisted row carries it on every
-`node_completed` row, so summing `node_completed.data.tokens` adds a scope's usage once per
-level and `execution.accounting` says which rows those are. Run metadata exposes the
+field at all depends on the sink: the transcript carries it only on a row that reports its
+own spend, while the persisted row carries it on every `node_completed` row except a
+`loop_group` roll-up. So a sum over `node_completed.data.tokens` counts a composed fan-out's
+scope once per level, and `data.accounting` names each row's role. Run metadata exposes the
 same totals as `total_tokens_in`, `total_tokens_out`, `total_cache_read_tokens`, and
 `total_cache_write_tokens`. A cache total sums every contributing node that reported that
 axis; when at least one node did not, the total is a **floor** and the aggregate carries
@@ -1900,8 +1900,8 @@ report as their own reproduces the run's own cost. Count error rows in that sum:
 attempt that already spent reports on its own `node_error` row. A row that restates spend its
 scope already reports elsewhere in the same run — a `loop_group` roll-up over its body rows, a
 composed fan-out wrapper over its instances, an instance terminal over its own leaves — omits
-both usage fields and names itself in `execution.accounting` instead. The persisted
-`node_completed` row still carries both numbers on every row and marks a restatement with
+both usage fields from its transcript row and names itself in `execution.accounting` instead.
+The persisted `node_completed` row keeps `cost_usd` on every row and marks a restatement with
 `data.aggregate: true`; a resume skips a marked row because its scope's own rows already
 carry that spend, except a composed-instance terminal, which the resume keeps as the
 authoritative source for its scope (#3508). JSONL `workflow_complete`

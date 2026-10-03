@@ -98,7 +98,7 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
  * already carry — a `loop_group` roll-up over its `<groupId>.<nodeId>` body rows, a
  * composed fan-out wrapper over its instances, an instance terminal over its own leaves,
  * an amendment over the attempt it amends — so those rows omit both axes. The durable row
- * keeps every number and marks a restatement `aggregate: true`; the resume fold skips a
+ * keeps its `cost_usd` and marks a restatement `aggregate: true`; the resume fold skips a
  * marked row because its scope's own rows already carry that spend, except a
  * composed-instance terminal, which the fold keeps as the authoritative source for its
  * scope because that instance's inner rows are observability writes that can be missing
@@ -110,9 +110,9 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
  * spend is on the rows it names.
  *
  * Do not read an absent `cost_usd` on a run's transcript as "the whole run was free"; read
- * it per row. A `loop:` node's cumulative totals reach its transcript row on failure and
- * its persisted event on either outcome, and a success exit also writes the terminal row
- * for the loop's own id; its per-iteration rows carry duration and no usage.
+ * it per row. A `loop:` node's cumulative totals reach its persisted event on either
+ * outcome, and a success exit writes the terminal transcript row for the loop's own id just
+ * as a failure does; its per-iteration rows carry duration and no usage.
  *
  * Each axis is omitted when nothing was reported for it, so on a row that reports its own
  * spend an absent `cost_usd` means the provider reported no cost (Codex reports none at all
