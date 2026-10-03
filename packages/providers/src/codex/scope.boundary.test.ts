@@ -36,11 +36,7 @@ createInterface({ input: process.stdin }).on('line', line => {
 });
 `;
 
-/**
- * Appends `<argv[2]>` to the log at `<argv[3]>`: the plugin hooks' command. Codex runs a
- * hook command through the platform shell, so the command line is left unquoted to read
- * the same in sh, cmd and PowerShell; `beforeAll` fails when a path it uses has a space.
- */
+/** Appends `<argv[2]>` to the log at `<argv[3]>`: the plugin hooks' command. */
 const HOOK_SCRIPT = `require('node:fs').appendFileSync(process.argv[3], process.argv[2] + '\\n');`;
 
 let root: string;
@@ -53,6 +49,16 @@ let modelRequests: string[] = [];
 const bun = process.execPath;
 /** TOML basic strings take JSON string escapes, so a Windows path survives. */
 const toml = (value: string): string => JSON.stringify(value);
+
+/**
+ * One hook-command argument. Codex runs a hook command with `sh -lc` on POSIX, where
+ * single quotes are safe, and inside its own quotes with `cmd.exe /C` on Windows, where
+ * nested quotes kept the hook from running on windows-latest. Windows arguments therefore
+ * stay bare, and `beforeAll` refuses a path with whitespace there.
+ */
+function shellArg(arg: string): string {
+  return process.platform === 'win32' ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
+}
 
 function stdioServer(stubPath: string, name: string): { command: string; args: string[] } {
   return { command: bun, args: [stubPath, name] };
@@ -76,7 +82,7 @@ async function writePlugin(marketplace: string, name: string, stubPath: string):
               hooks: [
                 {
                   type: 'command',
-                  command: `${bun} ${hookScript} ${name} ${hookLog}`,
+                  command: [bun, hookScript, name, hookLog].map(shellArg).join(' '),
                   timeout: 10,
                 },
               ],
@@ -131,9 +137,9 @@ beforeAll(async () => {
   repo = join(root, 'repo');
   hookLog = join(root, 'hooks.log');
   const unquotable = [bun, root].filter(path => /\s/.test(path));
-  if (unquotable.length > 0) {
+  if (process.platform === 'win32' && unquotable.length > 0) {
     throw new Error(
-      `The hook command cannot hold a path with whitespace: ${unquotable.join(', ')}`
+      `The Windows hook command cannot hold a path with whitespace: ${unquotable.join(', ')}`
     );
   }
   const marketplace = join(root, 'marketplace');
