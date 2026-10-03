@@ -106,6 +106,10 @@ import type { RequirementBearingWorkflow } from '@archon/workflows/utils/workflo
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { formatDeprecationNotice } from '@archon/workflows/deprecation';
 import type { WorkflowEvent } from '@archon/workflows/logger';
+import {
+  providerEventLineSchema,
+  type ProviderEventLine,
+} from '@archon/workflows/schemas/provider-event';
 import { formatToolInputBrief } from '@archon/workflows/utils/tool-formatter';
 import {
   dryRunWorkflow,
@@ -4221,18 +4225,117 @@ function oneLine(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
 }
 
-/** Compile-time check only: a new transcript row type must be decided in `formatTranscriptRow`. */
-function rowTypeDecided(_type: never): void {
+/** Compile-time check only: a new row or provider event type must be decided where it renders. */
+function typeDecided(_type: never): void {
   // Nothing to do at runtime.
+}
+
+/** Output lines a tool call's outcome shows: the end of its output, where errors land. */
+const TRANSCRIPT_TOOL_OUTPUT_LINES = 3;
+
+/** What rendering a row needs from the rows before it. One per rendered transcript. */
+interface TranscriptRenderState {
+  /** Tool names by attempt and call id, so a call's outcome can name its tool. */
+  toolNames: Map<string, string>;
+  /** The node of the last rendered row, so a switch to another node's activity is labelled. */
+  lastStep?: string;
+}
+
+function toolCallKey(attemptId: string, toolCallId: string): string {
+  // A call id is unique within its attempt; parallel nodes can repeat one.
+  return JSON.stringify([attemptId, toolCallId]);
+}
+
+function toolOutputTail(output: string): string | undefined {
+  const lines = output.replace(/\n+$/, '').split('\n');
+  if (lines.length === 1 && lines[0] === '') return undefined;
+  const shown = lines.slice(-TRANSCRIPT_TOOL_OUTPUT_LINES);
+  const hidden = lines.length - shown.length;
+  return [
+    ...(hidden > 0 ? [`(${String(hidden)} earlier lines)`] : []),
+    ...shown.map(line =>
+      line.length > TRANSCRIPT_TOOL_LINE_MAX
+        ? `${line.slice(0, TRANSCRIPT_TOOL_LINE_MAX - 3)}...`
+        : line
+    ),
+  ]
+    .map(line => `    ${line}`)
+    .join('\n');
+}
+
+/**
+ * One provider event, indented under its node like the node's other activity. Events that
+ * only mark progress (a running subtask, a hook that started or succeeded, a connected MCP
+ * server) render nothing, so a transcript reads as what the agent said and did.
+ */
+function formatProviderEvent(
+  line: ProviderEventLine,
+  state: TranscriptRenderState
+): string | undefined {
+  const event = line.event;
+  switch (event.type) {
+    case 'agent_message_chunk':
+      return indentLines(event.text, '  ');
+    case 'agent_thought_chunk':
+      return `  ${oneLine(`thinking: ${event.text}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    case 'tool_call': {
+      const name = toolCallDisplayName(event);
+      state.toolNames.set(toolCallKey(line.attemptId, event.toolCallId), name);
+      // A title is already what the call does, such as the command a Codex shell runs.
+      const brief =
+        !event.title && event.rawInput ? formatToolInputBrief(name, event.rawInput) : null;
+      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    }
+    case 'tool_call_update': {
+      const key = toolCallKey(line.attemptId, event.toolCallId);
+      const name = state.toolNames.get(key) ?? event.toolCallId;
+      state.toolNames.delete(key);
+      const details = [
+        ...(event.exitCode !== undefined ? [`exit ${String(event.exitCode)}`] : []),
+        ...(event.outputTruncated ? ['output truncated'] : []),
+      ];
+      const outcome = `  ${oneLine(`${event.status}: ${name}`, TRANSCRIPT_TOOL_LINE_MAX / 2)}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
+      const tail = event.output ? toolOutputTail(event.output) : undefined;
+      return tail ? `${outcome}\n${tail}` : outcome;
+    }
+    case 'warning':
+      return `  ${oneLine(`warning: ${event.message} (${event.code})`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    case 'mcp_server_status':
+      if (event.status === 'connected' || event.status === 'pending') return undefined;
+      return `  ${oneLine(`mcp ${event.server}: ${event.status}${event.error ? ` (${event.error})` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    case 'compaction': {
+      const tokens =
+        event.tokensBefore !== undefined && event.tokensAfter !== undefined
+          ? `: ${String(event.tokensBefore)} -> ${String(event.tokensAfter)} tokens`
+          : '';
+      return `  compaction ${event.phase}${event.trigger ? ` (${event.trigger})` : ''}${tokens}`;
+    }
+    case 'subtask': {
+      if (event.status === 'running') return undefined;
+      const about =
+        event.status === 'started' ? event.description : (event.summary ?? event.description);
+      return `  ${oneLine(`subtask ${event.status}: ${about ?? event.taskId}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    }
+    case 'hook':
+      if (event.status === 'started' || event.status === 'succeeded') return undefined;
+      return `  hook ${event.status}: ${event.hookName} (${event.hookEvent}${event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : ''})`;
+    case 'state_update':
+      return event.state === 'requires_action' ? '  waiting on the user' : undefined;
+    default:
+      typeDecided(event);
+      return undefined;
+  }
 }
 
 /**
  * One transcript row as the text `workflow logs --format text` prints, or `undefined` for a
  * row that renders nothing. Node lines share their wording with the foreground renderer.
- * `tool` and `assistant` rows record no node, and parallel nodes interleave, so they are
- * indented under whatever ran rather than attributed to a guessed node.
+ * A node's agent text and tool calls are indented beneath it. A `provider_event` row names
+ * its node, so when activity switches to another node (parallel nodes interleave) a
+ * `[node]` line labels it. The historical `assistant` and `tool` rows record no node and
+ * stay unlabelled rather than attributed to a guessed one.
  */
-function formatTranscriptRow(row: WorkflowEvent): string | undefined {
+function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): string | undefined {
   const step = row.step ?? '?';
   switch (row.type) {
     case 'workflow_start':
@@ -4268,6 +4371,15 @@ function formatTranscriptRow(row: WorkflowEvent): string | undefined {
         ? `${decision}\n${indentLines(row.content, '  ')}`
         : `${decision} (${row.content})`;
     }
+    case 'provider_event': {
+      // Unlike the rows above, a provider event is read field by field, so a line that
+      // does not match the schema this build knows renders nothing instead of throwing.
+      const parsed = providerEventLineSchema.safeParse(row);
+      if (!parsed.success) return undefined;
+      const text = formatProviderEvent(parsed.data, state);
+      if (text === undefined) return undefined;
+      return parsed.data.step === state.lastStep ? text : `[${parsed.data.step}]\n${text}`;
+    }
     case 'assistant':
       return row.content ? indentLines(row.content, '  ') : undefined;
     case 'tool': {
@@ -4288,7 +4400,7 @@ function formatTranscriptRow(row: WorkflowEvent): string | undefined {
     default:
       // At runtime a type this build does not know (an older or newer transcript)
       // renders nothing.
-      rowTypeDecided(row.type);
+      typeDecided(row.type);
       return undefined;
   }
 }
@@ -4298,7 +4410,7 @@ function formatTranscriptRow(row: WorkflowEvent): string | undefined {
  * build does not know (older transcripts hold `step_start`, newer engines may add more),
  * renders nothing: the text view is a reading aid, and the JSONL default keeps every row.
  */
-function renderTranscriptLine(line: string): string | undefined {
+function renderTranscriptLine(line: string, state: TranscriptRenderState): string | undefined {
   if (line.trim().length === 0) return undefined;
   let row: unknown;
   try {
@@ -4307,7 +4419,10 @@ function renderTranscriptLine(line: string): string | undefined {
     return undefined;
   }
   if (typeof row !== 'object' || row === null || Array.isArray(row)) return undefined;
-  return formatTranscriptRow(row as WorkflowEvent);
+  const event = row as WorkflowEvent;
+  const text = formatTranscriptRow(event, state);
+  if (text !== undefined && event.step !== undefined) state.lastStep = event.step;
+  return text;
 }
 
 function transcriptOutput(format: TranscriptFormat): TranscriptOutput {
@@ -4316,8 +4431,9 @@ function transcriptOutput(format: TranscriptFormat): TranscriptOutput {
   }
   // A read can end mid-row while the run is still appending, so only whole lines render.
   let partial = '';
+  const state: TranscriptRenderState = { toolNames: new Map() };
   const render = async (lines: string[]): Promise<void> => {
-    const rendered = lines.flatMap(line => renderTranscriptLine(line) ?? []);
+    const rendered = lines.flatMap(line => renderTranscriptLine(line, state) ?? []);
     if (rendered.length > 0) await writeStdout(`${rendered.join('\n')}\n`);
   };
   return {

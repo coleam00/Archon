@@ -6568,6 +6568,142 @@ describe('workflowLogsCommand', () => {
     expect(stderrText()).toBe('');
   });
 
+  it('renders provider events under their node, naming each tool call in its outcome', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    let seq = 0;
+    const event = (step: string, attemptId: string, providerEvent: Record<string, unknown>) => ({
+      type: 'provider_event',
+      workflow_id: 'run-1',
+      ts: '2026-10-03T00:00:00.000Z',
+      step,
+      attemptId,
+      seq: seq++,
+      observedAt: '2026-10-03T00:00:00.000Z',
+      event: providerEvent,
+    });
+    const rows = [
+      { type: 'node_start', step: 'plan', content: '<inline>' },
+      { type: 'node_start', step: 'lint', content: '<inline>' },
+      event('plan', 'a1', { type: 'agent_thought_chunk', text: 'Check the\nissue first.' }),
+      event('plan', 'a1', { type: 'agent_message_chunk', text: 'Reading.\n\nThen planning.' }),
+      event('plan', 'a1', {
+        type: 'tool_call',
+        toolCallId: 'c1',
+        name: 'Bash',
+        rawInput: { command: 'git status' },
+      }),
+      // The other node reuses the call id; its outcome must not take plan's tool name.
+      event('lint', 'a2', {
+        type: 'tool_call',
+        toolCallId: 'c1',
+        name: 'command_execution',
+        title: '/bin/zsh -lc "bun run lint"',
+        rawInput: { command: '/bin/zsh -lc "bun run lint"' },
+      }),
+      event('plan', 'a1', {
+        type: 'tool_call_update',
+        toolCallId: 'c1',
+        status: 'completed',
+        output: 'one\ntwo\nthree\nfour\n',
+        exitCode: 0,
+      }),
+      event('lint', 'a2', {
+        type: 'tool_call_update',
+        toolCallId: 'c1',
+        status: 'failed',
+        output: 'error: bad',
+        outputTruncated: true,
+        exitCode: 1,
+      }),
+      event('lint', 'a2', { type: 'warning', code: 'codex.x', message: 'model fell back' }),
+      event('lint', 'a2', { type: 'mcp_server_status', server: 'gh', status: 'connected' }),
+      event('lint', 'a2', {
+        type: 'mcp_server_status',
+        server: 'db',
+        status: 'failed',
+        error: 'timeout',
+      }),
+      event('lint', 'a2', { type: 'compaction', phase: 'started', trigger: 'auto' }),
+      event('lint', 'a2', {
+        type: 'compaction',
+        phase: 'completed',
+        tokensBefore: 9000,
+        tokensAfter: 2000,
+      }),
+      event('lint', 'a2', {
+        type: 'subtask',
+        taskId: 't1',
+        status: 'started',
+        description: 'scan',
+      }),
+      event('lint', 'a2', { type: 'subtask', taskId: 't1', status: 'running', summary: 'half' }),
+      event('lint', 'a2', { type: 'subtask', taskId: 't1', status: 'completed', summary: 'done' }),
+      event('lint', 'a2', {
+        type: 'hook',
+        hookId: 'h1',
+        hookName: 'guard',
+        hookEvent: 'PreToolUse',
+        status: 'started',
+      }),
+      event('lint', 'a2', {
+        type: 'hook',
+        hookId: 'h1',
+        hookName: 'guard',
+        hookEvent: 'PreToolUse',
+        status: 'failed',
+        exitCode: 2,
+      }),
+      event('lint', 'a2', { type: 'state_update', state: 'running' }),
+      event('lint', 'a2', { type: 'state_update', state: 'requires_action' }),
+      // A newer event type, and a line missing its event: neither renders nor throws.
+      event('lint', 'a2', { type: 'plan_update', entries: [] }),
+      {
+        type: 'provider_event',
+        workflow_id: 'run-1',
+        ts: '2026-10-03T00:00:00.000Z',
+        step: 'lint',
+      },
+      { type: 'node_complete', step: 'plan', duration_ms: 1000 },
+    ];
+    writeFileSync(transcriptPath, `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('completed'));
+
+    expect(await workflowLogsCommand(run('completed').id, false, undefined, 'text')).toBe(0);
+    expect(stdoutText()).toBe(
+      [
+        '[plan] Started',
+        '[lint] Started',
+        '[plan]',
+        '  thinking: Check the issue first.',
+        '  Reading.',
+        '',
+        '  Then planning.',
+        '  tool: Bash git status',
+        '[lint]',
+        '  tool: /bin/zsh -lc "bun run lint"',
+        '[plan]',
+        '  completed: Bash (exit 0)',
+        '    (1 earlier lines)',
+        '    two',
+        '    three',
+        '    four',
+        '[lint]',
+        '  failed: /bin/zsh -lc "bun run lint" (exit 1, output truncated)',
+        '    error: bad',
+        '  warning: model fell back (codex.x)',
+        '  mcp db: failed (timeout)',
+        '  compaction started (auto)',
+        '  compaction completed: 9000 -> 2000 tokens',
+        '  subtask started: scan',
+        '  subtask completed: done',
+        '  hook failed: guard (PreToolUse, exit 2)',
+        '  waiting on the user',
+        '[plan] Completed (1s)',
+        '',
+      ].join('\n')
+    );
+  });
+
   it('follows as text, rendering a row only once it is whole', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const nodeRow = JSON.stringify({ type: 'node_start', step: 'build' });
