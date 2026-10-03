@@ -44,7 +44,7 @@ deliver__impl__implement:
   green: true
   red_cause: ""
   summary: "stub: fix built per the investigation, checks green"
-deliver__review__mode: '{"continuation":false}'
+deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false

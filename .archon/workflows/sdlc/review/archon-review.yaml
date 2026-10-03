@@ -33,8 +33,8 @@ inputs:
     default: ""
     description: >-
       Path to the previous review round's report. When set, this round verifies
-      prior findings first and reviews only the delta since the report's recorded
-      head SHA.
+      prior findings first and reviews only the delta since the commit that round
+      reviewed, which its publish recorded beside the report.
   work_order:
     default: ""
     description: >-
@@ -60,25 +60,17 @@ returns: publish
 outcome_field: ready
 
 nodes:
-  # A continuation round is one whose caller handed it the prior round's report.
-  # Deliver's rounds pass the path of a pointer this workflow's own synthesize
-  # node certified, but `prior_report` is also a declared input an outside
-  # caller can fill with a path from an earlier run, which no pointer covers.
-  # That boundary is checked here, once, because a continuation that cannot
-  # read the report it continues from would review nothing and say it reviewed
-  # everything. The node also turns the input into the routable fact the lenses
-  # gate on: an include's inputs are substituted as text at load time and cannot
-  # be compared in a `when:`.
+  # Fixes what this round reviews before any agent reads the target: whether it
+  # continues a previous round, the commit under review (the checkout's HEAD as
+  # the engine observed it), and, on a continuation, the previous round's
+  # reviewed commit, which the head must descend from. A caller's pull-request
+  # record names the PR, never the commit: its head revision goes stale with
+  # every push after the PR opens. publish refuses a report about any other
+  # commit. The node also turns the input into the routable fact the lenses gate
+  # on: an include's inputs are substituted as text at load time and cannot be
+  # compared in a `when:`.
   - id: mode
-    script: |
-      const prior = (process.env.INPUTS_PRIOR_REPORT ?? '').trim();
-      const exists = prior !== '' && (() => { try { return require('node:fs').statSync(prior).isFile(); } catch { return false; } })();
-      if (prior !== '' && !exists) {
-        console.error(`Previous review report does not exist: ${prior}`);
-        process.exitCode = 1;
-      } else {
-        console.log(JSON.stringify({ continuation: prior !== '' }));
-      }
+    script: review-round
     runtime: bun
     with:
       prior_report: "$INPUTS.prior_report"
@@ -86,7 +78,10 @@ nodes:
       type: object
       properties:
         continuation: { type: boolean }
-      required: [continuation]
+        head: { type: string, minLength: 1 }
+        # The previous round's reviewed commit; empty on a first round.
+        cursor: { type: string }
+      required: [continuation, head, cursor]
 
   - id: scope
     command: review-scope
@@ -265,6 +260,7 @@ nodes:
       scope: "$INPUTS.scope"
       pr: "$scope.output.pr"
       report: "$ARTIFACTS_DIR/review/report.md"
+      head: "$mode.output.head"
       ready: "$synthesize.output.ready"
       action: "$synthesize.output.action"
       summary: "$synthesize.output.findings_summary"

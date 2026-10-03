@@ -18,7 +18,7 @@ classify:
     errors: "stub"
     docs: "stub"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # accepted contract recorded
   docs: false

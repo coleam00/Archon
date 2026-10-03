@@ -21,7 +21,7 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -52,7 +52,7 @@ ci-fix__implement:
   summary: "stub: the branch's new test asserted an unsorted order; fixed at the cause and pushed"
 ci-fix__assert-changed: "1 file changed"
 ci-delta-scope: '{"moved":true}'
-ci-recheck__mode: '{"continuation":true}'
+ci-recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
 ci-recheck__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 9 }

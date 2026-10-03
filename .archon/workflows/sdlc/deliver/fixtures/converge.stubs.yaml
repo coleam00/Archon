@@ -16,7 +16,7 @@ impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -45,7 +45,7 @@ fix__implement:
   summary: "stub: findings fixed, pushed"
 fix__assert-changed: "2 files changed"
 gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
-recheck__mode: '{"continuation":true}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
 recheck__scope:
   # light mode; delta since cursor
   docs: false

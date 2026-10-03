@@ -20,7 +20,7 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: changed shipped docs need impact review"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }

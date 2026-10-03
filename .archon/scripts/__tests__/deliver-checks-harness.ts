@@ -235,6 +235,8 @@ export interface ScriptOptions {
   readonly inputs?: Readonly<Record<string, string>>;
   /** Files to write under the run's artifact directory, with the same substitution. */
   readonly artifacts?: Readonly<Record<string, string>>;
+  /** The script's working directory, for one that reads a git checkout. Defaults to a scratch directory. */
+  readonly cwd?: string;
 }
 
 /** Run one pack script the way the engine does: `<pack>/<relative>.ts`. */
@@ -311,7 +313,7 @@ else {
   }
 
   const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`)], {
-    cwd: root,
+    cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',
   });

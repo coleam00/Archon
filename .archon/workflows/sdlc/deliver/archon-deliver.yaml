@@ -196,8 +196,10 @@ nodes:
   - id: review
     include: archon-review
     with:
-      # The PR node's structured read-back is the target authority. Review must
-      # not rediscover an ambient branch→PR mapping.
+      # The PR node's structured read-back names the pull request, so review
+      # never rediscovers an ambient branch→PR mapping. It does not name the
+      # commit: every round reviews the checkout's HEAD, which archon-review
+      # checks against this PR's remote head before publishing.
       scope: "$pr.output"
       prior_report: "$INPUTS.prior_report"
       work_order: "$INPUTS.work"

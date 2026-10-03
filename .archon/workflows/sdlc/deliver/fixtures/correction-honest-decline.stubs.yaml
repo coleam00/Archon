@@ -29,7 +29,7 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -55,7 +55,7 @@ fix__implement:
   green: false
   red_cause: inherited
   summary: "stub: the finding is already satisfied on the branch and needed no edit; lint is red only for a violation present at the reviewed starting commit, in a file this diff never touches"
-recheck__mode: '{"continuation":true}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
 recheck__scope:
   # light mode; delta since cursor
   docs: false

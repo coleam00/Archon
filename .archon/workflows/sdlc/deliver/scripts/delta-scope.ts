@@ -15,36 +15,18 @@
  * - INPUTS_SINCE: `$ci-fix.execution.checkoutStart`.
  */
 
+import { nodeStartCommit, observedCommit } from '../../.shared/checkout.ts';
 import { emit, refuse, trimmed } from '../../.shared/io.ts';
 
-function commitOf(label: string, text: string): string {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    throw new Error(`${label} is not a checkout observation`);
-  }
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new Error(`${label} is not a checkout observation`);
-  }
-  const observation = value as { kind?: unknown; commit?: unknown; reason?: unknown };
-  if (observation.kind !== 'git' || typeof observation.commit !== 'string') {
-    const reason = typeof observation.reason === 'string' ? ` (${observation.reason})` : '';
-    throw new Error(`${label} names no commit${reason}`);
-  }
-  return observation.commit;
-}
-
 try {
-  const since = commitOf('the earlier pass start', trimmed(process.env.INPUTS_SINCE));
-  const execution = JSON.parse(trimmed(process.env.ARCHON_NODE_EXECUTION)) as {
-    attempt?: { checkoutStart?: unknown };
-  };
-  const current = commitOf(
-    'this node start',
-    JSON.stringify(execution.attempt?.checkoutStart ?? null)
-  );
-  emit({ moved: current !== since });
+  let observation: unknown;
+  try {
+    observation = JSON.parse(trimmed(process.env.INPUTS_SINCE));
+  } catch {
+    throw new Error('the earlier pass start is not a checkout observation');
+  }
+  const since = observedCommit('the earlier pass start', observation);
+  emit({ moved: nodeStartCommit() !== since });
 } catch (error) {
   refuse(`delta-scope: ${error instanceof Error ? error.message : String(error)}`);
 }

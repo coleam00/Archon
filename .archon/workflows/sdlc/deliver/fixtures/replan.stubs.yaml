@@ -19,7 +19,7 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no docs changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # accepted contract and scope conflict recorded
   docs: false

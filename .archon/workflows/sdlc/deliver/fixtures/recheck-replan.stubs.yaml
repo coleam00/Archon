@@ -18,7 +18,7 @@ classify:
     errors: "stub"
     docs: "stub"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # accepted contract recorded
   docs: false
@@ -46,7 +46,7 @@ fix__implement:
   summary: "stub: correction exposed a scope conflict"
 fix__assert-changed: "1 file changed"
 gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
-recheck__mode: '{"continuation":true}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
 recheck__scope:
   # light review with original accepted contract
   docs: false

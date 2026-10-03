@@ -44,7 +44,7 @@ deliver__classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
-deliver__review__mode: '{"continuation":false}'
+deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false

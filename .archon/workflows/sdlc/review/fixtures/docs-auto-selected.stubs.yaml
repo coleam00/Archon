@@ -1,7 +1,7 @@
 # Dry-run fixture: archon-review called directly, not through delivery. `docs` is left
 # at its `auto` default, so the docs lens is gated on the scope node's own selection —
 # the branch archon-deliver never reaches, because it always binds a resolved boolean.
-mode: '{"continuation":false}'
+mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 scope:
   docs: true
   # A standalone review of the working diff: no pull request to publish to.
