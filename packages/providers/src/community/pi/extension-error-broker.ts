@@ -27,6 +27,24 @@ interface ActiveTurn {
 /** Turns that still accept process errors. */
 const activeTurns = new Map<PiExtensionTurn, ActiveTurn>();
 
+// Pi's crash-log.findExtensionStackMatches is the reference; its matcher is not
+// exported through the SDK. Normalize here without importing Pi at startup.
+function normalizeStackPath(value: string): string {
+  return value
+    .replace(/\\/g, '/')
+    .replace(/file:\/\/([^\s)]+)/gi, (_url, pathname: string) => {
+      const location = /:\d+(?::\d+)?$/.exec(pathname)?.[0] ?? '';
+      let path = pathname.slice(0, pathname.length - location.length);
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        // Some stack URLs contain a literal, unescaped percent sign.
+      }
+      return path.replace(/^\/(?=[a-z]:\/)/i, '') + location;
+    })
+    .replace(/\b[A-Z](?=:\/)/g, drive => drive.toLowerCase());
+}
+
 /**
  * A frame names a path only where the path ends: at its line/column, a closing paren,
  * whitespace, the frame end, or a `/` into a directory extension. A bare substring
@@ -46,9 +64,12 @@ function matchingExtensionPath(
   error: Error,
   extensionPaths: readonly string[]
 ): string | undefined {
-  const stackFrames = error.stack?.split('\n').slice(1);
+  const stackFrames = error.stack?.split('\n').slice(1).map(normalizeStackPath);
   if (!stackFrames) return undefined;
-  return extensionPaths.find(path => stackFrames.some(frame => frameNamesPath(frame, path)));
+  return extensionPaths.find(path => {
+    const normalizedPath = normalizeStackPath(path);
+    return stackFrames.some(frame => frameNamesPath(frame, normalizedPath));
+  });
 }
 
 /**

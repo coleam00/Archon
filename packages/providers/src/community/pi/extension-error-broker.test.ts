@@ -15,6 +15,53 @@ afterEach(() => {
 });
 
 describe('Pi extension process-error broker', () => {
+  test.each([
+    ['Windows file URL', 'C:\\x\\ext.ts', 'file:///C:/x/ext.ts'],
+    ['percent-encoded frame', 'C:\\my extensions\\ext.ts', 'file:///C:/my%20extensions/ext.ts'],
+    [
+      'percent-encoded loaded URL',
+      'file:///C:/my%20extensions/ext.ts',
+      'C:\\my extensions\\ext.ts',
+    ],
+    ['backslash frame', 'C:/x/ext.ts', 'C:\\x\\ext.ts'],
+    ['forward-slash frame', 'C:\\x\\ext.ts', 'C:/x/ext.ts'],
+    ['loaded file URL', 'file:///C:/x/ext.ts', 'C:\\x\\ext.ts'],
+    ['drive-letter case', 'C:/x/ext.ts', 'c:/x/ext.ts'],
+    ...['#', ';', '@', '&', '=', '+', '$', ','].flatMap(character => {
+      const path = `C:\\extensions\\a${character}b.ts`;
+      const url = `file:///C:/extensions/a%${character.charCodeAt(0).toString(16)}b.ts`;
+      return [
+        [`encoded ${character} frame`, path, url],
+        [`encoded ${character} loaded URL`, url, path],
+      ];
+    }),
+    ['literal percent escape', 'C:\\extensions\\a%23b.ts', 'file:///C:/extensions/a%2523b.ts'],
+    ['literal encoded space', 'C:\\extensions\\a%20b.ts', 'file:///C:/extensions/a%2520b.ts'],
+    [
+      'literal malformed percent',
+      'C:\\extensions\\100%real.ts',
+      'file:///C:/extensions/100%real.ts',
+    ],
+  ])('routes %s to the turn that loaded it', (_name, loadedPath, framePath) => {
+    openTurn = beginPiExtensionTurn([loadedPath]);
+    const unrelated = beginPiExtensionTurn(['C:/x/other.ts']);
+    try {
+      let received: Error | undefined;
+      openTurn.onError(error => {
+        received = error;
+      });
+      const error = new Error('timer exploded');
+      error.stack = `Error: timer exploded\n    at callback (${framePath}:4:2)`;
+
+      expect(claimPiExtensionProcessError(error)).toBe(true);
+      expect(received).toBe(error);
+      expect(piExtensionFailureEvidence(error)).toBe(error.stack);
+      expect(() => unrelated.throwIfFailed()).not.toThrow();
+    } finally {
+      unrelated.close();
+    }
+  });
+
   test('claims a stack-attested extension error without replacing it', () => {
     openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     let received: Error | undefined;
@@ -30,6 +77,16 @@ describe('Pi extension process-error broker', () => {
     expect(piExtensionFailureEvidence(error)).toBe(error.stack);
   });
 
+  test('does not decode a literal percent escape in a filesystem path', () => {
+    openTurn = beginPiExtensionTurn(['C:\\extensions\\a%20b.ts']);
+    const error = new Error('another extension failed');
+    error.stack =
+      'Error: another extension failed\n    at callback (file:///C:/extensions/a%20b.ts:4:2)';
+
+    expect(claimPiExtensionProcessError(error)).toBe(false);
+    expect(() => openTurn?.throwIfFailed()).not.toThrow();
+  });
+
   test('leaves unmatched and unstructured process errors unclaimed', () => {
     openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     let received = false;
@@ -40,6 +97,9 @@ describe('Pi extension process-error broker', () => {
     archonError.stack = 'Error: engine bug\n    at execute (/archon/dag-executor.ts:1:1)';
 
     expect(claimPiExtensionProcessError(archonError)).toBe(false);
+    const messageOnly = new Error('failed in file:///C:/extensions/fake-extension.ts');
+    messageOnly.stack = 'Error: failed in /extensions/fake-extension.ts';
+    expect(claimPiExtensionProcessError(messageOnly)).toBe(false);
     expect(claimPiExtensionProcessError('plain rejection')).toBe(false);
     expect(received).toBe(false);
   });
@@ -101,33 +161,42 @@ describe('Pi extension process-error broker', () => {
     }
   });
 
-  test('a loaded path that prefixes another file does not claim that file', () => {
-    const fileTurn = beginPiExtensionTurn(['/extensions/ext.ts']);
-    const dirTurn = beginPiExtensionTurn(['/extensions/bench']);
-    try {
-      const received: string[] = [];
-      fileTurn.onError(() => received.push('file'));
-      dirTurn.onError(() => received.push('dir'));
-      const unrelated = new Error('other file');
-      unrelated.stack =
-        'Error: other file\n    at callback (/extensions/ext.tsx:4:2)\n' +
-        '    at timer (/extensions/bench-two/index.ts:1:1)';
-      expect(claimPiExtensionProcessError(unrelated)).toBe(false);
+  test.each([
+    ['/extensions', '/extensions'],
+    ['/extensions', 'file:///extensions'],
+    ['C:\\extensions', 'file:///c:/extensions'],
+  ])(
+    'a loaded path under %s does not claim a sibling file or directory',
+    (loadedRoot, frameRoot) => {
+      const fileTurn = beginPiExtensionTurn([`${loadedRoot}/ext.ts`]);
+      const dirTurn = beginPiExtensionTurn([`${loadedRoot}/bench`]);
+      try {
+        const received: string[] = [];
+        fileTurn.onError(() => received.push('file'));
+        dirTurn.onError(() => received.push('dir'));
+        const unrelated = new Error('other file');
+        unrelated.stack =
+          `Error: other file\n    at callback (${frameRoot}/ext.tsx:4:2)\n` +
+          `    at timer (${frameRoot}/bench-two/index.ts:1:1)`;
+        expect(claimPiExtensionProcessError(unrelated)).toBe(false);
 
-      // A file inside a directory extension, and a file:// frame, still belong to it.
-      const inDir = new Error('dir helper');
-      inDir.stack = 'Error: dir helper\n    at helper (file:///extensions/bench/lib/util.ts:2:1)';
-      expect(claimPiExtensionProcessError(inDir)).toBe(true);
-      expect(received).toEqual(['dir']);
-    } finally {
-      fileTurn.close();
-      dirTurn.close();
+        const inDir = new Error('dir helper');
+        inDir.stack = `Error: dir helper\n    at helper (${frameRoot}/bench/lib/util.ts:2:1)`;
+        expect(claimPiExtensionProcessError(inDir)).toBe(true);
+        expect(received).toEqual(['dir']);
+      } finally {
+        fileTurn.close();
+        dirTurn.close();
+      }
     }
-  });
+  );
 
-  test('fails every candidate turn when concurrent turns loaded the same extension', () => {
-    const first = beginPiExtensionTurn(['/extensions/shared.ts']);
-    const second = beginPiExtensionTurn(['/extensions/shared.ts']);
+  test.each([
+    ['/extensions/shared.ts', '/extensions/shared.ts', '/extensions/shared.ts'],
+    ['C:\\extensions\\shared.ts', 'file:///c:/extensions/shared.ts', 'C:/extensions/shared.ts'],
+  ])('fails every candidate turn that loaded %s', (firstPath, secondPath, framePath) => {
+    const first = beginPiExtensionTurn([firstPath]);
+    const second = beginPiExtensionTurn([secondPath]);
     const unrelated = beginPiExtensionTurn(['/extensions/other.ts']);
     try {
       const received: { owner: string; error: Error }[] = [];
@@ -135,7 +204,7 @@ describe('Pi extension process-error broker', () => {
       second.onError(error => received.push({ owner: 'second', error }));
       unrelated.onError(error => received.push({ owner: 'unrelated', error }));
       const error = new Error('timer exploded');
-      error.stack = 'Error: timer exploded\n    at callback (/extensions/shared.ts:4:2)';
+      error.stack = `Error: timer exploded\n    at callback (${framePath}:4:2)`;
 
       expect(claimPiExtensionProcessError(error)).toBe(true);
       expect(received.map(r => r.owner)).toEqual(['first', 'second']);
