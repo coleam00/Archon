@@ -60,6 +60,12 @@ function shellArg(arg: string): string {
   return process.platform === 'win32' ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
 }
 
+/** A `UserPromptSubmit` hook that logs `name`, in the shape plugin.json and hooks.json share. */
+function promptHook(name: string): object {
+  const command = [bun, join(root, 'hook.js'), name, hookLog].map(shellArg).join(' ');
+  return { UserPromptSubmit: [{ hooks: [{ type: 'command', command, timeout: 10 }] }] };
+}
+
 function stdioServer(stubPath: string, name: string): { command: string; args: string[] } {
   return { command: bun, args: [stubPath, name] };
 }
@@ -68,28 +74,13 @@ async function writePlugin(marketplace: string, name: string, stubPath: string):
   const dir = join(marketplace, 'plugins', name);
   await mkdir(join(dir, '.codex-plugin'), { recursive: true });
   await mkdir(join(dir, 'skills', `${name}-skill`), { recursive: true });
-  const hookScript = join(root, 'hook.js');
   await writeFile(
     join(dir, '.codex-plugin', 'plugin.json'),
     JSON.stringify({
       name,
       version: '1.0.0',
       description: 'fixture',
-      hooks: {
-        hooks: {
-          UserPromptSubmit: [
-            {
-              hooks: [
-                {
-                  type: 'command',
-                  command: [bun, hookScript, name, hookLog].map(shellArg).join(' '),
-                  timeout: 10,
-                },
-              ],
-            },
-          ],
-        },
-      },
+      hooks: { hooks: promptHook(name) },
     })
   );
   await writeFile(
@@ -102,7 +93,7 @@ async function writePlugin(marketplace: string, name: string, stubPath: string):
   );
 }
 
-/** Installs both plugins into the temp home and trusts their hooks, as an operator would. */
+/** Installs both plugins into the temp home and trusts every hook, as an operator would. */
 async function installPlugins(marketplaceFile: string): Promise<void> {
   const connection = AppServerConnection.start(resolveBundledCodexBinary(), [], {
     ...(process.env as Record<string, string>),
@@ -120,11 +111,11 @@ async function installPlugins(marketplaceFile: string): Promise<void> {
     const listed = (await connection.request('hooks/list', { cwds: [repo] })) as {
       data: { hooks: { key: string; currentHash: string; pluginId: string | null }[] }[];
     };
+    // Both plugin hooks and the user's own hook.
     const trust = listed.data
       .flatMap(entry => entry.hooks)
-      .filter(hook => hook.pluginId !== null)
       .map(hook => `[hooks.state.${toml(hook.key)}]\ntrusted_hash = ${toml(hook.currentHash)}\n`);
-    expect(trust).toHaveLength(2);
+    expect(trust).toHaveLength(3);
     appendFileSync(join(home, 'config.toml'), `\n${trust.join('\n')}`);
   } finally {
     await connection.shutdown(3000);
@@ -150,6 +141,8 @@ beforeAll(async () => {
   await writeFile(stubPath, MCP_STUB);
   await writeFile(join(root, 'hook.js'), HOOK_SCRIPT);
   await writeFile(join(home, 'AGENTS.md'), 'USER-GUIDANCE-MARKER\n');
+  // The user's own hook, which every node keeps.
+  await writeFile(join(home, 'hooks.json'), JSON.stringify({ hooks: promptHook('user') }));
   await writeFile(join(repo, 'AGENTS.md'), 'PROJECT-GUIDANCE-MARKER\n');
   for (const name of ['alpha', 'beta']) await writePlugin(marketplace, name, stubPath);
   const marketplaceFile = join(marketplace, '.agents', 'plugins', 'marketplace.json');
@@ -213,6 +206,18 @@ beforeEach(async () => {
   await rm(hookLog, { force: true });
 });
 
+/** Runs `body` with `lines` appended to the fixture's config.toml, then restores it. */
+async function withUserConfig<T>(lines: string, body: () => Promise<T>): Promise<T> {
+  const configPath = join(home, 'config.toml');
+  const original = await readFile(configPath, 'utf8');
+  await writeFile(configPath, `${original}\n${lines}\n`);
+  try {
+    return await body();
+  } finally {
+    await writeFile(configPath, original);
+  }
+}
+
 const PROMPT = 'Use $alpha:alpha-skill and $beta:beta-skill.';
 
 /** One workflow-node turn against the fixture home; returns its chunks. */
@@ -273,13 +278,16 @@ async function writeMcp(file: string, servers: Record<string, string>): Promise<
   );
 }
 
+/** What a node naming only `alpha@fixture` sees: alpha's skill and hook, the user's hook. */
+const ALPHA_ONLY: Seen = { tools: [], skills: ['alpha'], hooks: ['alpha', 'user'], guidance: true };
+
 describe('Codex workflow-node scope on the real binary', () => {
   test(
-    'a node that names nothing sees no plugin tool, skill or hook, and keeps both AGENTS.md',
+    'a node that names nothing sees no plugin tool, skill or hook, and keeps the user’s hook and both AGENTS.md',
     async () => {
       const chunks = await runNode({});
       expect(resultOf(chunks).failure?.evidence).toContain('stub model');
-      expect(await seen()).toEqual({ tools: [], skills: [], hooks: [], guidance: true });
+      expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
     },
     testTimeout(20_000)
   );
@@ -290,8 +298,9 @@ describe('Codex workflow-node scope on the real binary', () => {
       const sessionId = resultOf(await runNode({})).sessionId;
       expect(sessionId).toBeDefined();
       modelRequests = [];
+      await rm(hookLog, { force: true });
       await runNode({}, sessionId);
-      expect(await seen()).toEqual({ tools: [], skills: [], hooks: [], guidance: true });
+      expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
     },
     testTimeout(20_000)
   );
@@ -300,12 +309,31 @@ describe('Codex workflow-node scope on the real binary', () => {
     'a named plugin brings its skill and hook, not its MCP server, and nothing from the other plugin',
     async () => {
       await runNode({ plugins: ['alpha@fixture'] });
-      expect(await seen()).toEqual({
-        tools: [],
-        skills: ['alpha'],
-        hooks: ['alpha'],
-        guidance: true,
-      });
+      expect(await seen()).toEqual(ALPHA_ONLY);
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'a resumed thread keeps a named plugin’s scope',
+    async () => {
+      const sessionId = resultOf(await runNode({ plugins: ['alpha@fixture'] })).sessionId;
+      expect(sessionId).toBeDefined();
+      modelRequests = [];
+      await rm(hookLog, { force: true });
+      await runNode({ plugins: ['alpha@fixture'] }, sessionId);
+      expect(await seen()).toEqual(ALPHA_ONLY);
+    },
+    testTimeout(20_000)
+  );
+
+  test(
+    'a named plugin loads even when the user turned plugins off globally',
+    async () => {
+      await withUserConfig('[features]\nplugins = false', () =>
+        runNode({ plugins: ['alpha@fixture'] })
+      );
+      expect(await seen()).toEqual(ALPHA_ONLY);
     },
     testTimeout(20_000)
   );

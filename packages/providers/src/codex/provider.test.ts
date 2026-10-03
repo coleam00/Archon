@@ -658,6 +658,8 @@ describe('CodexProvider', () => {
       });
       await run(provider, { nodeConfig: { nodeId: 'implement', plugins: ['alpha@fixture'] } });
       expect(paramsOf(server, 'plugin/read')).toMatchObject({ pluginName: 'alpha' });
+      // Plugins on for the process, so a user's global plugins-off still lists them.
+      expect(server.processes[0].args).toEqual(['app-server', '-c', 'features.plugins=true']);
       expect(paramsOf(server, 'thread/start')?.config).toMatchObject({
         features: { apps: false, plugins: true },
         plugins: {

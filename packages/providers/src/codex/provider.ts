@@ -819,16 +819,23 @@ export class CodexProvider implements IAgentProvider {
         codexConfig.modelReasoningEffort
       );
 
+      const workflowNode = isWorkflowNode(requestOptions);
+      const nodePlugins = workflowNode ? (requestOptions?.nodeConfig?.plugins ?? []) : undefined;
       connection = AppServerConnection.start(
         binary,
-        apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : [],
+        [
+          ...(apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : []),
+          // A user who turned plugins off globally gets an empty `plugin/installed`, so a
+          // node that names plugins could not find them. This process serves only this
+          // node's thread, and the thread config switches off every plugin it does not name.
+          ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
+        ],
         env,
         this.spawner
       );
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
-      const workflowNode = isWorkflowNode(requestOptions);
       const stream = streamTurn({
         connection,
         apiKey,
@@ -847,7 +854,7 @@ export class CodexProvider implements IAgentProvider {
           ...(effort ? { effort } : {}),
           ...(outputSchema !== undefined ? { outputSchema } : {}),
         },
-        nodePlugins: workflowNode ? (requestOptions?.nodeConfig?.plugins ?? []) : undefined,
+        nodePlugins,
         hasOutputFormat,
         model,
         onThread: id => {
