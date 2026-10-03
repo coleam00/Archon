@@ -83,6 +83,20 @@ describe('Pi native credentials', () => {
       source: 'native',
     });
   });
+  test('uses assistant config model and key with request env taking precedence', async () => {
+    const request = {
+      assistantConfig: { model: 'anthropic/claude-sonnet-4-6', env: { ANTHROPIC_API_KEY: secret } },
+      env: {},
+      signal: AbortSignal.timeout(2000),
+    };
+    expect(await new PiProvider().checkCredential(request)).toEqual({
+      state: 'usable',
+      source: 'native',
+    });
+    expect(
+      await new PiProvider().checkCredential({ ...request, env: { ANTHROPIC_API_KEY: '' } })
+    ).toEqual({ state: 'not_connected', source: 'native' });
+  });
   test('an expired OAuth grant reports a failed native refresh', async () => {
     writeFileSync(
       join(root, 'auth.json'),
@@ -133,6 +147,20 @@ describe('Pi native credentials', () => {
     expect(await check()).toEqual({ state: 'usable', source: 'native' });
     expect(existsSync(marker)).toBe(true);
     expect(readFileSync(marker, 'utf8')).toBe('ran');
+  });
+  test('checks only the selected provider command-backed key', async () => {
+    const selected = join(root, 'selected');
+    const unrelated = join(root, 'unrelated');
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'api_key', key: `!printf ran > '${selected}'; printf '${secret}'` },
+        openai: { type: 'api_key', key: `!printf ran > '${unrelated}'; printf '${secret}'` },
+      })
+    );
+    expect(await check()).toEqual({ state: 'usable', source: 'native' });
+    expect(existsSync(selected)).toBe(true);
+    expect(existsSync(unrelated)).toBe(false);
   });
   test('typed auth rejection is unusable regardless of its prose', async () => {
     const runtime = await ModelRuntime.create();

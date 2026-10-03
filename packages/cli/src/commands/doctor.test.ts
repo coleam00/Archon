@@ -484,6 +484,7 @@ describe('checkAssistantLogin', () => {
       expect(result.status).toBe(expected);
       expect(result.message).toContain('pi:');
       expect(fixture.provider.checkCredential).toHaveBeenCalledWith({
+        assistantConfig: fixture.assistantConfig,
         model: fixture.model,
         env: { DEFAULT_AI_ASSISTANT: 'claude', TEST_KEY: 'secret' },
         signal: expect.any(AbortSignal),
@@ -528,6 +529,49 @@ describe('checkAssistantLogin', () => {
     } finally {
       load.mockRestore();
       pi.mockRestore();
+    }
+  });
+
+  it('checks a Pi key supplied only by merged assistant config', async () => {
+    const core = await import('@archon/core');
+    const { registerBuiltinProviders, registerCommunityProviders } =
+      await import('@archon/providers');
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const root = mkdtempSync(join(tmpdir(), 'doctor-pi-config-'));
+    const keys = [
+      'PI_CODING_AGENT_DIR',
+      'ANTHROPIC_API_KEY',
+      'ANTHROPIC_OAUTH_TOKEN',
+      'ANTHROPIC_AUTH_TOKEN',
+    ];
+    const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+    for (const key of keys) delete process.env[key];
+    process.env.PI_CODING_AGENT_DIR = root;
+    writeFileSync(join(root, 'auth.json'), '{}');
+    const load = spyOn(core, 'loadConfig').mockResolvedValue({
+      ...config,
+      assistant: 'pi',
+      assistants: {
+        ...config.assistants,
+        pi: {
+          model: 'anthropic/claude-sonnet-4-6',
+          env: { ANTHROPIC_API_KEY: 'config-only-key' },
+        },
+      },
+    });
+    try {
+      expect(await checkAssistantLogin({})).toMatchObject({
+        status: 'pass',
+        message: 'pi: usable',
+      });
+    } finally {
+      load.mockRestore();
+      for (const key of keys) {
+        if (previous[key] === undefined) delete process.env[key];
+        else process.env[key] = previous[key];
+      }
+      await removeTempTree(root);
     }
   });
 

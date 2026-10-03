@@ -1,3 +1,7 @@
+import { z } from 'zod';
+import type { Account } from './protocol/v2/Account';
+import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
+import type { PlanType } from './protocol/PlanType';
 import type { CredentialStatus } from '@archon/provider-contract';
 import {
   collectCredentialValues,
@@ -60,6 +64,45 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.codex');
   return cachedLog;
 }
+
+const planTypes = {
+  free: 'free',
+  go: 'go',
+  plus: 'plus',
+  pro: 'pro',
+  prolite: 'prolite',
+  promax: 'promax',
+  team: 'team',
+  self_serve_business_prolite: 'self_serve_business_prolite',
+  self_serve_business_usage_based: 'self_serve_business_usage_based',
+  business: 'business',
+  ent26: 'ent26',
+  enterprise_cbp_automation: 'enterprise_cbp_automation',
+  enterprise_cbp_usage_based: 'enterprise_cbp_usage_based',
+  enterprise: 'enterprise',
+  edu: 'edu',
+  edu_plus: 'edu_plus',
+  edu_pro: 'edu_pro',
+  unknown: 'unknown',
+} satisfies { [Plan in PlanType]: Plan };
+
+const accountSchemas = {
+  apiKey: z.object({ type: z.literal('apiKey') }),
+  chatgpt: z.object({
+    type: z.literal('chatgpt'),
+    email: z.string().nullable(),
+    planType: z.enum(planTypes),
+  }),
+  amazonBedrock: z.object({
+    type: z.literal('amazonBedrock'),
+    usesCodexManagedCredentials: z.boolean(),
+  }),
+} satisfies { [Kind in Account['type']]: z.ZodType<Extract<Account, { type: Kind }>> };
+
+const accountResponseSchema: z.ZodType<GetAccountResponse> = z.object({
+  account: z.union(Object.values(accountSchemas)).nullable(),
+  requiresOpenaiAuth: z.boolean(),
+});
 
 type CodexConfig = Record<string, JsonValue>;
 
@@ -785,7 +828,15 @@ export class CodexProvider implements IAgentProvider {
         connection.request('account/read', { refreshToken: false }),
       ]);
       signal.throwIfAborted();
-      return response.account === null
+      const validated = accountResponseSchema.safeParse(response);
+      if (!validated.success) {
+        return {
+          state: 'check_failed',
+          source: 'native',
+          evidence: 'Codex account/read returned an invalid protocol response.',
+        };
+      }
+      return validated.data.account === null
         ? {
             state: 'unusable',
             source: 'native',

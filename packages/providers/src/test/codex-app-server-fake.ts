@@ -44,6 +44,7 @@ type McpToolCall = Extract<ThreadItem, { type: 'mcpToolCall' }>;
 
 export interface FakeTurnScript {
   account?: GetAccountResponse['account'];
+  accountResponse?: unknown;
   ignoreAccountRead?: boolean;
   /** Notifications sent after `turn/start` answers, in order. */
   notifications?: ServerNotification[];
@@ -238,10 +239,13 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
             if (!turn.ignoreAccountRead)
               send({
                 id,
-                result: {
-                  account: turn.account ?? null,
-                  requiresOpenaiAuth: true,
-                } satisfies GetAccountResponse,
+                result:
+                  'accountResponse' in turn
+                    ? turn.accountResponse
+                    : ({
+                        account: turn.account ?? null,
+                        requiresOpenaiAuth: true,
+                      } satisfies GetAccountResponse),
               });
             break;
           case 'account/login/start':

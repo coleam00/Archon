@@ -387,6 +387,7 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
 
 export interface AssistantLoginDeps {
   assistant: string;
+  assistantConfig?: Parameters<IAgentProvider['checkCredential']>[0]['assistantConfig'];
   model?: string;
   credentialConnected: boolean;
   provider: Pick<IAgentProvider, 'checkCredential'>;
@@ -407,6 +408,7 @@ export async function checkAssistantLogin(
       };
     }
     const status = await deps.provider.checkCredential({
+      assistantConfig: deps.assistantConfig,
       model: deps.model,
       env: Object.fromEntries(
         Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)
@@ -462,6 +464,7 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
   }
   return {
     assistant: config.assistant,
+    assistantConfig: { ...(config.assistants[config.assistant] ?? {}) },
     model,
     credentialConnected,
     provider: getAgentProvider(config.assistant),

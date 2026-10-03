@@ -667,6 +667,7 @@ export interface ProviderInfo {
 export interface IAgentProvider {
   /** Check the credential this provider uses when Archon delivers none. */
   checkCredential(request: {
+    assistantConfig?: SendQueryOptions['assistantConfig'];
     model?: string;
     env: Record<string, string>;
     signal: AbortSignal;

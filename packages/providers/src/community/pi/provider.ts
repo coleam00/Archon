@@ -362,13 +362,16 @@ export class PiProvider implements IAgentProvider {
   async checkCredential(
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
-    const { env, signal } = request;
+    let env = request.env;
+    const { signal } = request;
     try {
+      const piConfig = parsePiConfig(request.assistantConfig ?? {});
+      env = { ...piConfig.env, ...env };
       signal.throwIfAborted();
       ensurePiPackageDirShim();
       const piCodingAgent = await import('@earendil-works/pi-coding-agent');
-      const parsed = resolvePiModel(request.model, process.cwd(), piCodingAgent);
-      const runtime = await piCodingAgent.ModelRuntime.create({ signal });
+      const parsed = resolvePiModel(request.model ?? piConfig.model, process.cwd(), piCodingAgent);
+      const runtime = await piCodingAgent.ModelRuntime.create({ signal, refreshOnCreate: false });
       await applyPiEnvOverride(runtime, parsed.provider, env);
       const status = await resolvePiAuthStatus(
         runtime,

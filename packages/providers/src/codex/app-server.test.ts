@@ -224,12 +224,29 @@ describe('Codex native credential check', () => {
     return status;
   };
 
-  test('an account is usable', async () => {
-    expect(await check({ account: { type: 'chatgpt', email: null, planType: 'plus' } })).toEqual({
-      state: 'usable',
-      source: 'native',
+  for (const account of [
+    { type: 'apiKey' },
+    { type: 'chatgpt', email: null, planType: 'plus' },
+    { type: 'amazonBedrock', usesCodexManagedCredentials: false },
+  ] as const) {
+    test(`${account.type} account is usable`, async () => {
+      expect(await check({ account })).toEqual({ state: 'usable', source: 'native' });
     });
-  });
+  }
+  for (const accountResponse of [
+    {},
+    null,
+    { account: {}, requiresOpenaiAuth: true },
+    { account: { type: 'chatgpt', email: null, planType: 'invalid' }, requiresOpenaiAuth: true },
+    { account: { type: 'amazonBedrock' }, requiresOpenaiAuth: true },
+  ]) {
+    test(`malformed account response ${JSON.stringify(accountResponse)} is check_failed`, async () => {
+      expect(await check({ accountResponse })).toMatchObject({
+        state: 'check_failed',
+        evidence: expect.stringContaining('account/read'),
+      });
+    });
+  }
   test('no account is unusable', async () => {
     expect(await check({ account: null })).toMatchObject({
       state: 'unusable',

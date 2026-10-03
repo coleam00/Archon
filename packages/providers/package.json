@@ -97,6 +97,9 @@
       "src/native-tools-conformance.test.ts"
     ],
     [
+      "src/native-credential-check.test.ts"
+    ],
+    [
       "src/claude/config.test.ts"
     ],
     [
