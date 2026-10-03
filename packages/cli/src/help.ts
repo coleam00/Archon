@@ -22,9 +22,9 @@ interface FlagOwner {
 interface FlagHelp {
   spec: string;
   description: string;
-  // Each (command, subcommand?) tuple that owns this flag. Empty means
-  // "global": appears in `archon --help` only, never in any scoped slice.
-  owners: FlagOwner[];
+  // Each (command, subcommand?) tuple that owns this flag. Scoped-only flags
+  // omit owners because their enclosing entry owns them; empty means "global".
+  owners?: FlagOwner[];
 }
 
 interface ExampleHelp {
@@ -69,7 +69,6 @@ const commandHelp: HelpEntry[] = [
       {
         spec: '--data <json>',
         description: 'JSON object with remote (URL/SSH syntax or null)',
-        owners: [],
       },
     ],
   },
@@ -82,7 +81,6 @@ const commandHelp: HelpEntry[] = [
       {
         spec: '--data <json>',
         description: 'JSON object with ref: {repo: {host, path}, number}',
-        owners: [],
       },
     ],
   },
@@ -107,7 +105,6 @@ const commandHelp: HelpEntry[] = [
         spec: '--full',
         description:
           'When given with a name, show the exact description instead of the compact preview',
-        owners: [],
       },
     ],
   },
@@ -216,12 +213,10 @@ const commandHelp: HelpEntry[] = [
       {
         spec: '--merged',
         description: 'Remove environments with branches merged into the base branch',
-        owners: [],
       },
       {
         spec: '--include-closed',
         description: 'Also remove environments whose PRs were closed without merging',
-        owners: [],
       },
     ],
   },
@@ -422,12 +417,10 @@ const scopedOnlyHelp: HelpEntry[] = [
       {
         spec: '--data <json>',
         description: 'Structured request without operationId or op',
-        owners: [],
       },
       {
         spec: '--data-file <path>',
         description: 'Read that request from a file, keeping authored content out of argv',
-        owners: [],
       },
     ],
   })),
@@ -495,7 +488,6 @@ const scopedOnlyHelp: HelpEntry[] = [
         spec: '--comment <text>',
         description:
           'Comment to attach to the approval (also accepted as positional args after <run-id>)',
-        owners: [],
       },
     ],
   },
@@ -509,7 +501,6 @@ const scopedOnlyHelp: HelpEntry[] = [
         spec: '--reason <text>',
         description:
           'Reason to record with the rejection (also accepted as positional args after <run-id>)',
-        owners: [],
       },
     ],
   },
@@ -529,17 +520,14 @@ const scopedOnlyHelp: HelpEntry[] = [
       {
         spec: '--scope <key>',
         description: 'Limit the reset to one scope (omit to delete every scope; requires --yes)',
-        owners: [],
       },
       {
         spec: '--node <id>',
         description: 'Limit the reset to one node within the chosen scope',
-        owners: [],
       },
       {
         spec: '--yes',
         description: 'Skip the confirmation prompt (required for cross-scope deletion)',
-        owners: [],
       },
     ],
   },
@@ -552,17 +540,14 @@ const scopedOnlyHelp: HelpEntry[] = [
       {
         spec: '--run-id <id>',
         description: 'Target run for the event (required)',
-        owners: [],
       },
       {
         spec: '--type <event-type>',
         description: 'Event type to emit (required)',
-        owners: [],
       },
       {
         spec: '--data <json>',
         description: 'JSON payload for the event (optional)',
-        owners: [],
       },
     ],
   },
@@ -900,7 +885,7 @@ function selectFlagsFor(selected: HelpEntry[], scopedOnly: FlagHelp[] = []): Fla
     out.push(f);
   }
   for (const f of orderedFlags) {
-    if (!f.owners.some(o => keys.has(ownerKey(o)))) continue;
+    if (!f.owners?.some(o => keys.has(ownerKey(o)))) continue;
     if (seen.has(f.spec)) continue;
     seen.add(f.spec);
     out.push(f);
