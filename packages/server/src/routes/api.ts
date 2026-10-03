@@ -130,19 +130,6 @@ interface RawWorkflowFile {
   content: string;
 }
 
-/**
- * The workflow as authored: the YAML mapping before the engine's normalizing
- * transform. The builder edits this shape, and the normalized `workflow` cannot
- * be sent back (validate rejects it), so GET returns both. Parsed with the same
- * `Bun.YAML` the loader uses; undefined when the top level is not a mapping.
- */
-function authoredForm(content: string): Record<string, unknown> | undefined {
-  const raw: unknown = Bun.YAML.parse(content);
-  return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
-    ? (raw as Record<string, unknown>)
-    : undefined;
-}
-
 async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflowFile | null> {
   const acceptedNames = new Set(name.includes('/') ? [name, basename(name)] : [name]);
   for (const ext of ['yaml', 'yml']) {
@@ -158,6 +145,19 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
     }
   }
   return null;
+}
+
+/**
+ * The workflow as authored: the YAML mapping before the engine's normalizing
+ * transform. The builder edits this shape, and the normalized `workflow` cannot
+ * be sent back (validate rejects it), so GET returns both. Parsed with the same
+ * `Bun.YAML` the loader uses; undefined when the top level is not a mapping.
+ */
+function authoredForm(content: string): Record<string, unknown> | undefined {
+  const raw: unknown = Bun.YAML.parse(content);
+  return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
 }
 
 async function findPackagedWorkflowAt(
