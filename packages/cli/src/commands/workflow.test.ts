@@ -587,7 +587,7 @@ mock.module('@archon/core/db/workflow-events', () => ({
 const mockDeleteNodeSessions = mock(() => Promise.resolve({ deleted: 0 }));
 mock.module('@archon/core/db/workflow-node-sessions', () => ({
   deleteWorkflowNodeSessions: mockDeleteNodeSessions,
-  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  listWorkflowNodeSessions: mock(() => Promise.resolve([])),
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
 }));
 

@@ -299,7 +299,7 @@ function createMockStore(): MockWorkflowStore {
     ),
     getCodebase: mock<IWorkflowStore['getCodebase']>(async _id => null),
     getCodebaseEnvVars: mock<IWorkflowStore['getCodebaseEnvVars']>(async _codebaseId => ({})),
-    getWorkflowNodeSession: mock<IWorkflowStore['getWorkflowNodeSession']>(async _key => null),
+    listWorkflowNodeSessions: mock<IWorkflowStore['listWorkflowNodeSessions']>(async _scope => []),
     listWorkflowRunNodeSessions: mock<IWorkflowStore['listWorkflowRunNodeSessions']>(
       async _workflowRunId => []
     ),
@@ -308,9 +308,6 @@ function createMockStore(): MockWorkflowStore {
     ),
     upsertWorkflowNodeSession: mock<IWorkflowStore['upsertWorkflowNodeSession']>(
       async _params => {}
-    ),
-    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(
-      async _filter => ({ deleted: 0 })
     ),
   };
 }
@@ -20648,15 +20645,12 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    const getMock = store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>;
     const upsertMock = store.upsertWorkflowNodeSession as Mock<
       typeof store.upsertWorkflowNodeSession
     >;
-    expect(getMock).toHaveBeenCalledWith({
+    expect(store.listWorkflowNodeSessions).toHaveBeenCalledWith({
       workflow_name: 'persist-test',
-      node_id: 'planner',
       scope_key: 'conv-dag',
-      provider: 'claude',
     });
 
     const resumeSessionArg = mockSendQueryDag.mock.calls[0][2];
@@ -20674,16 +20668,18 @@ describe('executeDagWorkflow -- persist_session', () => {
 
   it('persist_session: true with prior row → resumeSessionId loaded, upsert with new id', async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-session-id',
-      last_run_id: 'prior-run',
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-session-id',
+        last_run_id: 'prior-run',
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     const mockDeps = createMockDeps(store);
 
     await executeDagWorkflow(
@@ -20726,17 +20722,21 @@ describe('executeDagWorkflow -- persist_session', () => {
     // the user's chat as parent_conversation_id. The scope must follow the chat.
     const store = createMockStore();
     const rows = new Map<string, string>();
-    store.getWorkflowNodeSession.mockImplementation(async key => {
-      const id = rows.get(key.scope_key);
+    store.listWorkflowNodeSessions.mockImplementation(async scope => {
+      const id = rows.get(scope.scope_key);
       return id === undefined
-        ? null
-        : {
-            ...key,
-            provider_session_id: id,
-            last_run_id: null,
-            created_at: '2026-05-01T00:00:00Z',
-            updated_at: '2026-05-01T00:00:00Z',
-          };
+        ? []
+        : [
+            {
+              ...scope,
+              node_id: 'planner',
+              provider: 'claude',
+              provider_session_id: id,
+              last_run_id: null,
+              created_at: '2026-05-01T00:00:00Z',
+              updated_at: '2026-05-01T00:00:00Z',
+            },
+          ];
     });
     store.upsertWorkflowNodeSession.mockImplementation(async params => {
       rows.set(params.scope_key, params.provider_session_id);
@@ -20782,16 +20782,18 @@ describe('executeDagWorkflow -- persist_session', () => {
 
   it('persist_session resume returns cold (resumed:false) → surfaced to user, no re-run, fresh id persisted', async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-session-id',
-      last_run_id: 'prior-run',
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-session-id',
+        last_run_id: 'prior-run',
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
 
@@ -20842,16 +20844,18 @@ describe('executeDagWorkflow -- persist_session', () => {
   /** Arm the mocks for a cold resume: a persisted prior session that the provider
    *  reports back as not resumed (fresh fallback). */
   function armColdResume(store: ReturnType<typeof createMockStore>): void {
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-session-id',
-      last_run_id: 'prior-run',
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-session-id',
+        last_run_id: 'prior-run',
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     mockSendQueryDag.mockClear();
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'cold run' };
@@ -21092,51 +21096,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     expect(runCopy).toBe('AI response');
   });
 
-  it('persist_session: true but provider returns no sessionId → delete stale row', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'AI response' };
-      yield { type: 'result' }; // no sessionId
-    });
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        cwd: testDir,
-        workflow: {
-          name: 'persist-test',
-          nodes: [
-            {
-              id: 'planner',
-              kind: 'agent',
-              source: { kind: 'command', name: 'my-cmd' },
-              persist_session: true,
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun(),
-      })
-    );
-
-    const upsertMock = store.upsertWorkflowNodeSession as Mock<
-      typeof store.upsertWorkflowNodeSession
-    >;
-    const deleteMock = store.deleteWorkflowNodeSessions as Mock<
-      typeof store.deleteWorkflowNodeSessions
-    >;
-    expect(upsertMock).not.toHaveBeenCalled();
-    // Provider is included in the filter so a stale-row cleanup under provider B
-    // does not wipe provider A's saved row for the same node.
-    expect(deleteMock).toHaveBeenCalledWith({
-      workflow_name: 'persist-test',
-      scope_key: 'conv-dag',
-      node_id: 'planner',
-      provider: 'claude',
-    });
-  });
-
-  it('persist_session unset → no store interaction', async () => {
+  it('persist_session unset → no session is written', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
 
@@ -21152,9 +21112,7 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
-    expect(store.deleteWorkflowNodeSessions).not.toHaveBeenCalled();
   });
 
   it('workflow.persist_sessions: true + node.persist_session: false → node opts out', async () => {
@@ -21181,22 +21139,23 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 
   it("node.context: 'fresh' bypasses persistence even when persist_session: true", async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-id',
-      last_run_id: null,
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-id',
+        last_run_id: null,
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     const mockDeps = createMockDeps(store);
 
     await executeDagWorkflow(
@@ -21219,7 +21178,6 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
@@ -21288,12 +21246,6 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).toHaveBeenCalledWith({
-      workflow_name: 'wf-inherit',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-    });
     const upsertMock = store.upsertWorkflowNodeSession as Mock<
       typeof store.upsertWorkflowNodeSession
     >;
@@ -21309,9 +21261,7 @@ describe('executeDagWorkflow -- persist_session', () => {
 
   it('persist_session lookup failure → node runs fresh and upserts (non-fatal)', async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockRejectedValue(
-      new Error('DB timeout')
-    );
+    store.listWorkflowNodeSessions.mockRejectedValue(new Error('DB timeout'));
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
 
@@ -21413,23 +21363,17 @@ describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => 
       updated_at: '2026-10-01T00:00:00Z',
     });
     const store = createMockStore();
-    store.getWorkflowNodeSession.mockImplementation(async k => rows.get(key(k)) ?? null);
+    store.listWorkflowNodeSessions.mockImplementation(async scope =>
+      [...rows.values()].filter(
+        row => row.workflow_name === scope.workflow_name && row.scope_key === scope.scope_key
+      )
+    );
     store.upsertWorkflowNodeSession.mockImplementation(async params => {
       rows.set(key(params), {
         ...params,
         created_at: '2026-10-03T00:00:00Z',
         updated_at: '2026-10-03T00:00:00Z',
       });
-    });
-    store.deleteWorkflowNodeSessions.mockImplementation(async filter => {
-      let deleted = 0;
-      for (const [k, row] of rows) {
-        if (row.workflow_name === filter.workflow_name && row.node_id === filter.node_id) {
-          rows.delete(k);
-          deleted++;
-        }
-      }
-      return { deleted };
     });
     return { store, row: () => rows.get(key(seed)) };
   }
@@ -21544,8 +21488,9 @@ describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => 
       plannerSessionId: run => `${run}-planner`,
     });
 
-    expect(plannerResume.get('a')?.resume).toBeUndefined();
-    expect(plannerResume.get('b')?.resume).toBeUndefined();
+    // Each run's planner continues only its own run's conversation, never the persisted S0.
+    expect(plannerResume.get('a')?.resume).toBe('a-warmup');
+    expect(plannerResume.get('b')?.resume).toBe('b-warmup');
     const notContinued = store.createWorkflowEvent.mock.calls
       .map(([event]) => event)
       .filter(event => event.event_type === 'node_session_not_continued');
@@ -26559,16 +26504,18 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       };
     });
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'addressable',
-      node_id: 'consumer',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'persisted-consumer-session',
-      last_run_id: 'old-run',
-      created_at: '2026-08-19T00:00:00Z',
-      updated_at: '2026-08-19T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'addressable',
+        node_id: 'consumer',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'persisted-consumer-session',
+        last_run_id: 'old-run',
+        created_at: '2026-08-19T00:00:00Z',
+        updated_at: '2026-08-19T00:00:00Z',
+      },
+    ]);
 
     await runAddressableWorkflow(
       [
@@ -26585,7 +26532,6 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       store
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(mockSendQueryDag.mock.calls[1][2]).toBe('named-source');
     expect(store.upsertWorkflowNodeSession).toHaveBeenCalledWith(
       expect.objectContaining({ node_id: 'consumer', provider_session_id: 'named-branch' })
