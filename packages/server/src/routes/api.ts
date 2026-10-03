@@ -126,7 +126,7 @@ interface RawWorkflowFile {
   filename: string;
   packaged: boolean;
   parsed: ReturnType<typeof parseWorkflow>;
-  /** The file text as read — the source of the authored form the builder edits. */
+  /** The file text as read. */
   content: string;
 }
 
