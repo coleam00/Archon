@@ -1,8 +1,8 @@
-import { afterAll, beforeAll, expect, test } from 'bun:test';
+import { afterAll, beforeAll, expect, test as bunTest } from 'bun:test';
 import { link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { removeTempTree, skipCompiledBinaryTests, testTimeout } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { compileDiscoveryPlugin } from './fixtures/compile-discovery-plugin';
 import { dispatchForge } from './dispatch';
@@ -11,15 +11,23 @@ import { runForgeReadConformance } from './outbound-conformance';
 const exe = process.platform === 'win32' ? '.exe' : '';
 let buildRoot: string;
 let compiledFixture: string;
+// Every test here uses the compiled fixture. Bun still runs file-level hooks when every
+// test is skipped, so the hooks check this too.
+const skipCompiled = skipCompiledBinaryTests();
+const test = bunTest.skipIf(skipCompiled);
 
 // One compile for the file; installing the binary under a name is a hard link. On
 // windows-latest the compile alone took 0.7-8 s, so the hook carries an explicit budget.
 beforeAll(async () => {
+  if (skipCompiled) return;
   buildRoot = await mkdtemp(join(tmpdir(), 'forge-fixture-build-'));
   compiledFixture = compileDiscoveryPlugin(buildRoot);
 }, testTimeout(20_000));
 
-afterAll(() => removeTempTree(buildRoot));
+afterAll(async () => {
+  if (skipCompiled) return;
+  await removeTempTree(buildRoot);
+});
 
 test('opportunistic discovery failures do not disable a healthy plugin or hide selected failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'forge-discovery-'));

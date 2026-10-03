@@ -158,3 +158,24 @@ export function captureLogLines(): { lines: Record<string, unknown>[]; restore()
     },
   };
 }
+
+let compiledBinarySkipAnnounced = false;
+
+/**
+ * Whether tests that build a fresh executable with `bun build --compile` skip on this host.
+ *
+ * They skip on macOS unless `ARCHON_TEST_COMPILED_BINARIES=1`: running them locally has
+ * preceded a stuck `syspolicyd`, after which every new process on the machine queues behind
+ * the daemon until a reboot. CI runs on Linux and Windows, so it always runs them. Bun
+ * reports a skipped test only as a count, so the first skip in a process says why on stderr.
+ */
+export function skipCompiledBinaryTests(): boolean {
+  const skip = process.platform === 'darwin' && process.env.ARCHON_TEST_COMPILED_BINARIES !== '1';
+  if (skip && !compiledBinarySkipAnnounced) {
+    compiledBinarySkipAnnounced = true;
+    console.warn(
+      'Skipping tests that compile a binary with `bun build --compile` on macOS; set ARCHON_TEST_COMPILED_BINARIES=1 to run them.'
+    );
+  }
+  return skip;
+}
