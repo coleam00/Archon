@@ -146,6 +146,23 @@ export interface LoadedWorkflow {
 }
 
 /**
+ * An installed-pack workflow (`owner/plugin:entrypoint`). The server resolves it through
+ * the catalog and returns no authored form, so the builder shows it as read-only instead
+ * of opening an editor on it.
+ */
+export interface InstalledPackWorkflow {
+  installedPack: true;
+  name: string;
+}
+
+/** What `loadWorkflow` resolves to: a definition to edit, or a pack workflow that has none. */
+export type WorkflowLoad = LoadedWorkflow | InstalledPackWorkflow;
+
+export function isInstalledPackWorkflow(load: WorkflowLoad): load is InstalledPackWorkflow {
+  return 'installedPack' in load;
+}
+
+/**
  * `POST /api/workflows/validate` response — HTTP 200 even when invalid.
  * Discriminated on `valid` so a `valid:false` body always carries the (possibly
  * empty) `errors` field and the `valid:true` branch cannot claim errors.
@@ -169,9 +186,10 @@ export function buildSavePath(name: string, cwd: string, source: WorkflowSaveSou
  * `.archon/workflows/<subdir>/` (matches `getWorkflowGraph`'s note). Workflows
  * in subfolders won't load here — callers surface a "not found" empty state.
  */
-export async function loadWorkflow(name: string, cwd: string): Promise<LoadedWorkflow> {
+export async function loadWorkflow(name: string, cwd: string): Promise<WorkflowLoad> {
   const res = await requestJson<GetWorkflowResponse>(buildWorkflowPath(name, cwd));
   if (res.authored === undefined) {
+    if (res.source === 'installed') return { installedPack: true, name };
     // Editing the normalized form would open every node as unrecognised and
     // write them back as empty prompts — refuse rather than corrupt on save.
     throw new Error(`GET /api/workflows/${name} returned no authored form; cannot edit it`);

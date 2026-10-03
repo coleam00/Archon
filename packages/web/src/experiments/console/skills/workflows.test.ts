@@ -150,7 +150,20 @@ describe('loadWorkflow', () => {
     });
 
     const loaded = await loadWorkflow('assist', '/repo');
-    expect(loaded.definition).toEqual(authored);
+    expect(loaded).toMatchObject({ definition: authored });
+  });
+
+  test('reports an installed-pack workflow as such instead of failing on its missing authored form', async () => {
+    stubGet({
+      workflow: { name: 'acme/review:pr', description: 'pack entrypoint', nodes: [] },
+      filename: 'acme/review:pr',
+      source: 'installed',
+    });
+
+    expect(await loadWorkflow('acme/review:pr', '/repo')).toEqual({
+      installedPack: true,
+      name: 'acme/review:pr',
+    });
   });
 
   test('refuses a response without the authored form instead of editing the normalized one', async () => {
