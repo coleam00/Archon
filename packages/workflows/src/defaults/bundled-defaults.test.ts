@@ -498,8 +498,8 @@ describe('bundled-defaults', () => {
       // focused reviewer stands in for them on a low-risk change.
       const lensWhen = (id: string) => parsed.workflow?.nodes.find(node => node.id === id)?.when;
       expect(lensWhen('seams')).not.toContain('tier');
-      expect(lensWhen('code')).toContain("$INPUTS.tier == 'full'");
-      expect(lensWhen('tests')).toContain("$INPUTS.tier == 'full'");
+      expect(lensWhen('code')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('tests')).toContain("$INPUTS.tier != 'focused'");
       expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
       // Reviewers are read-only by the engine's check, not only by their prompts.
       for (const id of [

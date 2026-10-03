@@ -2,7 +2,7 @@
 # adopts it before the pull request opens; the review is ready but leaves
 # Suggestions open, so one polish pass judges them without another review round,
 # and the description is resynced because the diff changed after it was written.
-# skipped and gate-ready binds the review verdict directly (the corrections
+# The corrections loop is skipped and gate-ready binds the review verdict directly (the corrections
 # binding takes its if_skipped default). The pull request's head is in its own
 # repository, so the final local validation is skipped: its nodes carry no stub,
 # and running them would fail this fixture.

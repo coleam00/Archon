@@ -208,10 +208,10 @@ nodes:
   # the current canonical findings, proves the correction is green, then runs a
   # fresh continuation review over the report and delta, so a blocking fix is
   # never unreviewed. The bound is a runaway backstop, not a pacing device:
-  # until_bash ends the loop the moment a recheck certifies ready. Since
-  # continuation rechecks and class completion landed (2026-08-27), no converging
-  # delivery needed more than three corrections, and the one run that reached
-  # five never converged: it found another symptom of one class each round. A
+  # until_bash ends the loop the moment a recheck certifies ready. With
+  # continuation rechecks and class completion, a converging delivery needs at
+  # most three corrections; a run that needs more is finding another symptom of
+  # one class each round and will not converge by looping. A
   # per-lane bound would need runtime-parameterized composition, which the
   # language deliberately does not have — the flat bound buys the same outcome.
   #
@@ -408,7 +408,8 @@ nodes:
 
   # Unrelated work the review proved becomes tracker issues, one per record, each
   # linking back to this run and the pull request. Off the flip's path: a failed
-  # filing is reported, and never holds a delivered change back.
+  # filing never holds a delivered change back, but it does end the run failed
+  # after the flip, so the unfiled records reach the operator.
   - id: file-discoveries
     script: file-discoveries
     runtime: bun
@@ -586,8 +587,7 @@ nodes:
 
   # One correction pass, entered only on concluded red. No review follows it: the
   # re-await below reads CI on the pushed fix, which is the proof a CI fix needs,
-  # and the red-cause discipline in its brief is what keeps it honest. Every
-  # post-CI-fix review in the pack's history confirmed the fix (21 of 21).
+  # and the red-cause discipline in its brief is what keeps it honest.
   - id: ci-fix
     include: archon-implement
     depends_on: [ci-verdict]

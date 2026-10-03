@@ -57,7 +57,8 @@ that was already true when the node started.
 
 ## Forge source
 
-One switch selects the source for every forge read and write this pack makes.
+One switch selects the source for every pull-request and check read and write
+this pack makes; issue writes go through `gh` either way (see below).
 [`.shared/forge.ts`](.shared/forge.ts) owns which one a run selected;
 [`.shared/checks.ts`](.shared/checks.ts) owns the check read and its gate policy,
 and [`.shared/pr.ts`](.shared/pr.ts) owns the pull-request reads and writes. Both

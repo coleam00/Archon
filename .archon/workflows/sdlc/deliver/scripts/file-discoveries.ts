@@ -4,9 +4,11 @@
  * Review consolidates work it proved but that is unrelated to this change into
  * `discoveries.json`. A record nobody files is lost the moment the run ends, so
  * delivery files one issue per record, linking back to the run and the pull
- * request. An open issue with the same title is reused rather than duplicated,
- * and each record gains the `issue` URL it now lives at, so a resumed run files
- * nothing twice and the terminal report can point at it.
+ * request. Each record gains the `issue` URL it now lives at, written back after
+ * every issue, so a resumed run files nothing twice and the terminal report can
+ * point at it. A matching title is not reused: an open issue with the same title
+ * may describe different work, and reusing it would report this record filed
+ * while its claim and evidence were never published.
  *
  * gh is the transport, as it is for triage's labels: the forge contract has no
  * issue-create operation yet. Each created issue is read back before it counts.
@@ -81,25 +83,16 @@ try {
       const title = typeof record.title === 'string' ? record.title.trim() : '';
       if (title === '') throw new Error('a discovery has no title');
 
-      const open = JSON.parse(
-        gh('issue', 'list', '--repo', repo, '--state', 'open', '--search', `${title} in:title`,
-          '--json', 'title,url', '--limit', '20')
-      ) as { title: string; url: string }[];
-      const existing = open.find(issue => issue.title.trim().toLowerCase() === title.toLowerCase());
-      if (existing) {
-        record.issue = existing.url;
-      } else {
-        const bodyPath = join(scratch, 'body.md');
-        writeFileSync(bodyPath, body(record, pr.url));
-        const url = gh('issue', 'create', '--repo', repo, '--title', title, '--body-file', bodyPath);
-        const readBack = JSON.parse(gh('issue', 'view', url, '--json', 'title,url')) as {
-          title: string;
-          url: string;
-        };
-        if (readBack.title !== title) throw new Error(`issue read-back disagrees for ${url}`);
-        record.issue = readBack.url;
-      }
-      filed.push(String(record.issue));
+      const bodyPath = join(scratch, 'body.md');
+      writeFileSync(bodyPath, body(record, pr.url));
+      const url = gh('issue', 'create', '--repo', repo, '--title', title, '--body-file', bodyPath);
+      const readBack = JSON.parse(gh('issue', 'view', url, '--json', 'title,url')) as {
+        title: string;
+        url: string;
+      };
+      if (readBack.title !== title) throw new Error(`issue read-back disagrees for ${url}`);
+      record.issue = readBack.url;
+      filed.push(readBack.url);
       // Persist after each issue, so a failure part-way never files one twice.
       writeFileSync(path, `${JSON.stringify(records, null, 2)}\n`);
     }

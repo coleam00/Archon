@@ -47,8 +47,9 @@ inputs:
   tier:
     default: "full"
     description: >-
-      full — code, seams and tests lenses; focused — seams plus one general
-      reviewer, for a change that engages none of the risks the lenses scale on.
+      focused — seams plus one general reviewer, for a change that engages none
+      of the risks the lenses scale on; any other value runs the full tier: code,
+      seams and tests.
   simplify:
     default: "true"
     description: >-
@@ -139,7 +140,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.tier == 'full'"
+    when: "$mode.output.continuation == false && $INPUTS.tier != 'focused'"
     retry:
       max_attempts: 2
       delay_ms: 20000
@@ -149,7 +150,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.tier == 'full'"
+    when: "$mode.output.continuation == false && $INPUTS.tier != 'focused'"
     retry:
       max_attempts: 2
       delay_ms: 20000
