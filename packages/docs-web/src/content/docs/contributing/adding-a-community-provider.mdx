@@ -94,7 +94,9 @@ export class YourProvider implements IAgentProvider {
     //    for it, after the final `result`. The executor finishes the node on
     //    `settled`; a stream that produced output and ends without it fails the
     //    node. Check it with `runProviderConformance` from
-    //    `@archon/provider-contract/conformance`.
+    //    `@archon/provider-contract/conformance`. The suite requires
+    //    `capabilities: provider.getCapabilities()`; it checks session ids
+    //    (step 6) only when that declares sessionResume: true.
   }
 
   getType() { return 'your-id'; }
