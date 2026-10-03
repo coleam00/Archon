@@ -56,6 +56,7 @@ import {
 } from './schemas';
 import {
   canonicalValueText,
+  OUTPUT_REF_SOURCE,
   LOOP_PREV_OUTPUT_REF_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
   parseWholeInputsRef,
@@ -189,14 +190,8 @@ export function collectComposedSuspensionPaths(
  */
 export const INCLUDE_MAX_DEPTH = 3;
 
-/**
- * Output-ref pattern — mirrors the loader's `outputRefPattern` and the executor's
- * substitution regex. Matches `$<id>.output`; any `.field` suffix that follows is
- * left untouched (only the node-id segment is rewritten). Used for the eight text
- * surfaces that go through substituteNodeOutputRefs (prompt/bash/script/... ), which
- * only accept the canonical `.output[.field]` form.
- */
-const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+/** Matches the canonical current-output prefix; only the node-id segment is rewritten. */
+const OUTPUT_REF_PATTERN = new RegExp(OUTPUT_REF_SOURCE, 'g');
 
 /**
  * Cross-iteration body refs use the same executable node ids, under a distinct prefix.

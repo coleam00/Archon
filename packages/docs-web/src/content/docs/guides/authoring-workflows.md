@@ -573,9 +573,10 @@ Variable substitution order:
 1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
 2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
 
-Only one top-level field segment is supported. A nested reference such as
-`$nodeId.output.proposal.text` fails workflow validation. Flatten the producer's
-`output_format`, or pass `$nodeId.output.proposal` to a script node and inspect it there.
+In fields that substitute node output references, only one top-level field segment is
+supported. A nested reference such as `$nodeId.output.proposal.text` fails workflow
+validation. Flatten the producer's `output_format`, or pass `$nodeId.output.proposal` to a
+script node and inspect it there.
 
 A reference to a **failed** producer — fielded or whole-text — fails the node doing the
 substitution instead of splicing in the failed producer's leftover output; a `bash:`/
@@ -1089,6 +1090,8 @@ coalescing decision ("ready if either branch said so") stays in the consuming sc
 is the YAML-coordinates / code-computes split. A skipped producer with **no**
 `if_skipped` fails the node with the
 binding, producer, and fix named — a binding never silently resolves to `''`.
+`if_skipped` is literal data, so reference-looking text there is neither substituted nor
+validated as an output reference.
 
 `if_skipped` covers a producer that completed as **skipped**, including an exec node that
 ran until an opted-in timeout. A producer that **failed** always fails the binding too,
