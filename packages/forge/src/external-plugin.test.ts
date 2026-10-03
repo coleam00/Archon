@@ -1,11 +1,14 @@
-import { expect, test } from 'bun:test';
+import { expect, test as bunTest } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, skipCompiledBinaryTests } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
 import { runForgeReadConformance } from './outbound-conformance';
+
+// Every test in this file compiles a fixture binary.
+const test = bunTest.skipIf(skipCompiledBinaryTests());
 
 test('discovers and runs an independently installed executable outside the source tree', async () => {
   const root = await mkdtemp(join(tmpdir(), 'archon-external-forge-'));

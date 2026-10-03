@@ -1,10 +1,13 @@
-import { expect, test } from 'bun:test';
+import { expect, test as bunTest } from 'bun:test';
 import { link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, skipCompiledBinaryTests } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
+
+// Every test in this file compiles a fixture binary.
+const test = bunTest.skipIf(skipCompiledBinaryTests());
 
 test('opportunistic discovery failures do not disable a healthy plugin or hide selected failures', async () => {
   const root = await mkdtemp(join(tmpdir(), 'forge-discovery-'));
