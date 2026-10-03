@@ -34403,6 +34403,72 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(JSON.parse(String(wrapper?.data.node_output))).toEqual(['done-a', 'done-b']);
   });
 
+  it('a persist_session node inside a composed body continues the scope session', async () => {
+    // The parent has no persisted node of its own; only the fan-out's body persists.
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: test block',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: work',
+        "    prompt: 'work on $INPUTS.item'",
+        '    persist_session: true',
+      ].join('\n')
+    );
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    let sessionCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      sessionCount += 1;
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: `session-${sessionCount}` };
+    });
+    // Body node ids are instance-namespaced, so the second run reads back exactly the
+    // rows the first run wrote rather than a hand-built key.
+    const store = createMockStore();
+    const rows: WorkflowNodeSession[] = [];
+    store.listWorkflowNodeSessions.mockImplementation(async () => [...rows]);
+    store.upsertWorkflowNodeSession.mockImplementation(async params => {
+      rows.push({
+        ...params,
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      });
+    });
+
+    for (const runId of ['run-1', 'run-2']) {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-compose',
+          cwd: testDir,
+          workflow: {
+            name: 'compose-parent',
+            nodes: [
+              { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                depends_on: ['list'],
+                with: { item: 'unused' },
+                fan_out: { items: '$list.output', as: 'item', max_parallel: 1, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(runId, { conversation_id: 'conv-compose' }),
+        })
+      );
+    }
+
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
+  });
+
   it('schedules the quota resume when a composed instance node reports quota_exhausted', async () => {
     await writeBlock(
       [
