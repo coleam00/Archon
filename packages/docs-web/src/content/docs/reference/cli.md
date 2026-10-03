@@ -633,7 +633,10 @@ entry includes `nodeId` and `state`; nodes with a start event include the origin
 `startedAt`, and terminal nodes with both start and end events include `durationMs`.
 Completed nodes may include an `outputPreview`, truncated after 200 characters with
 ASCII `...`, while failed nodes include `error` (or `Unknown error` when none was
-recorded).
+recorded). Nodes whose provider reported a session include `sessionIds`: the full
+session id of each attempt and loop iteration, in order. Human `--verbose` output prints
+them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in
+the provider's own tool, for example with `claude --resume <id>`.
 
 Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
 debugging. Raw events are not the recommended integration surface.
