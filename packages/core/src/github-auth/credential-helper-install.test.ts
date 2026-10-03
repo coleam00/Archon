@@ -21,7 +21,7 @@ import { cp, mkdtemp, readFile, writeFile, mkdir, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as git from '@archon/git';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
 import { installCredentialHelper } from './credential-helper-install';
 
 const trackTempRoot = trackTempRoots();
@@ -122,7 +122,7 @@ describe('installCredentialHelper', () => {
     expect(result.error.message).toContain('not a git repository');
   });
 
-  test.skipIf(process.platform === 'win32')(
+  test.skipIf(process.platform === 'win32' || skipCompiledBinaryTests())(
     'loads from Docker source packaging and embeds in a compiled binary',
     async () => {
       execSpy.mockRestore();

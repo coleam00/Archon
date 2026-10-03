@@ -28,8 +28,8 @@ describe('when-grammar parse', () => {
     // Every other fixture here is hyphen-free, so this is the only case that
     // catches the node-id slot being filled with the hyphen-free segment
     // grammar — the natural slip now that ATOM_PATTERN is composed rather than
-    // written out. `archon-validate-pr.yaml` ships exactly this condition, so
-    // the slip would reject a bundled workflow that runs fine in production.
+    // written out. Hyphenated node ids are the norm in real workflows, so the
+    // slip would reject workflows that run fine in production.
     const r = parse("$classify-testability.output.testable == 'e2e_testable'");
     expect(r.ok).toBe(true);
     if (r.ok) {
