@@ -21,13 +21,21 @@
  */
 export const STEP_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 
-/** Sentinel value to distinguish idle timeout from normal generator completion */
-const IDLE_TIMEOUT_SENTINEL = Symbol('IDLE_TIMEOUT');
+/**
+ * The watchdog counts silence one tick at a time. A tick is credited with at most its
+ * scheduled delay, so a jump in the wall clock between ticks (the machine was
+ * suspended) costs the idle window at most one tick. A single timer spanning the
+ * whole window would fire on wake and fail a node that was never silent while awake.
+ */
+const WATCHDOG_TICK_MS = 1000;
+
+const TICK = Symbol('WATCHDOG_TICK');
 
 /**
  * Wraps an async generator with an idle timeout. If the generator yields no value for
- * `timeoutMs` of its own time — time the consumer spends handling a value does not
- * count — the wrapper returns normally, converting a hang into a clean exit.
+ * `timeoutMs` of its own time, the wrapper returns normally, converting a hang into a
+ * clean exit. Time the consumer spends handling a value does not count, and neither
+ * does time the machine spends suspended.
  *
  * When `shouldResetTimer` is provided and returns `false` for a yielded value, the
  * timer is NOT reset — it keeps counting from the previous reset point. Most callers
@@ -54,50 +62,53 @@ export async function* withIdleTimeout<T>(
   onTimerReset?: (value: T, resetAt: number) => void
 ): AsyncGenerator<T> {
   let timedOut = false;
-  let timerStartedAt = Date.now();
+  let idleMs = 0;
 
   try {
     while (true) {
-      const elapsed = Date.now() - timerStartedAt;
-      const remaining = Math.max(0, timeoutMs - elapsed);
-
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeoutPromise = new Promise<typeof IDLE_TIMEOUT_SENTINEL>(resolve => {
-        timer = setTimeout(() => {
-          resolve(IDLE_TIMEOUT_SENTINEL);
-        }, remaining);
-      });
-
-      // Start waiting for the next value from the generator
       const nextPromise = generator.next();
 
-      const result = await Promise.race([nextPromise, timeoutPromise]);
-      clearTimeout(timer);
-
-      if (result === IDLE_TIMEOUT_SENTINEL) {
-        timedOut = true;
-        // Prevent unhandled rejection when the subprocess is aborted via onTimeout
-        nextPromise.catch((_err: unknown) => {
-          // Intentional: swallow rejection from aborted subprocess
+      let result: IteratorResult<T> | undefined;
+      while (result === undefined) {
+        const tickMs = Math.max(0, Math.min(WATCHDOG_TICK_MS, timeoutMs - idleMs));
+        const tickStartedAt = Date.now();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const tick = new Promise<typeof TICK>(resolve => {
+          timer = setTimeout(() => {
+            resolve(TICK);
+          }, tickMs);
         });
-        onTimeout?.();
-        return;
+
+        const settled = await Promise.race([nextPromise, tick]);
+        clearTimeout(timer);
+        // Wall-clock time beyond the scheduled delay was spent suspended.
+        idleMs += Math.max(0, Math.min(Date.now() - tickStartedAt, tickMs));
+
+        if (settled !== TICK) {
+          result = settled;
+        } else if (idleMs >= timeoutMs) {
+          timedOut = true;
+          // Prevent unhandled rejection when the subprocess is aborted via onTimeout
+          nextPromise.catch((_err: unknown) => {
+            // Intentional: swallow rejection from aborted subprocess
+          });
+          onTimeout?.();
+          return;
+        }
       }
 
       if (result.done) return;
 
       // Reset the timer unless the predicate says not to
       if (!shouldResetTimer || shouldResetTimer(result.value)) {
-        timerStartedAt = Date.now();
-        onTimerReset?.(result.value, timerStartedAt);
+        idleMs = 0;
+        onTimerReset?.(result.value, Date.now());
       }
 
-      // The clock measures the generator's silence, so the time the consumer spends on
-      // the value (the engine records every provider event before it asks for the next
-      // one) is not charged to it.
-      const yieldedAt = Date.now();
+      // Idle time accrues only while waiting on the generator, so the time the consumer
+      // spends on the value (the engine records every provider event before it asks for
+      // the next one) is not charged to it.
       yield result.value;
-      timerStartedAt += Date.now() - yieldedAt;
     }
   } finally {
     if (!timedOut) {
