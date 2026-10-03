@@ -1267,7 +1267,7 @@ describe('checkConnectedProviders', () => {
     );
     expect(result.status).toBe('fail');
     expect(result.message).toContain(
-      'openai (oauth): cannot be used (OpenAI token refresh failed (401): invalid_grant). Reconnect: archon ai login openai'
+      'openai (oauth): cannot be used. Reconnect: archon ai login openai. Cause: OpenAI token refresh failed (401): invalid_grant.'
     );
   });
 
@@ -1280,7 +1280,7 @@ describe('checkConnectedProviders', () => {
     );
     expect(result.status).toBe('warn');
     expect(result.message).toContain(
-      'openrouter (api_key): could not be verified (Request timed out). If it persists, reconnect: archon ai key set openrouter'
+      'openrouter (api_key): could not be verified. If it persists, reconnect: archon ai key set openrouter. Cause: Request timed out.'
     );
   });
 

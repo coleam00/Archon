@@ -110,7 +110,7 @@ function oauthRow(overrides: Partial<UserProviderKeyRow> = {}): UserProviderKeyR
 const UNREADABLE = {
   state: 'unusable',
   source: 'archon',
-  evidence: 'The stored credential cannot be read. Reconnect it.',
+  evidence: 'The stored credential cannot be read.',
 } as const;
 
 describe('user-provider-key-store', () => {

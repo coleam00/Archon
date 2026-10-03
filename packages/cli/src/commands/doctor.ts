@@ -652,10 +652,6 @@ export interface ProviderDeps {
   ) => Promise<{ id: string }>;
 }
 
-function withoutFinalPeriod(text: string): string {
-  return text.endsWith('.') ? text.slice(0, -1) : text;
-}
-
 /** One line for a connected credential: its state, and what to do when it fails. */
 function describeStoredCredential(
   row: { provider: string; kind: string },
@@ -672,9 +668,9 @@ function describeStoredCredential(
     case 'not_checked':
       return `${name}: not checked`;
     case 'unusable':
-      return `${name}: cannot be used (${withoutFinalPeriod(status.evidence)}). Reconnect: ${reconnect}`;
+      return `${name}: cannot be used. Reconnect: ${reconnect}. Cause: ${status.evidence}`;
     case 'check_failed':
-      return `${name}: could not be verified (${withoutFinalPeriod(status.evidence)}). If it persists, reconnect: ${reconnect}`;
+      return `${name}: could not be verified. If it persists, reconnect: ${reconnect}. Cause: ${status.evidence}`;
   }
 }
 

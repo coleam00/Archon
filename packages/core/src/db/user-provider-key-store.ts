@@ -145,7 +145,7 @@ const NOT_CONNECTED: StoredCredentialFailure = { state: 'not_connected', source:
 const UNREADABLE: StoredCredentialFailure = {
   state: 'unusable',
   source: 'archon',
-  evidence: 'The stored credential cannot be read. Reconnect it.',
+  evidence: 'The stored credential cannot be read.',
 };
 
 /**
@@ -303,7 +303,7 @@ async function resolveOAuthCredential(
     return {
       state: 'unusable',
       source: 'archon',
-      evidence: 'The stored credential produced no access token. Reconnect it.',
+      evidence: 'The stored credential produced no access token.',
     };
   }
   const rawCreds = result.newCredentials as OAuthCredentials;
