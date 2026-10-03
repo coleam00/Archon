@@ -15,8 +15,8 @@ afterEach(() => {
 });
 
 describe('Pi extension process-error broker', () => {
-  test('claims a stack-attested extension error without replacing it', async () => {
-    openTurn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+  test('claims a stack-attested extension error without replacing it', () => {
+    openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     let received: Error | undefined;
     openTurn.onError(error => {
       received = error;
@@ -30,8 +30,8 @@ describe('Pi extension process-error broker', () => {
     expect(piExtensionFailureEvidence(error)).toBe(error.stack);
   });
 
-  test('leaves unmatched and unstructured process errors unclaimed', async () => {
-    openTurn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+  test('leaves unmatched and unstructured process errors unclaimed', () => {
+    openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     let received = false;
     openTurn.onError(() => {
       received = true;
@@ -44,8 +44,8 @@ describe('Pi extension process-error broker', () => {
     expect(received).toBe(false);
   });
 
-  test('stops claiming when the turn closes', async () => {
-    openTurn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+  test('stops claiming when the turn closes', () => {
+    openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     openTurn.close();
     openTurn = undefined;
     const error = new Error('late timer');
@@ -54,8 +54,8 @@ describe('Pi extension process-error broker', () => {
     expect(claimPiExtensionProcessError(error)).toBe(false);
   });
 
-  test('stops claiming before a successful terminal result is exposed', async () => {
-    openTurn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+  test('stops claiming before a successful terminal result is exposed', () => {
+    openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     openTurn.stopAccepting();
     const error = new Error('late timer');
     error.stack = 'Error: late timer\n    at callback (/extensions/fake-extension.ts:4:2)';
@@ -63,8 +63,8 @@ describe('Pi extension process-error broker', () => {
     expect(claimPiExtensionProcessError(error)).toBe(false);
   });
 
-  test('preserves structured Pi extension evidence', async () => {
-    openTurn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+  test('preserves structured Pi extension evidence', () => {
+    openTurn = beginPiExtensionTurn(['/extensions/fake-extension.ts']);
     let received: Error | undefined;
     openTurn.onError(error => {
       received = error;
@@ -83,20 +83,48 @@ describe('Pi extension process-error broker', () => {
     );
   });
 
-  test('serializes extension-enabled turns process-wide', async () => {
-    const first = await beginPiExtensionTurn(['/extensions/first.ts']);
-    openTurn = first;
-    let secondStarted = false;
-    const secondPending = beginPiExtensionTurn(['/extensions/second.ts']).then(turn => {
-      secondStarted = true;
-      return turn;
-    });
-    // A macrotask drains every pending microtask, so an ungated second turn would have started.
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(secondStarted).toBe(false);
+  test('routes a detached error to the only active turn that loaded the extension', () => {
+    const first = beginPiExtensionTurn(['/extensions/first.ts']);
+    const second = beginPiExtensionTurn(['/extensions/second.ts']);
+    try {
+      const received: string[] = [];
+      first.onError(() => received.push('first'));
+      second.onError(() => received.push('second'));
+      const error = new Error('timer exploded');
+      error.stack = 'Error: timer exploded\n    at callback (/extensions/second.ts:4:2)';
 
-    first.close();
-    openTurn = await secondPending;
-    expect(secondStarted).toBe(true);
+      expect(claimPiExtensionProcessError(error)).toBe(true);
+      expect(received).toEqual(['second']);
+    } finally {
+      first.close();
+      second.close();
+    }
+  });
+
+  test('fails every candidate turn when concurrent turns loaded the same extension', () => {
+    const first = beginPiExtensionTurn(['/extensions/shared.ts']);
+    const second = beginPiExtensionTurn(['/extensions/shared.ts']);
+    const unrelated = beginPiExtensionTurn(['/extensions/other.ts']);
+    try {
+      const received: { owner: string; error: Error }[] = [];
+      first.onError(error => received.push({ owner: 'first', error }));
+      second.onError(error => received.push({ owner: 'second', error }));
+      unrelated.onError(error => received.push({ owner: 'unrelated', error }));
+      const error = new Error('timer exploded');
+      error.stack = 'Error: timer exploded\n    at callback (/extensions/shared.ts:4:2)';
+
+      expect(claimPiExtensionProcessError(error)).toBe(true);
+      expect(received.map(r => r.owner)).toEqual(['first', 'second']);
+      for (const { error: reported } of received) {
+        // Each node is told the failure is ambiguous, not that it owns it.
+        expect(reported.message).toContain('2 concurrent Pi turns');
+        expect(reported.cause).toBe(error);
+        expect(piExtensionFailureEvidence(reported)).toContain(error.stack);
+      }
+    } finally {
+      first.close();
+      second.close();
+      unrelated.close();
+    }
   });
 });
