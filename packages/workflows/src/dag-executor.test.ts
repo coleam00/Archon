@@ -2277,6 +2277,10 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     expect(nodeConfig.effort).toBeUndefined();
     expect(assistantConfig.modelReasoningEffort).toBeUndefined();
 
+    expect(deliveredMessages(platform)).toContain(
+      "Warning: Node 'step1' uses effort but opencode doesn't support it — this will be ignored."
+    );
+
     // And the run does not claim a depth it never applied.
     const createEventCalls = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock
       .calls as Array<[{ event_type: string; data?: Record<string, unknown> }]>;
