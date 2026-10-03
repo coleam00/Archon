@@ -21,6 +21,7 @@ export function approvalFromDag(variantSpecific: Partial<WireDagNode>): Approval
   }
   return {
     message: approval.message,
+    ...ifDefined('decisions', approval.decisions),
     ...ifDefined('capture_response', approval.capture_response),
     ...ifDefined('on_reject', onRejectFragment(approval.on_reject)),
   };
@@ -40,6 +41,7 @@ export function approvalToDag(data: ApprovalNodeData): Partial<WireDagNode> {
   return {
     approval: {
       message: data.message,
+      ...ifDefined('decisions', data.decisions),
       ...ifDefined('capture_response', data.capture_response),
       ...ifDefined('on_reject', onRejectFragment(data.on_reject)),
     },

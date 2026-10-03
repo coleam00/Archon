@@ -11,6 +11,7 @@
 import type {
   BuilderDagFragment,
   BuilderNode,
+  OpaqueKind,
   VariantData,
   VariantDataMap,
   VariantId,
@@ -77,7 +78,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultCommandData,
     fromDag: commandFromDag,
     toDag: commandToDag,
-    wireKeys: ['command'],
+    wireKeys: ['command', 'with'],
     capabilities: VARIANT_CAPABILITIES.command,
   },
   bash: {
@@ -93,7 +94,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultScriptData,
     fromDag: scriptFromDag,
     toDag: scriptToDag,
-    wireKeys: ['script', 'runtime', 'deps', 'timeout'],
+    wireKeys: ['script', 'runtime', 'deps', 'timeout', 'with'],
     capabilities: VARIANT_CAPABILITIES.script,
   },
   loop: {
@@ -130,6 +131,29 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
   },
 };
 
+const OPAQUE_LABELS: Record<OpaqueKind, string> = {
+  loop_group: 'Loop group',
+  workflow: 'Workflow',
+  include: 'Include',
+};
+
+/** Read-only nodes expose no editable fields, so no affordance applies to them. */
+const OPAQUE_CAPABILITIES: VariantCapabilities = { honorsAiFields: false };
+
+/** Badge label for any builder node, read-only ones included. */
+export function nodeLabel(node: BuilderNode): string {
+  return node.variant === 'opaque'
+    ? OPAQUE_LABELS[node.data.kind]
+    : VARIANT_REGISTRY[node.variant].label;
+}
+
+/** Capability flags for any builder node, read-only ones included. */
+export function nodeCapabilities(node: BuilderNode): VariantCapabilities {
+  return node.variant === 'opaque'
+    ? OPAQUE_CAPABILITIES
+    : VARIANT_REGISTRY[node.variant].capabilities;
+}
+
 /**
  * Build the variant-specific data for a given variant from a partitioned wire
  * node. Safe through the registry index: every `fromDag` has the same parameter
@@ -149,6 +173,8 @@ export function variantDataFromDag(
  */
 export function nodeDataToDag(node: BuilderNode): BuilderDagFragment {
   switch (node.variant) {
+    case 'opaque':
+      return node.data.fields;
     case 'loop':
       return loopToDag(node.data);
     case 'approval':
