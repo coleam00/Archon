@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   checkEventVocabulary,
   checkFailureClasses,
+  checkSessionIdReported,
   checkSettled,
   runProviderConformance,
   type ProviderFailureCase,
@@ -29,9 +30,9 @@ const conforming: ProviderFailureCase = {
 const settlingTurn: ProviderTurnCase = {
   name: 'background work',
   run: turn(
-    { type: 'result' },
+    { type: 'result', sessionId: 'session-1' },
     { type: 'state_update', state: 'running' },
-    { type: 'result' },
+    { type: 'result', sessionId: 'session-1' },
     { type: 'settled' }
   ),
 };
@@ -125,17 +126,31 @@ describe('settled conformance', () => {
   test.each<[string, ProviderTurnCase, string]>([
     [
       'no settled',
-      { ...settlingTurn, run: turn({ type: 'result' }) },
+      { ...settlingTurn, run: turn({ type: 'result', sessionId: 'session-1' }) },
       'background work: expected one settled, got 0',
     ],
     [
       'two settled',
-      { ...settlingTurn, run: turn({ type: 'result' }, { type: 'settled' }, { type: 'settled' }) },
+      {
+        ...settlingTurn,
+        run: turn(
+          { type: 'result', sessionId: 'session-1' },
+          { type: 'settled' },
+          { type: 'settled' }
+        ),
+      },
       'background work: expected one settled, got 2',
     ],
     [
       'settled before the final result',
-      { ...settlingTurn, run: turn({ type: 'result' }, { type: 'settled' }, { type: 'result' }) },
+      {
+        ...settlingTurn,
+        run: turn(
+          { type: 'result', sessionId: 'session-1' },
+          { type: 'settled' },
+          { type: 'result', sessionId: 'session-1' }
+        ),
+      },
       'background work: settled is not the last chunk',
     ],
     [
@@ -173,7 +188,7 @@ const toolTurn: ProviderTurnCase = {
     { type: 'tool_call_update', toolCallId: 'a', status: 'completed', output: 'file' },
     { type: 'subtask', taskId: 't', status: 'completed' },
     { type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' },
-    { type: 'result', stopReason: 'cancelled' },
+    { type: 'result', sessionId: 'session-1', stopReason: 'cancelled' },
     { type: 'settled' }
   ),
 };
@@ -188,14 +203,18 @@ describe('event vocabulary conformance', () => {
   test.each<[string, unknown[], string]>([
     [
       'an unparseable chunk',
-      [{ type: 'assistant', content: 'hi' }, { type: 'result' }, { type: 'settled' }],
+      [
+        { type: 'assistant', content: 'hi' },
+        { type: 'result', sessionId: 'session-1' },
+        { type: 'settled' },
+      ],
       'tool turn: rule 1, chunk 0 (type "assistant") is not a provider chunk',
     ],
     [
       'an unclosed tool call',
       [
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 2, tool call a is still open at a result',
@@ -209,7 +228,7 @@ describe('event vocabulary conformance', () => {
       'a tool call closed only after the result',
       [
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
         { type: 'settled' },
       ],
@@ -218,9 +237,9 @@ describe('event vocabulary conformance', () => {
     [
       'a call started after the first result and left open at the next',
       [
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 2, tool call a is still open at a result',
@@ -231,7 +250,7 @@ describe('event vocabulary conformance', () => {
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
         { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
         { type: 'tool_call_update', toolCallId: 'a', status: 'failed' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 2, tool call a is closed twice',
@@ -242,7 +261,7 @@ describe('event vocabulary conformance', () => {
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
         { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 2, tool call a is started twice',
@@ -251,7 +270,7 @@ describe('event vocabulary conformance', () => {
       'an update without a start',
       [
         { type: 'tool_call_update', toolCallId: 'z', status: 'completed' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 3, tool call z is updated before it starts',
@@ -261,7 +280,7 @@ describe('event vocabulary conformance', () => {
       [
         { type: 'subtask', taskId: 't', status: 'started' },
         { type: 'subtask', taskId: 't', status: 'running' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 4, subtask t is still open at settled',
@@ -270,7 +289,7 @@ describe('event vocabulary conformance', () => {
       'a subtask seen only as running',
       [
         { type: 'subtask', taskId: 't', status: 'running' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 4, subtask t is still open at settled',
@@ -281,7 +300,7 @@ describe('event vocabulary conformance', () => {
         { type: 'subtask', taskId: 't', status: 'started' },
         { type: 'subtask', taskId: 't', status: 'completed' },
         { type: 'subtask', taskId: 't', status: 'running' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 4, subtask t is still open at settled',
@@ -296,7 +315,7 @@ describe('event vocabulary conformance', () => {
     const closed = turn(
       { type: 'subtask', taskId: 't', status: 'started' },
       { type: 'subtask', taskId: 't', status },
-      { type: 'result' },
+      { type: 'result', sessionId: 'session-1' },
       { type: 'settled' }
     );
     expect(await checkEventVocabulary([{ name: 'tool turn', run: closed }])).toEqual([]);
@@ -304,10 +323,10 @@ describe('event vocabulary conformance', () => {
 
   test('a call started after the first result may close before the next one', async () => {
     const backgroundCall = turn(
-      { type: 'result' },
+      { type: 'result', sessionId: 'session-1' },
       { type: 'tool_call', toolCallId: 'a', name: 'Read' },
       { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
-      { type: 'result' },
+      { type: 'result', sessionId: 'session-1' },
       { type: 'settled' }
     );
     expect(await checkEventVocabulary([{ name: 'tool turn', run: backgroundCall }])).toEqual([]);
@@ -320,7 +339,7 @@ describe('event vocabulary conformance', () => {
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
         { type: 'tool_call', toolCallId: 'b', name: 'Bash' },
         { type: 'tool_call_update', toolCallId: 'b', status: 'cancelled' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: rule 2, tool call a is still open at a result',
@@ -332,7 +351,7 @@ describe('event vocabulary conformance', () => {
         { type: 'tool_call_update', toolCallId: 'a', status: 'completed' },
         { type: 'tool_call', toolCallId: 'b', name: 'Read' },
         { type: 'tool_call_update', toolCallId: 'b', status: 'completed' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: the tool turn needs two tool calls and one cancelled, got 2 and 0',
@@ -342,7 +361,7 @@ describe('event vocabulary conformance', () => {
       [
         { type: 'tool_call', toolCallId: 'a', name: 'Read' },
         { type: 'tool_call_update', toolCallId: 'a', status: 'cancelled' },
-        { type: 'result' },
+        { type: 'result', sessionId: 'session-1' },
         { type: 'settled' },
       ],
       'tool turn: the tool turn needs two tool calls and one cancelled, got 1 and 1',
@@ -358,7 +377,10 @@ describe('event vocabulary conformance', () => {
   });
 
   test('the tool turn must settle', async () => {
-    const unsettled: ProviderTurnCase = { ...toolTurn, run: turn({ type: 'result' }) };
+    const unsettled: ProviderTurnCase = {
+      ...toolTurn,
+      run: turn({ type: 'result', sessionId: 'session-1' }),
+    };
     expect(
       await runProviderConformance({ failureCases: [conforming], turns: [], toolTurn: unsettled })
     ).toContain('tool turn: expected one settled, got 0');
@@ -368,11 +390,41 @@ describe('event vocabulary conformance', () => {
     const legacy = { type: 'assistant', content: 'hi' };
     const violations = await runProviderConformance({
       failureCases: [{ ...conforming, run: turn(legacy, ...failedTurnEnd) }],
-      turns: [{ name: 'plain turn', run: turn(legacy, { type: 'result' }, { type: 'settled' }) }],
+      turns: [
+        {
+          name: 'plain turn',
+          run: turn(legacy, { type: 'result', sessionId: 'session-1' }, { type: 'settled' }),
+        },
+      ],
     });
     expect(violations).toEqual([
       expect.stringContaining('plain turn: rule 1, chunk 0 (type "assistant")'),
       expect.stringContaining('expired key: rule 1, chunk 0 (type "assistant")'),
+    ]);
+  });
+});
+
+describe('session id conformance', () => {
+  test('a turn whose results all name their session conforms', async () => {
+    expect(await checkSessionIdReported([settlingTurn])).toEqual([]);
+  });
+
+  test.each<[string, unknown]>([
+    ['absent', undefined],
+    ['empty', ''],
+  ])('a result whose sessionId is %s is a violation', async (_label, sessionId) => {
+    const unnamed: ProviderTurnCase = {
+      name: 'plain turn',
+      run: turn(
+        { type: 'result', sessionId: 'session-1' },
+        { type: 'result', sessionId },
+        {
+          type: 'settled',
+        }
+      ),
+    };
+    expect(await runProviderConformance({ failureCases: [conforming], turns: [unnamed] })).toEqual([
+      'plain turn: 1 of 2 results carry no sessionId',
     ]);
   });
 });
