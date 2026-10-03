@@ -616,8 +616,16 @@ function* completeTurn(
   yield result;
 }
 
-function withModelAccessAdvice(evidence: string, model: string | undefined): string {
-  return isModelAccessError(evidence)
+/**
+ * @param scanned the text that decides whether the advice applies: Codex's own message,
+ *   never a stderr tail, whose log lines can mention a model for unrelated reasons.
+ */
+function withModelAccessAdvice(
+  evidence: string,
+  model: string | undefined,
+  scanned = evidence
+): string {
+  return isModelAccessError(scanned)
     ? `${buildModelAccessMessage(model)}\n\n${evidence}`
     : evidence;
 }
@@ -809,7 +817,8 @@ export class CodexProvider implements IAgentProvider {
           subtype,
           withModelAccessAdvice(
             error instanceof ConnectionClosedError ? error.evidence : (error as Error).message,
-            model
+            model,
+            (error as Error).message
           )
         );
         if (threadId) result.sessionId = threadId;

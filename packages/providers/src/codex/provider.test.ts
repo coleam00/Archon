@@ -711,6 +711,16 @@ describe('CodexProvider', () => {
       expect(result.failure?.evidence).toContain('signal SIGKILL');
     });
 
+    test('stderr that mentions a model does not earn model-access advice', async () => {
+      const result = resultOf(
+        await streamOf({
+          startupFailure: { code: 1, stderr: 'error: model catalog file not found\n' },
+        })
+      );
+      expect(result.failure?.evidence).toContain('model catalog file not found');
+      expect(result.failure?.evidence).not.toContain('is not available for your account');
+    });
+
     test('a credential Codex echoes to stderr never reaches the failure evidence', async () => {
       const result = resultOf(
         await streamOf(
