@@ -82,7 +82,7 @@ Summarize (under 250 words):
 - Only `plan-to-execute` immediately creates a new session; others deactivate first
 
 ### AI Providers
-- `ClaudeProvider` (claude-agent-sdk) and `CodexProvider` (codex-sdk)
+- `ClaudeProvider` (claude-agent-sdk) and `CodexProvider` (`codex app-server` over JSON-RPC)
 - `IAgentProvider` streaming pattern: `for await (const event of events)`
 
 ### Key Database Tables

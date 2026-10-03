@@ -594,7 +594,7 @@ status=$emit.output.status
 
 ### `output_format` for Structured JSON
 
-Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex (v0.116.0+), the schema is passed via `TurnOptions.outputSchema` and the agent's inline JSON response is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
+Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex, the schema is sent as the turn's `outputSchema` and the agent's final JSON message is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
 
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
 >
@@ -803,7 +803,7 @@ Archon sorts a failed AI attempt into one of three buckets before deciding wheth
 Every built-in provider reports a typed class:
 
 - **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
-- **Codex** reports `misconfigured` when its binary cannot be found (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, or no binary in a compiled install) or its MCP config file cannot be read. Its SDK reports every other failure only as a message string, so those are `unknown`.
+- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `transient` for overload, a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. Every other failure is `unknown`, including a thread that can no longer be resumed.
 - **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
@@ -996,6 +996,8 @@ If the stored session is gone (for example, a Pi JSONL file was moved), the prov
 > ⚠️ Node `planner`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.
 
 The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run — the fresh session is already a clean start, so re-running would only repeat it. Expect this only for `persist_session` nodes whose prior session became unavailable; warm resumes and first-time runs are unaffected.
+
+Codex does not fall back: a thread it cannot resume fails the node as `unknown`, with Codex's own error as evidence (for example `no rollout found for thread id …`). Codex reports a missing thread with the same JSON-RPC code as any other invalid request, so Archon cannot tell it apart safely enough to start over on its own. Codex cannot fork a session, so a `persist_session` node on Codex never continues an earlier run's thread (see [Concurrent runs](#concurrent-runs)); a Codex resume only continues a thread from the same run, which is gone only if something removed it mid-run.
 
 #### By-reference recovery via scope artifacts
 
@@ -2619,7 +2621,7 @@ Model and options are resolved in this order:
 
 1. **Workflow-level** - Explicit settings in the workflow YAML
 2. **Config defaults** - `assistants.*` in `.archon/config.yaml`
-3. **SDK defaults** - Built-in defaults from Claude/Codex SDKs
+3. **Provider defaults** - Built-in defaults of the Claude Agent SDK and of Codex (including your own Codex `config.toml`)
 
 For the Claude SDK advanced options (`effort`, `fallbackModel`, `betas`, `sandbox`) a per-node value sits above the workflow level: a node uses its own value if set, otherwise it inherits the workflow-level default. See [Claude SDK Advanced Options](#claude-sdk-advanced-options).
 
