@@ -31,7 +31,7 @@ export const roadmapItems: RoadmapItem[] = [
       'YAML workflow definition language',
       'DAG orchestration with full dependency resolution',
       'Git worktree isolation — no conflicts between runs',
-      'Multi-provider support (Claude Code SDK, Codex SDK)',
+      'Multi-provider support (Claude Code SDK, Codex)',
     ],
     tags: ['core', 'cli', 'dag'],
   },

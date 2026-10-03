@@ -1,23 +1,23 @@
 /**
- * Codex binary resolver for compiled (bun --compile) archon binaries.
+ * Codex binary resolver.
  *
- * The @openai/codex-sdk uses `createRequire(import.meta.url)` to locate the
- * native Codex CLI binary, which breaks in compiled binaries where
- * `import.meta.url` is frozen to the build host's path.
- *
- * Resolution order:
+ * Source installs find the native binary of the pinned `@openai/codex` package in
+ * node_modules. That lookup uses `createRequire(import.meta.url)`, which breaks in
+ * compiled (bun --compile) binaries where `import.meta.url` is frozen to the build
+ * host's path, so compiled builds resolve in this order:
  * 1. `CODEX_BIN_PATH` environment variable
  * 2. `assistants.codex.codexBinaryPath` in config
  * 3. `~/.archon/vendor/codex/<platform-binary>` (user-placed)
  * 4. Autodetect canonical install paths (npm prefix defaults per platform)
  * 5. Throw with install instructions
  *
- * Source installs honor explicit env/config pins, then defer to the SDK's
- * node_modules-based resolution when no pin is configured.
+ * Source installs honor explicit env/config pins, then fall back to
+ * {@link resolveBundledCodexBinary}.
  */
 import { existsSync as _existsSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { BUNDLED_IS_BINARY, getArchonHome, createLogger } from '@archon/paths';
 import {
   appendBinaryCandidateHint,
@@ -135,7 +135,8 @@ function validateAndExpand(rawPath: string, pin: CodexBinaryPin): string {
 /**
  * Resolve the path to the Codex native binary.
  *
- * In dev mode: honors explicit pins, otherwise lets the SDK resolve via node_modules.
+ * In dev mode: honors explicit pins, otherwise returns undefined so the turn runs the
+ * bundled `@openai/codex` binary.
  * In binary mode: resolves from env/config/vendor dir, or throws with install instructions.
  */
 export async function resolveCodexBinaryPath(
@@ -170,7 +171,7 @@ export async function resolveCodexBinaryWithSource(
     return { path: resolvedConfig, source: 'config' };
   }
 
-  // Source installs honor explicit pins too; the SDK remains the unpinned default.
+  // Source installs honor explicit pins too; the bundled package remains the unpinned default.
   if (!BUNDLED_IS_BINARY) return undefined;
 
   // 3-4. Vendor then autodetect. The same search supplies diagnostics for an
@@ -200,6 +201,65 @@ export async function resolveCodexBinaryWithSource(
       '       codex:\n' +
       '         codexBinaryPath: /path/to/codex\n'
   );
+}
+
+/** The native binary to spawn, and directories its package ships helpers in (ripgrep). */
+export interface CodexBinary {
+  path: string;
+  /** Prepended to the child's PATH, as the package's own launcher does. */
+  pathDirs: string[];
+}
+
+/** Rust target triple per `platform-arch`; the platform package `@openai/codex-<platform-arch>` vendors it. */
+const CODEX_TARGETS: Record<string, string> = {
+  'linux-x64': 'x86_64-unknown-linux-musl',
+  'linux-arm64': 'aarch64-unknown-linux-musl',
+  'darwin-x64': 'x86_64-apple-darwin',
+  'darwin-arm64': 'aarch64-apple-darwin',
+  'win32-x64': 'x86_64-pc-windows-msvc',
+  'win32-arm64': 'aarch64-pc-windows-msvc',
+};
+
+/**
+ * The native binary of the `@openai/codex` package Archon pins, for source installs with
+ * no explicit pin. The package installs one optional platform package holding
+ * `vendor/<target>/bin/codex` and a `codex-path` directory of helpers.
+ */
+export function resolveBundledCodexBinary(): CodexBinary {
+  const platformKey = `${process.platform}-${process.arch}`;
+  const target = CODEX_TARGETS[platformKey];
+  const missing = (detail: string): ClassifiedProviderError =>
+    new ClassifiedProviderError(
+      'misconfigured',
+      `Codex CLI binary not found: ${detail}\n` +
+        'Run `bun install` so @openai/codex installs its platform package, or set CODEX_BIN_PATH.'
+    );
+  if (!target) throw missing(`no Codex build for ${platformKey}`);
+
+  let vendorRoot: string;
+  try {
+    const codexPackageJson = createRequire(import.meta.url).resolve('@openai/codex/package.json');
+    const platformPackageJson = createRequire(codexPackageJson).resolve(
+      `@openai/codex-${platformKey}/package.json`
+    );
+    vendorRoot = join(dirname(platformPackageJson), 'vendor', target);
+  } catch (error) {
+    throw missing(`@openai/codex-${platformKey} is not installed (${(error as Error).message})`);
+  }
+
+  const path = join(vendorRoot, 'bin', CODEX_BINARY_NAME);
+  if (pathKind(path) !== 'file') throw missing(`${path} does not exist`);
+  const helpers = join(vendorRoot, 'codex-path');
+  return { path, pathDirs: pathKind(helpers) === 'directory' ? [helpers] : [] };
+}
+
+/**
+ * The binary a Codex turn spawns: an explicit pin or a compiled build's lower tiers,
+ * else the bundled package. Resolved on every turn, so a changed pin applies to the next one.
+ */
+export async function resolveCodexBinary(configCodexBinaryPath?: string): Promise<CodexBinary> {
+  const pinned = await resolveCodexBinaryPath(configCodexBinaryPath);
+  return pinned ? { path: pinned, pathDirs: [] } : resolveBundledCodexBinary();
 }
 
 /**

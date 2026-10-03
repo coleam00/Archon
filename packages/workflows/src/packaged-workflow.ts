@@ -77,6 +77,15 @@ export function parsePackagedResourceReference(
   return { owner: { source: parsedSource.data, pack, workflow }, name };
 }
 
+/**
+ * A resource name without its package owner. Discovery qualifies a pack's commands with the
+ * owner it was found under; the owner is not part of what runs, so display and telemetry
+ * name the bare resource. Unqualified names pass through unchanged.
+ */
+export function unqualifiedResourceName(reference: string): string {
+  return parsePackagedResourceReference(reference)?.name ?? reference;
+}
+
 function isNamedScript(script: string): boolean {
   return !script.includes('\n') && !/[;(){}&|<>$`"' ]/.test(script);
 }

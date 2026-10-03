@@ -259,7 +259,10 @@ export const dagNodeBaseSchema = z.object({
   // error naming it if the snapshot changed — outside the run's engine-owned
   // directories (artifacts/state/logs). Enforced for exec and agent nodes; warned
   // as ignored on wait and workflow (sub-run) nodes, whose execution is not a
-  // single checkout-scoped payload. Absent means no enforcement.
+  // single checkout-scoped payload. Absent means no enforcement. A layer of guarded
+  // nodes only runs concurrently; a layer mixing guarded nodes with any node that
+  // isn't checkout-guarded runs sequentially so a sibling's write is never blamed on
+  // a guarded node.
   mutates_checkout: z.boolean().optional(),
   // Persist this node's provider session ID across workflow re-runs in the same
   // scope (typically the conversation). The next run in that scope forks the session

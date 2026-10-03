@@ -36,6 +36,7 @@ import {
   type McpServerStatus,
   type PostToolUseFailureHookInput,
   type PostToolUseHookInput,
+  type SDKAPIRetryMessage,
   type SDKAssistantMessageError,
   type SDKRateLimitInfo,
   type SDKResultMessage,
@@ -473,6 +474,20 @@ export function classifyClaudeThrownError(
 /** A failed turn as the one `result` chunk the contract requires. */
 function failureResultChunk(failure: ProviderFailure): ResultChunk {
   return { type: 'result', isError: true, failure, errors: [failure.evidence] };
+}
+
+/** Counts, delay, status and the SDK's error token only: the vendor's error body stays out. */
+function apiRetryWarning(retry: SDKAPIRetryMessage): ProviderWarning {
+  const delay =
+    retry.retry_delay_ms < 1000
+      ? `${String(retry.retry_delay_ms)}ms`
+      : `${String(Math.round(retry.retry_delay_ms / 1000))}s`;
+  const cause =
+    retry.error_status === null ? retry.error : `HTTP ${String(retry.error_status)} ${retry.error}`;
+  return {
+    code: 'claude.api_retry',
+    message: `Claude is retrying the model call (attempt ${String(retry.attempt)} of ${String(retry.max_retries)}, waiting ${delay}, ${cause})`,
+  };
 }
 
 function getFirstEventTimeoutMs(): number {
@@ -1351,6 +1366,10 @@ async function* streamClaudeMessages(
         };
         if (sysMsg.exit_code !== undefined) hook.exitCode = sysMsg.exit_code;
         yield hook;
+      } else if (subtype === 'api_retry') {
+        // The SDK retries the model call itself; Archon only reports it, so a turn that
+        // waits out a rate limit does not look stuck.
+        yield { type: 'warning', ...apiRetryWarning(msg as SDKAPIRetryMessage) };
       } else {
         getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
       }

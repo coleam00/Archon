@@ -76,6 +76,26 @@ describe('node-event-write', () => {
     expect(emitter.emit).not.toHaveBeenCalled();
   });
 
+  it('names a packaged command node by its bare command name on the derived emitter path', () => {
+    const packaged = '__archon_pack__installed:Wirasm.archon-video:make::pick';
+    const node = {
+      id: 'pick-node',
+      kind: 'agent' as const,
+      source: { kind: 'command' as const, name: packaged },
+    };
+    const event: NodeStateEventInput = {
+      workflow_run_id: 'run-1',
+      step_name: 'pick-node',
+      event_type: 'node_completed',
+      data: { node_output: 'approved' },
+    };
+    expect(deriveEmitterEvent(node, event)).toMatchObject({
+      nodeId: 'pick-node',
+      nodeName: 'pick',
+    });
+    expect(deriveTranscriptEvent(node, event)).toMatchObject({ content: packaged });
+  });
+
   it('derives an old transactional wait completion without inventing metadata or duration', async () => {
     const waitNode = { id: 'wait-for-ci', kind: 'wait' as const, wait: { duration_ms: 1 } };
     const event: NodeStateEventInput = {

@@ -39,6 +39,10 @@ import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -1136,6 +1140,29 @@ async function snapshotCheckout(
 }
 
 /**
+ * Take a `mutates_checkout: false` node's pre-run snapshot and record it in its
+ * concurrent layer's snapshot set, so a sibling's violation can name it. Returns
+ * `undefined` for an undeclared node: nothing to assert.
+ */
+async function snapshotGuardedNode(
+  ctx: Pick<RunLayersContext, 'cwd' | 'guardedLayerSnapshots'>,
+  node: DagNode,
+  excludeDirs: readonly string[]
+): Promise<string | undefined> {
+  if (node.mutates_checkout !== false) return undefined;
+  ctx.guardedLayerSnapshots?.add(node.id);
+  return snapshotCheckout(ctx.cwd, excludeDirs);
+}
+
+/**
+ * A node whose `mutates_checkout: false` the engine enforces: exec and agent nodes.
+ * Every other node may write to the checkout as far as layer scheduling knows.
+ */
+function isCheckoutGuarded(node: DagNode): boolean {
+  return node.mutates_checkout === false && (isExecNode(node) || isAgentNode(node));
+}
+
+/**
  * Enforce a node's `mutates_checkout: false` declaration (#2771): when the node ran
  * successfully but the pre-run snapshot changed, rewrite its result to a failure that
  * names the node and lists what moved, and persist the standard `node_failed` event so
@@ -1151,7 +1178,8 @@ async function assertCheckoutUntouched(
   before: string | undefined,
   result: NodeExecutionResult,
   deps: WorkflowDeps,
-  logDir: string
+  logDir: string,
+  guardedLayerSnapshots: ReadonlySet<string> | undefined
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -1166,7 +1194,11 @@ async function assertCheckoutUntouched(
     .flatMap(porcelainPaths)
     .slice(0, 10)
     .join(', ');
-  const error = `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`;
+  const concurrentGuardedSiblings = [...(guardedLayerSnapshots ?? [])].filter(id => id !== node.id);
+  const error =
+    concurrentGuardedSiblings.length === 0
+      ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
+      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed; the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')} also ran in this parallel layer, so the change may not be this node's alone: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
   if (result.execution === undefined) {
     throw new Error(`Node '${node.id}' completed without its execution record`);
@@ -2861,36 +2893,6 @@ function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
   return error.killed === true && error.code === null;
 }
 
-const CREDENTIAL_ENV_KEY_SUFFIX = /(?:TOKEN|KEY|SECRET|PASSWORD)$/i;
-const CREDENTIAL_ENV_KEYS = new Set(['DATABASE_URL']);
-
-function collectSubprocessCredentialValues(
-  env: NodeJS.ProcessEnv,
-  protectedEnvKeys: readonly string[] | undefined,
-  protectedCredentialValues: readonly string[] | undefined
-): string[] {
-  const explicitlyProtected = new Set(protectedEnvKeys);
-  const values = Object.entries(env).flatMap(([key, value]) =>
-    value &&
-    (explicitlyProtected.has(key) ||
-      CREDENTIAL_ENV_KEYS.has(key) ||
-      CREDENTIAL_ENV_KEY_SUFFIX.test(key))
-      ? [value]
-      : []
-  );
-  return [...new Set([...values, ...(protectedCredentialValues ?? [])])]
-    .filter(value => value.length > 0)
-    .sort((a, b) => b.length - a.length);
-}
-
-function redactCredentialValues(input: string, credentialValues: readonly string[]): string {
-  let result = input;
-  for (const value of credentialValues) {
-    result = result.replaceAll(value, '[REDACTED]');
-  }
-  return result;
-}
-
 /**
  * Scrub credentials from every subprocess rejection field that can carry
  * subprocess text. The exact values come from the engine's injected-credential
@@ -2898,7 +2900,7 @@ function redactCredentialValues(input: string, credentialValues: readonly string
  * removed even when the failed process echoes them without their env key.
  *
  * Mutates in place rather than returning a fresh Error: callers classify the
- * rejection by reading `killed` (timeout) and `code`/`message` (ENOENT/EACCES) off
+ * rejection by reading `killed` (timeout) and `code` (ENOENT/EACCES) off
  * the original object, and a replacement would silently drop those and turn every
  * timeout into a generic failure.
  *
@@ -2970,7 +2972,7 @@ async function runSubprocess(
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
-  const credentialValues = collectSubprocessCredentialValues(
+  const credentialValues = collectCredentialValues(
     subprocessEnv,
     options.protectedEnvKeys,
     options.protectedCredentialValues
@@ -3833,9 +3835,9 @@ async function executeScriptNode(
       errorMsg = err.message;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
-    } else if (err.message?.includes('ENOENT')) {
+    } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
-    } else if (err.message?.includes('EACCES')) {
+    } else if (execContext.kind === 'host' && err.code === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;
@@ -4718,6 +4720,13 @@ async function executeLoopGroupBody(
       );
     }
 
+    // Carry the body's final sequential session into the next iteration (unless
+    // fresh_context forces a reset, handled above by seeding undefined). Taken
+    // before the escalation below, which returns early: its pause persists this
+    // cursor, and a cursor from before the paused iteration would resume without
+    // that iteration's turns (#3532).
+    loopLastSequentialSession = iterCtx.lastSequentialSession;
+
     // #2707 step 3: pause escalation. A gate node that is the body's sole terminal
     // sink pauses generically via executeApprovalNode (called through runLayers,
     // like any other body node) — that pause alone does NOT stop this loop: the
@@ -4825,10 +4834,6 @@ async function executeLoopGroupBody(
         loopIterations: i,
       };
     }
-
-    // Carry the body's final sequential session into the next iteration (unless
-    // fresh_context forces a reset, handled above by seeding undefined).
-    loopLastSequentialSession = iterCtx.lastSequentialSession;
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
@@ -9062,6 +9067,15 @@ interface RunLayersContext extends RunInputs, RunDerived {
   nodeInvocation?: NodeInvocation;
   /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
   currentExecution?: NodeExecutionRecord;
+  /**
+   * Ids of the nodes in this concurrent layer that have taken their
+   * `mutates_checkout: false` snapshot in this run, shared by the layer's nodes. A
+   * violation names the others as nodes that also ran in the layer; add-only, so a
+   * named node may have finished before the write. A node that was skipped or
+   * reused from a prior run never snapshots and is never named. Undefined when the
+   * layer runs sequentially. Set per layer; never inherited.
+   */
+  guardedLayerSnapshots?: Set<string>;
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
@@ -9301,19 +9315,25 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
       ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
     }
 
-    // Build a thunk per node so the layer can run either concurrently or, when any
-    // node guards its checkout, strictly sequentially: the `mutates_checkout: false`
-    // assertion snapshots before and asserts after a node's own execution, so a
-    // concurrent sibling's write landing inside that window would be falsely
-    // attributed to the guarded node. Serializing the whole layer keeps that window
-    // exclusive — including loop/loop_group/workflow siblings whose internal
-    // execution would otherwise overlap it.
+    // Build a thunk per node so the layer can run either concurrently or strictly
+    // sequentially. The `mutates_checkout: false` assertion snapshots before and
+    // asserts after a node's own execution, so when a guarded node shares the layer
+    // with any node that isn't checkout-guarded (including loop/loop_group/workflow
+    // siblings whose internal execution would overlap the window), that sibling's
+    // legitimate write would be blamed on the guarded node: such a mixed layer runs
+    // sequentially. A layer of guarded nodes only runs concurrently, since no node in
+    // it may write: the writer still sees its own write and fails, and a sibling
+    // whose window overlapped fails with it, its error naming the siblings.
+    const guardedCount = layer.filter(isCheckoutGuarded).length;
+    const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
+    const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
     const nodeThunks = layer.map(
       (node): (() => Promise<LayerNodeResult>) =>
         async (): Promise<LayerNodeResult> => {
           const ctx: RunLayersContext = {
             ...parentCtx,
             currentExecution: undefined,
+            guardedLayerSnapshots,
             nodeInvocation:
               parentCtx.unfinishedInvocations?.get(
                 nodeInvocationKey(parentCtx.stepNamePrefix + node.id, parentCtx.loopGroupPath)
@@ -9606,10 +9626,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.stateDir,
                     ctx.logDir
                   );
-                  const treeBefore =
-                    node.mutates_checkout === false
-                      ? await snapshotCheckout(ctx.cwd, excludes)
-                      : undefined;
+                  const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                   const output = await runDeterministicNodeWithRetry(
                     node,
                     ctx.platform,
@@ -9636,7 +9653,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       treeBefore,
                       output,
                       ctx.deps,
-                      ctx.logDir
+                      ctx.logDir,
+                      ctx.guardedLayerSnapshots
                     ),
                   };
                 }
@@ -9647,10 +9665,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.stateDir,
                   ctx.logDir
                 );
-                const treeBefore =
-                  node.mutates_checkout === false
-                    ? await snapshotCheckout(ctx.cwd, excludes)
-                    : undefined;
+                const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                 const output = await runDeterministicNodeWithRetry(
                   node,
                   ctx.platform,
@@ -9677,7 +9692,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     treeBefore,
                     output,
                     ctx.deps,
-                    ctx.logDir
+                    ctx.logDir,
+                    ctx.guardedLayerSnapshots
                   ),
                 };
               }
@@ -10052,10 +10068,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.stateDir,
               ctx.logDir
             );
-            const treeBefore =
-              node.mutates_checkout === false
-                ? await snapshotCheckout(ctx.cwd, checkoutExcludes)
-                : undefined;
+            const treeBefore = await snapshotGuardedNode(ctx, node, checkoutExcludes);
             const retriedOutput = await runNodeRetryLoop(
               node,
               ctx.platform,
@@ -10097,7 +10110,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               treeBefore,
               retriedOutput,
               ctx.deps,
-              ctx.logDir
+              ctx.logDir,
+              ctx.guardedLayerSnapshots
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
@@ -10231,9 +10245,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
           }
         }
     );
-    // A guarded node in the layer forces fully sequential execution (see the thunk
-    // comment above); an unguarded layer keeps the concurrent `allSettled` path.
-    const layerResults = layer.some(node => node.mutates_checkout === false)
+    // A layer mixing guarded and unguarded nodes runs sequentially (see the thunk
+    // comment above); every other layer keeps the concurrent `allSettled` path.
+    const layerResults = serializeLayer
       ? await settleSequentially(nodeThunks)
       : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 

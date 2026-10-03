@@ -12,6 +12,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { z } from 'zod';
 import {
+  credentialStatusSchema,
   providerCapabilitiesSchema,
   providerChunkSchema,
   providerEventSchema,
@@ -38,6 +39,7 @@ const CONTRACT_SCHEMAS = {
   ProviderStopReason: providerStopReasonSchema,
   ProviderEvent: providerEventSchema,
   ProviderChunk: providerChunkSchema,
+  CredentialStatus: credentialStatusSchema,
 };
 
 function render(): string {

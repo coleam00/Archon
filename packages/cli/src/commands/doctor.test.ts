@@ -38,6 +38,7 @@ import {
   type DatabaseDeps,
   type FolderProjectDeps,
   type OpenCodeDeps,
+  type ProviderDeps,
 } from './doctor';
 import * as doctorModule from './doctor';
 import type { MergedConfig } from '@archon/core';
@@ -1206,49 +1207,81 @@ describe('doctorCommand', () => {
 
 describe('checkConnectedProviders', () => {
   const mockUser = { id: 'user-1' };
+  type Status = Awaited<ReturnType<ProviderDeps['getStoredCredentialStatus']>>;
+
+  function depsWith(
+    rows: { provider: string; kind: string; label: string | null }[],
+    statuses: Record<string, Status> = {}
+  ): () => Promise<ProviderDeps> {
+    return async () => ({
+      listUserProviderKeys: async () => rows,
+      getStoredCredentialStatus: async (_userId, vendor) =>
+        statuses[vendor] ?? { state: 'usable', source: 'archon' },
+      findOrCreateUserByPlatformIdentity: async () => mockUser,
+    });
+  }
 
   it('returns skip when CLI identity is not resolvable', async () => {
-    const result = await checkConnectedProviders({}, async () => ({
-      listUserProviderKeys: async () => [],
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
-    }));
+    const result = await checkConnectedProviders({}, depsWith([]));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('no CLI identity');
   });
 
   it('returns skip with a connect hint when no providers are connected', async () => {
-    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
-      listUserProviderKeys: async () => [],
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
-    }));
+    const result = await checkConnectedProviders({ USER: 'testuser' }, depsWith([]));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('archon ai login');
   });
 
-  it('returns pass with a count and vendor list when providers are connected', async () => {
-    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
-      listUserProviderKeys: async () => [
+  it('passes with one line per credential when every credential is usable', async () => {
+    const result = await checkConnectedProviders(
+      { USER: 'testuser' },
+      depsWith([
         { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
         { provider: 'openrouter', kind: 'api_key', label: null },
-      ],
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
-    }));
+      ])
+    );
     expect(result.status).toBe('pass');
-    expect(result.message).toContain('2 connected');
-    expect(result.message).toContain('anthropic');
+    expect(result.message).toBe(
+      '2 connected\n    anthropic (oauth): usable\n    openrouter (api_key): usable'
+    );
   });
 
-  it('reports a connected credential as unvalidated, not proven to work', async () => {
-    // A row here means a credential file exists, not that it authenticates —
-    // the wording must not read as a validity check.
-    const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
-      listUserProviderKeys: async () => [
-        { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
-      ],
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
-    }));
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('not validated');
+  it('fails naming the vendor, its evidence and the reconnect command when one is unusable', async () => {
+    const result = await checkConnectedProviders(
+      { USER: 'testuser' },
+      depsWith(
+        [
+          { provider: 'anthropic', kind: 'oauth', label: 'subscription' },
+          { provider: 'openai', kind: 'oauth', label: null },
+        ],
+        {
+          openai: {
+            state: 'unusable',
+            source: 'archon',
+            evidence: 'OpenAI token refresh failed (401): invalid_grant.',
+          },
+          anthropic: { state: 'check_failed', source: 'archon', evidence: 'network down.' },
+        }
+      )
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain(
+      'openai (oauth): cannot be used. Reconnect: archon ai login openai. Cause: OpenAI token refresh failed (401): invalid_grant.'
+    );
+  });
+
+  it('warns when a credential could not be verified', async () => {
+    const result = await checkConnectedProviders(
+      { USER: 'testuser' },
+      depsWith([{ provider: 'openrouter', kind: 'api_key', label: null }], {
+        openrouter: { state: 'check_failed', source: 'archon', evidence: 'Request timed out.' },
+      })
+    );
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain(
+      'openrouter (api_key): could not be verified. If it persists, reconnect: archon ai key set openrouter. Cause: Request timed out.'
+    );
   });
 
   it('returns skip (not fail) when loadDeps throws', async () => {
@@ -1261,10 +1294,10 @@ describe('checkConnectedProviders', () => {
 
   it('returns skip (not fail) when reading credentials throws', async () => {
     const result = await checkConnectedProviders({ USER: 'testuser' }, async () => ({
-      listUserProviderKeys: async () => {
+      ...(await depsWith([{ provider: 'openrouter', kind: 'api_key', label: null }])()),
+      getStoredCredentialStatus: async () => {
         throw new Error('db down');
       },
-      findOrCreateUserByPlatformIdentity: async () => mockUser,
     }));
     expect(result.status).toBe('skip');
     expect(result.message).toContain('db down');

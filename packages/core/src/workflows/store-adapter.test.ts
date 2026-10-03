@@ -132,7 +132,9 @@ mock.module('../db/user-provider-key-store', () => ({
   getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
   listUserProviderKeys: mock(() => Promise.resolve([])),
   deleteUserProviderKey: mock(() => Promise.resolve()),
-  getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
+  getDecryptedProviderCredential: mock(() =>
+    Promise.resolve({ state: 'not_connected', source: 'archon' })
+  ),
 }));
 
 // github-auth mocks (required by store-adapter imports)

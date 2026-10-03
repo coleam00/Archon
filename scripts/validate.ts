@@ -52,6 +52,11 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     command: ['bun', 'run', 'check:pi-vendor-map'],
   },
   {
+    id: 'codex-protocol',
+    label: 'Codex app-server protocol types are regenerated',
+    command: ['bun', 'run', 'check:codex-protocol'],
+  },
+  {
     id: 'capability-matrix',
     label: 'Provider capability matrix is regenerated',
     command: ['bun', 'run', 'check:capability-matrix'],
