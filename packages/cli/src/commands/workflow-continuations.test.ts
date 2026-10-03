@@ -88,6 +88,9 @@ test('invalid payload, timestamp, extra positionals and stale event never mutate
     await workflowContinuationCommand('signal', ['id'], { ...values, 'resume-at': 'today' })
   ).toBe(1);
   expect(await workflowContinuationCommand('signal', ['id', 'extra'], values)).toBe(1);
+  expect(await workflowContinuationCommand('signal', ['id'], { ...values, event: '' })).toBe(1);
+  expect(await workflowContinuationCommand('signal', ['id'], { ...values, event: 123 })).toBe(1);
+  expect(getRun).not.toHaveBeenCalled();
   getRun.mockResolvedValue(makeTestWorkflowRun({ status: 'paused', metadata: {} }));
   expect(await workflowContinuationCommand('signal', ['id'], values)).toBe(1);
   expect(signal).not.toHaveBeenCalled();
@@ -162,6 +165,14 @@ test('schedule validates intervals and removes the exact installed identity', as
     id: expect.stringContaining('workflow-wake-'),
     schedule: { intervalSeconds: 10, runAtLoad: true },
   });
+});
+
+test('schedule installation failure is reported with a nonzero exit', async () => {
+  install.mockRejectedValueOnce(new Error('service not registered'));
+  expect(await workflowContinuationCommand('wake', ['schedule', 'install'], { json: true })).toBe(
+    1
+  );
+  expect(output[0]).toMatchObject({ ok: false, error: 'service not registered' });
 });
 
 test('watch continues after a failed pass and returns failure on shutdown', async () => {

@@ -196,12 +196,40 @@ describe('workflow wake native schedule', () => {
     const installed = await installMacosNativeSchedule(generated, runtime);
     expect(await readFile(installed, 'utf8')).toContain('<string>wake</string>');
     expect(await installMacosNativeSchedule(generated, runtime)).toBe(installed);
-    expect(commands).toHaveLength(1);
+    expect(commands).toHaveLength(2);
+    expect(commands[1]).toEqual([
+      '/bin/launchctl',
+      'print',
+      `gui/501/com.archon.trigger.${originalId}`,
+    ]);
     await expect(
       installMacosNativeSchedule(workflowWakeScheduleConfig(10), runtime)
     ).rejects.toThrow('different configuration');
     expect(await removeMacosNativeSchedule(originalId, runtime)).toBe(true);
-    expect(commands[1]).toEqual(['/bin/launchctl', 'bootout', 'gui/501', installed]);
+    expect(commands[2]).toEqual(['/bin/launchctl', 'bootout', 'gui/501', installed]);
     expect(await removeMacosNativeSchedule(originalId, runtime)).toBe(false);
+  });
+
+  it('rejects an identical install when launchd registration cannot be verified and keeps the plist', async () => {
+    const directory = await scratchDirectory();
+    const path = join(directory, 'com.archon.trigger.source-refresh.plist');
+    const plist = renderMacosLaunchAgent(config()).plist;
+    await writeFile(path, plist);
+    const commands: string[][] = [];
+    await expect(
+      installMacosNativeSchedule(config(), {
+        platform: 'darwin',
+        uid: 501,
+        launchAgentsDirectory: directory,
+        runCommand: async (executable, args) => {
+          commands.push([executable, ...args]);
+          throw new Error('service not registered');
+        },
+      })
+    ).rejects.toThrow('service not registered');
+    expect(commands).toEqual([
+      ['/bin/launchctl', 'print', 'gui/501/com.archon.trigger.source-refresh'],
+    ]);
+    expect(await readFile(path, 'utf8')).toBe(plist);
   });
 });

@@ -3,6 +3,7 @@ import { stat } from 'node:fs/promises';
 import { getArchonHome } from '@archon/paths';
 import { getConversationById } from '@archon/core/db/conversations';
 import { getWorkflowRun, signalWorkflowWait } from '@archon/core/db/workflows';
+import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import {
   resumeWorkflowContinuation,
@@ -15,7 +16,6 @@ import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { isWorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
-import { z } from '@hono/zod-openapi';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { writeStdout } from '../utils/stdout';
@@ -216,26 +216,29 @@ async function signalEvent(args: string[], values: Values, json: boolean): Promi
   if (
     !runId ||
     args.length !== 1 ||
-    typeof values.event !== 'string' ||
-    !values.event ||
-    typeof values['resume-at'] !== 'string'
+    values.event === undefined ||
+    values['resume-at'] === undefined
   ) {
     throw new Error(
       'Usage: archon workflow signal <full-run-id> --event <name> --resume-at <ISO timestamp> [--data <JSON>] [--json]'
     );
   }
-  const resumeAt = z.iso.datetime().parse(values['resume-at']);
-  let payload: unknown;
+  let data: unknown;
   if (typeof values.data === 'string') {
     try {
-      payload = JSON.parse(values.data);
+      data = JSON.parse(values.data);
     } catch {
       throw new Error('--data must be valid JSON');
     }
   }
+  const { event, resumeAt, payload } = signalWorkflowWaitRequestSchema.parse({
+    event: values.event,
+    resumeAt: values['resume-at'],
+    payload: data,
+  });
   const run = await getWorkflowRun(runId);
   const wait = run && isWorkflowWaitContext(run.metadata.wait) ? run.metadata.wait : undefined;
-  if (!run || wait?.kind !== 'event' || wait.event !== values.event || wait.resumeAt !== resumeAt) {
+  if (!run || wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt) {
     throw new Error(
       'Run is not waiting on that event occurrence; use its full run id and current resumeAt'
     );
