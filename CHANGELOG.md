@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Two overlapping runs of one workflow in one conversation no longer share a persisted session. Each run's `persist_session` nodes continue from the session saved when that run started, never from one a sibling run saved later, and a node that finishes without a session id no longer erases the saved one. (#2667)
+- A `script:`/`bash:` node that reads a variable from `.archon/.env`, `~/.archon/.env`, or `config.yaml`'s `env:` section no longer warns as if it were a typo, on a fresh listing or a real run. The bundled `sdlc` pack no longer trips this warning for its own `ARCHON_SDLC_FORGE` operator switch. A name no configured source supplies still warns. (#3509, #3514)
 
 ## [0.11.1] - 2026-09-25
 
