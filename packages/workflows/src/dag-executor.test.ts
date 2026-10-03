@@ -36747,6 +36747,172 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     expect(nodeFailedError(mockDeps, 'guarded')).toBeUndefined();
   });
 
+  const runGuardedLayer = async (
+    scripts: Record<string, string>,
+    priorCompletedNodes?: Map<string, PersistedNodeOutput>
+  ): Promise<ReturnType<typeof createMockDeps>> => {
+    const mockDeps = createMockDeps();
+    const workflowRun = makeWorkflowRun('mc-run-id', {
+      workflow_name: 'mc-test',
+      conversation_id: 'conv-mc',
+      user_message: 'mc test',
+    });
+    const nodes: ExecNode[] = Object.entries(scripts).map(([id, script]) => ({
+      id,
+      kind: 'exec',
+      runtime: 'sh',
+      script,
+      mutates_checkout: false as const,
+    }));
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform: createMockPlatform(),
+        conversationId: 'conv-mc',
+        cwd: testDir,
+        workflow: { name: 'mc-test', nodes },
+        workflowRun,
+        priorCompletedNodes,
+      })
+    );
+    return mockDeps;
+  };
+
+  it('a layer of guarded nodes only runs its nodes concurrently', async () => {
+    await initRepo(testDir);
+    // Each node marks itself started, then waits for the other's mark. Run one after
+    // the other, the first never sees the second's mark and fails at the bound.
+    const meetThenExit = (self: string, other: string): string =>
+      `mkdir -p "$ARTIFACTS_DIR" && touch "$ARTIFACTS_DIR/${self}" && i=0; ` +
+      `while [ ! -f "$ARTIFACTS_DIR/${other}" ]; do i=$((i+1)); ` +
+      `[ $i -gt 40 ] && exit 1; sleep 0.1; done`;
+    const deps = await runGuardedLayer({
+      first: meetThenExit('first', 'second'),
+      second: meetThenExit('second', 'first'),
+    });
+    expect(nodeFailedError(deps, 'first')).toBeUndefined();
+    expect(nodeFailedError(deps, 'second')).toBeUndefined();
+  });
+
+  it('a write in a concurrent guarded layer fails every guarded node whose window it landed in', async () => {
+    await initRepo(testDir);
+    // The writer writes only after the reader has started, and the reader exits only
+    // after the write, so the write lands inside both nodes' windows.
+    const deps = await runGuardedLayer({
+      writer:
+        'i=0; while [ ! -f "$ARTIFACTS_DIR/reader" ]; do i=$((i+1)); ' +
+        '[ $i -gt 40 ] && exit 1; sleep 0.1; done; touch stray.txt',
+      reader:
+        'mkdir -p "$ARTIFACTS_DIR" && touch "$ARTIFACTS_DIR/reader" && i=0; ' +
+        'while [ ! -f stray.txt ]; do i=$((i+1)); [ $i -gt 40 ] && exit 1; sleep 0.1; done',
+    });
+    const writerError = nodeFailedError(deps, 'writer');
+    expect(writerError).toContain('stray.txt');
+    expect(writerError).toContain('guarded siblings `reader`');
+    expect(writerError).toContain("may not be this node's alone");
+    // The innocent reader fails too: one repo-wide snapshot cannot tell whose write it saw.
+    const readerError = nodeFailedError(deps, 'reader');
+    expect(readerError).toContain('stray.txt');
+    expect(readerError).toContain('guarded siblings `writer`');
+  });
+
+  it('a loop declaring mutates_checkout: false still serializes its layer', async () => {
+    await initRepo(testDir);
+    const mockDeps = createMockDeps();
+    // The guarded node waits briefly for the loop's write. Run concurrently, the write
+    // lands inside its window and fails it; run one after the other, it never sees it.
+    const nodes: DagNode[] = [
+      {
+        id: 'guarded',
+        kind: 'exec',
+        runtime: 'sh',
+        script:
+          'i=0; while [ ! -f loop.txt ]; do i=$((i+1)); [ $i -gt 10 ] && exit 0; sleep 0.1; done',
+        mutates_checkout: false,
+      },
+      {
+        id: 'looper',
+        kind: 'loop',
+        mutates_checkout: false,
+        loop: {
+          fresh_context: false,
+          prompt: 'Do a task.',
+          until_bash: 'touch loop.txt',
+          max_iterations: 1,
+        },
+      },
+    ];
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform: createMockPlatform(),
+        conversationId: 'conv-mc',
+        cwd: testDir,
+        workflow: { name: 'mc-test', nodes },
+        workflowRun: makeWorkflowRun('mc-run-id', {
+          workflow_name: 'mc-test',
+          conversation_id: 'conv-mc',
+          user_message: 'mc test',
+        }),
+      })
+    );
+    expect(nodeFailedError(mockDeps, 'guarded')).toBeUndefined();
+    expect(nodeFailedError(mockDeps, 'looper')).toBeUndefined();
+  });
+
+  it('a violation names no guarded node from an earlier layer', async () => {
+    await initRepo(testDir);
+    const mockDeps = createMockDeps();
+    const guarded = (id: string, script: string, depends_on?: string[]): ExecNode => ({
+      id,
+      kind: 'exec',
+      runtime: 'sh',
+      script,
+      mutates_checkout: false as const,
+      ...(depends_on ? { depends_on } : {}),
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform: createMockPlatform(),
+        conversationId: 'conv-mc',
+        cwd: testDir,
+        workflow: {
+          name: 'mc-test',
+          nodes: [
+            guarded('first', 'echo a'),
+            guarded('second', 'echo b'),
+            guarded('writer', 'touch stray.txt', ['first', 'second']),
+          ],
+        },
+        workflowRun: makeWorkflowRun('mc-run-id', {
+          workflow_name: 'mc-test',
+          conversation_id: 'conv-mc',
+          user_message: 'mc test',
+        }),
+      })
+    );
+    const error = nodeFailedError(mockDeps, 'writer');
+    expect(error).toContain('stray.txt');
+    expect(error).not.toContain('first');
+    expect(error).not.toContain('second');
+  });
+
+  it('a violation on resume names no sibling reused from the prior run', async () => {
+    await initRepo(testDir);
+    const deps = await runGuardedLayer(
+      { writer: 'touch stray.txt', cachedA: 'echo a', cachedB: 'echo b' },
+      new Map([
+        ['cachedA', { output: 'a' }],
+        ['cachedB', { output: 'b' }],
+      ])
+    );
+    const error = nodeFailedError(deps, 'writer');
+    expect(error).toContain('stray.txt');
+    expect(error).not.toContain('cachedA');
+    expect(error).not.toContain('cachedB');
+  });
+
   it('non-ASCII paths under excluded dirs do not trip the assertion', async () => {
     await initRepo(testDir);
     const deps = await runBashNode(
