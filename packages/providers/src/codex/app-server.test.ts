@@ -170,6 +170,27 @@ describe('AppServerConnection', () => {
     expect(error.evidence).not.toContain('xxx');
   });
 
+  test('a credential is redacted before the evidence is cut, so the cut cannot leave its tail', async () => {
+    const key = 'sk-straddle-0123456789';
+    const fake = rawChild();
+    const connection = AppServerConnection.start(BINARY, [], { CODEX_API_KEY: key }, fake.spawner);
+    const pending = connection.request('initialize', {
+      clientInfo: { name: 'archon', title: null, version: '0' },
+      capabilities: null,
+    });
+    // One 1017-char line whose last 1000 chars begin seven chars into the key: cutting
+    // first would leave `ddle-0123456789`, which no later redaction recognises.
+    fake.stderr.write(`${'a'.repeat(10)}${key}${'b'.repeat(985)}\n`);
+    await tick();
+    fake.child.emit('close', 1, null);
+
+    const error = (await pending.catch((e: unknown) => e)) as ConnectionClosedError;
+    const stderr = error.evidence.slice(error.evidence.indexOf('stderr:\n') + 'stderr:\n'.length);
+    expect(stderr).toContain('[REDACTED]');
+    expect(stderr).not.toContain('0123456789');
+    expect(stderr.length).toBeLessThanOrEqual(1000);
+  });
+
   test('shutdown closes stdin and sends SIGTERM only when the process does not exit', async () => {
     const signalsOnExit: string[] = [];
     const exits = rawChild((_child, signal) => signalsOnExit.push(signal));
