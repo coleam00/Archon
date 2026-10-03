@@ -101,29 +101,6 @@ export const workflowWaitContextSchema = z.union([
   z.strictObject({ ...workflowWaitLoopOwnerFields, ...workflowWaitAttentionFields }),
 ]);
 export type WorkflowWaitContext = z.infer<typeof workflowWaitContextSchema>;
-
-const [
-  nodeTimeWait,
-  nodeEventWait,
-  nodeAttentionWait,
-  loopTimeWait,
-  loopEventWait,
-  loopAttentionWait,
-] = workflowWaitContextSchema.options;
-const sessionCursor = { sessionId: true, sessionProvider: true } as const;
-
-/**
- * The wait cursor as API clients see it. A loop owner's session cursor resumes the
- * paused loop, so it stays in the engine; node records carry each node's session id.
- */
-export const publicWorkflowWaitContextSchema = z.union([
-  nodeTimeWait,
-  nodeEventWait,
-  nodeAttentionWait,
-  loopTimeWait.omit(sessionCursor),
-  loopEventWait.omit(sessionCursor),
-  loopAttentionWait.omit(sessionCursor),
-]);
 export type WorkflowAttentionWaitContext = Extract<WorkflowWaitContext, { kind: 'attention' }>;
 
 export function isWorkflowWaitContext(value: unknown): value is WorkflowWaitContext {
@@ -872,25 +849,6 @@ export interface LoopGateRunMetadata {
  */
 export function isGateResolved(approval: ApprovalContext): boolean {
   return approval.resolved === 'approved' || approval.resolved === 'rejected';
-}
-
-/**
- * Run metadata as API clients see it. The wait and approval cursors' session ids resume
- * a paused loop, so they stay in the engine; node records carry each node's session id.
- */
-export function withoutSessionCursors(metadata: Record<string, unknown>): Record<string, unknown> {
-  const strip = (cursor: unknown): unknown => {
-    if (typeof cursor !== 'object' || cursor === null) return cursor;
-    const rest: Record<string, unknown> = { ...cursor };
-    delete rest.sessionId;
-    delete rest.sessionProvider;
-    return rest;
-  };
-  return {
-    ...metadata,
-    ...(metadata.wait !== undefined ? { wait: strip(metadata.wait) } : {}),
-    ...(metadata.approval !== undefined ? { approval: strip(metadata.approval) } : {}),
-  };
 }
 
 /**

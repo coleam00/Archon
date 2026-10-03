@@ -6,7 +6,13 @@ export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
 type WorkflowRunMetadata = components['schemas']['WorkflowRunMetadata'];
 type WorkflowWait = NonNullable<WorkflowRunMetadata['wait']>;
 type WorkflowRunStopReason = NonNullable<WorkflowRunMetadata['stop_reason']>;
-type WorkflowWaitOwnerField = 'owner' | 'nodeId' | 'bodyWaitId' | 'iteration';
+type WorkflowWaitOwnerField =
+  | 'owner'
+  | 'nodeId'
+  | 'bodyWaitId'
+  | 'iteration'
+  | 'sessionId'
+  | 'sessionProvider';
 type NormalizedWorkflowWait<T extends WorkflowWait = WorkflowWait> = T extends WorkflowWait
   ? Omit<T, WorkflowWaitOwnerField> & { nodeId: string }
   : never;
@@ -140,9 +146,11 @@ function normalizeWorkflowWait(wait: WorkflowWait): NormalizedWorkflowWait {
     void owner;
     return normalized;
   }
-  const { owner, nodeId, bodyWaitId, iteration, ...normalized } = wait;
+  const { owner, nodeId, bodyWaitId, iteration, sessionId, sessionProvider, ...normalized } = wait;
   void owner;
   void iteration;
+  void sessionId;
+  void sessionProvider;
   return { ...normalized, nodeId: `${nodeId}.${bodyWaitId}` };
 }
 

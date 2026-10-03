@@ -107,7 +107,6 @@ import {
   isGateResolved,
   isWorkflowWaitContext,
   runAttention,
-  withoutSessionCursors,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
@@ -2715,7 +2714,6 @@ export function registerApiRoutes(
   function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
     return {
       ...row,
-      metadata: withoutSessionCursors(row.metadata),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),
       last_activity_at: toISOString(row.last_activity_at),
@@ -2725,7 +2723,6 @@ export function registerApiRoutes(
   function toApiDashboardWorkflowRun(row: DashboardWorkflowRun): ApiDashboardWorkflowRun {
     return {
       ...row,
-      metadata: withoutSessionCursors(row.metadata),
       started_at: toISOString(row.started_at),
       completed_at: toISOString(row.completed_at),
       last_activity_at: toISOString(row.last_activity_at),

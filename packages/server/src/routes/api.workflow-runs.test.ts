@@ -113,6 +113,8 @@ describe('workflow run API wait metadata', () => {
     nodeId: 'recover-ci',
     bodyWaitId: 'pause',
     iteration: 14,
+    sessionId: null,
+    sessionProvider: null,
     kind: 'attention' as const,
     waitingSince: '2026-08-31T10:00:00.000Z',
     message: 'Re-run CI, then resume.',
@@ -1585,58 +1587,6 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(mockListWorkflowEvents).toHaveBeenCalledWith('run-uuid-1', {
       excludeEventTypes: expect.arrayContaining(['provider_event', 'tool_called']),
     });
-  });
-
-  test('returns node session ids in events and keeps loop session cursors out of run metadata', async () => {
-    const pausedLoopRun = {
-      ...MOCK_RUNNING_RUN,
-      status: 'paused',
-      metadata: {
-        wait: {
-          owner: 'loop_group',
-          nodeId: 'poll',
-          bodyWaitId: 'delay',
-          iteration: 2,
-          sessionId: 'wait-cursor-session-id',
-          sessionProvider: 'claude',
-          kind: 'time',
-          waitingSince: '2026-10-03T10:00:00.000Z',
-          resumeAt: '2026-10-03T11:00:00.000Z',
-        },
-        approval: {
-          nodeId: 'refine',
-          message: 'Review the draft',
-          type: 'interactive_loop',
-          sessionId: 'approval-cursor-session-id',
-        },
-      },
-    } satisfies MockWorkflowRun;
-    mockGetWorkflowRun.mockImplementationOnce(async () => pausedLoopRun);
-    mockListWorkflowEvents.mockImplementationOnce(async () => [
-      {
-        id: 'node-done',
-        workflow_run_id: pausedLoopRun.id,
-        event_type: 'node_completed',
-        step_index: null,
-        step_name: 'draft',
-        data: { session_id: 'node-record-session-id' },
-        created_at: new Date().toISOString(),
-      },
-    ]);
-    mockListDashboardRuns.mockImplementationOnce(async () =>
-      makeDashboardRunsResult({ runs: [makeDashboardWorkflowRun(pausedLoopRun)] })
-    );
-
-    const { app } = makeApp();
-    const detail = await (await app.request(`/api/workflows/runs/${pausedLoopRun.id}`)).text();
-    const dashboard = await (await app.request('/api/dashboard/runs')).text();
-    expect(detail).toContain('node-record-session-id');
-    for (const body of [detail, dashboard]) {
-      expect(body).toContain('"bodyWaitId":"delay"');
-      expect(body).toContain('"message":"Review the draft"');
-      expect(body).not.toContain('wait-cursor-session-id');
-      expect(body).not.toContain('approval-cursor-session-id');
-    }
   });
 
   test('exposes the persisted terminal record and suppresses it during resumed execution', async () => {
