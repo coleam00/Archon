@@ -637,6 +637,8 @@ export class PiProvider implements IAgentProvider {
         case 'unusable':
           throw new ClassifiedProviderError('auth', authStatus.evidence);
         case 'check_failed':
+          // An abort during the check is the caller's cancel, not a credential failure.
+          if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
           throw new Error(authStatus.evidence);
         case 'not_checked':
           getLog().info({ piProvider: parsed.provider }, 'pi.auth_missing');
