@@ -21317,6 +21317,51 @@ describe('executeDagWorkflow -- persist_session', () => {
     });
   });
 
+  it('a scoped run with no persisted node never reads the session store', async () => {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'persist-test',
+          nodes: [{ id: 'planner', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    expect(store.listWorkflowNodeSessions).not.toHaveBeenCalled();
+  });
+
+  it('a failed session read with a persisted node that never dispatches does not reject unhandled', async () => {
+    const store = createMockStore();
+    store.listWorkflowNodeSessions.mockRejectedValue(new Error('DB timeout'));
+    // Bun fails the test on an unhandled rejection; the node never awaits the read.
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'persist-test',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              persist_session: true,
+              when: '1 == 0',
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(store.listWorkflowNodeSessions).toHaveBeenCalled();
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
+
   it('persist_session lookup failure → node runs fresh and upserts (non-fatal)', async () => {
     const store = createMockStore();
     store.listWorkflowNodeSessions.mockRejectedValue(new Error('DB timeout'));

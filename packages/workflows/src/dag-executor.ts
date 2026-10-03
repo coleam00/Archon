@@ -11195,18 +11195,24 @@ export async function executeDagWorkflow(
   // skipped in that case.
   // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
+  const workflowPersistSessions = workflow.persist_sessions === true;
+  // A composed fan-out resolves its body only when it runs, so it may hold persisted
+  // nodes this list cannot see; count it as one.
+  const runUsesPersistedScope = workflow.nodes.some(
+    node => node.kind === 'compose_fan_out' || nodeUsesPersistedScope(node, workflowPersistSessions)
+  );
   let persistScope: PersistScope | undefined;
-  if (runPersistScopeKey !== undefined) {
+  if (runPersistScopeKey !== undefined && runUsesPersistedScope) {
     const sessionsAtStart = deps.store.listWorkflowNodeSessions({
       workflow_name: workflow.name,
       scope_key: runPersistScopeKey,
     });
-    // A run with no persisted node never awaits this; a failed read must not become an
-    // unhandled rejection there. Nodes that await it still see the rejection.
+    // A persisted node that never dispatches (skipped by `when:`, or after a failure)
+    // never awaits this; a failed read must not become an unhandled rejection there.
+    // Nodes that await it still see the rejection.
     sessionsAtStart.catch(() => undefined);
     persistScope = { key: runPersistScopeKey, sessionsAtStart };
   }
-  const workflowPersistSessions = workflow.persist_sessions === true;
   const namedResumeSourceIds = new Set<string>();
   for (const node of workflow.nodes) {
     if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
