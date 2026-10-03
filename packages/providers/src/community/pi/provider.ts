@@ -369,6 +369,26 @@ export async function resolvePiAuth(
   }
 }
 
+/**
+ * The credential decision a Pi turn makes before its session starts; the login check
+ * reports the same one. A model outside Pi's static catalog may belong to an extension
+ * provider, which manages its credential outside Pi's store (kiro uses AWS SSO), so a
+ * missing credential is not an error for it. Anthropic is resolved even then: a turn needs
+ * the key to choose the subscription-OAuth system prompt.
+ */
+async function resolvePiTurnAuth(
+  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth'>,
+  providerId: string,
+  catalogued: boolean,
+  credentialValues: readonly string[],
+  signal?: AbortSignal
+): Promise<{ status: CredentialStatus; apiKey?: string }> {
+  const deferred = { status: { state: 'not_checked', source: 'native' } } as const;
+  if (!catalogued && providerId !== 'anthropic') return deferred;
+  const resolved = await resolvePiAuth(runtime, providerId, credentialValues, signal);
+  return !catalogued && resolved.status.state === 'not_connected' ? deferred : resolved;
+}
+
 async function applyPiEnvOverride(
   runtime: Pick<ModelRuntime, 'setRuntimeApiKey'>,
   providerId: string,
@@ -460,9 +480,11 @@ export class PiProvider implements IAgentProvider {
         refreshOnCreate: false,
       });
       await applyPiEnvOverride(runtime, parsed.provider, env);
-      const { status } = await resolvePiAuth(
+      const { status } = await resolvePiTurnAuth(
         runtime,
         parsed.provider,
+        new piCodingAgent.ModelRegistry(runtime).find(parsed.provider, parsed.modelId) !==
+          undefined,
         collectCredentialValues(env),
         signal
       );
@@ -648,39 +670,40 @@ export class PiProvider implements IAgentProvider {
       ...requestOptions?.env,
     });
     let resolvedKey: string | undefined;
-    if (model || parsed.provider === 'anthropic') {
-      const { status: authStatus, apiKey } = await resolvePiAuth(
-        modelRuntime,
-        parsed.provider,
-        collectCredentialValues(
-          { ...process.env, ...requestOptions?.env },
-          requestOptions?.protectedEnvKeys
-        ),
-        requestOptions?.abortSignal
-      );
-      switch (authStatus.state) {
-        case 'not_connected': {
-          const varHint = oauthVarName
-            ? `${oauthVarName} (subscription) or ${envVarName}`
-            : envVarName;
-          throw new ClassifiedProviderError(
-            'auth',
-            `Pi auth: no credentials for provider '${parsed.provider}'. Set ${varHint} in the environment or codebase env vars (.archon/config.yaml env: section). Or run \`pi\` and type \`/login\` locally.`
-          );
-        }
-        case 'unusable':
-          throw new ClassifiedProviderError('auth', authStatus.evidence);
-        case 'check_failed':
-          // An abort during the check is the caller's cancel, not a credential failure.
-          if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
-          throw new Error(authStatus.evidence);
-        case 'not_checked':
-          getLog().info({ piProvider: parsed.provider }, 'pi.auth_missing');
-          break;
-        case 'usable':
-          resolvedKey = apiKey;
-          break;
+    const { status: authStatus, apiKey } = await resolvePiTurnAuth(
+      modelRuntime,
+      parsed.provider,
+      model !== undefined,
+      collectCredentialValues(
+        { ...process.env, ...requestOptions?.env },
+        requestOptions?.protectedEnvKeys
+      ),
+      requestOptions?.abortSignal
+    );
+    switch (authStatus.state) {
+      case 'not_connected': {
+        // Name the OAuth var first when the backend has one: the resolver prefers it (#1984).
+        const envHint = envVarName
+          ? ` Set ${oauthVarName ? `${oauthVarName} (subscription) or ${envVarName}` : envVarName} in the environment or codebase env vars (.archon/config.yaml env: section).`
+          : '';
+        throw new ClassifiedProviderError(
+          'auth',
+          `Pi auth: no credentials for provider '${parsed.provider}'.${envHint} Or run \`pi\` and type \`/login\` locally.`
+        );
       }
+      case 'unusable':
+        throw new ClassifiedProviderError('auth', authStatus.evidence);
+      case 'check_failed':
+        // An abort during the check is the caller's cancel, not a credential failure.
+        if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
+        throw new Error(authStatus.evidence);
+      case 'not_checked':
+        // A local provider that needs no credential, or an extension's model.
+        if (model) getLog().info({ piProvider: parsed.provider }, 'pi.auth_missing');
+        break;
+      case 'usable':
+        resolvedKey = apiKey;
+        break;
     }
 
     // 4. Translate Archon nodeConfig to Pi SDK options. All three translations

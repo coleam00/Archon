@@ -1190,6 +1190,39 @@ describe('PiProvider', () => {
     );
   });
 
+  test('an Anthropic model outside the static catalog with no stored login reaches the extensions', async () => {
+    // An extension may register the model and manage its credential outside Pi's store.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() =>
+      createMockModel('anthropic', 'extension-model')
+    );
+    resetScript(scriptedAgentEnd());
+
+    const { error, failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/extension-model',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(failure).toBeUndefined();
+    expect(mockSetModel).toHaveBeenCalledTimes(1);
+  });
+
+  test('a configured login that resolves to nothing names no env var the provider lacks', async () => {
+    fileCreds['local-oauth'] = { type: 'oauth' };
+    mockGetAuth.mockImplementationOnce(async () => undefined);
+    resetScript(scriptedAgentEnd());
+
+    const { failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'local-oauth/model' })
+    );
+
+    expect(failure?.class).toBe('auth');
+    expect(failure?.evidence).toContain("no credentials for provider 'local-oauth'");
+    expect(failure?.evidence).not.toContain('undefined');
+  });
+
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
     process.env.GEMINI_API_KEY = 'from-process-env';
     resetScript([

@@ -223,6 +223,12 @@ describe('Pi native credentials', () => {
     expect(await check()).toEqual({ state: 'not_connected', source: 'native' });
     expect(await check('local/model')).toEqual({ state: 'not_checked', source: 'native' });
   });
+  test('a model outside the static catalog is not_checked, as a turn defers it to extensions', async () => {
+    expect(await check('anthropic/extension-model')).toEqual({
+      state: 'not_checked',
+      source: 'native',
+    });
+  });
   test('send reports auth only for the mapped missing credential', async () => {
     const chunks = [];
     for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
