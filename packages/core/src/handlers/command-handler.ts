@@ -37,7 +37,7 @@ import {
   abandonWorkflow,
   cancelWorkflow,
   CancelRefusedError,
-  ChildRunRedirectError,
+  workflowOperationErrorMessage,
   describeAbandonOwner,
   abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
@@ -702,8 +702,7 @@ async function handleWorkflowCommand(
   const subcommand = args[0];
   const cmd = (command: string): string => spellWorkflowCommand(surface, command);
   /** A child-run redirect is spelled for THIS surface; anything else reports as-is. */
-  const failureText = (err: Error): string =>
-    err instanceof ChildRunRedirectError ? err.messageFor(surface) : err.message;
+  const failureText = (err: Error): string => workflowOperationErrorMessage(err, surface);
 
   // Workflow commands work with or without a project context
   const codebase = conversation.codebase_id

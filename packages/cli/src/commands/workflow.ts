@@ -163,6 +163,7 @@ import {
   cancelWorkflow,
   CancelRefusedError,
   ChildRunRedirectError,
+  workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
   getWorkflowStatus,
@@ -5123,9 +5124,7 @@ export async function workflowRunsCommand(
  * can actually type.
  */
 function cliRefusalText(error: unknown): string {
-  return error instanceof ChildRunRedirectError
-    ? error.messageFor(CLI_WORKFLOW_SURFACE)
-    : (error as Error).message;
+  return workflowOperationErrorMessage(error, CLI_WORKFLOW_SURFACE);
 }
 
 /**
