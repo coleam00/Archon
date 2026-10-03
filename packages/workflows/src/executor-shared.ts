@@ -242,58 +242,6 @@ export function formatSubprocessFailure(
   };
 }
 
-// ─── Credit/Limit Exhaustion Detection ──────────────────────────────────────
-
-/** Patterns that indicate a subscription session limit in streamed assistant output */
-const SESSION_LIMIT_OUTPUT_PATTERNS = [
-  'hit your session limit',
-  'session limit reached',
-  'session limit has been reached',
-];
-
-/** Patterns that indicate pay-per-token credit exhaustion in streamed assistant output */
-const CREDIT_EXHAUSTION_OUTPUT_PATTERNS = [
-  "you're out of extra usage",
-  'out of credits',
-  'credit balance',
-  'insufficient credit',
-];
-
-/** Extract a reset-time clause from a session-limit message, e.g. "resets 3am (America/Mexico_City)". */
-function extractResetTime(text: string): string | null {
-  const match = /resets\s+([^\n·.!]+)/i.exec(text);
-  return match ? match[1].trim() : null;
-}
-
-/**
- * Detect credit/session-limit exhaustion in streamed node output text.
- *
- * The Claude SDK surfaces both subscription session limits and pay-per-token
- * credit exhaustion as normal assistant text messages rather than thrown errors.
- * This function checks the accumulated output for known phrases and returns an
- * actionable error string, or null if no limit is detected.
- *
- * @returns null if no limit detected; a session-limit string (instructs user to
- * abandon and retry after reset) or a credit-exhaustion string (instructs user
- * to resume when credits refill).
- */
-export function detectCreditExhaustion(text: string): string | null {
-  const lower = text.toLowerCase();
-
-  if (SESSION_LIMIT_OUTPUT_PATTERNS.some(p => lower.includes(p))) {
-    const resetTime = extractResetTime(text);
-    return resetTime
-      ? `Claude session limit reached — resets ${resetTime}. Abandon this run and retry after reset.`
-      : 'Claude session limit reached — abandon this run and retry when the session resets.';
-  }
-
-  if (CREDIT_EXHAUSTION_OUTPUT_PATTERNS.some(p => lower.includes(p))) {
-    return 'Credit exhaustion detected — resume when credits reset';
-  }
-
-  return null;
-}
-
 // ─── Command Loading ─────────────────────────────────────────────────────────
 
 /**
