@@ -1,3 +1,4 @@
+import type { GetAccountResponse } from '../codex/protocol/v2/GetAccountResponse';
 /**
  * A scripted stand-in for `codex app-server`, driven through the provider's injectable
  * spawner. It speaks the real JSONL framing over PassThrough streams, so the JSON-RPC
@@ -42,6 +43,8 @@ type CommandExecution = Extract<ThreadItem, { type: 'commandExecution' }>;
 type McpToolCall = Extract<ThreadItem, { type: 'mcpToolCall' }>;
 
 export interface FakeTurnScript {
+  account?: GetAccountResponse['account'];
+  ignoreAccountRead?: boolean;
   /** Notifications sent after `turn/start` answers, in order. */
   notifications?: ServerNotification[];
   /** End the turn with this `turn/completed` status (default `completed`); `null` sends none. */
@@ -230,6 +233,16 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
             if (turn.ignoreInterrupt) break;
             send({ id, result: {} satisfies TurnInterruptResponse });
             completeTurn('interrupted');
+            break;
+          case 'account/read':
+            if (!turn.ignoreAccountRead)
+              send({
+                id,
+                result: {
+                  account: turn.account ?? null,
+                  requiresOpenaiAuth: true,
+                } satisfies GetAccountResponse,
+              });
             break;
           case 'account/login/start':
             send({ id, result: { type: 'apiKey' } satisfies LoginAccountResponse });

@@ -22,6 +22,7 @@ import { EFFORT_LADDER } from '@archon/paths/effort';
 function makeMockProvider(id: string): IAgentProvider {
   return {
     getType: () => id,
+    checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     getCapabilities: () => ({
       sessionResume: false,
       mcp: false,
@@ -58,7 +59,7 @@ function makeMockRegistration(
     factory: () => makeMockProvider(id),
     capabilities: makeMockProvider(id).getCapabilities(),
     builtIn: false,
-    credentials: { kind: 'static', specs: [] },
+    credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
     ...overrides,
     parseConfig: overrides?.parseConfig ?? (raw => raw),
   };
@@ -450,5 +451,39 @@ describe('registry', () => {
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'copilot']);
     });
+  });
+});
+
+describe('credential vendor mapping', () => {
+  beforeEach(() => {
+    clearRegistry();
+    registerBuiltinProviders();
+    registerCommunityProviders();
+  });
+  test('single-vendor providers resolve every model from their own spec', () => {
+    for (const [id, vendor] of [
+      ['claude', 'anthropic'],
+      ['codex', 'openai'],
+      ['copilot', 'github-copilot'],
+    ]) {
+      const catalog = getRegistration(id).credentials;
+      expect(catalog.vendorFor(undefined)).toBe(vendor);
+      expect(catalog.vendorFor('any-model')).toBe(vendor);
+      if (catalog.kind === 'static')
+        expect(catalog.specs.map(spec => spec.vendor)).toEqual([vendor]);
+    }
+  });
+  test('Pi maps only models whose vendor is in its catalog', () => {
+    const { vendorFor } = getRegistration('pi').credentials;
+    expect(vendorFor('anthropic/claude-sonnet-4-6')).toBe('anthropic');
+    expect(vendorFor('github-copilot/gpt-5.6')).toBe('github-copilot');
+    expect(vendorFor('google/gemini-3-pro')).toBe('google');
+    expect(vendorFor('copilot/gpt-5.6')).toBe('github-copilot');
+    expect(vendorFor('ollama/local')).toBeUndefined();
+    expect(vendorFor('broken')).toBeUndefined();
+    expect(vendorFor(undefined)).toBeUndefined();
+  });
+  test('OpenCode has no stored-credential mapping', () => {
+    expect(getRegistration('opencode').credentials.vendorFor('anthropic/claude')).toBeUndefined();
   });
 });

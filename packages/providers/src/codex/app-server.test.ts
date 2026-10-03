@@ -84,10 +84,10 @@ describe('AppServerConnection', () => {
     expect(a).toMatchObject({ id: 1, method: 'thread/start' });
     expect(b).toMatchObject({ id: 2, method: 'account/read' });
 
-    fake.reply({ id: 2, result: 'second' });
+    fake.reply({ id: 2, result: { account: null, requiresOpenaiAuth: true } });
     fake.reply({ id: 1, result: 'first' });
     expect(await first).toBe('first');
-    expect(await second).toBe('second');
+    expect(await second).toEqual({ account: null, requiresOpenaiAuth: true });
   });
 
   test('frames split across reads, or sharing one, are each read whole', async () => {
@@ -97,9 +97,9 @@ describe('AppServerConnection', () => {
     const second = connection.request('account/read', {});
     fake.stdout.write('{"id":1,"result":"fi');
     await tick();
-    fake.stdout.write('rst"}\n{"id":2,"result":"second"}\n');
+    fake.stdout.write('rst"}\n{"id":2,"result":{"account":null,"requiresOpenaiAuth":true}}\n');
     expect(await first).toBe('first');
-    expect(await second).toBe('second');
+    expect(await second).toEqual({ account: null, requiresOpenaiAuth: true });
   });
 
   test('a JSON-RPC error rejects with its code and the method', async () => {
@@ -205,5 +205,78 @@ describe('AppServerConnection', () => {
     });
     await AppServerConnection.start(BINARY, [], {}, hangs.spawner).shutdown(20);
     expect(signals).toEqual(['SIGTERM']);
+  });
+});
+
+describe('Codex native credential check', () => {
+  const env = { CODEX_API_KEY: '', TEST_SECRET: 'planted-codex-secret' };
+  const check = async (script: import('../test/codex-app-server-fake').FakeTurnScript) => {
+    const { CodexProvider } = await import('./provider');
+    const { createFakeAppServer } = await import('../test/codex-app-server-fake');
+    const server = createFakeAppServer(() => script);
+    const status = await new CodexProvider(server, 1).checkCredential({
+      env,
+      signal: AbortSignal.timeout(1000),
+    });
+    expect(server.processes[0]?.methods).toEqual(['initialize', 'account/read']);
+    expect(server.processes[0]?.requests[1]?.params).toEqual({ refreshToken: false });
+    expect(server.processes[0]?.stdinEnded).toBe(true);
+    return status;
+  };
+
+  test('an account is usable', async () => {
+    expect(await check({ account: { type: 'chatgpt', email: null, planType: 'plus' } })).toEqual({
+      state: 'usable',
+      source: 'native',
+    });
+  });
+  test('no account is unusable', async () => {
+    expect(await check({ account: null })).toMatchObject({
+      state: 'unusable',
+      evidence: expect.stringContaining('codex login'),
+    });
+  });
+  test('JSON-RPC errors are check_failed and redact secrets', async () => {
+    const { checkCredentialStatuses } = await import('@archon/provider-contract/conformance');
+    expect(
+      await checkCredentialStatuses([
+        {
+          name: 'Codex error',
+          expected: 'check_failed',
+          secret: env.TEST_SECRET,
+          check: () =>
+            check({
+              errors: {
+                'account/read': { code: -32600, message: `cannot verify ${env.TEST_SECRET}` },
+              },
+            }),
+        },
+      ])
+    ).toEqual([]);
+  });
+  test('an abort stops an unanswered account read', async () => {
+    expect(await check({ ignoreAccountRead: true })).toMatchObject({ state: 'check_failed' });
+  });
+  test('CODEX_API_KEY is usable without starting a process', async () => {
+    const { CodexProvider } = await import('./provider');
+    const spawner = mock(() => {
+      throw new Error('must not spawn');
+    });
+    const { checkCredentialStatuses } = await import('@archon/provider-contract/conformance');
+    expect(
+      await checkCredentialStatuses([
+        {
+          name: 'Codex API key',
+          expected: 'usable',
+          secret: 'planted-key',
+          check: () =>
+            new CodexProvider(spawner).checkCredential({
+              env: { CODEX_API_KEY: 'planted-key' },
+              signal: new AbortController().signal,
+            }),
+        },
+      ])
+    ).toEqual([]);
+    expect(spawner).not.toHaveBeenCalled();
   });
 });

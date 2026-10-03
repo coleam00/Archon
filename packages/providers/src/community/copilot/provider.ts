@@ -1,3 +1,4 @@
+import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * GitHub Copilot provider (community tier).
  *
@@ -400,6 +401,10 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
  * per-request env vars are honored.
  */
 export class CopilotProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   getType(): string {
     return 'copilot';
   }

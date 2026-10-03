@@ -314,6 +314,12 @@ AI agent providers wrap AI SDKs and provide a unified streaming interface. Imple
 
 ```typescript
 export interface IAgentProvider {
+  checkCredential(request: {
+    model?: string;
+    env: Record<string, string>;
+    signal: AbortSignal;
+  }): Promise<CredentialStatus>;
+
   sendQuery(
     prompt: string,
     cwd: string,
@@ -360,9 +366,14 @@ Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(r
 **2. Implement the interface:**
 
 ```typescript
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
 
 export class YourAssistantProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -1366,7 +1377,7 @@ Post single comment on issue with summary
 This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the folder layout, registration, and capability discipline are covered there in depth.
 
 - [ ] Create `packages/providers/src/your-assistant/provider.ts`
-- [ ] Implement `IAgentProvider` interface (sendQuery + getType + getCapabilities)
+- [ ] Implement `IAgentProvider` interface (checkCredential + sendQuery + getType + getCapabilities)
 - [ ] Map SDK events to `MessageChunk` discriminated union
 - [ ] Handle session creation and resumption
 - [ ] Declare `ProviderCapabilities` honestly — under-declare rather than over-promise

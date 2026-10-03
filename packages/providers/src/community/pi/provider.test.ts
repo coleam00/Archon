@@ -1,3 +1,4 @@
+import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -116,6 +117,14 @@ const mockGetAuth = mock(async (providerId: string) => {
     return { auth: { apiKey: 'sk-ant-oat01-file-stub' }, source: 'auth.json' };
   return undefined;
 });
+const mockCheckAuth = mock(async (providerId: string) => {
+  if (runtimeOverrides[providerId]) return { type: 'api_key', source: 'runtime override' };
+  if (fileCreds[providerId])
+    return { type: fileCreds[providerId].type, source: 'stored credential' };
+  if (!PI_PROVIDER_ENV_VARS[providerId] && mockHasConfiguredAuth(providerId))
+    return { type: 'api_key', source: 'config' };
+  return undefined;
+});
 const mockHasConfiguredAuth = mock(
   (providerId: string) =>
     runtimeOverrides[providerId] !== undefined || fileCreds[providerId] !== undefined
@@ -163,6 +172,7 @@ type MockModelRegistry = Pick<ModelRegistry, 'find'> &
 // previously poked at the auth passed to `ModelRegistry.create` now poke at
 // the runtime passed to the constructor.
 type MockModelRuntime = {
+  checkAuth: typeof mockCheckAuth;
   setRuntimeApiKey(providerId: string, key: string): Promise<void>;
   getAuth(providerId: string): Promise<unknown>;
   hasConfiguredAuth(providerId: string): boolean;
@@ -219,6 +229,7 @@ const mockModelRegistryConstruct = mock(
 // (just on the runtime object now).
 const mockModelRuntimeCreate = mock(
   async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => ({
+    checkAuth: mockCheckAuth,
     setRuntimeApiKey: mockSetRuntimeApiKey,
     getAuth: mockGetAuth,
     hasConfiguredAuth: mockHasConfiguredAuth,
@@ -540,8 +551,6 @@ describe('PiProvider', () => {
     expect(mockLogger.info).toHaveBeenCalledWith(
       {
         piProvider: 'unknownprovider',
-        envHint: expect.stringContaining("not in the Archon adapter's env-var table"),
-        loginHint: expect.stringContaining('/login'),
       },
       'pi.auth_missing'
     );
@@ -612,6 +621,7 @@ describe('PiProvider', () => {
         capturedPerCallContent = readFileSync(options.modelsPath, 'utf-8');
       }
       return {
+        checkAuth: mockCheckAuth,
         setRuntimeApiKey: mockSetRuntimeApiKey,
         getAuth: mockGetAuth,
         hasConfiguredAuth: mockHasConfiguredAuth,
@@ -1112,7 +1122,7 @@ describe('PiProvider', () => {
     // Runtime override NOT set — no env var present — so Pi's getAuth
     // resolves through the OAuth code path.
     expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
-    expect(mockGetAuth).toHaveBeenCalledWith('anthropic');
+    expect(mockGetAuth).toHaveBeenCalledWith('anthropic', { signal: undefined });
   });
 
   test('reports a failure when ModelRegistry.find returns undefined', async () => {
@@ -2351,7 +2361,7 @@ describe('PiProvider', () => {
     expect(violations).toEqual([]);
   });
 
-  test('pre-aborted signal triggers session.abort before any yielding', async () => {
+  test('pre-aborted signal stops before creating a session', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
     const controller = new AbortController();
@@ -2363,7 +2373,8 @@ describe('PiProvider', () => {
         abortSignal: controller.signal,
       })
     );
-    expect(mockAbort).toHaveBeenCalled();
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+    expect(mockPrompt).not.toHaveBeenCalled();
   });
 
   test('abort signal mid-stream calls session.abort', async () => {

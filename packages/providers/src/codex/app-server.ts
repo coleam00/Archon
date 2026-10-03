@@ -1,3 +1,4 @@
+import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 /**
  * A JSON-RPC connection to one `codex app-server` process over stdio.
  *
@@ -198,6 +199,8 @@ export class AppServerConnection {
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
+  request(method: 'account/read', params: ParamsOf<'account/read'>): Promise<GetAccountResponse>;
+  request<M extends Method>(method: M, params: ParamsOf<M>): Promise<unknown>;
   request<M extends Method>(method: M, params: ParamsOf<M>): Promise<unknown> {
     if (this.endedWith) return Promise.reject(this.closedError(this.endedWith));
     const id = this.nextId++;

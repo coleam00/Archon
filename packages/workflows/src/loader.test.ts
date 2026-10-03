@@ -6755,7 +6755,7 @@ nodes:
         id: 'no-resume-skip-test',
         displayName: 'No Resume Skip Test',
         builtIn: false,
-        credentials: { kind: 'static', specs: [] },
+        credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
           sessionResume: false,
@@ -6778,6 +6778,10 @@ nodes:
           requiresAllPropertiesRequired: false,
         },
         factory: () => ({
+          checkCredential: async () => ({
+            state: 'not_checked' as const,
+            source: 'native' as const,
+          }),
           getType: () => 'no-resume-skip-test',
           getCapabilities: () => ({
             sessionResume: false,
@@ -6844,7 +6848,7 @@ nodes:
         id: 'no-resume-test',
         displayName: 'No Resume Test',
         builtIn: false,
-        credentials: { kind: 'static', specs: [] },
+        credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
           sessionResume: false,
@@ -6867,6 +6871,10 @@ nodes:
           requiresAllPropertiesRequired: false,
         },
         factory: () => ({
+          checkCredential: async () => ({
+            state: 'not_checked' as const,
+            source: 'native' as const,
+          }),
           getType: () => 'no-resume-test',
           getCapabilities: () => ({
             sessionResume: false,

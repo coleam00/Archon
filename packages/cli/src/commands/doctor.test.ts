@@ -7,7 +7,7 @@
  * testability. Avoids `mock.module()` because it is process-global and
  * irreversible in Bun, which would pollute other test files in this package.
  */
-import { describe, it, expect, spyOn, afterEach, beforeEach } from 'bun:test';
+import { describe, it, expect, mock, spyOn, afterEach, beforeEach } from 'bun:test';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
@@ -23,7 +23,8 @@ import {
   checkDatabase,
   checkConnectedProviders,
   checkGhAuth,
-  checkPi,
+  checkAssistantLogin,
+  type AssistantLoginDeps,
   checkWorkspaceWritable,
   checkBundledDefaults,
   checkSlack,
@@ -40,7 +41,6 @@ import {
   type OpenCodeDeps,
   type ProviderDeps,
 } from './doctor';
-import * as doctorModule from './doctor';
 import type { MergedConfig } from '@archon/core';
 
 describe('checkClaudeBinary', () => {
@@ -442,186 +442,155 @@ describe('checkGhAuth', () => {
   });
 });
 
-describe('checkPi', () => {
-  // Spy on the exported `probePiAuthValidity` wrapper rather than reaching into
-  // 'fs'. Named imports from 'fs' cannot be intercepted by spying on the
-  // namespace object due to ESM rebinding — the wrapper pattern (same as
-  // `probeFileExists` in setup.ts) is the correct way to make this testable.
-  let piAuthReaderSpy: ReturnType<typeof spyOn<typeof doctorModule, 'probePiAuthValidity'>> | null =
-    null;
+describe('checkAssistantLogin', () => {
+  const config: MergedConfig = {
+    botName: 'test',
+    assistant: 'claude',
+    assistants: { claude: {}, codex: {}, pi: { model: 'anthropic/claude-sonnet-4-6' } },
+    streaming: { telegram: 'batch', discord: 'batch', slack: 'batch' },
+    paths: { workspaces: '/unused', worktrees: '/unused' },
+    concurrency: { maxConversations: 1 },
+    workflows: { autoResumeOnQuotaReset: false, quotaMaxAttempts: 1, quotaDeadlineMs: 1 },
+    commands: { autoLoad: false },
+    defaults: { copyDefaults: false, loadDefaultCommands: false, loadDefaultWorkflows: false },
+  };
 
-  afterEach(() => {
-    piAuthReaderSpy?.mockRestore();
+  const deps = (
+    state: import('@archon/provider-contract').CredentialStatus
+  ): AssistantLoginDeps => ({
+    assistant: 'pi',
+    model: 'anthropic/claude-sonnet-4-6',
+    credentialConnected: false,
+    provider: { checkCredential: mock(async () => state) },
   });
 
-  it('returns skip when Pi is not configured', async () => {
-    const result = await checkPi({});
-    expect(result.status).toBe('skip');
-    expect(result.label).toBe('Pi provider');
-    expect(result.message).toContain('not configured');
-  });
-
-  it('returns pass when ~/.pi/agent/auth.json exists', async () => {
-    // The store has to hold a usable credential too — presence alone is no
-    // longer a pass (#3274), so this pins the "exists AND valid" path.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'valid',
-      providers: ['anthropic'],
-      expiredProviders: [],
-      expiresAt: Date.UTC(2027, 0, 1),
+  for (const [state, expected] of [
+    ['usable', 'pass'],
+    ['not_checked', 'pass'],
+    ['check_failed', 'warn'],
+    ['unusable', 'fail'],
+    ['not_connected', 'fail'],
+  ] as const) {
+    it(`maps ${state} to ${expected}`, async () => {
+      const fixture = deps(
+        state === 'unusable' || state === 'check_failed'
+          ? { state, source: 'native', evidence: 'runtime evidence' }
+          : { state, source: 'native' }
+      );
+      const result = await checkAssistantLogin(
+        { DEFAULT_AI_ASSISTANT: 'claude', TEST_KEY: 'secret' },
+        async () => fixture
+      );
+      expect(result.status).toBe(expected);
+      expect(result.message).toContain('pi:');
+      expect(fixture.provider.checkCredential).toHaveBeenCalledWith({
+        model: fixture.model,
+        env: { DEFAULT_AI_ASSISTANT: 'claude', TEST_KEY: 'secret' },
+        signal: expect.any(AbortSignal),
+      });
+      if (state === 'check_failed' || state === 'unusable')
+        expect(result.message).toContain('runtime evidence');
+      if (state === 'not_checked') expect(result.message).toContain('not checked');
     });
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('auth.json');
+  }
+
+  it('checks only the configured Claude assistant and reports not checked', async () => {
+    const { ClaudeProvider } = await import('@archon/providers');
+    const check = spyOn(ClaudeProvider.prototype, 'checkCredential');
+    try {
+      const result = await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' }, async () => ({
+        assistant: 'claude',
+        credentialConnected: false,
+        provider: new ClaudeProvider(),
+      }));
+      expect(result).toMatchObject({ status: 'pass', message: 'claude: not checked' });
+      expect(check).toHaveBeenCalledTimes(1);
+    } finally {
+      check.mockRestore();
+    }
   });
 
-  it('returns pass when a Pi API key env var is set', async () => {
-    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json,
-    // so a machine that has Pi set up takes the store branch instead of the
-    // env-var branch this test exists to cover.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'missing',
-    });
-
-    const result = await checkPi({
-      DEFAULT_AI_ASSISTANT: 'pi',
-      ANTHROPIC_API_KEY: 'sk-ant-test',
-    });
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('ANTHROPIC_API_KEY');
+  it('loads the merged default assistant without consulting the Pi login', async () => {
+    const core = await import('@archon/core');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
+      await import('@archon/providers');
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const load = spyOn(core, 'loadConfig').mockResolvedValue(config);
+    const pi = spyOn(PiProvider.prototype, 'checkCredential');
+    try {
+      expect(await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' })).toMatchObject({
+        status: 'pass',
+        message: 'claude: not checked',
+      });
+      expect(load).toHaveBeenCalledWith(process.cwd());
+      expect(pi).not.toHaveBeenCalled();
+    } finally {
+      load.mockRestore();
+      pi.mockRestore();
+    }
   });
 
-  it('returns fail when DEFAULT_AI_ASSISTANT=pi but no auth found', async () => {
-    // An explicit probe: without one this reads the real ~/.pi/agent/auth.json
-    // and passes or fails by the machine it runs on.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'missing',
+  it("skips native login only for the configured model's connected vendor", async () => {
+    const core = await import('@archon/core');
+    const userDb = await import('@archon/core/db/users');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
+      await import('@archon/providers');
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
+    const user = spyOn(userDb, 'findOrCreateUserByPlatformIdentity').mockResolvedValue({
+      id: 'cli-user',
+      display_name: null,
+      email: null,
+      role: 'member',
+      created_at: new Date(0),
+      updated_at: new Date(0),
     });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('pi /login');
+    const rows = spyOn(core, 'listUserProviderKeys');
+    const native = spyOn(PiProvider.prototype, 'checkCredential').mockResolvedValue({
+      state: 'not_connected',
+      source: 'native',
+    });
+    try {
+      rows.mockResolvedValue([{ provider: 'openai', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+      });
+      expect(native).toHaveBeenCalledTimes(1);
+      rows.mockResolvedValue([{ provider: 'anthropic', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'pass',
+        message: 'pi: uses the credential connected in Archon',
+      });
+      expect(native).toHaveBeenCalledTimes(1);
+    } finally {
+      native.mockRestore();
+      rows.mockRestore();
+      user.mockRestore();
+      load.mockRestore();
+    }
   });
 
-  it('warns rather than fails when auth.json holds an expired access token (#3274)', async () => {
-    // `expires` is the access token's expiry, and Pi refreshes it on the next
-    // use while the refresh token works. A hard fail here is a false alarm on
-    // a healthy install — worse than the false pass this check replaced.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'expired',
-      providers: ['anthropic'],
-      expiredProviders: ['anthropic'],
-      expiresAt: Date.UTC(2026, 5, 8),
+  it('uses the connected credential without checking native login', async () => {
+    const fixture = {
+      ...deps({ state: 'unusable', source: 'native', evidence: 'dead native login' }),
+      credentialConnected: true,
+    };
+    const result = await checkAssistantLogin({}, async () => fixture);
+    expect(result).toMatchObject({
+      status: 'pass',
+      message: 'pi: uses the credential connected in Archon',
     });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('warn');
-    expect(result.message).toContain('anthropic');
-    expect(result.message).toContain('expired');
+    expect(fixture.provider.checkCredential).not.toHaveBeenCalled();
   });
 
-  it('reports the expiry date rather than any credential value', async () => {
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'expired',
-      providers: ['anthropic'],
-      expiredProviders: ['anthropic'],
-      expiresAt: Date.UTC(2026, 5, 8),
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.message).toContain('2026');
-    expect(result.message).not.toContain('stored-access');
-    expect(result.message).not.toContain('stored-refresh');
-  });
-
-  it('names only the expired provider when the store also holds a usable one', async () => {
-    // Two grants, one dead since June and one good until next year. The verdict
-    // is aggregate, but the message must not send the operator to renew a
-    // credential that does not need it.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'expired',
-      providers: ['anthropic', 'github-copilot'],
-      expiredProviders: ['anthropic'],
-      expiresAt: Date.UTC(2026, 5, 8),
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('warn');
-    expect(result.message).toContain('anthropic');
-    expect(result.message).not.toContain('github-copilot');
-  });
-
-  it('returns pass when auth.json holds a grant that is still valid', async () => {
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'valid',
-      providers: ['anthropic'],
-      expiredProviders: [],
-      expiresAt: Date.UTC(2027, 0, 1),
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('pass');
-  });
-
-  it('does not turn an unreadable store into an expired-credential failure', async () => {
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'unreadable',
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    // The file exists but says nothing usable. That is not the same defect as
-    // an expired grant, and the message must not claim it is.
-    expect(result.message).not.toContain('expired');
-    expect(result.message).toContain('auth.json');
-  });
-
-  it('an empty store is not a pass on its own', async () => {
-    // `{}` on disk means the file is present but holds no credential, so `pi`
-    // has nothing to authenticate with. It must fall through to the env-var
-    // check rather than report a green doctor for a Pi-default user.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'empty',
-    });
-
-    const result = await checkPi({ DEFAULT_AI_ASSISTANT: 'pi' });
-
-    expect(result.status).toBe('fail');
-    expect(result.message).toContain('pi /login');
-  });
-
-  it('an empty store still passes when an API key env var is set', async () => {
-    // The reason `empty` falls through instead of failing outright: the env-var
-    // path is a legitimate answer for the same store.
-    piAuthReaderSpy = spyOn(doctorModule, 'probePiAuthValidity').mockReturnValue({
-      status: 'empty',
-    });
-
-    const result = await checkPi({
-      DEFAULT_AI_ASSISTANT: 'pi',
-      ANTHROPIC_API_KEY: 'sk-ant-test',
-    });
-
-    expect(result.status).toBe('pass');
-    expect(result.message).toContain('ANTHROPIC_API_KEY');
-  });
-
-  it('returns skip for Claude-only users who have ANTHROPIC_API_KEY but Pi is not default', async () => {
-    // Regression guard for M2: shared keys like ANTHROPIC_API_KEY must not be treated
-    // as Pi evidence unless DEFAULT_AI_ASSISTANT=pi.
-    const result = await checkPi({ ANTHROPIC_API_KEY: 'sk-ant-test' });
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('not configured');
-  });
-
-  it('returns skip for users with OPENROUTER_API_KEY set but Pi not configured as default', async () => {
-    const result = await checkPi({ OPENROUTER_API_KEY: 'or-key' });
-    expect(result.status).toBe('skip');
-    expect(result.message).toContain('not configured');
+  it('warns if the configured login could not be checked', async () => {
+    expect(
+      await checkAssistantLogin({}, async () => {
+        throw new Error('config unavailable');
+      })
+    ).toMatchObject({ status: 'warn', message: expect.stringContaining('config unavailable') });
   });
 });
 

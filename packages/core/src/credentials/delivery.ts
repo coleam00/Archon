@@ -21,24 +21,14 @@
  * pi-ai SDK — `bun run check:pi-vendor-map` guards drift).
  */
 import { dirname, join } from 'node:path';
-import { PI_PROVIDER_ENV_VARS, PI_AMBIENT_VENDORS } from '@archon/providers';
+import {
+  PI_PROVIDER_ENV_VARS,
+  PI_AMBIENT_VENDORS,
+  normalizeCredentialVendor,
+} from '@archon/providers';
 import { CODEX_AUTH_JSON_RELATIVE_PATH, PI_AUTH_JSON_RELATIVE_PATH } from '@archon/workflows/deps';
 
-/**
- * Pre-#1955 agent-keyed credential ids → vendor-canonical ids. Accepted at
- * every entry point (connect, delivery, CLI) so in-flight callers and
- * not-yet-migrated rows keep working; storage always uses the vendor id.
- */
-export const LEGACY_VENDOR_ALIASES: Readonly<Record<string, string>> = {
-  claude: 'anthropic',
-  codex: 'openai',
-  copilot: 'github-copilot',
-};
-
-/** Map a (possibly legacy agent-keyed) credential id to its vendor-canonical id. */
-export function normalizeCredentialVendor(id: string): string {
-  return LEGACY_VENDOR_ALIASES[id] ?? id;
-}
+export { LEGACY_VENDOR_ALIASES, normalizeCredentialVendor } from '@archon/providers';
 
 /**
  * Raw OAuth credential blob minted at login — by `@earendil-works/pi-ai/oauth`

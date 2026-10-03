@@ -115,3 +115,9 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+
+export {
+  singleVendorCatalog,
+  normalizeCredentialVendor,
+  LEGACY_VENDOR_ALIASES,
+} from './credential-catalog';

@@ -1,3 +1,8 @@
+import type { CredentialStatus } from '@archon/provider-contract';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 /**
  * Codex provider: one Codex turn per `sendQuery`, driven over the `codex app-server`
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
@@ -747,6 +752,62 @@ export class CodexProvider implements IAgentProvider {
     private readonly spawner?: Spawner,
     private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS
   ) {}
+
+  async checkCredential(
+    request: Parameters<IAgentProvider['checkCredential']>[0]
+  ): Promise<CredentialStatus> {
+    const { env, signal } = request;
+    let connection: AppServerConnection | undefined;
+    let onAbort: (() => void) | undefined;
+    try {
+      signal.throwIfAborted();
+      if (env.CODEX_API_KEY) return { state: 'usable', source: 'native' };
+      const binary = await resolveCodexBinary();
+      signal.throwIfAborted();
+      connection = AppServerConnection.start(binary, [], env, this.spawner);
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = (): void => {
+          const reason: unknown = signal.reason;
+          reject(reason instanceof Error ? reason : new Error(String(reason)));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      await Promise.race([
+        aborted,
+        connection.request('initialize', {
+          clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
+          capabilities: null,
+        }),
+      ]);
+      connection.notify('initialized');
+      const response = await Promise.race([
+        aborted,
+        connection.request('account/read', { refreshToken: false }),
+      ]);
+      signal.throwIfAborted();
+      return response.account === null
+        ? {
+            state: 'unusable',
+            source: 'native',
+            evidence:
+              'Codex reports no usable login (not signed in, or its sign-in could not be refreshed). Run `codex login`.',
+          }
+        : { state: 'usable', source: 'native' };
+    } catch (error) {
+      const reason: unknown = signal.aborted ? signal.reason : error;
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence: redactCredentialValues(
+          reason instanceof Error ? reason.message : String(reason),
+          collectCredentialValues(env)
+        ),
+      };
+    } finally {
+      if (onAbort) signal.removeEventListener('abort', onAbort);
+      await connection?.shutdown(this.shutdownGraceMs);
+    }
+  }
 
   getCapabilities(): ProviderCapabilities {
     return CODEX_CAPABILITIES;

@@ -1,3 +1,8 @@
+import type { CredentialStatus } from '@archon/provider-contract';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
@@ -6,7 +11,11 @@ import { createLogger } from '@archon/paths';
 // Type-only import — erased by TS, so it does NOT trigger Pi's config.js
 // package.json read at module load (see the header note below). Used only to
 // annotate the per-call ResourceLoader local.
-import type { DefaultResourceLoader, ExtensionError } from '@earendil-works/pi-coding-agent';
+import type {
+  DefaultResourceLoader,
+  ExtensionError,
+  ModelRuntime,
+} from '@earendil-works/pi-coding-agent';
 
 import type {
   IAgentProvider,
@@ -257,12 +266,134 @@ Guidelines:
 - Be concise in your responses.
 - Show file paths clearly when working with files.`;
 
+function resolvePiModel(
+  modelRef: string | undefined,
+  cwd: string,
+  piCodingAgent: Pick<typeof import('@earendil-works/pi-coding-agent'), 'SettingsManager'>
+): NonNullable<ReturnType<typeof parsePiModelRef>> {
+  if (!modelRef) {
+    try {
+      const settingsManager = piCodingAgent.SettingsManager.create(cwd);
+      const settings = settingsManager.getGlobalSettings();
+      // SettingsManager records malformed/unreadable settings via
+      // drainErrors() rather than throwing, so a broken settings.json yields
+      // default (empty) settings here. Drain + log them so that case is
+      // visible instead of being swallowed behind the "requires a model"
+      // error below (this branch may throw before the main settings load
+      // that would otherwise surface them).
+      for (const { scope, error: settingsErr } of settingsManager.drainErrors()) {
+        getLog().warn({ scope, err: settingsErr }, 'pi.settings_default_model_read_error');
+      }
+      const provider = settings.defaultProvider?.trim();
+      const modelId = settings.defaultModel?.trim();
+      if (provider && modelId) {
+        modelRef = `${provider}/${modelId}`;
+        getLog().info({ modelRef }, 'pi.model_defaulted_from_settings');
+      }
+    } catch (err) {
+      // Non-fatal: settings.json may be absent (user never ran `pi`) or
+      // unreadable. Fall through to the explicit "requires a model" error
+      // below rather than swallowing the missing-model condition.
+      getLog().debug({ err }, 'pi.settings_default_model_read_failed');
+    }
+  }
+  if (!modelRef) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      'Pi provider requires a model. Set `model` on the workflow node or `assistants.pi.model` in .archon/config.yaml, ' +
+        'or select a default model in the `pi` CLI (writes defaultProvider/defaultModel to ~/.pi/agent/settings.json). ' +
+        "Format: '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro')."
+    );
+  }
+  const parsed = parsePiModelRef(modelRef);
+  if (!parsed) {
+    throw new ClassifiedProviderError(
+      'misconfigured',
+      `Invalid Pi model ref: '${modelRef}'. Expected format '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro').`
+    );
+  }
+
+  return parsed;
+}
+
+export async function resolvePiAuthStatus(
+  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth'>,
+  providerId: string,
+  mapped: boolean,
+  signal?: AbortSignal
+): Promise<CredentialStatus> {
+  const piAi = await import('@earendil-works/pi-ai');
+  try {
+    signal?.throwIfAborted();
+    const auth = await runtime.checkAuth(providerId, { signal });
+    if (!auth) return { state: mapped ? 'not_connected' : 'not_checked', source: 'native' };
+    if (auth.type === 'oauth') {
+      const resolution = await runtime.getAuth(providerId, { signal });
+      if (!resolution) return { state: 'not_connected', source: 'native' };
+    }
+    return { state: 'usable', source: 'native' };
+  } catch (error) {
+    return {
+      state:
+        error instanceof piAi.ModelsError && error.code === 'auth' ? 'unusable' : 'check_failed',
+      source: 'native',
+      evidence: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function applyPiEnvOverride(
+  runtime: Pick<ModelRuntime, 'setRuntimeApiKey'>,
+  providerId: string,
+  env: Readonly<Record<string, string | undefined>>
+): Promise<void> {
+  const oauthVar = PI_OAUTH_ENV_VARS[providerId];
+  const keyVar = PI_PROVIDER_ENV_VARS[providerId];
+  const key = (oauthVar ? env[oauthVar] : undefined) ?? (keyVar ? env[keyVar] : undefined);
+  if (key) await runtime.setRuntimeApiKey(providerId, key);
+}
+
 /**
  * Pi community provider — wraps `@earendil-works/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
+  async checkCredential(
+    request: Parameters<IAgentProvider['checkCredential']>[0]
+  ): Promise<CredentialStatus> {
+    const { env, signal } = request;
+    try {
+      signal.throwIfAborted();
+      ensurePiPackageDirShim();
+      const piCodingAgent = await import('@earendil-works/pi-coding-agent');
+      const parsed = resolvePiModel(request.model, process.cwd(), piCodingAgent);
+      const runtime = await piCodingAgent.ModelRuntime.create({ signal });
+      await applyPiEnvOverride(runtime, parsed.provider, env);
+      const status = await resolvePiAuthStatus(
+        runtime,
+        parsed.provider,
+        Boolean(PI_PROVIDER_ENV_VARS[parsed.provider]),
+        signal
+      );
+      return 'evidence' in status
+        ? {
+            ...status,
+            evidence: redactCredentialValues(status.evidence, collectCredentialValues(env)),
+          }
+        : status;
+    } catch (error) {
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence: redactCredentialValues(
+          error instanceof Error ? error.message : String(error),
+          collectCredentialValues(env)
+        ),
+      };
+    }
+  }
+
   /**
    * One call is one Pi prompt. A failure, including one thrown while setting the
    * session up, ends in a `result` carrying a typed `failure`, and the engine decides
@@ -373,61 +504,7 @@ export class PiProvider implements IAgentProvider {
       }
     }
 
-    // 1. Resolve model ref: request (workflow node / chat) → config default →
-    //    the operator's own Pi default (defaultProvider/defaultModel in
-    //    ~/.pi/agent/settings.json, as written by the `pi` CLI when a model is
-    //    selected). The settings fallback keeps Archon model-agnostic for Pi:
-    //    no vendor model is hardcoded anywhere, and litellm-only setups — whose
-    //    catalog drifts over time — work without pinning a specific model.
-    //    Mirrors how the standalone `pi` CLI boots with the user's default.
-    let modelRef = requestOptions?.model ?? piConfig.model;
-    if (!modelRef) {
-      try {
-        const settingsManager = piCodingAgent.SettingsManager.create(cwd);
-        const settings = settingsManager.getGlobalSettings();
-        // SettingsManager records malformed/unreadable settings via
-        // drainErrors() rather than throwing, so a broken settings.json yields
-        // default (empty) settings here. Drain + log them so that case is
-        // visible instead of being swallowed behind the "requires a model"
-        // error below (this branch may throw before the main settings load
-        // that would otherwise surface them).
-        for (const { scope, error: settingsErr } of settingsManager.drainErrors()) {
-          getLog().warn({ scope, err: settingsErr }, 'pi.settings_default_model_read_error');
-        }
-        const provider = settings.defaultProvider?.trim();
-        const modelId = settings.defaultModel?.trim();
-        if (provider && modelId) {
-          modelRef = `${provider}/${modelId}`;
-          getLog().info({ modelRef }, 'pi.model_defaulted_from_settings');
-        }
-      } catch (err) {
-        // Non-fatal: settings.json may be absent (user never ran `pi`) or
-        // unreadable. Fall through to the explicit "requires a model" error
-        // below rather than swallowing the missing-model condition.
-        getLog().debug({ err }, 'pi.settings_default_model_read_failed');
-      }
-    }
-    if (!modelRef) {
-      throw new ClassifiedProviderError(
-        'misconfigured',
-        'Pi provider requires a model. Set `model` on the workflow node or `assistants.pi.model` in .archon/config.yaml, ' +
-          'or select a default model in the `pi` CLI (writes defaultProvider/defaultModel to ~/.pi/agent/settings.json). ' +
-          "Format: '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro')."
-      );
-    }
-    const parsed = parsePiModelRef(modelRef);
-    if (!parsed) {
-      throw new ClassifiedProviderError(
-        'misconfigured',
-        `Invalid Pi model ref: '${modelRef}'. Expected format '<pi-provider-id>/<model-id>' (e.g. 'google/gemini-2.5-pro').`
-      );
-    }
-
-    // 2. Build ModelRuntime + ModelRegistry. Both read on every sendQuery —
-    //    user edits to auth.json or models.json take effect without restart.
-    //    The registry is a thin facade over the runtime — extension providers
-    //    call registerProvider() on it during bindExtensions() to add their
-    //    models (phase 2 resolution).
+    const parsed = resolvePiModel(requestOptions?.model ?? piConfig.model, cwd, piCodingAgent);
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
     let modelRuntime: Awaited<ReturnType<typeof piCodingAgent.ModelRuntime.create>>;
@@ -532,71 +609,42 @@ export class PiProvider implements IAgentProvider {
     //    createClient discriminates OAuth vs api-key by token content (sk-ant-oat*),
     //    so one runtime channel serves both — and setRuntimeApiKey stays runtime-only
     //    (no auth.json disk write, unlike AuthStorage.set) (#1984).
-    const readEnvOverride = (name: string | undefined): string | undefined =>
-      name ? (requestOptions?.env?.[name] ?? process.env[name]) : undefined;
-    const envOverride = readEnvOverride(oauthVarName) ?? readEnvOverride(envVarName);
-    if (envOverride) {
-      // pi 0.84.0+: setRuntimeApiKey is async (the runtime serializes the
-      // credential mutation per provider). await it before any subsequent
-      // getAuth() call so the override is visible to the model resolution
-      // path (otherwise the SDK would read the file-backed credential
-      // before the runtime override lands).
-      await modelRuntime.setRuntimeApiKey(parsed.provider, envOverride);
-    }
-
-    // Auth validation deferred for extension providers — they manage credentials
-    // outside Pi's AuthStorage (e.g. kiro uses AWS SSO/OIDC via ~/.aws/sso/cache/).
-    // Only validate early for static-catalog models where we can give actionable hints.
-    // The resolved credential is also kept for the Anthropic subscription-OAuth
-    // detection in step 4c; for 'anthropic' we resolve even when the model is
-    // deferred to extensions (AuthStorage reads are cheap and side-effect-free)
-    // so a catalog miss can never skip the OAuth-safe default prompt.
+    await applyPiEnvOverride(modelRuntime, parsed.provider, {
+      ...process.env,
+      ...requestOptions?.env,
+    });
     let resolvedKey: string | undefined;
-    let hasResolvedAuth = false;
-    if (model && !envVarName) {
-      // This is deliberately status-only: Pi resolves models.json request auth
-      // when it sends, and command-backed values must execute only once there.
-      hasResolvedAuth = modelRegistry.hasConfiguredAuth(model);
-    } else if (model || parsed.provider === 'anthropic') {
-      // pi 0.84.0+: ModelRuntime exposes `getAuth(providerId)` returning
-      // `{ auth: { apiKey, headers, baseUrl }, env?, source? } | undefined`.
-      // We only need the apiKey for the Anthropic subscription-OAuth shape
-      // discriminator in step 4c — the SDK reads the credential on its own
-      // when sending.
-      const resolution = await modelRuntime.getAuth(parsed.provider);
-      resolvedKey = resolution?.auth.apiKey;
-      hasResolvedAuth = Boolean(resolvedKey);
-    }
-    if (model) {
-      if (!hasResolvedAuth) {
-        if (envVarName) {
-          // Name the OAuth var first when the backend has one — a subscription
-          // user who hits this miss must be told the var the resolver actually
-          // prefers (ANTHROPIC_OAUTH_TOKEN), not just the API-key var (#1984).
+    if (model || parsed.provider === 'anthropic') {
+      const authStatus = await resolvePiAuthStatus(
+        modelRuntime,
+        parsed.provider,
+        Boolean(envVarName),
+        requestOptions?.abortSignal
+      );
+      switch (authStatus.state) {
+        case 'not_connected': {
           const varHint = oauthVarName
             ? `${oauthVarName} (subscription) or ${envVarName}`
             : envVarName;
-          const envHint = `Set ${varHint} in the environment or codebase env vars (.archon/config.yaml env: section).`;
-          const loginHint = `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`;
           throw new ClassifiedProviderError(
             'auth',
-            `Pi auth: no credentials for provider '${parsed.provider}'. ${envHint} ${loginHint}`
+            `Pi auth: no credentials for provider '${parsed.provider}'. Set ${varHint} in the environment or codebase env vars (.archon/config.yaml env: section). Or run \`pi\` and type \`/login\` locally.`
           );
         }
-
-        // Unmapped providers (LM Studio, ollama, llamacpp, custom
-        // OpenAI-compatible endpoints) often don't need credentials at all —
-        // log + continue rather than failing fast so local models work without
-        // ceremony. If the SDK call later fails for a provider that *does*
-        // need creds, the auth_missing breadcrumb is searchable in the log.
-        getLog().info(
-          {
-            piProvider: parsed.provider,
-            envHint: `Provider '${parsed.provider}' is not in the Archon adapter's env-var table — file an issue if you want a shortcut env var for it.`,
-            loginHint: `Or run \`pi\` and type \`/login\` locally to authenticate '${parsed.provider}' via OAuth; credentials land in ~/.pi/agent/auth.json and are picked up automatically.`,
-          },
-          'pi.auth_missing'
-        );
+        case 'unusable':
+          throw new ClassifiedProviderError('auth', authStatus.evidence);
+        case 'check_failed':
+          throw new Error(authStatus.evidence);
+        case 'not_checked':
+          getLog().info({ piProvider: parsed.provider }, 'pi.auth_missing');
+          break;
+        case 'usable':
+          if (parsed.provider === 'anthropic') {
+            resolvedKey = (
+              await modelRuntime.getAuth(parsed.provider, { signal: requestOptions?.abortSignal })
+            )?.auth.apiKey;
+          }
+          break;
       }
     }
 

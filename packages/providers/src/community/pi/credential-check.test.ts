@@ -1,0 +1,161 @@
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trackTempRoots } from '@archon/paths/test-utils';
+import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
+import { PiProvider, resolvePiAuthStatus } from './provider';
+import { ModelRuntime } from '@earendil-works/pi-coding-agent';
+import { ModelsError } from '@earendil-works/pi-ai';
+
+const trackTempRoot = trackTempRoots();
+const secret = 'planted-pi-credential';
+const keys = [
+  'PI_CODING_AGENT_DIR',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_OAUTH_TOKEN',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_FEDERATION_RULE_ID',
+] as const;
+let previous: Record<string, string | undefined>;
+let root: string;
+
+beforeEach(() => {
+  previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+  for (const key of keys) delete process.env[key];
+  root = trackTempRoot(mkdtempSync(join(tmpdir(), 'pi-credential-check-')));
+  process.env.PI_CODING_AGENT_DIR = root;
+  writeFileSync(join(root, 'auth.json'), '{}');
+  writeFileSync(
+    join(root, 'models.json'),
+    JSON.stringify({
+      providers: {
+        local: {
+          baseUrl: 'http://localhost:1234/v1',
+          api: 'openai-completions',
+          models: [{ id: 'model', name: 'Local' }],
+        },
+      },
+    })
+  );
+});
+afterEach(() => {
+  for (const key of keys) {
+    if (previous[key] === undefined) delete process.env[key];
+    else process.env[key] = previous[key];
+  }
+});
+const check = (model = 'anthropic/claude-sonnet-4-6', env: Record<string, string> = {}) =>
+  new PiProvider().checkCredential({ model, env, signal: AbortSignal.timeout(2000) });
+
+describe('Pi native credentials', () => {
+  test('API keys resolve through the native runtime without surfacing the key', async () => {
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: secret } })
+    );
+    expect(
+      await checkCredentialStatuses([{ name: 'Pi API key', expected: 'usable', secret, check }])
+    ).toEqual([]);
+  });
+  test('uses the native Pi default model when Archon has none', async () => {
+    writeFileSync(
+      join(root, 'settings.json'),
+      JSON.stringify({ defaultProvider: 'anthropic', defaultModel: 'claude-sonnet-4-6' })
+    );
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: secret } })
+    );
+    expect(
+      await new PiProvider().checkCredential({ env: {}, signal: AbortSignal.timeout(2000) })
+    ).toEqual({ state: 'usable', source: 'native' });
+  });
+  test('a request env key overrides a stored OAuth grant', async () => {
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'oauth', access: secret, refresh: 'dead-refresh', expires: 1 },
+      })
+    );
+    expect(await check(undefined, { ANTHROPIC_API_KEY: secret })).toEqual({
+      state: 'usable',
+      source: 'native',
+    });
+  });
+  test('an expired OAuth grant reports a failed native refresh', async () => {
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'oauth', access: secret, refresh: 'dead-refresh', expires: 1 },
+      })
+    );
+    const runtime = await ModelRuntime.create();
+    const oauth = runtime.getProvider('anthropic')?.auth.oauth;
+    if (!oauth) throw new Error('Anthropic OAuth runtime missing');
+    const refresh = spyOn(oauth, 'refresh').mockRejectedValue(
+      new ModelsError('oauth', 'refresh fixture failed')
+    );
+    const create = spyOn(ModelRuntime, 'create').mockResolvedValue(runtime);
+    try {
+      expect(
+        await checkCredentialStatuses([
+          { name: 'Pi OAuth', expected: 'check_failed', secret, check },
+        ])
+      ).toEqual([]);
+      expect(refresh).toHaveBeenCalledTimes(1);
+    } finally {
+      create.mockRestore();
+      refresh.mockRestore();
+    }
+  });
+  test('mapped missing auth is not_connected; a local provider is not_checked', async () => {
+    expect(await check()).toEqual({ state: 'not_connected', source: 'native' });
+    expect(await check('local/model')).toEqual({ state: 'not_checked', source: 'native' });
+  });
+  test('send reports auth only for the mapped missing credential', async () => {
+    const chunks = [];
+    for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
+      model: 'anthropic/claude-sonnet-4-6',
+    }))
+      chunks.push(chunk);
+    const result = chunks.find(chunk => chunk.type === 'result');
+    expect(result).toMatchObject({ failure: { class: 'auth' } });
+  });
+  test('the native check executes a configured key command', async () => {
+    const marker = join(root, 'command-ran');
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({
+        anthropic: { type: 'api_key', key: `!printf ran > '${marker}'; printf '${secret}'` },
+      })
+    );
+    expect(await check()).toEqual({ state: 'usable', source: 'native' });
+    expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(marker, 'utf8')).toBe('ran');
+  });
+  test('typed auth rejection is unusable regardless of its prose', async () => {
+    const runtime = await ModelRuntime.create();
+    const auth = spyOn(runtime, 'checkAuth').mockRejectedValue(
+      new ModelsError('auth', 'fixture rejection')
+    );
+    try {
+      expect(await resolvePiAuthStatus(runtime, 'anthropic', true)).toEqual({
+        state: 'unusable',
+        source: 'native',
+        evidence: 'fixture rejection',
+      });
+    } finally {
+      auth.mockRestore();
+    }
+  });
+  test('aborted checks are check_failed', async () => {
+    expect(
+      await new PiProvider().checkCredential({
+        model: 'anthropic/model',
+        env: {},
+        signal: AbortSignal.abort(new Error('cancelled')),
+      })
+    ).toEqual({ state: 'check_failed', source: 'native', evidence: 'cancelled' });
+  });
+});

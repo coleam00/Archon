@@ -1,3 +1,4 @@
+import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * Claude Agent SDK wrapper
  * Provides async generator interface for streaming Claude responses
@@ -1561,6 +1562,10 @@ async function* streamClaudeMessages(
  * - classifyClaudeThrownError: typed failure for an error thrown by the SDK
  */
 export class ClaudeProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   constructor() {
     if (getProcessUid() === 0 && process.env.IS_SANDBOX !== '1') {
       throw new Error(

@@ -67,9 +67,7 @@ function getLog(): ReturnType<typeof createLogger> {
 // Types
 // =============================================================================
 
-// Pi backends offered by the setup wizard. Keep `envVar` names in sync with
-// `PI_API_KEY_VARS` in doctor.ts — the doctor check uses them to detect
-// configured Pi auth.
+// Pi backends offered by the setup wizard.
 const PI_BACKENDS = [
   {
     id: 'anthropic',
