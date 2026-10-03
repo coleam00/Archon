@@ -123,7 +123,8 @@ import {
   isIncludeDirective,
   isOutputFormatEnforced,
   isWaitNode,
-  isPersistableNode,
+  nodeUsesPersistedScope,
+  persistedSessionHandling,
   readSubrunMetadata,
   isApprovalContext,
   inputEnvKey,
@@ -8898,20 +8899,6 @@ async function executeComposeFanOutNode(
 }
 
 /**
- * True when a node participates in cross-run session persistence: a command/prompt
- * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
- * with `persist_session: true` set directly or inherited from the workflow-level
- * `persist_sessions` default. Single source of truth for both the session
- * lookup/persist gates and the #1846 scope-artifact mirror.
- */
-function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
-  if (!isPersistableNode(node)) return false;
-  if (node.context === 'fresh') return false;
-  const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
-  return nodePersist ?? workflowPersistSessions;
-}
-
-/**
  * A run's cross-run session scope. Concurrent runs of one workflow share a scope, so
  * `sessionsAtStart` is read once when the run starts and every persisted node continues
  * from that copy, never from a row a sibling run wrote afterwards. The read is issued
@@ -9964,8 +9951,10 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               // case where provider was resolved from .archon/config.yaml defaults).
               // Uses the instance's getCapabilities() rather than the static registry so
               // tests can substitute mock providers with different caps without registering.
-              const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
-              if (!caps.sessionResume) {
+              const handling = persistedSessionHandling(
+                ctx.deps.getAgentProvider(provider).getCapabilities()
+              );
+              if (handling === 'unsupported') {
                 throw new Error(
                   `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
                 );
@@ -9982,10 +9971,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     // store only an 8-char prefix here — enough for observability without
                     // leaving a resumable artifact in the event log.
                     const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
-                    // Only a fork gives this run its own copy. A provider that resumes in
-                    // place would let two runs of this scope write into one conversation,
-                    // so the node does not continue the persisted session at all.
-                    const continues = caps.sessionFork === true;
+                    const continues = handling === 'fork';
                     if (continues) resumeSessionId = persisted.provider_session_id;
                     ctx.deps.store
                       .createWorkflowEvent({
@@ -10010,7 +9996,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       await safeSendMessage(
                         ctx.platform,
                         ctx.conversationId,
-                        `⚠️ Node \`${node.id}\`: provider \`${provider}\` cannot fork a session, so this run did not continue the persisted session. Concurrent runs never share one provider conversation.`,
+                        `⚠️ Node \`${node.id}\`: provider \`${provider}\` cannot fork a session, so this run started fresh instead of continuing the persisted session (concurrent runs never share one provider conversation). To carry context across runs, use a provider with sessionFork or pass state through artifacts.`,
                         { workflowId: ctx.workflowRun.id, nodeName: node.id }
                       );
                     }

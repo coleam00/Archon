@@ -129,6 +129,8 @@ export {
   ignoredFieldsForNode,
   isOutputFormatEnforced,
   isPersistableNode,
+  nodeUsesPersistedScope,
+  persistedSessionHandling,
   isNodeContextResume,
   isTriggerRule,
   BASH_NODE_AI_FIELDS,
