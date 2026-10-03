@@ -301,7 +301,7 @@ function Main {
         Write-Host ""
         Write-Host "  Get started:" -ForegroundColor Cyan
         Write-Host "    archon workflow list"
-        Write-Host "    archon workflow run assist `"What workflows are available?`""
+        Write-Host "    archon workflow run archon-investigate `"Why does the test suite fail?`""
         Write-Host ""
         Write-Host "  Note: Open a new terminal window so the updated PATH takes effect." -ForegroundColor Yellow
         Write-Host ""

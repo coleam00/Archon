@@ -55,6 +55,7 @@ import type {
   NodeConfig,
 } from '../types';
 import {
+  sessionPreview,
   truncateToolOutput,
   type ProviderFailure,
   type ProviderFailureClass,
@@ -956,9 +957,6 @@ function buildBaseClaudeOptions(
     ...(requestOptions?.fallbackModel !== undefined
       ? { fallbackModel: requestOptions.fallbackModel }
       : {}),
-    ...(requestOptions?.persistSession !== undefined
-      ? { persistSession: requestOptions.persistSession }
-      : {}),
     ...(requestOptions?.forkSession !== undefined
       ? { forkSession: requestOptions.forkSession }
       : {}),
@@ -1376,7 +1374,10 @@ async function* streamClaudeMessages(
         sessionSpend.record(resultMsg.session_id, cumulative);
         if (spend.costUsd === undefined) {
           getLog().warn(
-            { sessionId: resultMsg.session_id, baseline: spendBaseline.kind },
+            {
+              sessionIdPreview: sessionPreview(resultMsg.session_id),
+              baseline: spendBaseline.kind,
+            },
             'claude.query_cost_unknown'
           );
         }
@@ -1407,7 +1408,10 @@ async function* streamClaudeMessages(
       // than silently swallowing content.
       if (syntheticError !== undefined && !resultMsg.is_error) {
         getLog().warn(
-          { sessionId: resultMsg.session_id, errorCode: syntheticError.code },
+          {
+            sessionIdPreview: sessionPreview(resultMsg.session_id),
+            errorCode: syntheticError.code,
+          },
           'claude.synthetic_error_not_confirmed'
         );
         if (syntheticError.text) yield { type: 'agent_message_chunk', text: syntheticError.text };
@@ -1456,7 +1460,7 @@ async function* streamClaudeMessages(
       if (failure !== undefined) {
         getLog().error(
           {
-            sessionId: resultMsg.session_id,
+            sessionIdPreview: sessionPreview(resultMsg.session_id),
             errorSubtype: resultMsg.subtype,
             errorCode: syntheticError?.code,
             terminalReason: resultMsg.terminal_reason,
@@ -1469,7 +1473,10 @@ async function* streamClaudeMessages(
         );
       } else if (isSuccessWithErrorFlag) {
         getLog().debug(
-          { sessionId: resultMsg.session_id, stopReason: resultMsg.stop_reason },
+          {
+            sessionIdPreview: sessionPreview(resultMsg.session_id),
+            stopReason: resultMsg.stop_reason,
+          },
           'claude.result_success_validated'
         );
       }
@@ -1662,7 +1669,10 @@ export class ClaudeProvider implements IAgentProvider {
       if (resumeSessionId) {
         options.resume = resumeSessionId;
         getLog().debug(
-          { sessionId: resumeSessionId, forkSession: requestOptions?.forkSession },
+          {
+            sessionIdPreview: sessionPreview(resumeSessionId),
+            forkSession: requestOptions?.forkSession,
+          },
           'resuming_session'
         );
       } else {

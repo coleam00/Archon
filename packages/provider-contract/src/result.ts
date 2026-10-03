@@ -42,8 +42,20 @@ export const providerStopReasonSchema = z.enum([
 ]);
 export type ProviderStopReason = z.infer<typeof providerStopReasonSchema>;
 
+/** Characters of a session id that may appear outside the node record. */
+export const SESSION_PREVIEW_LENGTH = 8;
+
+/**
+ * A session id can resume a conversation, so streams and logs carry only this preview.
+ * The full id is written to the node record alone.
+ */
+export function sessionPreview(sessionId: string): string {
+  return sessionId.slice(0, SESSION_PREVIEW_LENGTH);
+}
+
 /** The terminal result of one provider turn. Providers stream it as the `result` chunk. */
 export const providerResultSchema = z.object({
+  /** Required on every non-failing turn of a provider that declares `sessionResume`. */
   sessionId: z.string().optional(),
   tokens: tokenUsageSchema.optional(),
   structuredOutput: z.unknown().optional(),

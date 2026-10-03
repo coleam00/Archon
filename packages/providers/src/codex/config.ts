@@ -2,9 +2,8 @@
  * Typed config parsing for Codex provider defaults.
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
-import type { ModelReasoningEffort } from '@openai/codex-sdk';
 import type { CodexProviderDefaults } from '../types';
-import { EFFORT_LADDER, type AssertNever } from '@archon/paths/effort';
+import { EFFORT_LADDER, type EffortRung } from '@archon/paths/effort';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
@@ -15,17 +14,12 @@ import {
 export type { CodexProviderDefaults } from '../types';
 
 /**
- * Bind the shared ladder to the Codex SDK vocabulary in both directions.
+ * Codex accepts every rung of the shared ladder. Its protocol types the effort as a plain
+ * string, so there is no closed vendor vocabulary to check the ladder against.
  */
-export const CODEX_EFFORTS = EFFORT_LADDER satisfies readonly ModelReasoningEffort[];
+export const CODEX_EFFORTS = EFFORT_LADDER;
 
-/** Coverage, which `satisfies` above cannot express — a rung the SDK gains must
- *  be added here rather than silently clamped away. See `AssertNever`. */
-export type CodexEffortsAreComplete = AssertNever<
-  Exclude<ModelReasoningEffort, (typeof CODEX_EFFORTS)[number]>
->;
-
-function isCodexEffort(value: unknown): value is ModelReasoningEffort {
+function isCodexEffort(value: unknown): value is EffortRung {
   return typeof value === 'string' && (CODEX_EFFORTS as readonly string[]).includes(value);
 }
 

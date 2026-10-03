@@ -17,7 +17,7 @@ Workflows are YAML files discovered from `.archon/workflows/` (recursively) plus
 ### `name` (required)
 - **Type**: non-empty string
 - **Used by**: Router for exact-match lookup; displayed in workflow list
-- **Example**: `name: archon-fix-github-issue-dag`
+- **Example**: `name: archon-ship`
 
 ### `description` (required)
 - **Type**: non-empty string (multiline supported)
@@ -165,7 +165,7 @@ Nodes are sorted topologically (Kahn's algorithm). Nodes in the same layer run c
 **`command:`** — Named command file, AI-executed
 ```yaml
 - id: plan
-  command: archon-create-plan
+  command: create-plan
 ```
 
 **`prompt:`** — Inline prompt string, AI-executed
@@ -296,12 +296,9 @@ Four rules enforced at `loader.ts:370-439`:
 
 | File | Mode | Key Features |
 |------|------|-------------|
-| `archon-feature-development.yaml` | `steps:` | Simple two-step sequential |
-| `archon-plan-to-pr.yaml` | `steps:` | 11 steps with parallel review block |
-| `archon-ralph-fresh.yaml` | `loop:` | `fresh_context: true`, `<promise>COMPLETE</promise>` |
-| `archon-smart-pr-review.yaml` | `nodes:` | `output_format`, `when:`, `trigger_rule: one_success` |
-| `archon-validate-pr.yaml` | `nodes:` | `idle_timeout: 1800000`, bash nodes, `trigger_rule: all_done` |
-| `archon-fix-github-issue-dag.yaml` | `nodes:` | Full lifecycle with all DAG features |
+| `sdlc/ship/archon-ship.yaml` | `nodes:` | `include:` composition, `when:` routing on structured output, `trigger_rule: none_failed_min_one_success` |
+| `sdlc/review/archon-review.yaml` | `nodes:` | Parallel `command:` fan-out with `context: fresh`, conditional lenses, `script:` publish |
+| `sdlc/deliver/archon-deliver.yaml` | `nodes:` | Composed delivery tail, bounded correction loop, `script:` gates |
 
 ---
 

@@ -39,6 +39,10 @@ import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -68,7 +72,7 @@ import type {
   OverlayChangeSummary,
 } from '@archon/providers/types';
 import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
-import type { ProviderFailure } from '@archon/provider-contract';
+import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -105,6 +109,7 @@ import type {
   WorkflowRunOutcome,
   NodeArtifactLoopFrame,
   WorkflowRunNodeSession,
+  WorkflowNodeSession,
   WorkflowRunStatus,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
@@ -122,7 +127,9 @@ import {
   isIncludeDirective,
   isOutputFormatEnforced,
   isWaitNode,
-  isPersistableNode,
+  nodeUsesPersistedScope,
+  persistedSessionHandling,
+  runMayPersistSessions,
   readSubrunMetadata,
   isApprovalContext,
   inputEnvKey,
@@ -2077,6 +2084,8 @@ async function executeNodeInternal(
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeResolvedModel: ResolvedModel | undefined;
+  // Declared before `failAgentNode`, which records it and can run before the stream starts.
+  let newSessionId: string | undefined;
   const nodeKey = `${workflowRun.id}:${node.id}`;
 
   const failAgentNode = async (
@@ -2103,6 +2112,7 @@ async function executeNodeInternal(
           stopReason: nodeStopReason,
           numTurns: nodeNumTurns,
           resolvedModel: nodeResolvedModel?.id,
+          sessionId: newSessionId,
         }
       )
     );
@@ -2199,7 +2209,6 @@ async function executeNodeInternal(
 
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
-  let newSessionId: string | undefined;
   let nodeResumed: boolean | undefined;
   const batchMessages: string[] = [];
 
@@ -2411,7 +2420,7 @@ async function executeNodeInternal(
               nodeId: node.id,
               errorSubtype: subtype,
               errors: msg.errors,
-              sessionId: msg.sessionId,
+              ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
               stopReason: msg.stopReason,
               durationMs: Date.now() - nodeStartTime,
             },
@@ -2774,7 +2783,7 @@ async function executeNodeInternal(
         },
       }
     ),
-    { sessionId: result.sessionId, resumed: result.resumed }
+    { resumed: result.resumed }
   );
 
   // Clean up throttle entries on completion
@@ -2856,36 +2865,6 @@ function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
   return error.killed === true && error.code === null;
 }
 
-const CREDENTIAL_ENV_KEY_SUFFIX = /(?:TOKEN|KEY|SECRET|PASSWORD)$/i;
-const CREDENTIAL_ENV_KEYS = new Set(['DATABASE_URL']);
-
-function collectSubprocessCredentialValues(
-  env: NodeJS.ProcessEnv,
-  protectedEnvKeys: readonly string[] | undefined,
-  protectedCredentialValues: readonly string[] | undefined
-): string[] {
-  const explicitlyProtected = new Set(protectedEnvKeys);
-  const values = Object.entries(env).flatMap(([key, value]) =>
-    value &&
-    (explicitlyProtected.has(key) ||
-      CREDENTIAL_ENV_KEYS.has(key) ||
-      CREDENTIAL_ENV_KEY_SUFFIX.test(key))
-      ? [value]
-      : []
-  );
-  return [...new Set([...values, ...(protectedCredentialValues ?? [])])]
-    .filter(value => value.length > 0)
-    .sort((a, b) => b.length - a.length);
-}
-
-function redactCredentialValues(input: string, credentialValues: readonly string[]): string {
-  let result = input;
-  for (const value of credentialValues) {
-    result = result.replaceAll(value, '[REDACTED]');
-  }
-  return result;
-}
-
 /**
  * Scrub credentials from every subprocess rejection field that can carry
  * subprocess text. The exact values come from the engine's injected-credential
@@ -2965,7 +2944,7 @@ async function runSubprocess(
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
-  const credentialValues = collectSubprocessCredentialValues(
+  const credentialValues = collectCredentialValues(
     subprocessEnv,
     options.protectedEnvKeys,
     options.protectedCredentialValues
@@ -4044,8 +4023,7 @@ async function finalizeLoopFromSignal(
           // Approval does no execution work. Keep the duration observed before pause.
           durationMs: execution.timing.durationMs,
         }
-      ),
-      { sessionId }
+      )
     );
   }
   // Old approval cursors have no execution identity or observed start time.
@@ -4654,7 +4632,7 @@ async function executeLoopGroupBody(
       // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
       // participate in cross-run session persistence inside the loop — and therefore
       // no scope-artifact mirroring either.
-      persistScopeKey: undefined,
+      persistScope: undefined,
       workflowPersistSessions: false,
       scopeArtifactsDir: undefined,
       layers: iterBodyLayers,
@@ -4713,6 +4691,13 @@ async function executeLoopGroupBody(
         { nodeId: node.id, iteration: i }
       );
     }
+
+    // Carry the body's final sequential session into the next iteration (unless
+    // fresh_context forces a reset, handled above by seeding undefined). Taken
+    // before the escalation below, which returns early: its pause persists this
+    // cursor, and a cursor from before the paused iteration would resume without
+    // that iteration's turns (#3532).
+    loopLastSequentialSession = iterCtx.lastSequentialSession;
 
     // #2707 step 3: pause escalation. A gate node that is the body's sole terminal
     // sink pauses generically via executeApprovalNode (called through runLayers,
@@ -4821,10 +4806,6 @@ async function executeLoopGroupBody(
         loopIterations: i,
       };
     }
-
-    // Carry the body's final sequential session into the next iteration (unless
-    // fresh_context forces a reset, handled above by seeding undefined).
-    loopLastSequentialSession = iterCtx.lastSequentialSession;
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
@@ -5316,6 +5297,7 @@ async function executeLoopNode(
           stopReason: loopFinalStopReason,
           numTurns: loopTotalNumTurns,
           resolvedModel: loopResolvedModel?.id,
+          sessionId: currentSessionId,
           diagnostics: { ...extras.data, loopIterations: extras.loopIterations },
         }
       )
@@ -5582,6 +5564,8 @@ async function executeLoopNode(
     let iterationSettled = false;
     let lastWatchdogReset: WatchdogReset | undefined;
     let iterationPayload: unknown;
+    // The session this iteration reported, for its own `loop_iteration_completed` row.
+    let iterationSessionId: string | undefined;
 
     // Per-attempt transient retry for AI-loop iterations (#2706): a plain AI node's
     // failure goes through runNodeRetryLoop; an iteration used to die on its first
@@ -5623,6 +5607,8 @@ async function executeLoopNode(
     };
 
     iterationAttempt: for (let iterRetry = 0; ; iterRetry++) {
+      // A failed attempt's session is not the one the iteration completed in.
+      iterationSessionId = undefined;
       let iterationAbortController = new AbortController();
       // Mid-stream cancel-check throttle (see the check inside the stream loop).
       // The between-iteration status check just ran, so start the clock at the
@@ -5841,13 +5827,16 @@ async function executeLoopNode(
               if (msg.sessionId) {
                 if (pass.threadsSession) {
                   currentSessionId = msg.sessionId;
+                  iterationSessionId = msg.sessionId;
                 } else if (currentSessionId !== msg.sessionId) {
                   getLog().debug(
                     {
                       nodeId: node.id,
                       iteration: i,
                       attempt: reaskAttempt,
-                      keptSessionId: currentSessionId,
+                      ...(currentSessionId !== undefined
+                        ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
+                        : {}),
                     },
                     'loop_node.reask_session_not_threaded'
                   );
@@ -5908,7 +5897,7 @@ async function executeLoopNode(
                     iteration: i,
                     errorSubtype: subtype,
                     errors: msg.errors,
-                    sessionId: msg.sessionId,
+                    ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
                     stopReason: msg.stopReason,
                   },
                   'loop_node.iteration_sdk_error'
@@ -6447,7 +6436,15 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
         step_name: stepName,
-        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+        data: {
+          iteration: i,
+          duration,
+          completionDetected,
+          nodeId: node.id,
+          // The durable row is the only home for the full id; the emitter event above
+          // and the transcript line below stay without it.
+          ...(iterationSessionId !== undefined ? { session_id: iterationSessionId } : {}),
+        },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -6501,8 +6498,7 @@ async function executeLoopNode(
                 : {}),
             },
           }
-        ),
-        { sessionId: currentSessionId }
+        )
       );
     }
 
@@ -8718,7 +8714,7 @@ async function executeComposeFanOutNode(
         docsDir: ctx.docsDir,
         configuredCommandFolder: ctx.configuredCommandFolder,
         issueContext: ctx.issueContext,
-        persistScopeKey: ctx.persistScopeKey,
+        persistScope: ctx.persistScope,
         workflowPersistSessions: ctx.workflowPersistSessions,
         scopeArtifactsDir: undefined,
         // Runtime cardinality changes only the deterministic instance prefix; the body
@@ -8897,17 +8893,15 @@ async function executeComposeFanOutNode(
 }
 
 /**
- * True when a node participates in cross-run session persistence: a command/prompt
- * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
- * with `persist_session: true` set directly or inherited from the workflow-level
- * `persist_sessions` default. Single source of truth for both the session
- * lookup/persist gates and the #1846 scope-artifact mirror.
+ * A run's cross-run session scope. Concurrent runs of one workflow share a scope, so
+ * `sessionsAtStart` is read once when the run starts and every persisted node continues
+ * from that copy, never from a row a sibling run wrote afterwards. The read is issued
+ * before any node runs; a persisted node awaits it, so a failed read surfaces at the
+ * node that needed it.
  */
-function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
-  if (!isPersistableNode(node)) return false;
-  if (node.context === 'fresh') return false;
-  const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
-  return nodePersist ?? workflowPersistSessions;
+interface PersistScope {
+  key: string;
+  sessionsAtStart: Promise<readonly WorkflowNodeSession[]>;
 }
 
 /**
@@ -9009,17 +9003,18 @@ interface RunDerived {
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
   workflowLevelOptions: WorkflowLevelOptions;
-  /** Cross-run session-persistence scope key (DB conversation UUID), or undefined to skip. */
-  persistScopeKey: string | undefined;
+  /** Cross-run session persistence for this run, or undefined to skip. */
+  persistScope: PersistScope | undefined;
   /** Workflow-level default for per-node `persist_session` (opt-in). */
   workflowPersistSessions: boolean;
   /**
    * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`), or
-   * undefined when the workflow doesn't use session persistence. When set,
+   * undefined when the run cannot use session persistence (`runMayPersistSessions`,
+   * which also counts composed fan-out bodies). When set,
    * persistence-participating nodes with `output_type` mirror their typed sidecars
    * here, and a cold session resume points the user at the prior invocation's
    * artifacts by reference (#1846). Always undefined for loop_group bodies
-   * (which also run with `persistScopeKey: undefined`).
+   * (which also run with `persistScope: undefined`).
    */
   scopeArtifactsDir: string | undefined;
 }
@@ -9951,56 +9946,64 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               // case where provider was resolved from .archon/config.yaml defaults).
               // Uses the instance's getCapabilities() rather than the static registry so
               // tests can substitute mock providers with different caps without registering.
-              const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
-              if (!caps.sessionResume) {
+              const handling = persistedSessionHandling(
+                ctx.deps.getAgentProvider(provider).getCapabilities()
+              );
+              if (handling === 'unsupported') {
                 throw new Error(
                   `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
                 );
               }
-              if (ctx.persistScopeKey && !hasNamedSessionResume) {
+              const persistScope = ctx.persistScope;
+              if (persistScope && !hasNamedSessionResume) {
                 try {
-                  const persisted = await ctx.deps.store.getWorkflowNodeSession({
-                    workflow_name: ctx.workflowName,
-                    node_id: node.id,
-                    scope_key: ctx.persistScopeKey,
-                    provider,
-                  });
+                  const persisted = (await persistScope.sessionsAtStart).find(
+                    row => row.node_id === node.id && row.provider === provider
+                  );
                   if (persisted) {
-                    resumeSessionId = persisted.provider_session_id;
-                    // workflow_events is broader-scoped and longer-lived than the
-                    // node-session table. A session ID can resume a conversation, so we
-                    // store only an 8-char prefix here — enough for observability without
-                    // leaving a resumable artifact in the event log.
-                    const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
+                    // This event is not a node record, so it carries only the preview.
+                    const sessionIdPreview = sessionPreview(persisted.provider_session_id);
+                    const continues = handling === 'fork';
+                    if (continues) resumeSessionId = persisted.provider_session_id;
                     ctx.deps.store
                       .createWorkflowEvent({
                         workflow_run_id: ctx.workflowRun.id,
-                        event_type: 'node_session_resumed',
+                        event_type: continues
+                          ? 'node_session_resumed'
+                          : 'node_session_not_continued',
                         step_name: ctx.stepNamePrefix + node.id,
                         data: {
                           provider,
-                          scope_key: ctx.persistScopeKey,
+                          scope_key: persistScope.key,
                           provider_session_id_preview: sessionIdPreview,
                         },
                       })
                       .catch((err: Error) => {
                         getLog().warn(
                           { err, nodeId: node.id },
-                          'persist_session_resumed_event_persist_failed'
+                          'persist_session_event_persist_failed'
                         );
                       });
+                    if (!continues) {
+                      await safeSendMessage(
+                        ctx.platform,
+                        ctx.conversationId,
+                        `⚠️ Node \`${node.id}\`: provider \`${provider}\` cannot fork a session, so this run started fresh instead of continuing the persisted session (concurrent runs never share one provider conversation). To carry context across runs, use a provider with sessionFork or pass state through artifacts.`,
+                        { workflowId: ctx.workflowRun.id, nodeName: node.id }
+                      );
+                    }
                   }
                 } catch (err) {
                   // Non-fatal: the node still runs (fresh, no resume), but the user opted
                   // into persistence — a DB error here silently breaks continuity, so warn
-                  // them as well as the logs. (A "no row" result is not an error: it returns
-                  // null above and this catch never fires for it.)
+                  // them as well as the logs. (A "no row" result is not an error: it finds
+                  // nothing above and this catch never fires for it.)
                   getLog().warn(
                     {
                       err: err as Error,
                       nodeId: node.id,
                       workflow: ctx.workflowName,
-                      scopeKey: ctx.persistScopeKey,
+                      scopeKey: persistScope.key,
                       provider,
                     },
                     'persist_session_lookup_failed'
@@ -10102,14 +10105,12 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     node.id
                   )
                 : '';
-              // Mask the session id: it's a resumable artifact, so log only an
-              // 8-char preview (same policy as the node_session_resumed event above).
               getLog().warn(
                 {
                   nodeId: node.id,
                   provider,
                   workflowRunId: ctx.workflowRun.id,
-                  resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+                  resumeSessionIdPreview: sessionPreview(resumeSessionId),
                   priorArtifactsFound: recoveryPointer !== '',
                 },
                 'dag.session_resume_failed'
@@ -10122,41 +10123,39 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               );
             }
 
-            // Persist (or drop) the node's provider session ID for the next run in this scope.
+            // Advance the scope's cursor to this node's session for the next run. Concurrent
+            // runs each write their own session, so the cursor ends at the newest finished
+            // one. A completion without a session ID leaves the row alone: deleting it could
+            // erase a newer session a sibling run just wrote. A provider that cannot fork
+            // still writes its row: the next run never continues it, but reads it to record
+            // which session it did not continue.
             // context:'fresh' nodes are excluded (the author opted out of any cross-run memory).
-            if (usesPersistedScope && ctx.persistScopeKey && output.state === 'completed') {
+            const persistScope = ctx.persistScope;
+            if (
+              usesPersistedScope &&
+              persistScope &&
+              output.state === 'completed' &&
+              output.sessionId !== undefined
+            ) {
               try {
-                if (output.sessionId !== undefined) {
-                  await ctx.deps.store.upsertWorkflowNodeSession({
-                    workflow_name: ctx.workflowName,
-                    node_id: node.id,
-                    scope_key: ctx.persistScopeKey,
-                    provider,
-                    provider_session_id: output.sessionId,
-                    last_run_id: ctx.workflowRun.id,
-                  });
-                } else {
-                  // Provider returned no session ID (e.g. Codex with no thread ID).
-                  // Drop the stale row for THIS provider only — leave other providers'
-                  // rows intact so switching providers between runs doesn't clobber
-                  // the other side's continuity.
-                  await ctx.deps.store.deleteWorkflowNodeSessions({
-                    workflow_name: ctx.workflowName,
-                    scope_key: ctx.persistScopeKey,
-                    node_id: node.id,
-                    provider,
-                  });
-                }
+                await ctx.deps.store.upsertWorkflowNodeSession({
+                  workflow_name: ctx.workflowName,
+                  node_id: node.id,
+                  scope_key: persistScope.key,
+                  provider,
+                  provider_session_id: output.sessionId,
+                  last_run_id: ctx.workflowRun.id,
+                });
               } catch (err) {
                 // Non-fatal: persistence failure does not undo a successful node execution.
-                // But the user opted into persistence — the next run will start fresh for
-                // this node, so warn them as well as the logs.
+                // But the user opted into persistence — the next run will not continue this
+                // session, so warn them as well as the logs.
                 getLog().warn(
                   {
                     err: err as Error,
                     nodeId: node.id,
                     workflow: ctx.workflowName,
-                    scopeKey: ctx.persistScopeKey,
+                    scopeKey: persistScope.key,
                     provider,
                   },
                   'persist_session_upsert_failed'
@@ -10164,7 +10163,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 await safeSendMessage(
                   ctx.platform,
                   ctx.conversationId,
-                  `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will start this node fresh.`,
+                  `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will not continue from it.`,
                   { workflowId: ctx.workflowRun.id, nodeName: node.id }
                 );
               }
@@ -10270,9 +10269,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             runId: ctx.workflowRun.id,
             producedAt: new Date().toISOString(),
             ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
-            // `sessionId` may be undefined (e.g. bash/script nodes have no
-            // session); writeNodeArtifact omits it from the metadata when so.
-            sessionId: output.sessionId,
           };
           try {
             await writeNodeArtifact(ctx.artifactsDir, meta, output.output);
@@ -11184,9 +11180,20 @@ export async function executeDagWorkflow(
   // launched the run (see `persistScopeKey`). The `|| undefined` guard keeps an empty
   // key from scoping every invocation to the same blank scope — persistence is simply
   // skipped in that case.
-  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
+  let persistScope: PersistScope | undefined;
+  if (runPersistScopeKey !== undefined && runMayPersistSessions(workflow)) {
+    const sessionsAtStart = deps.store.listWorkflowNodeSessions({
+      workflow_name: workflow.name,
+      scope_key: runPersistScopeKey,
+    });
+    // A persisted node that never dispatches (skipped by `when:`, or after a failure)
+    // never awaits this; a failed read must not become an unhandled rejection there.
+    // Nodes that await it still see the rejection.
+    sessionsAtStart.catch(() => undefined);
+    persistScope = { key: runPersistScopeKey, sessionsAtStart };
+  }
   const namedResumeSourceIds = new Set<string>();
   for (const node of workflow.nodes) {
     if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
@@ -11264,11 +11271,11 @@ export async function executeDagWorkflow(
     docsDir,
     configuredCommandFolder,
     issueContext,
-    persistScopeKey: runPersistScopeKey,
+    persistScope,
     workflowPersistSessions,
     // Scope-keyed persistence surface: without a scope key there is no durable
     // scope to mirror into or recover from, so the dir is dropped alongside it.
-    scopeArtifactsDir: runPersistScopeKey !== undefined ? scopeArtifactsDir : undefined,
+    scopeArtifactsDir: persistScope !== undefined ? scopeArtifactsDir : undefined,
     layers,
     nodeOutputs,
     afterLayer: persistAuthoredOutcome,

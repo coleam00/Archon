@@ -521,45 +521,29 @@ if (!resultReported) {
 yield { type: 'settled' };
 ```
 
-**Codex SDK** (`packages/providers/src/codex/provider.ts`):
+**Codex app-server** (`packages/providers/src/codex/provider.ts`): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
 
 ```typescript
-// A new thread's id is assigned during the run via the thread.started event,
-// not synchronously on startThread() — capture it for a resumable sessionId.
-let resolvedThreadId = thread.id;
-for await (const event of result.events) {
-  if (event.type === 'thread.started') {
-    resolvedThreadId = event.thread_id; // resumable id; persist_session depends on it
-    continue;
-  }
-  if (event.type === 'item.started' && event.item.type === 'command_execution') {
+const { thread } = await connection.request('thread/start', { cwd, sandbox, approvalPolicy, config });
+const { turn } = await connection.request('turn/start', { threadId: thread.id, input });
+for await (const notification of connection.notifications()) {
+  if (notification.method === 'item/started' && notification.params.item.type === 'commandExecution') {
     // The command is the title the operator reads; the kind of tool is the name.
     yield {
       type: 'tool_call',
-      toolCallId: event.item.id,
+      toolCallId: notification.params.item.id,
       name: 'command_execution',
-      title: event.item.command,
+      title: notification.params.item.command,
     };
-  } else if (event.type === 'item.completed') {
-    switch (event.item.type) {
-      case 'agent_message':
-        yield { type: 'agent_message_chunk', text: event.item.text };
-        break;
-      case 'command_execution':
-        yield {
-          type: 'tool_call_update',
-          toolCallId: event.item.id,
-          status: event.item.exit_code === 0 ? 'completed' : 'failed',
-          ...truncateToolOutput(event.item.aggregated_output),
-        };
-        break;
-      case 'reasoning':
-        yield { type: 'agent_thought_chunk', text: event.item.text };
-        break;
-    }
-  } else if (event.type === 'turn.completed') {
-    yield { type: 'result', sessionId: resolvedThreadId };
-    break; // CRITICAL: Exit loop on turn completion
+  } else if (notification.method === 'item/completed' && notification.params.item.type === 'agentMessage') {
+    yield { type: 'agent_message_chunk', text: notification.params.item.text };
+  } else if (notification.method === 'turn/completed' && notification.params.turn.id === turn.id) {
+    const { error } = notification.params.turn;
+    // The failure class comes from the typed codexErrorInfo, never from the message.
+    yield error
+      ? { type: 'result', sessionId: thread.id, failure: classify(error.codexErrorInfo, error.message) }
+      : { type: 'result', sessionId: thread.id };
+    break;
   }
 }
 yield { type: 'settled' };

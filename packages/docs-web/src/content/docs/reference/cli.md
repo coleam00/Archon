@@ -45,13 +45,13 @@ Use `archon forge resolve --data <json>` for an explicit remote, `archon forge c
 archon workflow list --cwd /path/to/repo
 
 # Run a workflow (auto-creates isolated worktree by default)
-archon workflow run assist --cwd /path/to/repo "Explain the authentication flow"
+archon workflow run investigate --cwd /path/to/repo "Why does login fail after a password reset?"
 
 # Explicit branch name for the worktree
 archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth support"
 
 # Opt out of isolation (run in live checkout)
-archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
+archon workflow run investigate --cwd /path/to/repo --no-worktree "Why does the nightly build fail?"
 ```
 
 **Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands work anywhere.
@@ -222,7 +222,7 @@ archon workflow list --cwd /path/to/repo
 archon workflow list --cwd /path/to/repo --json
 
 # Exact, untouched description for one candidate
-archon workflow list archon-fix-github-issue-codex --full --json
+archon workflow list archon-review --full --json
 ```
 
 Discovers flat, one-level grouped, and exact `<pack>/<workflow>/` packaged layouts from `.archon/workflows/` and `~/.archon/workflows/`, plus bundled defaults. See [Global Workflows](/guides/global-workflows/).
@@ -247,7 +247,7 @@ Run a workflow with an optional user message.
 
 ```bash
 # Basic usage
-archon workflow run assist --cwd /path/to/repo "What does this function do?"
+archon workflow run investigate --cwd /path/to/repo "Why does the export job time out?"
 
 # With isolation
 archon workflow run plan --cwd /path/to/repo --branch feature-x "Add caching"
@@ -478,10 +478,10 @@ Every node in the new run uses that selected checkout, including bash/script del
 **Name Matching:**
 
 Workflow names are resolved using a 4-tier fallback hierarchy. This applies consistently across the CLI and all chat platforms (Slack, Telegram, Web, GitHub, Discord):
-1. **Exact match** - `archon-assist` matches `archon-assist`
-2. **Case-insensitive** - `Archon-Assist` matches `archon-assist`
-3. **Suffix match** - `assist` matches `archon-assist` (looks for `-assist` suffix)
-4. **Substring match** - `smart` matches `archon-smart-pr-review`
+1. **Exact match** - `archon-investigate` matches `archon-investigate`
+2. **Case-insensitive** - `Archon-Investigate` matches `archon-investigate`
+3. **Suffix match** - `investigate` matches `archon-investigate` (looks for `-investigate` suffix)
+4. **Substring match** - `deliv` matches `archon-deliver`
 
 If multiple workflows match at the same tier, an error lists the candidates:
 ```
@@ -588,8 +588,9 @@ work and invalid reported numbers. A reported zero stays zero. Historical nodes 
 when their rows lack these facts; they do not receive a guessed model or start time.
 
 `timing.durationMs` is elapsed wall time, not active compute time. Resumed loop durations can
-include time spent paused; bare approval retains the duration observed before the pause. Public
-records contain at most eight session-ID characters, never the full continuation handle. JSONL
+include time spent paused; bare approval retains the duration observed before the pause.
+`execution.binding.sessionPreview` holds at most eight session-ID characters; the full id is
+in the node's `sessionIds`, described below. JSONL
 transcripts retain the names `node_start`, `node_complete` and `node_error`; their `execution`
 metadata describes the same fact as the durable node event. Suspended nodes remain active and
 appear as running until their gate or wait resolves.
@@ -633,7 +634,12 @@ entry includes `nodeId` and `state`; nodes with a start event include the origin
 `startedAt`, and terminal nodes with both start and end events include `durationMs`.
 Completed nodes may include an `outputPreview`, truncated after 200 characters with
 ASCII `...`, while failed nodes include `error` (or `Unknown error` when none was
-recorded).
+recorded). Nodes whose provider reported a session include `sessionIds`: the full
+session id of each attempt and loop iteration, in order. Human `--verbose` output prints
+them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in
+the provider's own tool, for example with `claude --resume <id>`. Claude Code finds a
+session by the directory it ran in, so run it from the node's working directory: the run's
+worktree when the run used one.
 
 Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
 debugging. Raw events are not the recommended integration surface.
@@ -922,7 +928,7 @@ just outside your shell. The ack carries `continues: true` to say so:
   "action": "approve",
   "detached": true,
   "continues": true,
-  "workflowName": "assist",
+  "workflowName": "my-workflow",
   "logPath": "~/.archon/logs/detached-run-<id>.log"
 }
 ```
@@ -1263,11 +1269,11 @@ archon chat "How does error handling work in this codebase?"
 # Interactive setup wizard
 archon setup
 
-# Quick question (auto-isolated in archon/task-assist-<timestamp>)
-archon workflow run assist --cwd ~/projects/my-app "How does error handling work here?"
+# Investigate a bug (auto-isolated on a generated archon/task-... branch)
+archon workflow run investigate --cwd ~/projects/my-app "Why do API errors return 500 instead of 400?"
 
-# Quick question without isolation
-archon workflow run assist --cwd ~/projects/my-app --no-worktree "How does error handling work here?"
+# Investigate without isolation
+archon workflow run investigate --cwd ~/projects/my-app --no-worktree "Why do API errors return 500 instead of 400?"
 
 # Plan a feature (auto-isolated)
 archon workflow run plan --cwd ~/projects/my-app "Add rate limiting to the API"
