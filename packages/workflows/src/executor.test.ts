@@ -5178,6 +5178,18 @@ describe('resolveScopeArtifactsDir', () => {
     expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBeUndefined();
   });
 
+  it('returns undefined when the only AI node opts out with context: fresh', () => {
+    const workflow = {
+      name: 'feature-dev',
+      persist_sessions: true,
+      nodes: [
+        { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'x' }, context: 'fresh' },
+        { id: 'b', kind: 'exec', runtime: 'sh', script: 'echo hi' },
+      ] as WorkflowDefinition['nodes'],
+    };
+    expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBeUndefined();
+  });
+
   it('returns undefined without a conversation scope (same guard as persistScopeKey)', () => {
     const workflow = {
       name: 'feature-dev',
