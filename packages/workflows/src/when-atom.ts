@@ -20,7 +20,13 @@
  *   <op> is == != <= >= < >, RHS is a single-quoted literal or a bare
  *   number/boolean.
  */
-import { INPUT_NAME_SOURCE } from './schemas/dag-node';
+import {
+  INPUT_NAME_SOURCE,
+  LOOP_PREV_OUTPUT_REF_SOURCE,
+  OUTPUT_FIELD_SOURCE,
+  OUTPUT_REF_SOURCE,
+  type UnsupportedNestedOutputReference,
+} from './output-ref';
 
 /**
  * The reserved scope name for workflow inputs. `loader.ts` imports this rather than
@@ -49,7 +55,17 @@ function isWhenOperator(value: string): value is WhenOperator {
 
 /** A node id may contain hyphens; a path segment (a JSON field name) may not. */
 const NODE_ID_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
-const PATH_SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
+const PATH_SEGMENT_SOURCE = OUTPUT_FIELD_SOURCE;
+
+const NESTED_CANONICAL_WHEN_REF_PATTERN = new RegExp(
+  String.raw`^\s*(${OUTPUT_REF_SOURCE}\.${OUTPUT_FIELD_SOURCE}(?:\.${OUTPUT_FIELD_SOURCE})+)`
+);
+const NESTED_LOOP_PREV_WHEN_REF_PATTERN = new RegExp(
+  String.raw`^\s*(${LOOP_PREV_OUTPUT_REF_SOURCE}\.${OUTPUT_FIELD_SOURCE}(?:\.${OUTPUT_FIELD_SOURCE})+)`
+);
+const NESTED_SHORTHAND_WHEN_REF_PATTERN = new RegExp(
+  String.raw`^\s*(\$(${NODE_ID_SOURCE})\.(${OUTPUT_FIELD_SOURCE})(?:\.${OUTPUT_FIELD_SOURCE})+)`
+);
 
 /**
  * Capture groups:
@@ -144,6 +160,50 @@ export function splitOutsideQuotes(expr: string, sep: string): string[] {
  */
 export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
+}
+
+/** Find a nested output path on the left-hand side of a `when:` atom. */
+export function findUnsupportedNestedWhenRef(
+  expr: string
+): UnsupportedNestedOutputReference | undefined {
+  for (const atom of whenAtoms(expr)) {
+    const loopPrev = NESTED_LOOP_PREV_WHEN_REF_PATTERN.exec(atom);
+    if (loopPrev?.[1] !== undefined && loopPrev[2] !== undefined) {
+      return {
+        kind: 'loop_prev',
+        reference: loopPrev[1],
+        supportedForms: [
+          `$LOOP_PREV.${loopPrev[2]}.output`,
+          `$LOOP_PREV.${loopPrev[2]}.output.field`,
+        ],
+      };
+    }
+
+    const canonical = NESTED_CANONICAL_WHEN_REF_PATTERN.exec(atom);
+    if (canonical?.[1] !== undefined && canonical[2] !== undefined) {
+      const nodeId = canonical[2];
+      if (nodeId === WHEN_INPUTS_SCOPE) continue;
+      return {
+        kind: 'current',
+        reference: canonical[1],
+        supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`, `$${nodeId}.field`],
+      };
+    }
+
+    const shorthand = NESTED_SHORTHAND_WHEN_REF_PATTERN.exec(atom);
+    if (shorthand?.[1] !== undefined && shorthand[2] !== undefined && shorthand[3] !== undefined) {
+      const nodeId = shorthand[2];
+      const firstSegment = shorthand[3];
+      if (nodeId === WHEN_INPUTS_SCOPE || nodeId === 'LOOP_PREV' || firstSegment === 'output')
+        continue;
+      return {
+        kind: 'shorthand',
+        reference: shorthand[1],
+        supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`, `$${nodeId}.field`],
+      };
+    }
+  }
+  return undefined;
 }
 
 /**

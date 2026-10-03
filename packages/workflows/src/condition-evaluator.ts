@@ -41,9 +41,11 @@ import {
   OutputRefError,
   similarNodeIds,
   canonicalValueText,
+  unsupportedNestedOutputRefMessage,
   type JsonValue,
 } from './output-ref';
 import {
+  findUnsupportedNestedWhenRef,
   parseLoopPrevWhenAtom,
   parseWhenAtom,
   splitOutsideQuotes,
@@ -296,6 +298,8 @@ export function evaluateCondition(
   options?: { loopPrevOutputs?: ReadonlyMap<string, NodeOutput> }
 ): { result: boolean; parsed: boolean } {
   const trimmed = expr.trim();
+  const nestedRef = findUnsupportedNestedWhenRef(trimmed);
+  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
 
   // Split on || — OR has lower precedence
   const orClauses = splitOutsideQuotes(trimmed, '||');
