@@ -2,8 +2,34 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
+// The old workflow registry's listing and entry pages lived under /workflows/. GitHub Pages
+// serves a static build, so each former page gets its own redirect to the plugin install guide.
+const retiredRegistrySlugs = [
+  'archon-piv-loop',
+  'archon-fix-github-issue',
+  'archon-comprehensive-pr-review',
+  'archon-ralph-dag',
+  'video-generic',
+  'archon-idea-to-wo',
+  'archon-smart-mr-review',
+  'archon-resolve-mr-conflicts',
+  'archon-comprehensive-mr-review',
+  'piv-system-evolution',
+  'harness-score',
+  'pocock-skills-workflow-family',
+  'token-max-site-factory',
+  'image-node-factory',
+];
+const retiredRegistryRedirects = Object.fromEntries(
+  ['/workflows/', ...retiredRegistrySlugs.map((slug) => `/workflows/${slug}/`)].map((path) => [
+    path,
+    '/guides/global-workflows/#installed-workflow-packs',
+  ])
+);
+
 export default defineConfig({
   site: 'https://archon.diy',
+  redirects: retiredRegistryRedirects,
   integrations: [
     starlight({
       title: 'Archon',
@@ -33,7 +59,6 @@ export default defineConfig({
         baseUrl: 'https://github.com/coleam00/Archon/edit/main/packages/docs-web/',
       },
       sidebar: [
-        { label: '✦  Marketplace', link: '/workflows/' },
         { label: '🗺️  Roadmap', link: '/roadmap/' },
         { label: '🎨  Brand', link: '/brand/' },
         {
@@ -126,11 +151,6 @@ export default defineConfig({
               label: 'Roadmap',
               url: 'https://archon.diy/roadmap/',
               description: 'Project roadmap and planned features',
-            },
-            {
-              label: 'Workflow Marketplace',
-              url: 'https://archon.diy/workflows/',
-              description: 'Browse and discover community workflows',
             },
           ],
 

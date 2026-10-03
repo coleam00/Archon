@@ -218,13 +218,13 @@ type %USERPROFILE%\.codex\auth.json
 
 ### Set Environment Variables
 
-Set all four environment variables in your `.env`:
+Set all four environment variables in your `.env`. They carry an `ARCHON_` prefix because Codex reads `CODEX_ACCESS_TOKEN` itself, so an unprefixed copy would override your own Codex login. If your `.env` still has the old `CODEX_*` names from an earlier Archon, re-run `archon setup` to move them to the new names, or rename all four yourself and delete the old lines. Until the next release Archon still reads the old names, with a deprecation warning, but only when `CODEX_ID_TOKEN` is set and no `ARCHON_CODEX_*` variable is.
 
 ```ini
-CODEX_ID_TOKEN=eyJhbGc...
-CODEX_ACCESS_TOKEN=eyJhbGc...
-CODEX_REFRESH_TOKEN=rt_...
-CODEX_ACCOUNT_ID=6a6a7ba6-...
+ARCHON_CODEX_ID_TOKEN=eyJhbGc...
+ARCHON_CODEX_ACCESS_TOKEN=eyJhbGc...
+ARCHON_CODEX_REFRESH_TOKEN=rt_...
+ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
 ```
 
 ### Use an API key instead (optional)
@@ -233,7 +233,7 @@ By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`)
 
 ### How Archon runs Codex
 
-Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, `AGENTS.md` guidance and MCP servers load as they do for `codex` itself. A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `transient` for overload, network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `transient` for overload, network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
 
 ### Codex Configuration Options
 

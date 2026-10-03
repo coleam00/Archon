@@ -112,7 +112,7 @@ describe('CodexProvider', () => {
       mcp: true,
       hooks: false,
       skills: false,
-      plugins: false,
+      plugins: true,
       agents: false,
       toolRestrictions: false,
       structuredOutput: 'enforced',
@@ -137,8 +137,6 @@ describe('CodexProvider', () => {
     test('streams the reply and ends with the thread id and this turn’s usage', async () => {
       const chunks = await streamOf({
         notifications: [
-          // A resumed thread first replays the previous turn's usage under its id.
-          tokenUsage({ input: 999, output: 999 }, 'earlier-turn'),
           agentMessage('hello'),
           tokenUsage({ input: 120, output: 7, cached: 100, cacheWrite: 3 }),
         ],
@@ -153,9 +151,60 @@ describe('CodexProvider', () => {
       ]);
     });
 
-    test('a turn that used no tokens does not report the replayed usage of an earlier turn', async () => {
+    // Snapshots recorded from `codex app-server` 0.160.0: a turn of three requests on a new
+    // thread, then a resumed turn of two requests on the same thread.
+    test('a turn of several requests records all of them, once each', async () => {
       const chunks = await streamOf({
-        notifications: [tokenUsage({ input: 999, output: 999 }, 'earlier-turn')],
+        notifications: [
+          tokenUsage({ input: 26598, output: 37, cached: 7168 }),
+          tokenUsage(
+            { input: 53291, output: 59, cached: 33536 },
+            { input: 26693, output: 22, cached: 26368 }
+          ),
+          tokenUsage(
+            { input: 80066, output: 64, cached: 60032 },
+            { input: 26775, output: 5, cached: 26496 }
+          ),
+          // Codex re-sends its current snapshot without a new request.
+          tokenUsage(
+            { input: 80066, output: 64, cached: 60032 },
+            { input: 26775, output: 5, cached: 26496 }
+          ),
+        ],
+      });
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 80066,
+        output: 64,
+        cacheRead: 60032,
+        cacheWrite: 0,
+      });
+    });
+
+    test('a resumed turn records only its own requests, not the thread’s earlier turns', async () => {
+      const { provider } = providerWith({
+        notifications: [
+          tokenUsage(
+            { input: 106866, output: 99, cached: 86656 },
+            { input: 26800, output: 35, cached: 26624 }
+          ),
+          tokenUsage(
+            { input: 133758, output: 105, cached: 113280 },
+            { input: 26892, output: 6, cached: 26624 }
+          ),
+        ],
+      });
+      const chunks = await run(provider, undefined, THREAD_ID);
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 26800 + 26892,
+        output: 35 + 6,
+        cacheRead: 26624 + 26624,
+        cacheWrite: 0,
+      });
+    });
+
+    test('a turn that used no tokens does not report another turn’s usage', async () => {
+      const chunks = await streamOf({
+        notifications: [tokenUsage({ input: 999, output: 999 }, undefined, 'earlier-turn')],
         completion: { status: 'failed', error: turnError('serverOverloaded', 'busy') },
       });
       expect(resultOf(chunks).tokens).toBeUndefined();
@@ -259,6 +308,21 @@ describe('CodexProvider', () => {
       expect(env.PATH.split(process.platform === 'win32' ? ';' : ':')).toContain('/request/bin');
       expect(env.HOME).toBe(process.env.HOME as string);
       expect(env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
+    });
+
+    // #3562 renamed Archon's setup variables instead of stripping Codex's own names
+    // here. This fails if the provider starts filtering CODEX_ACCESS_TOKEN out.
+    test('the Codex env is not stripped of a user’s own CODEX_ACCESS_TOKEN (#3562)', async () => {
+      const original = process.env.CODEX_ACCESS_TOKEN;
+      process.env.CODEX_ACCESS_TOKEN = 'user-codex-token';
+      try {
+        const { provider, server } = providerWith();
+        await run(provider, { env: { ARCHON_CODEX_ACCESS_TOKEN: 'archon-setup-token' } });
+        expect(server.processes[0].env.CODEX_ACCESS_TOKEN).toBe('user-codex-token');
+      } finally {
+        if (original === undefined) delete process.env.CODEX_ACCESS_TOKEN;
+        else process.env.CODEX_ACCESS_TOKEN = original;
+      }
     });
   });
 
@@ -611,6 +675,130 @@ describe('CodexProvider', () => {
         message:
           'MCP config references undefined env vars: ARCHON_CODEX_MISSING. These will be empty strings - MCP servers may fail to authenticate.',
       });
+    });
+  });
+
+  describe('workflow node scope', () => {
+    const node = { nodeConfig: { nodeId: 'implement' } } satisfies SendQueryOptions;
+
+    test('a fresh or resumed thread loads no ambient plugin, app or server, and is checked before its turn', async () => {
+      const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+      for (const resumeId of [undefined, 'existing-thread']) {
+        const result = resultOf(await run(provider, node, resumeId));
+        expect(result.failure).toBeUndefined();
+        const threadMethod = resumeId ? 'thread/resume' : 'thread/start';
+        expect(server.processes.at(-1)?.methods).toEqual([
+          'initialize',
+          'config/read',
+          threadMethod,
+          'mcpServerStatus/list',
+          'turn/start',
+        ]);
+        expect(paramsOf(server, threadMethod)?.config).toMatchObject({
+          features: { apps: false, plugins: false },
+          mcp_servers: { posthog: { enabled: false } },
+        });
+      }
+    });
+
+    test('a named plugin stays on without its MCP servers; other installed plugins are off', async () => {
+      const { provider, server } = providerWith({
+        installedPlugins: { 'alpha@fixture': ['alpha_srv'], 'beta@fixture': ['beta_srv'] },
+      });
+      await run(provider, { nodeConfig: { nodeId: 'implement', plugins: ['alpha@fixture'] } });
+      expect(paramsOf(server, 'plugin/read')).toMatchObject({ pluginName: 'alpha' });
+      // Plugins on for the process, so a user's global plugins-off still lists them.
+      expect(server.processes[0].args).toEqual(['app-server', '-c', 'features.plugins=true']);
+      expect(paramsOf(server, 'thread/start')?.config).toMatchObject({
+        features: { apps: false, plugins: true },
+        plugins: {
+          'alpha@fixture': { enabled: true, mcp_servers: { alpha_srv: { enabled: false } } },
+          'beta@fixture': { enabled: false },
+        },
+      });
+    });
+
+    test('a live server the node did not declare fails misconfigured before the turn, across pages', async () => {
+      const { provider, server } = providerWith({
+        mcpStatusPages: [
+          [{ name: 'posthog', pluginId: null, runtimeStatus: 'disabled' }],
+          [
+            {
+              name: 'cua_repl',
+              pluginId: 'computer-use@openai-bundled',
+              runtimeStatus: 'starting',
+            },
+          ],
+        ],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain(
+        'Codex loaded MCP servers this node does not declare: cua_repl (plugin computer-use@openai-bundled)'
+      );
+      expect(result.sessionId).toBe(THREAD_ID);
+      expect(server.processes[0].methods).not.toContain('turn/start');
+    });
+
+    test('a configured server Codex still reports live fails, though the thread config named it', async () => {
+      const { provider } = providerWith({
+        configuredServers: ['posthog'],
+        mcpStatusPages: [[{ name: 'posthog', pluginId: null, runtimeStatus: 'connected' }]],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
+    test('a status this Codex version does not list counts as live', async () => {
+      const { provider } = providerWith({
+        mcpStatusPages: [
+          // A status a newer Codex might add; the generated union does not have it.
+          [{ name: 'posthog', pluginId: null, runtimeStatus: 'suspended' as 'disabled' }],
+        ],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
+    test('a declared live server passes the check', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-scope-')));
+      await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));
+      const { provider, server } = providerWith({
+        mcpStatusPages: [[{ name: 'local', pluginId: null, runtimeStatus: 'connected' }]],
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', dir, undefined, {
+        nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
+      })) {
+        chunks.push(chunk);
+      }
+      expect(resultOf(chunks).failure).toBeUndefined();
+      expect(server.processes[0].methods).toContain('turn/start');
+    });
+
+    test('a named plugin that is not installed fails misconfigured before any thread', async () => {
+      const { provider, server } = providerWith({ installedPlugins: { 'alpha@fixture': [] } });
+      const result = resultOf(
+        await run(provider, { nodeConfig: { nodeId: 'implement', plugins: ['ghost@fixture'] } })
+      );
+      expect(result.failure).toEqual({
+        class: 'misconfigured',
+        evidence:
+          'Codex plugin not installed in /home/user/.codex: ghost@fixture. Installed: alpha@fixture. ' +
+          'Name plugins by their exact `name@marketplace` id from `codex plugin list`.',
+      });
+      expect(server.processes[0].methods).not.toContain('thread/start');
+    });
+
+    test('an inventory request Codex rejects fails misconfigured before any thread', async () => {
+      const { provider, server } = providerWith({
+        errors: { 'config/read': { code: -32600, message: 'Invalid request: unknown variant' } },
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('config/read failed');
+      expect(server.processes[0].methods).not.toContain('thread/start');
     });
   });
 

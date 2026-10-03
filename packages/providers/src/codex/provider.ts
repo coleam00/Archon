@@ -40,9 +40,11 @@ import {
   type Spawner,
 } from './app-server';
 import { classifyTurnError, describeErrorInfo } from './turn-error';
+import { applyNodeScope, checkThreadMcpScope, readCodexInventory } from './scope';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
+import type { ThreadTokenUsage } from './protocol/v2/ThreadTokenUsage';
 import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
 import type { Turn } from './protocol/v2/Turn';
 import type { TurnError } from './protocol/v2/TurnError';
@@ -402,12 +404,20 @@ function toolCallUpdateOf(item: ToolItem): ToolCallUpdateEvent {
   }
 }
 
-function tokenUsageOf(last: TokenUsageBreakdown): TokenUsage {
+/**
+ * The turn's usage: the thread's cumulative total at the end less the total before the
+ * turn's first request (`total - last` of the turn's first snapshot), clamped at zero as
+ * Codex clamps its own per-turn figure (a context overflow resets the total). Codex reports
+ * reasoning tokens inside `outputTokens`, so they are not added again.
+ */
+function turnUsageOf(first: ThreadTokenUsage, end: TokenUsageBreakdown): TokenUsage {
+  const used = (key: keyof TokenUsageBreakdown): number =>
+    Math.max(0, end[key] - (first.total[key] - first.last[key]));
   return {
-    input: last.inputTokens,
-    output: last.outputTokens,
-    cacheRead: last.cachedInputTokens,
-    cacheWrite: last.cacheWriteInputTokens,
+    input: used('inputTokens'),
+    output: used('outputTokens'),
+    cacheRead: used('cachedInputTokens'),
+    cacheWrite: used('cacheWriteInputTokens'),
   };
 }
 
@@ -422,6 +432,15 @@ function idAt(value: unknown, key: 'thread' | 'turn'): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
+/** The Codex home the app-server reports in its `initialize` response, for error messages. */
+function codexHomeOf(initializeResponse: unknown): string {
+  const home =
+    typeof initializeResponse === 'object' && initializeResponse !== null
+      ? (initializeResponse as { codexHome?: unknown }).codexHome
+      : undefined;
+  return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
+}
+
 interface TurnRequest {
   connection: AppServerConnection;
   apiKey: string | undefined;
@@ -429,6 +448,11 @@ interface TurnRequest {
   resumeSessionId: string | undefined;
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
+  /**
+   * The plugins a workflow node names, which scopes its thread to them and its declared
+   * MCP servers (`./scope`). Undefined for direct chat, which keeps the user's setup.
+   */
+  nodePlugins: readonly string[] | undefined;
   hasOutputFormat: boolean;
   model: string | undefined;
   /** Receives the thread id as soon as it exists, so a failure can still carry it. */
@@ -442,8 +466,8 @@ interface TurnRequest {
  * process ending before `turn/completed` is thrown for `sendQuery` to classify.
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
-  const { connection } = request;
-  await connection.request('initialize', {
+  const { connection, nodePlugins } = request;
+  const initialized = await connection.request('initialize', {
     clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
     capabilities: null,
   });
@@ -454,17 +478,32 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     await connection.request('account/login/start', { type: 'apiKey', apiKey: request.apiKey });
   }
 
+  let { threadParams } = request;
+  // Set only for a workflow node: the MCP server names its thread may run.
+  let declared: string[] | undefined;
+  if (nodePlugins) {
+    const inventory = await readCodexInventory(connection, {
+      cwd: request.cwd,
+      plugins: nodePlugins,
+      codexHome: codexHomeOf(initialized),
+    });
+    const scope = applyNodeScope(threadParams.config ?? {}, inventory, nodePlugins);
+    threadParams = { ...threadParams, config: scope.config };
+    declared = scope.declared;
+  }
+  // A resumed thread needs the same config: Codex does not store it with the thread.
   const threadResponse = request.resumeSessionId
     ? await connection.request('thread/resume', {
         threadId: request.resumeSessionId,
         cwd: request.cwd,
-        ...request.threadParams,
+        ...threadParams,
         excludeTurns: true,
       })
-    : await connection.request('thread/start', { cwd: request.cwd, ...request.threadParams });
+    : await connection.request('thread/start', { cwd: request.cwd, ...threadParams });
   const threadId = idAt(threadResponse, 'thread');
   if (!threadId) throw new Error('Codex app-server returned a thread without an id');
   request.onThread(threadId);
+  if (declared) await checkThreadMcpScope(connection, threadId, declared);
   getLog().debug(
     { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
     'codex.thread_ready'
@@ -481,7 +520,13 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const startedToolIds = new Set<string>();
   const errors: string[] = [];
   let lastAgentMessage = '';
-  let usage: TokenUsage | undefined;
+  // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
+  // is the change in the thread's `total`. A resumed thread's total already includes earlier
+  // turns and is not replayed before the turn starts, so the first snapshot sets the baseline.
+  // If that first snapshot is a re-send rather than a request (a local compaction or a
+  // usage-limit failure before the first request), a resumed turn over-counts by one earlier
+  // request; Codex sends no pre-turn total on this resume path to correct it.
+  let usageSpan: { first: ThreadTokenUsage; end: TokenUsageBreakdown } | undefined;
   let rateLimits: RateLimitSnapshot | undefined;
   let retries = 0;
 
@@ -492,9 +537,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         break;
 
       case 'thread/tokenUsage/updated':
-        // A resumed thread first replays the previous turn's usage under its own turn id.
+        // Usage reported for another turn of the thread is not this turn's.
         if (notification.params.turnId === turnId) {
-          usage = tokenUsageOf(notification.params.tokenUsage.last);
+          const { tokenUsage } = notification.params;
+          usageSpan = { first: usageSpan?.first ?? tokenUsage, end: tokenUsage.total };
         }
         break;
 
@@ -565,7 +611,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         if (turn.id !== turnId) break;
         yield* completeTurn(turn.status, turn.error, request, {
           threadId,
-          usage,
+          usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
           rateLimits,
           lastAgentMessage,
         });
@@ -789,9 +835,17 @@ export class CodexProvider implements IAgentProvider {
         codexConfig.modelReasoningEffort
       );
 
+      const workflowNode = isWorkflowNode(requestOptions);
+      const nodePlugins = workflowNode ? (requestOptions?.nodeConfig?.plugins ?? []) : undefined;
       connection = AppServerConnection.start(
         binary,
-        apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : [],
+        [
+          ...(apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : []),
+          // A user who turned plugins off globally gets an empty `plugin/installed`, so a
+          // node that names plugins could not find them. This process serves only this
+          // node's thread, and the thread config switches off every plugin it does not name.
+          ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
+        ],
         env,
         this.spawner
       );
@@ -807,7 +861,7 @@ export class CodexProvider implements IAgentProvider {
           sandbox: 'danger-full-access',
           approvalPolicy: 'never',
           ...(model ? { model } : {}),
-          config: buildThreadConfig(codexConfig, mcpServers, isWorkflowNode(requestOptions)),
+          config: buildThreadConfig(codexConfig, mcpServers, workflowNode),
         },
         turnParams: {
           input: [
@@ -816,6 +870,7 @@ export class CodexProvider implements IAgentProvider {
           ...(effort ? { effort } : {}),
           ...(outputSchema !== undefined ? { outputSchema } : {}),
         },
+        nodePlugins,
         hasOutputFormat,
         model,
         onThread: id => {
