@@ -679,9 +679,10 @@ by its node id, and a command node's start line also names its command.
 
 A node's provider activity is indented beneath it: agent text in full, thinking on one
 line, one line per tool call, and each call's outcome naming the tool with its exit code
-and the last lines of its output. Warnings, failed MCP servers, compaction, subtask starts
-and ends, failed hooks, and waits on the user get one line each; progress-only events
-(running subtasks, started or successful hooks, connected MCP servers) are left out.
+and the last lines of its output. Warnings, MCP servers that failed, need auth or are
+disabled, compaction, subtask starts and ends, failed or cancelled hooks, and waits on
+the user get one line each; progress-only events (running subtasks, started or
+successful hooks, connected or pending MCP servers) are left out.
 `provider_event` lines record their node, so when parallel nodes interleave a `[node]`
 line marks each switch. The older `assistant` and `tool` lines record no node and are
 indented without a label. Rows the text view does not render (watchdog renewals,
