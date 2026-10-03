@@ -8,9 +8,8 @@ import { tmpdir } from 'node:os';
 import { isAbsolute, join } from 'node:path';
 
 import { createLogger } from '@archon/paths';
-// Type-only import — erased by TS, so it does NOT trigger Pi's config.js
-// package.json read at module load (see the header note below). Used only to
-// annotate the per-call ResourceLoader local.
+// Type-only imports — erased by TS, so they do NOT trigger Pi's config.js
+// package.json read at module load (see the header note below).
 import type { ModelsErrorCode } from '@earendil-works/pi-ai';
 import type {
   DefaultResourceLoader,
