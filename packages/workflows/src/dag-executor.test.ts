@@ -36620,7 +36620,8 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
   });
 
   const runGuardedLayer = async (
-    scripts: Record<string, string>
+    scripts: Record<string, string>,
+    priorCompletedNodes?: Map<string, PersistedNodeOutput>
   ): Promise<ReturnType<typeof createMockDeps>> => {
     const mockDeps = createMockDeps();
     const workflowRun = makeWorkflowRun('mc-run-id', {
@@ -36643,6 +36644,7 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
         cwd: testDir,
         workflow: { name: 'mc-test', nodes },
         workflowRun,
+        priorCompletedNodes,
       })
     );
     return mockDeps;
@@ -36670,6 +36672,21 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
     const error = nodeFailedError(deps, 'writer');
     expect(error).toContain('stray.txt');
     expect(error).toContain('guarded siblings `reader`');
+  });
+
+  it('a violation on resume names no sibling reused from the prior run', async () => {
+    await initRepo(testDir);
+    const deps = await runGuardedLayer(
+      { writer: 'touch stray.txt', cachedA: 'echo a', cachedB: 'echo b' },
+      new Map([
+        ['cachedA', { output: 'a' }],
+        ['cachedB', { output: 'b' }],
+      ])
+    );
+    const error = nodeFailedError(deps, 'writer');
+    expect(error).toContain('stray.txt');
+    expect(error).not.toContain('cachedA');
+    expect(error).not.toContain('cachedB');
   });
 
   it('non-ASCII paths under excluded dirs do not trip the assertion', async () => {

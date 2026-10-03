@@ -1140,6 +1140,21 @@ async function snapshotCheckout(
 }
 
 /**
+ * Take a `mutates_checkout: false` node's pre-run snapshot and record it in its
+ * concurrent layer's snapshot set, so a sibling's violation can name it. Returns
+ * `undefined` for an undeclared node: nothing to assert.
+ */
+async function snapshotGuardedNode(
+  ctx: Pick<RunLayersContext, 'cwd' | 'guardedLayerSnapshots'>,
+  node: DagNode,
+  excludeDirs: readonly string[]
+): Promise<string | undefined> {
+  if (node.mutates_checkout !== false) return undefined;
+  ctx.guardedLayerSnapshots?.add(node.id);
+  return snapshotCheckout(ctx.cwd, excludeDirs);
+}
+
+/**
  * A node whose `mutates_checkout: false` the engine enforces: exec and agent nodes.
  * Every other node may write to the checkout as far as layer scheduling knows.
  */
@@ -1164,7 +1179,7 @@ async function assertCheckoutUntouched(
   result: NodeExecutionResult,
   deps: WorkflowDeps,
   logDir: string,
-  concurrentGuardedSiblings: readonly string[] = []
+  guardedLayerSnapshots: ReadonlySet<string> | undefined
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -1179,6 +1194,7 @@ async function assertCheckoutUntouched(
     .flatMap(porcelainPaths)
     .slice(0, 10)
     .join(', ');
+  const concurrentGuardedSiblings = [...(guardedLayerSnapshots ?? [])].filter(id => id !== node.id);
   const error =
     concurrentGuardedSiblings.length === 0
       ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
@@ -9052,11 +9068,13 @@ interface RunLayersContext extends RunInputs, RunDerived {
   /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
   currentExecution?: NodeExecutionRecord;
   /**
-   * Guarded siblings running at the same time as this guarded node, named in its
-   * `mutates_checkout: false` violation because any of them may be the writer.
-   * Empty when the node ran alone in its window. Set per node; never inherited.
+   * Ids of the nodes in this concurrent layer that have taken their
+   * `mutates_checkout: false` snapshot in this run, shared by the layer's nodes. A
+   * violation names the others as possible writers; a node that was skipped or
+   * reused from a prior run never snapshots and is never named. Undefined when the
+   * layer runs sequentially. Set per layer; never inherited.
    */
-  concurrentGuardedSiblings?: readonly string[];
+  guardedLayerSnapshots?: Set<string>;
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
@@ -9307,17 +9325,14 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
     // sibling whose window overlapped fails with it, its error naming the siblings.
     const guardedCount = layer.filter(isCheckoutGuarded).length;
     const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
-    const guardedSiblingsOf = (node: DagNode): readonly string[] =>
-      !serializeLayer && isCheckoutGuarded(node)
-        ? layer.filter(n => n !== node).map(n => n.id)
-        : [];
+    const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
     const nodeThunks = layer.map(
       (node): (() => Promise<LayerNodeResult>) =>
         async (): Promise<LayerNodeResult> => {
           const ctx: RunLayersContext = {
             ...parentCtx,
             currentExecution: undefined,
-            concurrentGuardedSiblings: guardedSiblingsOf(node),
+            guardedLayerSnapshots,
             nodeInvocation:
               parentCtx.unfinishedInvocations?.get(
                 nodeInvocationKey(parentCtx.stepNamePrefix + node.id, parentCtx.loopGroupPath)
@@ -9610,10 +9625,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.stateDir,
                     ctx.logDir
                   );
-                  const treeBefore =
-                    node.mutates_checkout === false
-                      ? await snapshotCheckout(ctx.cwd, excludes)
-                      : undefined;
+                  const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                   const output = await runDeterministicNodeWithRetry(
                     node,
                     ctx.platform,
@@ -9641,7 +9653,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       output,
                       ctx.deps,
                       ctx.logDir,
-                      ctx.concurrentGuardedSiblings
+                      ctx.guardedLayerSnapshots
                     ),
                   };
                 }
@@ -9652,10 +9664,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.stateDir,
                   ctx.logDir
                 );
-                const treeBefore =
-                  node.mutates_checkout === false
-                    ? await snapshotCheckout(ctx.cwd, excludes)
-                    : undefined;
+                const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                 const output = await runDeterministicNodeWithRetry(
                   node,
                   ctx.platform,
@@ -9683,7 +9692,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     output,
                     ctx.deps,
                     ctx.logDir,
-                    ctx.concurrentGuardedSiblings
+                    ctx.guardedLayerSnapshots
                   ),
                 };
               }
@@ -10058,10 +10067,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.stateDir,
               ctx.logDir
             );
-            const treeBefore =
-              node.mutates_checkout === false
-                ? await snapshotCheckout(ctx.cwd, checkoutExcludes)
-                : undefined;
+            const treeBefore = await snapshotGuardedNode(ctx, node, checkoutExcludes);
             const retriedOutput = await runNodeRetryLoop(
               node,
               ctx.platform,
@@ -10104,7 +10110,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               retriedOutput,
               ctx.deps,
               ctx.logDir,
-              ctx.concurrentGuardedSiblings
+              ctx.guardedLayerSnapshots
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
