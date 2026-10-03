@@ -76,6 +76,7 @@ import {
   pendingDurableWait,
   hasUnresolvedWriteback,
   buildNodeSummaries,
+  NODE_SUMMARY_EVENT_TYPES,
   resolveCliExitCode,
   WorkflowRunFailedError,
   DETACHED_RUN_FAILED_EXIT_CODE,
@@ -572,11 +573,13 @@ mock.module('@archon/core/db/workflows', () => ({
   resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
   listWorkflowRuns: mock(() => Promise.resolve([])),
   listDashboardRuns: mockListDashboardRuns,
+  findOpenWorkRuns: mock(() => Promise.resolve([])),
   deleteOldWorkflowRuns: mock(() => Promise.resolve({ count: 0 })),
 }));
 
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
+  listEventsForRuns: mock(() => Promise.resolve(new Map())),
   createWorkflowEvent: mock(() => Promise.resolve()),
   PROVIDER_EVENT_ROW_TYPES: ['provider_event', 'tool_called'],
 }));
@@ -7405,6 +7408,153 @@ describe('workflowRunsCommand', () => {
     await expect(workflowRunsCommand('/test/path', { status: 'bogus' })).rejects.toThrow(
       /Invalid --status 'bogus'/
     );
+  });
+
+  describe('--json --verbose', () => {
+    const graph = { terminal_graph: { node_ids: ['plan', 'approve', 'ship'] } };
+    const listed = {
+      runs: [
+        {
+          id: 'run-gate',
+          workflow_name: 'ship',
+          status: 'paused',
+          metadata: { ...graph, approval: { nodeId: 'approve', message: 'Ship it?' } },
+          completed_at: null,
+          active_nodes: [],
+          started_at: '2026-09-27T10:00:00.000Z',
+        },
+        {
+          id: 'run-wait',
+          workflow_name: 'ship',
+          status: 'paused',
+          metadata: {
+            wait: {
+              owner: 'node',
+              nodeId: 'plan',
+              kind: 'attention',
+              waitingSince: '2026-09-27T09:00:01.000Z',
+              message: 'Check the plan',
+            },
+          },
+          completed_at: null,
+          active_nodes: [],
+          started_at: '2026-09-27T09:00:00.000Z',
+        },
+      ],
+      total: 2,
+      counts: { ...EMPTY_COUNTS, all: 2, paused: 2 },
+    };
+    const planCompleted = {
+      id: 'e1',
+      workflow_run_id: 'run-gate',
+      event_type: 'node_completed',
+      step_name: 'plan',
+      step_index: 0,
+      data: {},
+      created_at: '2026-09-27T10:00:01.000Z',
+    };
+
+    async function listOnce(): Promise<
+      Mock<(ids: readonly string[], types: readonly string[]) => Promise<unknown>>
+    > {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const eventsDb = await import('@archon/core/db/workflow-events');
+      (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce(
+        structuredClone(listed)
+      );
+      const eventsSpy = eventsDb.listEventsForRuns as unknown as Mock<
+        (ids: readonly string[], types: readonly string[]) => Promise<unknown>
+      >;
+      eventsSpy.mockClear();
+      return eventsSpy;
+    }
+
+    it('lists every declared node in order, unreached ones pending, from one events query', async () => {
+      const eventsSpy = await listOnce();
+      eventsSpy.mockResolvedValueOnce(
+        new Map([
+          ['run-gate', [planCompleted]],
+          ['run-wait', []],
+        ])
+      );
+
+      await workflowRunsCommand('/test/path', { json: true, verbose: true });
+
+      expect(eventsSpy).toHaveBeenCalledTimes(1);
+      expect(eventsSpy).toHaveBeenCalledWith(['run-gate', 'run-wait'], NODE_SUMMARY_EVENT_TYPES);
+      const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+        runs: Array<{ id: string; nodes: Array<{ nodeId: string; state: string }> }>;
+        total: number;
+      };
+      expect(parsed.total).toBe(2);
+      expect(parsed.runs[0]?.nodes.map(node => [node.nodeId, node.state])).toEqual([
+        ['plan', 'completed'],
+        ['approve', 'pending'],
+        ['ship', 'pending'],
+      ]);
+      // No terminal_graph recorded: only what the events reached, no seeding.
+      expect(parsed.runs[1]?.nodes).toEqual([]);
+    });
+
+    it("carries each run's attention: a gate awaits a response, an attention wait needs action", async () => {
+      const eventsSpy = await listOnce();
+      eventsSpy.mockResolvedValueOnce(new Map());
+
+      await workflowRunsCommand('/test/path', { json: true, verbose: true });
+
+      const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
+        runs: Array<{ attention: Record<string, unknown> | null }>;
+      };
+      expect(parsed.runs[0]?.attention).toEqual({
+        kind: 'awaiting_response',
+        runId: 'run-gate',
+        respondTo: { runId: 'run-gate', nodeId: 'approve' },
+        message: 'Ship it?',
+      });
+      expect(parsed.runs[1]?.attention).toEqual({
+        kind: 'action_required',
+        runId: 'run-wait',
+        nodeId: 'plan',
+        message: 'Check the plan',
+      });
+    });
+
+    it('fails rather than emit runs without nodes when the events query fails', async () => {
+      const eventsSpy = await listOnce();
+      eventsSpy.mockRejectedValueOnce(new Error('database is locked'));
+
+      await expect(
+        workflowRunsCommand('/test/path', { json: true, verbose: true })
+      ).rejects.toThrow('database is locked');
+      expect(stdoutSpy).not.toHaveBeenCalled();
+    });
+
+    it('fails the --open inbox the same way when the events query fails', async () => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const eventsDb = await import('@archon/core/db/workflow-events');
+      (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
+        { id: 'run-open', status: 'failed', metadata: {}, completed_at: null },
+      ]);
+      (eventsDb.listEventsForRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
+        new Error('database is locked')
+      );
+
+      await expect(
+        workflowRunsCommand('/test/path', { json: true, verbose: true, open: true })
+      ).rejects.toThrow('database is locked');
+      expect(stdoutSpy).not.toHaveBeenCalled();
+    });
+
+    it('leaves --json without --verbose byte-identical and reads no events', async () => {
+      const eventsSpy = await listOnce();
+
+      await workflowRunsCommand('/test/path', { json: true });
+
+      expect(eventsSpy).not.toHaveBeenCalled();
+      expect(firstJsonPayload(stdoutSpy).trimEnd()).toBe(
+        JSON.stringify({ ...listed, scopeFallback: true }, null, 2)
+      );
+    });
   });
 
   it('emits {ok:false} JSON (never throws) on an invalid --status in --json mode', async () => {

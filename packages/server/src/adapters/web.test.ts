@@ -76,6 +76,18 @@ beforeEach(() => {
   mockLogger.error.mockClear();
 });
 
+describe('WebAdapter.sendStructuredEvent — provider results', () => {
+  test('does not emit a provider session id on SSE', async () => {
+    const { adapter, emitted } = makeAdapter();
+    const sessionId = 'provider-session-3597-resumable-conversation';
+
+    await adapter.sendStructuredEvent('conv-1', { type: 'result', sessionId });
+
+    expect(emitted.join('\n')).not.toContain(sessionId);
+    expect(emitted).toEqual([]);
+  });
+});
+
 describe('WebAdapter.sendStructuredEvent — tool results', () => {
   test('pairs results by id when two tools with the same name run concurrently', async () => {
     const { adapter, emitted, appendToolResultCalls } = makeAdapter();

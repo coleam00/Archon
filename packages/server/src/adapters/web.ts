@@ -161,12 +161,7 @@ export class WebAdapter implements IWebPlatformAdapter {
         timestamp: now,
       });
     } else if (chunk.type === 'result') {
-      if (!chunk.sessionId) return;
-      event = JSON.stringify({
-        type: 'session_info',
-        sessionId: chunk.sessionId,
-        timestamp: Date.now(),
-      });
+      return;
     } else if (chunk.type === 'workflow_dispatch') {
       event = JSON.stringify({
         type: 'workflow_dispatch',

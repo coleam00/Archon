@@ -433,7 +433,7 @@ assistants:
     # interactive: false       # keep extensions loaded, but give them no UI bridge
 ```
 
-Pi nodes that discover extension code run one at a time within an Archon process. Detached extension callbacks carry a stack but no session identifier, so this keeps any escaped exception attributable to exactly one node. Pi nodes with no discovered extensions, including nodes with `enableExtensions: false`, keep their normal concurrency.
+An exception that escapes a detached extension callback (a timer, a watcher) fails the Pi node that loaded that extension instead of the Archon process. The error carries a stack but no session identifier, so Archon routes it by the extension path in the stack. When several concurrent Pi nodes loaded that extension, Archon cannot tell which one failed, so each of them fails with an error that says so and carries the original stack. An escaped error that names no loaded extension still terminates the process.
 
 Most extensions need three config surfaces:
 

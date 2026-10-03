@@ -125,6 +125,12 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'runs',
     spec: 'workflow runs',
     description: 'List recent runs (all statuses) for this project',
+    scopedFlags: [
+      {
+        spec: '--verbose, -v',
+        description: "With --json: add each run's per-node state and attention",
+      },
+    ],
   },
   {
     command: 'workflow',

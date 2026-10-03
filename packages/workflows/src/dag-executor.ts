@@ -201,7 +201,6 @@ import {
   currentAdoptedRunDir,
   getRetryDelayMs,
   RATE_LIMIT_MAX_RETRIES,
-  detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -2680,15 +2679,6 @@ async function executeNodeInternal(
       await safeSendMessage(platform, conversationId, batchContent, nodeContext);
     }
 
-    // Detect credit exhaustion: SDK returns it as assistant text, not a thrown error.
-    const creditError = detectCreditExhaustion(nodeOutputText);
-
-    if (creditError) {
-      const duration = Date.now() - nodeStartTime;
-      getLog().warn({ nodeId: node.id, durationMs: duration }, 'dag.node_credit_exhausted');
-      return { state: 'failed', output: nodeOutputText, error: creditError, failureKind: 'fatal' };
-    }
-
     // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
     if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
       const duration = Date.now() - nodeStartTime;
@@ -3192,15 +3182,21 @@ function providerReportedFailure(
   maxBudgetUsd: number | undefined,
   logContext: Record<string, unknown>
 ): NodeFailure {
-  if (failure.class === 'budget_exceeded') {
-    getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+  let message: string;
+  switch (failure.class) {
+    case 'budget_exceeded':
+      getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+      message = `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`;
+      break;
+    case 'misconfigured':
+      message = `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`;
+      break;
+    case 'quota_exhausted':
+      message = `${subject} failed: the provider's usage or credit limit is used up${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Resume the run once it reopens: ${failure.evidence}`;
+      break;
+    default:
+      message = `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   }
-  const message =
-    failure.class === 'budget_exceeded'
-      ? `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`
-      : failure.class === 'misconfigured'
-        ? `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`
-        : `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   return new NodeFailure(nodeFailureKindOf(failure), message, failure);
 }
 
