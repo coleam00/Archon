@@ -71,13 +71,15 @@ else
   check_warn "Claude credentials not found"
 fi
 
-if [ -n "$CODEX_ID_TOKEN" ] && [ -n "$CODEX_ACCESS_TOKEN" ]; then
+if [ -n "$ARCHON_CODEX_ID_TOKEN" ] && [ -n "$ARCHON_CODEX_ACCESS_TOKEN" ]; then
   check_pass "Codex credentials configured"
+elif [ -n "$CODEX_ID_TOKEN" ] && [ -n "$CODEX_ACCESS_TOKEN" ]; then
+  check_warn "Codex credentials use deprecated CODEX_* names; rename them to ARCHON_CODEX_*"
 else
   check_warn "Codex credentials not found"
 fi
 
-if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -z "$CLAUDE_API_KEY" ] && [ -z "$CODEX_ID_TOKEN" ]; then
+if [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] && [ -z "$CLAUDE_API_KEY" ] && [ -z "$ARCHON_CODEX_ID_TOKEN" ] && [ -z "$CODEX_ID_TOKEN" ]; then
   check_fail "No AI assistant credentials found (need at least one)"
 fi
 

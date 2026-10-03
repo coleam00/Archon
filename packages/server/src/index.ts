@@ -60,6 +60,7 @@ import {
   registerCommunityProviders,
 } from '@archon/providers';
 import { getVendorCatalog } from '@archon/core';
+import { formatCodexSetupDeprecation, readCodexSetupEnv } from '@archon/providers/codex/setup-env';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
@@ -315,19 +316,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // shared Claude key — auth is delivered per request from the encrypted store,
   // so it must NOT trip the no-credentials exit (#1983).
   const hasClaudeCredentials = hasClaudeBootAuthPosture(process.env);
-  const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const codexSetup = readCodexSetupEnv(process.env);
+  if (codexSetup.deprecated.length > 0) {
+    getLog().warn(
+      { hint: formatCodexSetupDeprecation(codexSetup.deprecated) },
+      'codex_setup_env_deprecated'
+    );
+  }
+  const hasCodexCredentials = codexSetup.values.idToken && codexSetup.values.accessToken;
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     getLog().fatal(
       {
         checked: {
           claude: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_USE_GLOBAL_AUTH'],
-          codex: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'],
+          codex: ['ARCHON_CODEX_ID_TOKEN', 'ARCHON_CODEX_ACCESS_TOKEN'],
         },
         hints: [
           'Set CLAUDE_USE_GLOBAL_AUTH=true in .env (requires `claude /login` first)',
           'Or set CLAUDE_API_KEY in .env',
-          'Or set CODEX_ID_TOKEN + CODEX_ACCESS_TOKEN in .env',
+          'Or set ARCHON_CODEX_ID_TOKEN + ARCHON_CODEX_ACCESS_TOKEN in .env',
           'See .env.example for all options',
         ],
         envFile: BUNDLED_IS_BINARY ? getArchonEnvPath() : envPath,
@@ -345,7 +353,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   }
   if (!hasCodexCredentials) {
     getLog().warn(
-      { checked: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'] },
+      { checked: ['ARCHON_CODEX_ID_TOKEN', 'ARCHON_CODEX_ACCESS_TOKEN'] },
       'codex_credentials_missing'
     );
   }

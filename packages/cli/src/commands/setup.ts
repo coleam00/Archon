@@ -44,6 +44,7 @@ import { randomBytes } from 'crypto';
 import { spawn, execSync, spawnSync, type ChildProcess } from 'child_process';
 import { execFileAsync } from '@archon/git';
 import { getRegisteredProviders } from '@archon/providers';
+import { CODEX_SETUP_ENV, readCodexSetupEnv } from '@archon/providers/codex/setup-env';
 import { TIER_NAMES, buildAiProfile } from '@archon/workflows/model-validation';
 import {
   getArchonEnvPath as pathsGetArchonEnvPath,
@@ -439,17 +440,15 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
   }
 
   const content = readFileSync(path, 'utf-8');
+  // Counts the deprecated unprefixed names too: the server still reads them this release.
+  const codex = readCodexSetupEnv(parseDotenv(content)).values;
 
   return {
     hasClaude:
       hasEnvValue(content, 'CLAUDE_API_KEY') ||
       hasEnvValue(content, 'CLAUDE_CODE_OAUTH_TOKEN') ||
       hasEnvValue(content, 'CLAUDE_USE_GLOBAL_AUTH'),
-    hasCodex:
-      hasEnvValue(content, 'CODEX_ID_TOKEN') &&
-      hasEnvValue(content, 'CODEX_ACCESS_TOKEN') &&
-      hasEnvValue(content, 'CODEX_REFRESH_TOKEN') &&
-      hasEnvValue(content, 'CODEX_ACCOUNT_ID'),
+    hasCodex: Boolean(codex.idToken && codex.accessToken && codex.refreshToken && codex.accountId),
     // Detection is intentionally API-key-only (no DEFAULT_AI_ASSISTANT=pi check)
     // so that re-runs after partial configs still surface Pi. Doctor's checkPi
     // uses the stricter DEFAULT_AI_ASSISTANT=pi gate to avoid false passes for
@@ -988,7 +987,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const idToken = await password({
-    message: 'Enter CODEX_ID_TOKEN:',
+    message: 'Enter ARCHON_CODEX_ID_TOKEN:',
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1001,7 +1000,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const accessToken = await password({
-    message: 'Enter CODEX_ACCESS_TOKEN:',
+    message: 'Enter ARCHON_CODEX_ACCESS_TOKEN:',
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1014,7 +1013,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const refreshToken = await password({
-    message: 'Enter CODEX_REFRESH_TOKEN:',
+    message: 'Enter ARCHON_CODEX_REFRESH_TOKEN:',
     validate: value => {
       if (!value) return 'Token is required';
       return undefined;
@@ -1027,7 +1026,7 @@ async function collectCodexAuth(): Promise<CodexTokens | null> {
   }
 
   const accountId = await text({
-    message: 'Enter CODEX_ACCOUNT_ID:',
+    message: 'Enter ARCHON_CODEX_ACCOUNT_ID:',
     validate: value => {
       if (!value) return 'Account ID is required';
       return undefined;
@@ -1682,10 +1681,11 @@ export function generateEnvContent(config: SetupConfig): string {
 
   if (config.ai.codex && config.ai.codexTokens) {
     lines.push('# Codex Authentication');
-    lines.push(`CODEX_ID_TOKEN=${config.ai.codexTokens.idToken}`);
-    lines.push(`CODEX_ACCESS_TOKEN=${config.ai.codexTokens.accessToken}`);
-    lines.push(`CODEX_REFRESH_TOKEN=${config.ai.codexTokens.refreshToken}`);
-    lines.push(`CODEX_ACCOUNT_ID=${config.ai.codexTokens.accountId}`);
+    const tokens = config.ai.codexTokens;
+    lines.push(`${CODEX_SETUP_ENV.idToken.name}=${tokens.idToken}`);
+    lines.push(`${CODEX_SETUP_ENV.accessToken.name}=${tokens.accessToken}`);
+    lines.push(`${CODEX_SETUP_ENV.refreshToken.name}=${tokens.refreshToken}`);
+    lines.push(`${CODEX_SETUP_ENV.accountId.name}=${tokens.accountId}`);
     lines.push('');
   }
 

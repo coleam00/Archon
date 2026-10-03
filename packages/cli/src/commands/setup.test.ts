@@ -85,10 +85,10 @@ describe('setup command', () => {
         `
 CLAUDE_USE_GLOBAL_AUTH=true
 TELEGRAM_BOT_TOKEN=123:ABC
-CODEX_ID_TOKEN=token1
-CODEX_ACCESS_TOKEN=token2
-CODEX_REFRESH_TOKEN=token3
-CODEX_ACCOUNT_ID=account1
+ARCHON_CODEX_ID_TOKEN=token1
+ARCHON_CODEX_ACCESS_TOKEN=token2
+ARCHON_CODEX_REFRESH_TOKEN=token3
+ARCHON_CODEX_ACCOUNT_ID=account1
 `.trim()
       );
 
@@ -250,10 +250,15 @@ CODEX_ACCOUNT_ID=account1
         botDisplayName: 'Archon',
       });
 
-      expect(content).toContain('CODEX_ID_TOKEN=id-token');
-      expect(content).toContain('CODEX_ACCESS_TOKEN=access-token');
-      expect(content).toContain('CODEX_REFRESH_TOKEN=refresh-token');
-      expect(content).toContain('CODEX_ACCOUNT_ID=account-id');
+      // Codex reads CODEX_* itself, so Archon's copies must not use its names (#3562).
+      const env = parseDotenv(content);
+      expect(env).toMatchObject({
+        ARCHON_CODEX_ID_TOKEN: 'id-token',
+        ARCHON_CODEX_ACCESS_TOKEN: 'access-token',
+        ARCHON_CODEX_REFRESH_TOKEN: 'refresh-token',
+        ARCHON_CODEX_ACCOUNT_ID: 'account-id',
+      });
+      expect(Object.keys(env).filter(key => key.startsWith('CODEX_'))).toEqual([]);
       expect(content).toContain('DEFAULT_AI_ASSISTANT=codex');
     });
 
