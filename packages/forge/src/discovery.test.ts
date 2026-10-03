@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
-import { copyFile, link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
+import { compileDiscoveryPlugin } from './fixtures/compile-discovery-plugin';
 import { dispatchForge } from './dispatch';
 import { runForgeReadConformance } from './outbound-conformance';
 
@@ -11,21 +12,12 @@ const exe = process.platform === 'win32' ? '.exe' : '';
 let buildRoot: string;
 let compiledFixture: string;
 
-// One compile for the file. On windows-latest `bun build --compile` writes an ~86 MB
-// executable to the OS disk and took 0.7-8 s of each test that ran it; installing the
-// binary under a name is a hard link. The source is copied out of the repository first,
-// so the build proves the fixture resolves no Archon code.
+// One compile for the file; installing the binary under a name is a hard link. On
+// windows-latest the compile alone took 0.7-8 s, so the hook carries an explicit budget.
 beforeAll(async () => {
   buildRoot = await mkdtemp(join(tmpdir(), 'forge-fixture-build-'));
-  const entry = join(buildRoot, 'fixture.ts');
-  await copyFile(join(import.meta.dir, 'fixtures', 'discovery-plugin.ts'), entry);
-  compiledFixture = join(buildRoot, `fixture${exe}`);
-  const built = Bun.spawnSync(
-    [process.execPath, 'build', '--compile', entry, '--outfile', compiledFixture],
-    { cwd: buildRoot, stdout: 'pipe', stderr: 'pipe' }
-  );
-  if (built.exitCode !== 0) throw new Error(built.stderr.toString());
-});
+  compiledFixture = compileDiscoveryPlugin(buildRoot);
+}, testTimeout(20_000));
 
 afterAll(() => removeTempTree(buildRoot));
 

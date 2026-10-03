@@ -10,7 +10,8 @@
     "./operations": "./src/operations.ts",
     "./dispatch": "./src/dispatch.ts",
     "./discovery": "./src/discovery.ts",
-    "./plugin-config": "./src/plugin-config.ts"
+    "./plugin-config": "./src/plugin-config.ts",
+    "./test-fixtures": "./src/fixtures/compile-discovery-plugin.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

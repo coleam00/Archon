@@ -1,7 +1,8 @@
-// An independently compilable protocol fixture. It imports no Archon code. One compiled
-// binary serves every forge executable test: it behaves according to the name it is
-// installed under (`archon-forge-<name>`), so a test hard-links it rather than compiling
-// its own copy, which on windows-latest is an ~86 MB write costing seconds (#2924).
+// An independently compilable protocol fixture. It imports no Archon code. It behaves
+// according to the name it is installed under (`archon-forge-<name>`), so a suite compiles
+// it once through `compileDiscoveryPlugin` and hard-links it under each name a test needs,
+// rather than compiling per test: on windows-latest each compile is an ~86 MB write costing
+// seconds (#2924).
 import { basename } from 'node:path';
 const name = basename(process.execPath)
   .replace(/^archon-forge-/, '')
