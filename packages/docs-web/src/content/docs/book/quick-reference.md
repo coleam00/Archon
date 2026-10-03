@@ -383,6 +383,7 @@ archon workflow run my-workflow --no-worktree "..."
 **Test a command on its own** before embedding it in a larger workflow: wrap it in a one-node workflow at `.archon/workflows/try-my-command.yaml`:
 ```yaml
 name: try-my-command
+description: Run my-command on its own.
 nodes:
   - id: run
     command: my-command
