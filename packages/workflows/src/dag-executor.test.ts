@@ -17410,7 +17410,10 @@ describe('executeDagWorkflow -- cost tracking', () => {
     const terminal = rows.find(row => row.type === 'node_complete' && row.step === 'my-loop');
     expect(terminal?.cost_usd).toBeCloseTo(0.004, 10);
     const iterationRows = rows.filter(
-      row => row.type === 'node_complete' && row.step?.startsWith('my-loop-iteration-') === true
+      row =>
+        row.type === 'node_complete' &&
+        typeof row.step === 'string' &&
+        row.step.startsWith('my-loop-iteration-')
     );
     expect(iterationRows.length).toBe(4);
     for (const row of iterationRows) expect(row).not.toHaveProperty('cost_usd');
