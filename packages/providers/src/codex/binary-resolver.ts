@@ -135,7 +135,8 @@ function validateAndExpand(rawPath: string, pin: CodexBinaryPin): string {
 /**
  * Resolve the path to the Codex native binary.
  *
- * In dev mode: honors explicit pins, otherwise lets the SDK resolve via node_modules.
+ * In dev mode: honors explicit pins, otherwise returns undefined so the turn runs the
+ * bundled `@openai/codex` binary.
  * In binary mode: resolves from env/config/vendor dir, or throws with install instructions.
  */
 export async function resolveCodexBinaryPath(

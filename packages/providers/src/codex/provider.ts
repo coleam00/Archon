@@ -172,8 +172,7 @@ function isWorkflowNode(requestOptions?: SendQueryOptions): boolean {
 
 /**
  * The config overrides a thread starts with. Codex merges them over the user's own
- * config.toml; it never replaces it. The sandbox settings mirror what `codex exec` was
- * given before the app-server move.
+ * config.toml; it never replaces it.
  */
 function buildThreadConfig(
   codexConfig: CodexProviderDefaults,

@@ -14,7 +14,7 @@ servers to individual nodes. Claude workflow nodes exclude ambient user/project/
 MCP by default, including the servers of plugins the node names with `plugins:`, and
 expose exactly the external servers in their declared file, plus
 governed native tools that Archon injects for the current workflow when applicable.
-Codex is an explicit exception: its SDK adds declared servers to ambient configuration
+Codex is an explicit exception: it adds declared servers to ambient configuration
 rather than replacing it.
 
 MCP works with Claude, Codex, and Copilot workflow nodes. On Pi and OpenCode, a
@@ -252,11 +252,11 @@ those placeholders.
 
 ### Codex ambient MCP limitation
 
-Codex's SDK applies node `mcp:` servers as additive configuration overrides. It
+Codex applies node `mcp:` servers as additive configuration overrides. It
 does not replace the ambient user/project/plugin MCP catalog: with no node `mcp:`,
 ambient servers may remain available, and with a declared file, both ambient and
 declared servers may be present. `mcp_servers={}` does not clear inherited entries,
-and the current SDK has no wildcard/default global-off control.
+and Codex has no wildcard/default global-off control.
 
 Archon therefore does not describe Codex `mcp:` as an exclusive tool boundary.
 It preserves runnable additive behavior and reports the limitation rather than
