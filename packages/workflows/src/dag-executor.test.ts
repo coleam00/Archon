@@ -17888,7 +17888,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     // recording a node outcome, and the layer join rethrows it OUTSIDE any try — out of
     // runLayers entirely.
     mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'spent before the platform died' };
+      yield { type: 'agent_message_chunk', text: 'spent before the halt write failed' };
       yield {
         type: 'result',
         sessionId: 'sid-throw',
@@ -17960,7 +17960,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
                   required: ['green'],
                 },
               },
-              { id: 'stop', kind: 'halt', reason: 'platform is gone' },
+              { id: 'stop', kind: 'halt', reason: 'stop the run' },
             ],
           },
           workflowRun: makeWorkflowRun(),

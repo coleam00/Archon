@@ -177,7 +177,7 @@ async function sendCriticalMessage(
         'platform.critical_message_send_failed'
       );
 
-      // Wait before retry (exponential backoff: 1s, 2s, 3s...)
+      // Wait before retry (linear backoff: 1s × attempt)
       if (attempt < maxRetries) {
         await delay(1000 * attempt);
       }
