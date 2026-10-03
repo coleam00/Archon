@@ -1879,7 +1879,11 @@ Workflow JSONL `node_complete.tokens` and persisted `node_completed.data.tokens`
 `input`, `output`, and optional `cacheRead` / `cacheWrite` fields. `input` is gross prompt
 input, including cache reads and cache writes. When both cache fields are present,
 uncached input is `input - cacheRead - cacheWrite`. An absent cache field means the
-provider did not report it; `0` means the provider reported zero. Run metadata exposes the
+provider did not report it; `0` means the provider reported zero. Which rows carry the
+field at all follows the rule the cost paragraph below states: the transcript carries it
+only on a row that reports its own spend, and the persisted row carries it on every
+`node_completed` row, so summing `node_completed.data.tokens` adds a scope's usage once per
+level and `execution.accounting` says which rows those are. Run metadata exposes the
 same totals as `total_tokens_in`, `total_tokens_out`, `total_cache_read_tokens`, and
 `total_cache_write_tokens`. A cache total sums every contributing node that reported that
 axis; when at least one node did not, the total is a **floor** and the aggregate carries
@@ -1896,9 +1900,11 @@ report as their own reproduces the run's own cost. Count error rows in that sum:
 attempt that already spent reports on its own `node_error` row. A row that restates spend its
 scope already reports elsewhere in the same run — a `loop_group` roll-up over its body rows, a
 composed fan-out wrapper over its instances, an instance terminal over its own leaves — omits
-the field and names itself in `execution.accounting` instead. The persisted
-`node_completed.data.cost_usd` still carries the number on every row and marks a restatement
-with `data.aggregate: true`, the marker a resume folds (#3508). JSONL `workflow_complete`
+both usage fields and names itself in `execution.accounting` instead. The persisted
+`node_completed` row still carries both numbers on every row and marks a restatement with
+`data.aggregate: true`; a resume skips a marked row because its scope's own rows already
+carry that spend, except a composed-instance terminal, which the resume keeps as the
+authoritative source for its scope (#3508). JSONL `workflow_complete`
 carries the successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal
 `workflow_error` carries the same aggregate when work reported usage before failure. These
 match run metadata `total_cost_usd` and `total_tokens_*`. On a row that reports its own spend,
@@ -1909,8 +1915,8 @@ last saw for the session a node resumes or forks. When that session was created 
 Archon process, for example before `archon workflow resume` or across `persist_session`
 invocations, the earlier total is unknown and the node's `cost_usd` is absent rather than
 over-counted. A run that spent nothing on AI, such as a bash-only workflow, carries no
-`cost_usd` rather than `0`. Successful loop nodes and governance nodes do not yet have complete
-terminal transcript-row coverage, so read usage from the rows that exist rather than treating
+`cost_usd` rather than `0`. Governance nodes do not yet have complete terminal
+transcript-row coverage, so read usage from the rows that exist rather than treating
 an absent row as zero spend.
 
 ### Choosing the child's checkout with `isolation:`

@@ -133,9 +133,11 @@ function outputFields(
  * already carries. `accounting` is the seam: a `loop_group` roll-up sums its body rows, a
  * composed fan-out wrapper sums its instances, an instance terminal sums its own leaves,
  * and an amendment re-states the attempt it amends. `serializeNodeStateRecord` marks every
- * of them `aggregate: true` and the resume fold skips marked rows, so the durable row, the
- * transcript and the emitter all report spend on the same terms — no row restates another's,
- * and a reader summing what the rows report lands on the run total (#3508).
+ * of them `aggregate: true`, and the resume fold skips a marked row because its scope's
+ * own rows already carry that spend — except for a composed-instance terminal, which the
+ * fold keeps as the authoritative source for its scope because its inner rows are
+ * observability writes that can be missing after a crash. So the durable row, the
+ * transcript and the emitter all report spend on the same terms (#3508).
  * `serializeNodeOutput` is deliberately not gated: the run total is fed by exactly one
  * aggregation point, and the scope totals it reads are already this record's own.
  */
