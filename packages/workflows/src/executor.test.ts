@@ -4198,6 +4198,40 @@ describe('telemetry wiring', () => {
     );
   });
 
+  it('reports usesPersistSession only when a node or composed fan-out may persist', async () => {
+    const persistFlag = async (nodes: WorkflowDefinition['nodes']): Promise<unknown> => {
+      mockCaptureWorkflowInvoked.mockClear();
+      const workflow = makeWorkflow({ persist_sessions: true, nodes });
+      await executeWorkflow(
+        makeDeps(makeStore()),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'msg',
+        'db-conv-1'
+      );
+      return mockCaptureWorkflowInvoked.mock.calls[0]?.[0]?.usesPersistSession;
+    };
+
+    expect(
+      await persistFlag([
+        { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'x' }, context: 'fresh' },
+        { id: 'b', kind: 'exec', runtime: 'sh', script: 'echo hi' },
+      ] as WorkflowDefinition['nodes'])
+    ).toBe(false);
+    expect(
+      await persistFlag([
+        {
+          id: 'fan',
+          kind: 'compose_fan_out',
+          include: 'persisting-block',
+          fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_done' },
+        },
+      ] as WorkflowDefinition['nodes'])
+    ).toBe(true);
+  });
+
   it('reports adoption booleans as false for a plain single-prompt workflow', async () => {
     mockCaptureWorkflowInvoked.mockClear();
     const store = makeStore();

@@ -2122,14 +2122,32 @@ export function isPersistableNode(node: DagNode): boolean {
  * True when a node participates in cross-run session persistence: a persistable node
  * that hasn't opted out via `context: 'fresh'`, with `persist_session: true` set
  * directly or inherited from the workflow-level `persist_sessions` default. The
- * loader's capability check, the executor's session lookup and upsert, and the #1846
- * scope-artifact mirror all gate on this one predicate.
+ * loader's capability check, the executor's session lookup and upsert, the #1846
+ * scope-artifact mirror, and `runMayPersistSessions` all gate on this one predicate.
  */
 export function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
   if (!isPersistableNode(node)) return false;
   if (node.context === 'fresh') return false;
   const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
   return nodePersist ?? workflowPersistSessions;
+}
+
+/**
+ * True when a run of this workflow may use cross-run session persistence: some node
+ * uses it, or a composed fan-out could, since its body resolves only when it runs.
+ * The executor's run-start session read, the scope-artifact dir, and run telemetry
+ * all gate on this.
+ */
+export function runMayPersistSessions(workflow: {
+  nodes: readonly (DagNode | IncludeDirective)[];
+  persist_sessions?: boolean;
+}): boolean {
+  const workflowPersistSessions = workflow.persist_sessions === true;
+  return workflow.nodes.some(
+    node =>
+      !isIncludeDirective(node) &&
+      (node.kind === 'compose_fan_out' || nodeUsesPersistedScope(node, workflowPersistSessions))
+  );
 }
 
 /**

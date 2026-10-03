@@ -125,6 +125,7 @@ import {
   isWaitNode,
   nodeUsesPersistedScope,
   persistedSessionHandling,
+  runMayPersistSessions,
   readSubrunMetadata,
   isApprovalContext,
   inputEnvKey,
@@ -9015,7 +9016,8 @@ interface RunDerived {
   workflowPersistSessions: boolean;
   /**
    * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`), or
-   * undefined when the workflow doesn't use session persistence. When set,
+   * undefined when the run cannot use session persistence (`runMayPersistSessions`,
+   * which also counts composed fan-out bodies). When set,
    * persistence-participating nodes with `output_type` mirror their typed sidecars
    * here, and a cold session resume points the user at the prior invocation's
    * artifacts by reference (#1846). Always undefined for loop_group bodies
@@ -11196,13 +11198,8 @@ export async function executeDagWorkflow(
   // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
-  // A composed fan-out resolves its body only when it runs, so it may hold persisted
-  // nodes this list cannot see; count it as one.
-  const runUsesPersistedScope = workflow.nodes.some(
-    node => node.kind === 'compose_fan_out' || nodeUsesPersistedScope(node, workflowPersistSessions)
-  );
   let persistScope: PersistScope | undefined;
-  if (runPersistScopeKey !== undefined && runUsesPersistedScope) {
+  if (runPersistScopeKey !== undefined && runMayPersistSessions(workflow)) {
     const sessionsAtStart = deps.store.listWorkflowNodeSessions({
       workflow_name: workflow.name,
       scope_key: runPersistScopeKey,

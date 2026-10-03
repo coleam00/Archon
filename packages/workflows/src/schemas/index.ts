@@ -130,6 +130,7 @@ export {
   isOutputFormatEnforced,
   isPersistableNode,
   nodeUsesPersistedScope,
+  runMayPersistSessions,
   persistedSessionHandling,
   isNodeContextResume,
   isTriggerRule,

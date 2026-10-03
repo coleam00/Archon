@@ -36,7 +36,7 @@ import {
   isScheduledWorkflowResume,
   isWaitNode,
   isIncludeDirective,
-  nodeUsesPersistedScope,
+  runMayPersistSessions,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
   RUN_METADATA_KEYS,
@@ -537,8 +537,8 @@ function composeRunPaths(
 
 /**
  * Resolve the stable cross-invocation artifact scope dir for a run (#1846), or
- * undefined when the feature doesn't apply. Applies only when some node uses
- * cross-run session persistence (`nodeUsesPersistedScope`) AND the run has a scope
+ * undefined when the feature doesn't apply. Applies only when the run may use
+ * cross-run session persistence (`runMayPersistSessions`) AND the run has a scope
  * (`persistScopeKey`) — the same opt-in + scope key the session store uses. No persistence → no new dirs,
  * default behavior unchanged.
  */
@@ -552,11 +552,7 @@ export function resolveScopeArtifactsDir(
   artifactsRoot: string
 ): string | undefined {
   if (!scopeKey) return undefined;
-  const workflowPersistSessions = workflow.persist_sessions === true;
-  const usesPersistence = workflow.nodes.some(
-    n => !isIncludeDirective(n) && nodeUsesPersistedScope(n, workflowPersistSessions)
-  );
-  if (!usesPersistence) return undefined;
+  if (!runMayPersistSessions(workflow)) return undefined;
   return archonPaths.getScopeArtifactsPath(artifactsRoot, workflow.name, scopeKey);
 }
 
@@ -3096,9 +3092,7 @@ export async function executeWorkflow(
       usesBash: telemetryNodes.some(n => isExecNode(n) && n.runtime === 'sh'),
       usesOutputFormat: telemetryNodes.some(n => n.output_format !== undefined),
       usesOutputType: telemetryNodes.some(n => n.output_type !== undefined),
-      usesPersistSession: telemetryNodes.some(n =>
-        nodeUsesPersistedScope(n, workflow.persist_sessions === true)
-      ),
+      usesPersistSession: runMayPersistSessions(workflow),
       usesMcp: telemetryNodes.some(n => n.mcp !== undefined),
       usesSkills: telemetryNodes.some(n => n.skills !== undefined),
       usesFreshContext: telemetryNodes.some(n => isLoopNode(n) && n.loop.fresh_context),
