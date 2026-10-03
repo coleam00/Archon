@@ -5265,45 +5265,86 @@ describe('executeDagWorkflow -- skills options', () => {
     expect(nodeConfig?.allowed_tools).toEqual(['Read', 'Grep']);
   });
 
-  it('warns that Codex ignores the YAML skills list', async () => {
-    mockGetAgentProviderDag.mockReturnValue({
-      sendQuery: mockSendQueryDag,
-      getType: () => 'codex',
-      getCapabilities: mockCodexCapabilities,
-    });
+  it('fails the run before any node runs when a later node names skills on a provider without the capability', async () => {
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-codex-skills',
+            nodes: [
+              { id: 'first', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } },
+              {
+                id: 'second',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                depends_on: ['first'],
+                provider: 'codex',
+                skills: ['codebase-search'],
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      )
+    ).rejects.toThrow("Node 'second' (provider 'codex') names skills");
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
 
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
+  it('fails the run before any node runs when a later node names mcp on a provider without the capability', async () => {
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'dag-pi-mcp',
+            nodes: [
+              { id: 'first', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } },
+              {
+                id: 'second',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                depends_on: ['first'],
+                provider: 'pi',
+                mcp: 'mcp.json',
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      )
+    ).rejects.toThrow("Node 'second' (provider 'pi') names mcp");
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
 
+  it('runs a node with empty skills and plugins lists on a provider without those capabilities', async () => {
     await executeDagWorkflow(
       dagOptions({
-        deps: mockDeps,
-        platform,
+        deps: createMockDeps(),
+        platform: createMockPlatform(),
         cwd: testDir,
         workflow: {
-          name: 'dag-codex-skills',
+          name: 'dag-codex-empty-lists',
           nodes: [
             {
-              id: 'review',
+              id: 'only',
               kind: 'agent',
               source: { kind: 'command', name: 'my-cmd' },
               provider: 'codex',
-              skills: ['codebase-search'],
+              skills: [],
+              plugins: [],
             },
           ],
         },
-        workflowRun,
-        workflowProvider: 'codex',
-        config: { ...minimalConfig, assistant: 'codex' },
+        workflowRun: makeWorkflowRun(),
       })
     );
 
-    // Codex workflow nodes suppress the ambient catalog. Authors invoke installed
-    // native skills explicitly in the command/prompt with `$skill-name` instead.
-    expect(deliveredMessages(platform)).toContain(
-      "Warning: Node 'review' uses skills but codex doesn't support it — this will be ignored."
-    );
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
   });
 
   it('passes named plugins to sendQuery nodeConfig', async () => {

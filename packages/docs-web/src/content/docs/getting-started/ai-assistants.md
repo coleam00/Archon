@@ -307,11 +307,11 @@ assistants:
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Single-agent runs return `sessionId`; multi-agent runs do not |
-| MCP servers | ✅ | `mcp: path/to/servers.json` passed through to OpenCode |
+| MCP servers | ❌ | Not translated to an OpenCode request yet; a node naming `mcp:` fails the run at start |
 | Structured output | ✅ | `output_format:` — schema passed to OpenCode SDK |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | merged into the spawned OpenCode environment |
-| Skills | ✅ | SKILL.md files with YAML frontmatter, pattern-based permissions |
+| Skills | ❌ | Not translated to an OpenCode request yet; a node naming `skills:` fails the run at start |
 | Tool restrictions | ✅ | `tools` / `disallowedTools` per agent; deny wins over allow |
 | Inline agents (`agents:`) | ✅ | File-materialized agents; single and parallel multi-agent fan-out |
 | Hooks | ❌ | Archon's per-node `hooks` field is Claude-SDK-shaped; the OpenCode provider has no translation site, so a node's `hooks:` is ignored (with a warning) |
@@ -320,7 +320,7 @@ assistants:
 | Sandbox | ❌ | Not native in the SDK; Archon uses worktree isolation |
 | Cost limits (`maxBudgetUsd`) | ❌ | Cost tracked in result chunks, but no runtime budget enforcement |
 
-Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend.
 
 ### Usage in workflows
 
@@ -666,7 +666,7 @@ nodes:
 | Inline sub-agents | ❌ | `agents:` is Claude-only; ignored with a warning on Pi |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars (`envInjection`) | ✅ | `.archon/config.yaml` `env:` section |
-| MCP servers | ❌ (bridged via your own extension) | No `mcpServers` field exists. An extension can act as MCP client and expose the tools in-process — see [Recipe: MCP servers through an extension bridge](#recipe-mcp-servers-through-an-extension-bridge). |
+| MCP servers | ❌ (bridged via your own extension) | No `mcpServers` field exists, so a node naming `mcp:` fails the run at start. An extension can act as MCP client and expose the tools in-process — see [Recipe: MCP servers through an extension bridge](#recipe-mcp-servers-through-an-extension-bridge). |
 | In-process native tools | ✅ | none — Archon's `manage_run` tool is auto-injected in project-scoped chat via Pi `customTools` (distinct from MCP, which Pi has no native surface for — see the [bridge recipe](#recipe-mcp-servers-through-an-extension-bridge)). Gated on the `nativeTools` provider capability. |
 | Claude-SDK hooks | ❌ | Claude-specific format |
 | Structured output | ✅ (best-effort) | `output_format:` — schema is appended to the prompt and JSON is parsed out of the assistant text. Handles bare JSON, ```json```-fenced, reasoning-model prose preambles like `Let me evaluate... {...}` (Minimax M2.x pattern), and structurally-corrupt JSON (trailing commas, single quotes, truncated tails) via repair. The parsed output is then **validated against the schema**; on a miss the executor re-asks (prompt + the schema errors) up to **3×**, and only then **fails** the node (it no longer degrades silently to a warning). Not SDK-enforced like Claude/Codex. |
@@ -674,7 +674,7 @@ nodes:
 | Fallback model | ❌ | not native in Pi |
 | Sandbox | ❌ | not native in Pi |
 
-Unsupported YAML fields trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored.
+Unsupported YAML fields that are ignored trigger a visible warning from the dag-executor when the workflow runs, so you always know what was ignored. A node that names `mcp:`, `skills:` or `plugins:` on a provider that can't honour them fails the run at start instead, before any spend.
 
 ### See also
 

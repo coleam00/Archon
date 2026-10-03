@@ -1609,11 +1609,13 @@ async function resolveNodeProviderAndModel(
     );
   }
 
-  // Dispatch backstop for named plugins, matching the run-start pre-scan
-  // (collectPluginIncompatibleNodes). Ignoring the list would run the node
-  // without a capability its author asked for, so this is fatal, not a warning.
-  if (node.plugins !== undefined && node.plugins.length > 0 && !caps.plugins) {
-    throw new Error(pluginsUnsupportedMessage([{ nodeId: node.id, provider }]));
+  // Dispatch backstop for the run-start pre-scan (collectScopedCapabilityMismatches),
+  // which resolves providers on its own path and could drift from this one.
+  const unscoped = unsupportedScopedCapabilities(node, caps);
+  if (unscoped.length > 0) {
+    throw new Error(
+      scopedCapabilityMismatchMessage([{ nodeId: node.id, provider, capabilities: unscoped }])
+    );
   }
 
   // Capability warnings — inform users when features are unsupported
@@ -1624,8 +1626,6 @@ async function resolveNodeProviderAndModel(
       node.allowed_tools !== undefined || node.denied_tools !== undefined,
     ],
     ['hooks', 'hooks', node.hooks !== undefined],
-    ['mcp', 'mcp', node.mcp !== undefined],
-    ['skills', 'skills', node.skills !== undefined && node.skills.length > 0],
     ['agents', 'agents', node.agents !== undefined],
     ['effort', 'effortControl', declaredEffort !== undefined],
     ['maxBudgetUsd', 'costControl', node.maxBudgetUsd !== undefined],
@@ -10418,39 +10418,68 @@ export function collectContainerIncompatibleProviders(
   return incompatible;
 }
 
-/** A node that names plugins on a provider that cannot load exactly those plugins. */
-export interface PluginIncompatibleNode {
+/**
+ * Node fields that name a capability for the node to load. Each is also the key of
+ * the provider capability that honours it. Running the node without what it named
+ * would produce output from a setup its author did not intend, so a mismatch fails
+ * the run instead of warning like the other capability axes.
+ */
+const SCOPED_CAPABILITIES = ['mcp', 'skills', 'plugins'] as const;
+type ScopedCapability = (typeof SCOPED_CAPABILITIES)[number];
+
+function namesScopedCapability(node: DagNode, capability: ScopedCapability): boolean {
+  switch (capability) {
+    case 'mcp':
+      return 'mcp' in node && node.mcp !== undefined;
+    // `skills: []` and `plugins: []` name nothing, so they need no capability.
+    case 'skills':
+      return 'skills' in node && (node.skills?.length ?? 0) > 0;
+    case 'plugins':
+      return 'plugins' in node && (node.plugins?.length ?? 0) > 0;
+  }
+}
+
+function unsupportedScopedCapabilities(
+  node: DagNode,
+  caps: ProviderCapabilities
+): ScopedCapability[] {
+  return SCOPED_CAPABILITIES.filter(cap => namesScopedCapability(node, cap) && !caps[cap]);
+}
+
+/** A node that names capabilities its resolved provider cannot honour. */
+export interface ScopedCapabilityMismatch {
   nodeId: string;
   provider: string;
+  capabilities: ScopedCapability[];
 }
 
 /**
- * Collect AI nodes that name `plugins:` while their resolved provider declares
- * `capabilities.plugins === false`. Unknown providers are skipped here; they fail
- * later with a clearer "unknown provider" error.
+ * Collect AI nodes that name `mcp:`, `skills:` or `plugins:` while their resolved
+ * provider declares that capability `false`. Unknown providers are skipped here;
+ * they fail later with a clearer "unknown provider" error.
  */
-export function collectPluginIncompatibleNodes(
+export function collectScopedCapabilityMismatches(
   nodes: readonly DagNode[],
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
-): PluginIncompatibleNode[] {
-  const incompatible: PluginIncompatibleNode[] = [];
+): ScopedCapabilityMismatch[] {
+  const mismatches: ScopedCapabilityMismatch[] = [];
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!('plugins' in node) || !node.plugins?.length) return;
     if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).plugins) {
-      incompatible.push({ nodeId: node.id, provider });
-    }
+    const capabilities = unsupportedScopedCapabilities(node, getProviderCapabilities(provider));
+    if (capabilities.length > 0) mismatches.push({ nodeId: node.id, provider, capabilities });
   });
-  return incompatible;
+  return mismatches;
 }
 
-function pluginsUnsupportedMessage(nodes: readonly PluginIncompatibleNode[]): string {
-  const list = nodes.map(n => `'${n.nodeId}' (provider '${n.provider}')`).join(', ');
+function scopedCapabilityMismatchMessage(mismatches: readonly ScopedCapabilityMismatch[]): string {
+  const list = mismatches
+    .map(m => `Node '${m.nodeId}' (provider '${m.provider}') names ${m.capabilities.join(', ')}`)
+    .join('; ');
   return (
-    `Node${nodes.length === 1 ? '' : 's'} ${list} name${nodes.length === 1 ? 's' : ''} plugins, ` +
-    'but the provider cannot load exactly the named plugins (plugins capability). ' +
-    'Remove plugins: from the node or use a provider that supports it.'
+    `${list}, but ${mismatches.length === 1 ? 'that provider cannot' : 'those providers cannot'} ` +
+    'load what the node names. Remove the field from the node or use a provider whose ' +
+    'capability is true (see the provider capability matrix).'
   );
 }
 
@@ -10946,15 +10975,15 @@ export async function executeDagWorkflow(
   } = options;
   const dagStartTime = Date.now();
 
-  // Named-plugin capability fail-fast: before ANY node runs, so no node spends
-  // in a run that would later reach a node whose plugins cannot load.
-  const pluginIncompatible = collectPluginIncompatibleNodes(
+  // Scoped-capability fail-fast: before ANY node runs, so no node spends in a run
+  // that would later reach a node whose MCP servers, skills or plugins cannot load.
+  const capabilityMismatches = collectScopedCapabilityMismatches(
     workflow.nodes,
     workflowProvider,
     aiProfile
   );
-  if (pluginIncompatible.length > 0) {
-    throw new Error(pluginsUnsupportedMessage(pluginIncompatible));
+  if (capabilityMismatches.length > 0) {
+    throw new Error(scopedCapabilityMismatchMessage(capabilityMismatches));
   }
 
   // Container capability fail-fast: before ANY node runs (and before any

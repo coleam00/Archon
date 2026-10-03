@@ -244,8 +244,8 @@ nodes:
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot; Codex adds servers to ambient config rather than replacing it. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`; OpenCode does not implement this field. See [Skills](/guides/skills/) |
+| `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot; Codex adds servers to ambient config rather than replacing it. Any other provider fails the run before it starts. See [MCP Servers](/guides/mcp-servers/) |
+| `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
 | `plugins` | string[] | — | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude only; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | — | Reasoning depth. Every provider with a request-level reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
@@ -393,7 +393,7 @@ A Claude workflow node loads none of the Claude Code plugins installed on the ma
 
 A named plugin brings its agents, hooks, LSP servers and commands. Its skills reach the node only when `skills:` names them, and its MCP servers only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-claude-plugin)).
 
-The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin the node did not name, for example one synced from claude.ai or loaded by another route. `plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error.
+The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin the node did not name, for example one synced from claude.ai or loaded by another route. `plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error. `mcp:` and a non-empty `skills:` follow the same rule on a provider without that capability.
 
 **Workflow-level defaults** (inherited by all Claude nodes unless overridden per-node):
 

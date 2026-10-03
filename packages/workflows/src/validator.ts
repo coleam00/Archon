@@ -709,14 +709,13 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using MCP with a provider that doesn't support it
       if (providerCaps?.mcp === false) {
         issues.push({
-          level: 'warning',
+          level: 'error',
           nodeId: node.id,
           field: 'mcp',
-          message: `MCP servers are not supported by provider '${provider}' — this will be ignored`,
-          hint: 'Remove the mcp field or switch to a provider that supports MCP',
+          message: `Provider '${provider}' cannot load MCP servers — the run would fail before any node starts`,
+          hint: 'Remove the mcp field or switch to a provider whose mcp capability is true',
         });
       }
     }
@@ -800,22 +799,21 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using skills with a provider that doesn't support them
       if (providerCaps?.skills === false && node.skills.length > 0) {
         issues.push({
-          level: 'warning',
+          level: 'error',
           nodeId: node.id,
           field: 'skills',
-          message: `The skills field is not supported by provider '${provider}' — this will be ignored`,
+          message: `Provider '${provider}' cannot load named skills — the run would fail before any node starts`,
           hint:
             provider === 'codex'
-              ? 'Invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
-              : 'Remove the skills field or switch to a provider that supports skills',
+              ? 'Remove the skills field and invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
+              : 'Remove the skills field or switch to a provider whose skills capability is true',
         });
       }
     }
 
-    // --- Plugins: an error, not a warning — the engine refuses to run it ---
+    // --- Plugins: an error like mcp and skills — the engine refuses to run it ---
     if ('plugins' in node && node.plugins?.length && providerCaps?.plugins === false) {
       issues.push({
         level: 'error',

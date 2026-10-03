@@ -43,8 +43,9 @@ nodes:
       - remotion-best-practices
 ```
 
-For Codex, also invoke the skill explicitly in the node body, preferably in a named
-command file. First install it into Codex's native `.agents/skills/` root:
+For Codex, leave out the `skills:` list (a Codex node that names skills fails the run
+before any node starts) and invoke the skill explicitly in the node body, preferably in
+a named command file. First install it into Codex's native `.agents/skills/` root:
 
 ```bash
 npx skills add remotion-dev/skills --agent codex --skill remotion-best-practices -y
@@ -243,9 +244,9 @@ skill. Direct Codex chat and other non-workflow calls keep their normal Codex be
   command file or prompt. Codex performs progressive disclosure and loads the
   selected skill from its original directory.
 - **YAML `skills:` is not Codex activation** — a non-empty list does not re-enable
-  the automatic catalog, inject metadata, or create an exclusive allowlist. It is
-  ignored with a warning. Keep the list when another selected provider needs it,
-  but still write the explicit `$skill-name` invocation for Codex portability.
+  the automatic catalog, inject metadata, or create an exclusive allowlist, so a
+  non-empty list on a Codex node fails the run before any node starts. Remove it and
+  write the explicit `$skill-name` invocation instead.
 - **Omission and `skills: []`** — both keep the automatic catalog off on Codex
   workflow nodes. Exact-loading providers interpret `[]` as an empty declared set.
 - **SKILL.md format** — Codex parses the same `name`/`description` frontmatter
@@ -293,7 +294,7 @@ installed one. A plugin's skill loads only when the node also names that plugin 
 | Claude skill not found (error) | Installed, but outside an enabled `.claude/skills/` root | Move it to `.claude/skills/<name>/SKILL.md`, or enable the setting source that holds it |
 | Claude skill not found (warning) | Absent from disk — normal for built-in and `plugin:skill` names | Ignore it for those, and name the plugin under `plugins:` for a `plugin:skill`; otherwise check the spelling or run `npx skills add <source>` |
 | Codex does not use a skill | Automatic catalogs are off in workflow nodes | Invoke it explicitly in the command/prompt with `$skill-name` and install it under a Codex-native root such as `.agents/skills/` |
-| Codex warns about `skills:` | Codex does not implement the YAML list | Keep the list only for other providers; use `$skill-name` for Codex |
+| Codex run fails on `skills:` | Codex does not implement the YAML list | Remove the list from Codex nodes; use `$skill-name` in the command or prompt |
 | Too many skills | Context budget exceeded | Reduce to 2-3 most relevant skills per node |
 | Skill has no effect | Description too vague | Rewrite SKILL.md with specific, actionable instructions |
 

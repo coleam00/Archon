@@ -17,8 +17,9 @@ governed native tools that Archon injects for the current workflow when applicab
 Codex is an explicit exception: its SDK adds declared servers to ambient configuration
 rather than replacing it.
 
-MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
-currently warn and ignore the `mcp` field.
+MCP works with Claude, Codex, and Copilot workflow nodes. On Pi and OpenCode, a
+node with `mcp:` fails the run before any node starts, and `archon validate workflows`
+reports it as an error.
 
 ## Quick Start
 
