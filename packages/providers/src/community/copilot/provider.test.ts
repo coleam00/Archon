@@ -523,14 +523,14 @@ describe('CopilotProvider.sendQuery', () => {
     expect(session.disconnected).toBe(true);
   });
 
-  test('forkSession + persistSession boolean flags logged at debug (not thrown)', async () => {
+  test('a forkSession flag is logged at debug (not thrown)', async () => {
     const session = makeFakeSession();
     nextCreateSessionResult = session;
 
     const p = new CopilotProvider();
     const gen = p.sendQuery('hi', '/w', undefined, {
       model: 'gpt-5',
-      persistSession: false,
+      forkSession: true,
     });
     const first = gen.next();
     await new Promise(resolve => setTimeout(resolve, 5));
@@ -538,7 +538,7 @@ describe('CopilotProvider.sendQuery', () => {
     await first;
     await collect(gen);
 
-    // No throw, and no warn-level log for persistSession — debug is fine.
+    // No throw, and no warn-level log for forkSession — debug is fine.
     const warnCalls = mockLogger.warn.mock.calls;
     const sawUnsupported = warnCalls.some(args => args[1] === 'copilot.option_not_supported');
     expect(sawUnsupported).toBe(false);

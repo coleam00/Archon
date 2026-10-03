@@ -263,8 +263,7 @@ export const dagNodeBaseSchema = z.object({
   // Persist this node's provider session ID across workflow re-runs in the same
   // scope (typically the conversation). On the next run with the same scope, the
   // executor loads the stored session and passes it as resumeSessionId. Requires
-  // a provider with sessionResume capability. Distinct from the Claude SDK's
-  // AgentRequestOptions.persistSession (on-disk transcript persistence).
+  // a provider with sessionResume capability.
   persist_session: z.boolean().optional(),
   // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
   // 'code', 'summary' — an open set). When set, the executor writes a typed

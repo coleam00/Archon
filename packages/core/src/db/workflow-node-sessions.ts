@@ -1,7 +1,6 @@
 /**
  * Database operations for per-node provider sessions persisted across workflow re-runs.
  *
- * Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript flag).
  * This table stores the provider's session ID returned in the result `MessageChunk`
  * (see `@archon/providers/types`) so the DAG executor can pass it back as
  * `resumeSessionId` on a subsequent workflow run with the same scope (the launching

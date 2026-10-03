@@ -409,7 +409,7 @@ describe('ClaudeProvider', () => {
         resultFor('spend-unseen', 0.0356233, 103);
         expect(await costOf('spend-unseen')).toBeUndefined();
         expect(mockLogger.warn).toHaveBeenCalledWith(
-          { sessionId: 'spend-unseen', baseline: 'unknown' },
+          { sessionIdPreview: 'spend-un', baseline: 'unknown' },
           'claude.query_cost_unknown'
         );
       });
@@ -767,39 +767,6 @@ describe('ClaudeProvider', () => {
           cwd: '/my/workspace',
           model: 'sonnet',
           permissionMode: 'bypassPermissions',
-        }),
-      });
-    });
-
-    test('omits persistSession from SDK options by default', async () => {
-      mockQuery.mockImplementation(async function* () {
-        // Empty generator
-      });
-
-      for await (const _ of client.sendQuery('test', '/workspace')) {
-        // consume
-      }
-
-      expect(mockQuery).toHaveBeenCalledTimes(1);
-      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options).not.toHaveProperty('persistSession');
-    });
-
-    test('passes persistSession: true when explicitly requested', async () => {
-      mockQuery.mockImplementation(async function* () {
-        // Empty generator
-      });
-
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        persistSession: true,
-      })) {
-        // consume
-      }
-
-      expect(mockQuery).toHaveBeenCalledWith({
-        prompt: 'test',
-        options: expect.objectContaining({
-          persistSession: true,
         }),
       });
     });
@@ -2496,7 +2463,7 @@ describe('sendQuery decomposition behaviors', () => {
       failure: { class: 'unknown', evidence: 'max_turns' },
     });
     expect(mockLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'sid-err', errorSubtype: 'max_turns' }),
+      expect.objectContaining({ sessionIdPreview: 'sid-err', errorSubtype: 'max_turns' }),
       'claude.result_failed'
     );
   });
@@ -2534,7 +2501,7 @@ describe('sendQuery decomposition behaviors', () => {
     expect(chunks[0]).not.toHaveProperty('errors');
     expect(mockLogger.error).not.toHaveBeenCalledWith(expect.anything(), 'claude.result_is_error');
     expect(mockLogger.debug).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'sid-stop-seq', stopReason: 'stop_sequence' }),
+      expect.objectContaining({ sessionIdPreview: 'sid-stop', stopReason: 'stop_sequence' }),
       'claude.result_success_validated'
     );
   });
@@ -3662,7 +3629,7 @@ describe('typed failures (#1797, #3524)', () => {
     expect(result).not.toHaveProperty('isError');
     expect(result).not.toHaveProperty('failure');
     expect(mockLogger.debug).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'sid-stop-seq' }),
+      expect.objectContaining({ sessionIdPreview: 'sid-stop' }),
       'claude.result_success_validated'
     );
   });

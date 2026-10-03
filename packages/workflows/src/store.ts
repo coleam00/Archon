@@ -557,7 +557,6 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
 
   // Per-node provider sessions persisted across workflow re-runs (opt-in via
   // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
-  // Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript).
   getWorkflowNodeSession(key: WorkflowNodeSessionKey): Promise<WorkflowNodeSession | null>;
   upsertWorkflowNodeSession(
     params: WorkflowNodeSessionKey & {

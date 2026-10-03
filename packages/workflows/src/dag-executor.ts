@@ -5852,7 +5852,9 @@ async function executeLoopNode(
                       nodeId: node.id,
                       iteration: i,
                       attempt: reaskAttempt,
-                      keptSessionId: currentSessionId,
+                      ...(currentSessionId !== undefined
+                        ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
+                        : {}),
                     },
                     'loop_node.reask_session_not_threaded'
                   );
@@ -11188,7 +11190,6 @@ export async function executeDagWorkflow(
   // launched the run (see `persistScopeKey`). The `|| undefined` guard keeps an empty
   // key from scoping every invocation to the same blank scope — persistence is simply
   // skipped in that case.
-  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
   const namedResumeSourceIds = new Set<string>();
