@@ -423,6 +423,8 @@ assistants:
     # interactive: false       # keep extensions loaded, but give them no UI bridge
 ```
 
+Pi nodes that discover extension code run one at a time within an Archon process. Detached extension callbacks carry a stack but no session identifier, so this keeps any escaped exception attributable to exactly one node. Pi nodes with no discovered extensions, including nodes with `enableExtensions: false`, keep their normal concurrency.
+
 Most extensions need three config surfaces:
 
 | Surface | Purpose |

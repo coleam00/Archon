@@ -5,6 +5,7 @@ import { truncateToolOutput, type ProviderStopReason } from '@archon/provider-co
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
 import { unknownFailureResult } from '../../shared/failure';
+import type { PiExtensionTurn } from './extension-error-broker';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -378,7 +379,7 @@ export interface BridgeNotifier {
  *  - subscribe before calling prompt, unsubscribe in finally
  *  - yield mapped events in order
  *  - complete on successful `session.prompt()` resolution
- *  - throw on `session.prompt()` rejection or listener-raised errors
+ *  - throw on `session.prompt()` rejection, listener errors, or attributed extension errors
  *  - forward `abortSignal` to `session.abort()` fire-and-forget
  *  - always `dispose()` the session to avoid listener accumulation
  */
@@ -387,7 +388,8 @@ export async function* bridgeSession(
   prompt: string,
   abortSignal?: AbortSignal,
   jsonSchema?: Record<string, unknown>,
-  uiBridge?: BridgeNotifier
+  uiBridge?: BridgeNotifier,
+  extensionTurn?: PiExtensionTurn
 ): AsyncGenerator<MessageChunk> {
   const queue = new AsyncQueue<BridgeQueueItem>();
 
@@ -546,22 +548,34 @@ export async function* bridgeSession(
     }
   }
 
-  const promptPromise = session.prompt(prompt).then(
-    () => {
-      if (sawAgentEnd) {
-        flushPending();
-        queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages, promptSideCalls) });
-      }
-      queue.push({ kind: 'done' });
-    },
-    (err: unknown) => {
-      queue.push({ kind: 'error', error: err as Error });
-    }
-  );
+  let extensionFailed = false;
+  const unsubscribeExtensionError = extensionTurn?.onError(error => {
+    extensionFailed = true;
+    flushPending();
+    queue.push({ kind: 'error', error });
+    onAbort();
+  });
+
+  const promptPromise = extensionFailed
+    ? Promise.resolve()
+    : session.prompt(prompt).then(
+        () => {
+          if (sawAgentEnd) {
+            flushPending();
+            queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages, promptSideCalls) });
+          }
+          queue.push({ kind: 'done' });
+        },
+        (err: unknown) => {
+          queue.push({ kind: 'error', error: err as Error });
+        }
+      );
 
   try {
     for await (const item of queue) {
       if (item.kind === 'done') {
+        extensionTurn?.throwIfFailed();
+        extensionTurn?.stopAccepting();
         // Buffered text is flushed ahead of the result chunk when an agent_end
         // was seen; a prompt that resolved without one can still strand text.
         const stranded = takePending();
@@ -581,6 +595,8 @@ export async function* bridgeSession(
       // it unconditionally and let the caller decide whether resume is
       // meaningful (capability-gated at the registry level).
       if (item.chunk.type === 'result') {
+        extensionTurn?.throwIfFailed();
+        extensionTurn?.stopAccepting();
         // The chunk was built for this turn by buildResultChunk; annotate it in place.
         const terminal = item.chunk;
         if (session.sessionId) terminal.sessionId = session.sessionId;
@@ -610,6 +626,7 @@ export async function* bridgeSession(
     // a no-op and pending iterate() waiters resolve — otherwise a consumer
     // abort mid-iteration would leak this generator on the promise forever.
     queue.close();
+    unsubscribeExtensionError?.();
     uiBridge?.setEmitter(undefined);
     unsubscribe();
     if (abortSignal) {
