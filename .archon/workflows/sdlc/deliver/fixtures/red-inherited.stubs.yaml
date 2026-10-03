@@ -51,6 +51,7 @@ validate__classify:
   red_cause: inherited
   summary: "stub: the same inherited break, still red on the base"
 ci-probe: '{"state":"pending","detail":"stub: 1 check still running"}'
+delta-scope: '{"moved":false,"base":"fixturehead"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'

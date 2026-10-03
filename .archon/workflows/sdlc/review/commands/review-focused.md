@@ -15,16 +15,14 @@ The implementation owns the project's full gate; its record is in `$ARTIFACTS_DI
 
 Every finding needs the changed line that causes it, the reachable path, the incorrect outcome, evidence, and the smallest correction. If the causal chain contains "might" or "could", investigate until it is concrete or drop it.
 
-## Severity
+## What a finding costs
 
-- **Critical** — merge would plausibly cause security compromise, data loss or corruption, or an unrecoverable contract break.
-- **Important** — a reachable supported path is wrong, a test proves nothing, a claim is false, or the change adds dead or duplicated machinery.
-- **Suggestion** — a proved improvement worth making that does not meet the bars above.
+State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding.
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/focused.md`: each in-scope finding begins with `sources: [focused]`, followed by severity, the evidence fields above, and `file:line` references; then an "examined and clean" list naming what you decisively checked. If there are no findings, say so and name what you checked — never claim the whole change is correct.
+Write `$ARTIFACTS_DIR/review/focused.md`: each in-scope finding begins with `sources: [focused]`, followed by what it costs, the evidence fields above, and `file:line` references; then an "examined and clean" list naming what you decisively checked. If there are no findings, say so and name what you checked — never claim the whole change is correct.
 
-A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding at its real severity, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-focused.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`focused`). Write no file for no discovery; never append to another lens's file or record suspicion.
+A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-focused.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`focused`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
-Verify the file exists and every `file:line` in it is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/focused.md` and the findings count by severity.
+Verify the file exists and every `file:line` in it is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/focused.md` and the findings count.

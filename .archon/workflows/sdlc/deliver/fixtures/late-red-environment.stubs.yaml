@@ -49,6 +49,7 @@ ci-fix__implement:
   summary: "stub: the hosted runner lost network; the branch cannot correct the runner environment"
 fix-ci-probe: '{"state":"red","detail":"hosted runner lost network (fail)"}'
 attention-ci-probe: '{"state":"red","detail":"hosted runner lost network (fail)"}'
+delta-scope: '{"moved":false,"base":"fixturehead"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'

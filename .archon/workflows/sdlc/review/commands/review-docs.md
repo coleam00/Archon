@@ -19,16 +19,14 @@ A documented statement, option, default, or example made false; removed behavior
 
 `AGENTS.md` / `CLAUDE.md` are steering, not changelogs. Suggest a change only when a stated rule is now false, a pointer moved, or a new durable invariant must guide future work. Smallest rule, reference the code, never duplicate it.
 
-## Severity
+## What a finding costs
 
-- **Critical** — docs direct a user or operator toward data loss or a breaking action.
-- **Important** — a reader acts incorrectly or cannot complete a supported task.
-- **Suggestion** — worthwhile but non-blocking.
+State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Name what a reader does wrong or cannot do because of it, and say whether the text is false, missing for behavior this change adds, or only improvable.
 
 ## Output
 
 Write `$ARTIFACTS_DIR/review/docs.md`: each in-scope finding begins with `sources: [docs]`, followed by the four parts (quote the false text), then the examined-and-current list with confirming evidence. In light mode, a verdict per prior finding. No findings is a valid result.
 
-A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding at its real severity, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-docs.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`docs`). Write no file for no discovery; never append to another lens's file or record suspicion.
+A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-docs.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`docs`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
-Verify every cited path is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/docs.md` and the findings count by severity.
+Verify every cited path is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/docs.md` and the findings count.

@@ -43,13 +43,15 @@ export interface LensTally {
   readonly findings: number;
   /** Findings no other lens also sourced — the measure that retired the comments lens. */
   readonly sole: number;
-  /** Critical or Important among them. */
+  /** Labelled blocking among them, under the current or the earlier label set. */
   readonly blocking: number;
   /** Findings synthesis or a later round disproved, or accepted as declined. */
   readonly disproved: number;
 }
 
-const BLOCKING = new Set(['critical', 'important']);
+// Synthesis labels findings `blocking` or `note`. Older findings files carry
+// `Critical`/`Important`/`Suggestion`, and the tally still reads them.
+const BLOCKING = new Set(['blocking', 'critical', 'important']);
 const FINDINGS_GLOB = '**/review/findings.json';
 
 function asFindings(parsed: unknown): FindingRecord[] {

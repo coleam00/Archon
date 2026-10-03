@@ -74,6 +74,7 @@ deliver__classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false","simplify":"false"}'
+deliver__delta-scope: '{"moved":false,"base":"fixturehead"}'
 deliver__polish-scope: '{"polish":false}'
 deliver__file-discoveries: '{"issues":[]}'
 deliver__fork: '{"fork":true}'

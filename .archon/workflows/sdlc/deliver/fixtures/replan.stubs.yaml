@@ -24,7 +24,7 @@ review__scope:
   # accepted contract and scope conflict recorded
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 3 }
-review__code: "1 Important scope conflict"
+review__code: "1 blocking scope conflict"
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"

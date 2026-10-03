@@ -47,6 +47,7 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false","simplify":"false"}'
+delta-scope: '{"moved":false,"base":"fixturehead"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":false}'

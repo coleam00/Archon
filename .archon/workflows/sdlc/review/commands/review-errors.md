@@ -26,17 +26,14 @@ Where this defect concentrates: background work, callbacks, and cancellation; re
 
 An explicitly best-effort operation; a capability probe whose failure is the expected negative; an internal retry whose final outcome preserves the contract; a bounded, behaviorally-equivalent compatibility fallback; duplicate logging when a higher boundary already records with better context; a library propagating instead of presenting; cancellation staying cancellation.
 
-## Severity
+## What a finding costs
 
-- **Critical** — false success can cause data loss, security failure, irreversible action, or undetected outage.
-- **Important** — a supported failure path reports success or leaves the caller unable to recover.
-
-No cosmetic message-wording suggestions.
+State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Name what the false success or lost failure lets happen next — lost data, an irreversible action, an outage nobody sees, a caller that cannot recover. No cosmetic message-wording suggestions.
 
 ## Output
 
 Write `$ARTIFACTS_DIR/review/errors.md`: each in-scope finding begins with `sources: [errors]`, followed by the four parts and the smallest correction (propagate, preserve identity, mark degraded, or report at the owning boundary), then the examined-and-visible list citing the contracts that handle failure correctly. In light mode, a verdict per prior finding. No findings is a valid result.
 
-A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding at its real severity, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-errors.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`errors`). Write no file for no discovery; never append to another lens's file or record suspicion.
+A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-errors.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`errors`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
-Verify every cited `file:line` is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/errors.md` and the findings count by severity.
+Verify every cited `file:line` is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/errors.md` and the findings count.

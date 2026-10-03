@@ -23,7 +23,7 @@ review__scope:
   # accepted contract recorded
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 6 }
-review__code: "1 Important in-scope finding"
+review__code: "1 blocking in-scope finding"
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"

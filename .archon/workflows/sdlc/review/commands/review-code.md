@@ -29,17 +29,14 @@ When execution is practical, run the smallest command that can falsify a finding
 
 Style, naming, and formatting without an explicit project rule (a rule `engineering.md` or the direction document states counts); simplification without a behavioral defect (the simplify pass owns structure); missing tests (the tests lens owns coverage); type-design quality; docs; generic error-handling preference. Do not apply framework folklore as if it were a project rule.
 
-## Severity
+## What a finding costs
 
-- **Critical** — merge would plausibly cause security compromise, data loss or corruption, or an unrecoverable contract break on a supported path.
-- **Important** — a reachable supported path is wrong, broken, or violates an explicit repository invariant; fix before merge.
-
-There is no third level from this lens — anything weaker is silence.
+State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Report only a reachable supported path that is wrong or broken, or an explicit repository invariant the change violates; anything weaker is silence.
 
 ## Output
 
-Write `$ARTIFACTS_DIR/review/code.md`: each in-scope finding begins with `sources: [code]`, followed by severity, the evidence fields above, and `file:line` references; then an "examined and clean" list naming the specific contracts or callers that cleared the suspicious spots; in light mode, a verdict per prior finding (still open / fixed at `<sha>` / disproved, with evidence). If there are no findings, say so and name what was decisively checked — never claim the whole change is correct.
+Write `$ARTIFACTS_DIR/review/code.md`: each in-scope finding begins with `sources: [code]`, followed by what it costs, the evidence fields above, and `file:line` references; then an "examined and clean" list naming the specific contracts or callers that cleared the suspicious spots; in light mode, a verdict per prior finding (still open / fixed at `<sha>` / disproved, with evidence). If there are no findings, say so and name what was decisively checked — never claim the whole change is correct.
 
-A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding at its real severity, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-code.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`code`). Write no file for no discovery; never append to another lens's file or record suspicion.
+A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. Only work unrelated to the change is a discovery: write `$ARTIFACTS_DIR/discoveries/review-code.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`code`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
-Verify the file exists and every `file:line` in it is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/code.md` and the findings count by severity.
+Verify the file exists and every `file:line` in it is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/code.md` and the findings count.

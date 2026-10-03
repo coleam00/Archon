@@ -17,8 +17,10 @@ description: |
 # body repeats fix → light review, so every blocking correction is independently
 # checked and a clean review stops immediately. Exhausting the bound fails
 # truthfully with the PR still draft and the canonical report carrying the open
-# findings. The polish and CI-fix passes after convergence get no review round:
-# CI on their pushed head is their only proof.
+# findings. Commits made after the pre-PR structure pass (review corrections, the
+# structure correction, a CI fix) get one more structure pass over just those
+# commits before they ship. The polish and CI-fix passes after convergence get no
+# review round: CI on their pushed head is their proof.
 
 requires: [github]
 
@@ -109,12 +111,14 @@ nodes:
     when: "$shape.output.findings == true"
     with:
       work: >-
-        Before this work is published, adopt the smaller shape recorded in
+        Before this work is published, judge the smaller shapes recorded in
         $ARTIFACTS_DIR/shape.md. Read it and the accepted work order below in full.
-        Judge every finding, Suggestions included: make each change that is
-        valid by this project's values, and decline one that is wrong or a matter
-        of taste the project's engineering conventions do not back, recording the
-        reason in implementation.md. Keep the requested outcome and its tests intact.
+        Adopt every finding the project's values back. Decline one only with the
+        evidence that it is wrong or that its smaller shape changes behavior; the
+        review that follows judges every decline and reopens one whose evidence does
+        not hold. Write $ARTIFACTS_DIR/shape-dispositions.md with one entry per
+        finding in shape.md: adopted, or declined with its evidence. Keep the
+        requested outcome and its tests intact.
 
         Accepted work order:
         $INPUTS.work
@@ -210,11 +214,11 @@ nodes:
   # the current canonical findings, proves the correction is green, then runs a
   # fresh continuation review over the report and delta, so a blocking fix is
   # never unreviewed. The bound is a runaway backstop, not a pacing device:
-  # until_bash ends the loop the moment a recheck certifies ready. Continuation
-  # rechecks and class completion make a converging delivery short; a run that
-  # keeps finding another symptom of one class each round will not converge by
-  # looping. A per-lane bound would need runtime-parameterized composition, which the
-  # language deliberately does not have — the flat bound buys the same outcome.
+  # until_bash ends the loop the moment a recheck certifies ready, so a healthy
+  # delivery still exits in one or two rounds. Five rounds leaves room for a
+  # feature-sized change whose rechecks keep finding real blockers. A per-lane
+  # bound would need runtime-parameterized composition, which the language
+  # deliberately does not have — the flat bound buys the same outcome.
   #
   # CI feeds the fix, without waiting: checks run on the pushed commits while
   # review happens, so concluded results usually exist by the time a round
@@ -235,7 +239,7 @@ nodes:
       # accepts only `none`; a replan outcome leaves the PR draft and fails with
       # the canonical report intact instead of spending another correction.
       until_bash: test $recheck.output.action != "correct"
-      max_iterations: 3
+      max_iterations: 5
       fresh_context: true
       nodes:
         # Evidence provisioning, never a gate: this node cannot fail the round
@@ -274,16 +278,15 @@ nodes:
           with:
             work: >-
               Judge every open finding recorded in $ARTIFACTS_DIR/review/report.md,
-              Suggestions included, within the accepted work order below. Read
-              both in full before editing. Fix every valid Critical and Important
-              finding, and every Suggestion that is valid by this project's values
-              — a simplification, removed machinery, a corrected claim, a test
-              that now proves its claim. Decline a wrong finding, or a taste call
-              the project's engineering conventions and direction do not back,
-              with the reason; the following review judges it. A finding
-              unrelated to this change is a follow-up, not work for this round:
-              say so and the review files it. Record every disposition — fixed,
-              declined with its reason, or unrelated — in implementation.md. When a causal finding
+              within the accepted work order below. Read both in full before
+              editing. Fix every blocking finding, or decline it only with the
+              evidence that it is not a finding: it is wrong, already satisfied,
+              or its smaller shape changes behavior. Fix a note, or decline it
+              with a one-line reason. The following review judges every decline.
+              A finding unrelated to this change is a follow-up, not work for
+              this round: say so and the review files it. Record every
+              disposition — fixed, declined with its reason or evidence, or
+              unrelated — in implementation.md. When a causal finding
               records a finite affected-member inventory, the finding is not
               fixed until every affected member is handled and the smallest
               relevant proof passes. Do not cross an explicit boundary to make
@@ -361,14 +364,43 @@ nodes:
       review_action: "$review.output.action"
       correction_action: { from: "$corrections.output.action", if_skipped: null }
 
-  # Suggestions never block, so a ready verdict can leave valid ones open. One
-  # implementation pass judges them — fix what the project's values back, decline
-  # the rest with a reason — and needs no review round of its own: nothing in it
-  # blocks, and CI on its pushed head is its proof.
+  # The pre-PR structure pass judged the change as `shape` saw it. Corrections
+  # and the structure correction committed more since, so one more structure
+  # pass reads only those commits: code written to satisfy a reviewer is where an
+  # overbuilt shape slips in. Skipped when nothing moved.
+  - id: delta-scope
+    script: delta-scope
+    runtime: bun
+    depends_on: [gate-ready]
+    with:
+      since: "$shape.execution.checkoutStart"
+    output_format: &delta_scope
+      type: object
+      properties:
+        moved: { type: boolean }
+        base: { type: string }
+      required: [moved, base]
+
+  - id: delta
+    include: archon-simplify
+    depends_on: [delta-scope]
+    when: "$delta-scope.output.moved == true"
+    with:
+      stage: delta
+      base: "$delta-scope.output.base"
+      report: delta.md
+      work_order: "$INPUTS.work"
+
+  # Notes never block, so a ready verdict can leave valid ones open, and the delta
+  # pass's findings arrive after the last review. One implementation pass judges
+  # both and needs no review round of its own: CI on its pushed head is its proof.
   - id: polish-scope
     script: polish-scope
     runtime: bun
-    depends_on: [gate-ready]
+    depends_on: [delta-scope, delta]
+    trigger_rule: none_failed_min_one_success
+    with:
+      delta_findings: { from: "$delta.output.findings", if_skipped: false }
     output_format:
       type: object
       properties:
@@ -381,13 +413,14 @@ nodes:
     when: "$polish-scope.output.polish == true"
     with:
       work: >-
-        The review of this pull request is ready, and it left Suggestions open in
-        $ARTIFACTS_DIR/review/report.md. Read it and the accepted work order below
-        in full. Judge each open Suggestion by this project's values: fix one that
-        simplifies, removes machinery, corrects a claim or makes a test prove its
-        claim; decline one that is wrong or a taste call the project's engineering
-        conventions and direction do not back. Record every disposition with its
-        reason in implementation.md. When you changed anything, push it to the
+        The review of this pull request is ready. Read the accepted work order
+        below, the open notes in $ARTIFACTS_DIR/review/report.md, and, when it
+        exists, the structure report $ARTIFACTS_DIR/simplify/delta.md over the
+        commits made after the pre-PR structure pass. Fix each open note or decline
+        it with a one-line reason. Adopt each finding in the structure report, or
+        decline it only with the evidence that it is wrong or that its smaller
+        shape changes behavior: no review follows this pass to judge it. Record
+        every disposition in implementation.md. When you changed anything, push it to the
         branch this run is on, explicitly by name, and record the push target and a
         read-back of the remote ref. Do not change the PR's draft state or edit the
         canonical review comment.
@@ -629,6 +662,58 @@ nodes:
       summary: "$ci-fix.output.summary"
       stage: "The CI correction"
 
+  # A CI fix is written against a failing check, after every other structure pass
+  # ran, so its commits get one of their own. Skipped when the fix pushed nothing
+  # (an inherited or environment classification).
+  - id: ci-delta-scope
+    script: delta-scope
+    runtime: bun
+    depends_on: [gate-ci-fix]
+    with:
+      since: "$ci-fix.execution.checkoutStart"
+    output_format: *delta_scope
+
+  - id: ci-delta
+    include: archon-simplify
+    depends_on: [ci-delta-scope]
+    when: "$ci-delta-scope.output.moved == true"
+    with:
+      stage: delta
+      base: "$ci-delta-scope.output.base"
+      report: ci-delta.md
+      work_order: "$INPUTS.work"
+
+  - id: ci-reshape
+    include: archon-implement
+    depends_on: [ci-delta]
+    when: "$ci-delta.output.findings == true"
+    with:
+      work: >-
+        A structure pass judged this run's CI fix and recorded smaller shapes in
+        $ARTIFACTS_DIR/simplify/ci-delta.md. Read it and the accepted work order
+        below in full. Adopt each finding, or decline it only with the evidence
+        that it is wrong or that its smaller shape changes behavior: no review
+        follows this pass to judge it. Record every disposition in
+        implementation.md. Keep the CI fix working. When you changed anything,
+        push it to the branch this run is on, explicitly by name, and record the
+        push target and a read-back of the remote ref. Do not change the PR's
+        draft state or edit the canonical review comment.
+
+        Accepted work order, for scope only — do not reopen it:
+        $INPUTS.work
+
+  - id: gate-ci-reshape
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format: *green_gate
+    depends_on: [ci-reshape]
+    with:
+      green: "$ci-reshape.output.green"
+      red_cause: "$ci-reshape.output.red_cause"
+      summary: "$ci-reshape.output.summary"
+      stage: "The CI fix's structure correction"
+
   # The re-wait after a pushed correction: same probe, webhook wake-up,
   # five-minute deadline fallback, and ceiling as await-checks. On an inherited
   # or environment classification nothing was pushed, the state is still
@@ -653,7 +738,8 @@ nodes:
             deadline_ms: 300000
           when: $fix-ci-probe.output.state == 'pending'
           depends_on: [fix-ci-probe]
-    depends_on: [gate-ci-fix]
+    depends_on: [gate-ci-fix, ci-delta-scope, ci-delta, gate-ci-reshape]
+    trigger_rule: none_failed_min_one_success
 
   # Late red that the branch did not introduce needs a person, not another
   # autonomous correction. Preserve the draft PR and the recorded refusal,

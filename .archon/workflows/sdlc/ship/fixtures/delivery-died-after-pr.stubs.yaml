@@ -61,6 +61,7 @@ deliver__validate__classify:
   summary: "stub: the change broke one spec in the project gate"
 # deliver__gate-validated is deliberately unstubbed: the real gate must refuse
 # introduced red.
+deliver__delta-scope: '{"moved":false,"base":"fixturehead"}'
 deliver__polish-scope: '{"polish":false}'
 deliver__file-discoveries: '{"issues":[]}'
 deliver__fork: '{"fork":true}'

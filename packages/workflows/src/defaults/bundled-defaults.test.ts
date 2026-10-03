@@ -261,9 +261,7 @@ describe('bundled-defaults', () => {
         // One boundary decides whether a defect blocks now or becomes a filed issue:
         // anything that touches the change is a finding, only unrelated work is a
         // discovery. Every reviewer states it in the same words.
-        expect(content).toContain(
-          'is a finding at its real severity, even when the contract never named it'
-        );
+        expect(content).toContain('is a finding, even when the contract never named it');
         expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
         // The risk taxonomy the removed file used to own, now stated in every prompt
         // that depends on it rather than cited.
@@ -276,6 +274,27 @@ describe('bundled-defaults', () => {
       // own depth by them.
       for (const key of lenses) {
         expect(BUNDLED_COMMANDS[key]).toContain('scale depth to what the change can destroy');
+      }
+    });
+
+    // Severity has one definition: synthesis assigns every label, so a lens that kept its
+    // own scale would be a second owner of the same decision.
+    it('only synthesis defines finding severity', () => {
+      const reviewers = Object.keys(BUNDLED_COMMANDS).filter(
+        key =>
+          (key.startsWith('__archon_pack__bundled:sdlc:review::review-') &&
+            !key.endsWith('review-synthesize') &&
+            !key.endsWith('review-scope')) ||
+          key === '__archon_pack__bundled:sdlc:simplify::simplify'
+      );
+      expect(reviewers.length).toBeGreaterThanOrEqual(7);
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '## Severity'
+      );
+      for (const key of reviewers) {
+        expect(BUNDLED_COMMANDS[key]).not.toMatch(
+          /## Severity|\bCritical\b|\bImportant\b|Suggestion/
+        );
       }
     });
   });
@@ -543,12 +562,13 @@ describe('bundled-defaults', () => {
       );
       // The lens this restores was cut as inert, not as unwanted (#2898/#2899): its charter
       // demoted every finding to a Suggestion. Pin the two halves of the posture that
-      // replaced it — the values frame it reasons from, and the blocking severity.
+      // replaced it — the values frame it reasons from, and the blocking severity, which
+      // synthesis owns because it assigns every label.
       expect(commands['__archon_pack__bundled:sdlc:simplify::simplify']).toContain(
         'Writing code is cheap; maintaining it and recovering option value are not'
       );
-      expect(commands['__archon_pack__bundled:sdlc:simplify::simplify']).toContain(
-        'a verdict may rest on simplification alone'
+      expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '- **Unneeded** — the change adds complexity that a proved, behavior-preserving smaller shape removes'
       );
       expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
         'report-round-N.md'
@@ -593,7 +613,7 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('## Judge contract coverage');
       expect(synthesize).toContain('`sources: [contract]`');
-      expect(synthesize).toContain('An unmet contract item is an Important or Critical finding');
+      expect(synthesize).toContain('An unmet contract item is a blocking finding');
     });
 
     // The same "does this diff earn a docs review" call is made in two packs — at

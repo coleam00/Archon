@@ -57,6 +57,7 @@ classify:
     tier: "stub: touches persisted state"
     errors: "stub: the diff adds a retry and a fallback"
     docs: "stub: no doc-facing changes"
+delta-scope: '{"moved":false,"base":"fixturehead"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'

@@ -58,6 +58,7 @@ ci-fix__implement:
   summary: "stub: e2e-smoke is red at the run's starting commit on a surface this diff never touches; no edit to make"
 fix-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 attention-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
+delta-scope: '{"moved":false,"base":"fixturehead"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'

@@ -17,7 +17,7 @@ Either may be empty. If both are, there is no work — say so and stop.
 Whichever carries it, the work may be:
 
 - **a plan** — a path to a plan file (read it completely) or an inline plan; execute its tasks in dependency order
-- **review findings** — judge every finding, Suggestions included, by this project's values, then give each one disposition in your report: **fixed**; **declined** with the reason, when the finding is wrong or a taste call the project's engineering conventions and direction do not back; or **unrelated**, when it has nothing to do with this change and belongs in its own issue. Every valid Critical and Important finding is fixed. A defect that touches the change is fixed now, not deferred
+- **review findings** — judge every finding, then give each one disposition in your report: **fixed**; **declined**; or **unrelated**, when it has nothing to do with this change and belongs in its own issue. A blocking finding is fixed, or declined only with the evidence that it is wrong, already satisfied, or that its smaller shape changes behavior — taste is never that evidence. A note may be declined with a one-line reason. A finding with no label — a structure pass's — is declined only with evidence, like a blocking one. A defect that touches the change is fixed now, not deferred
 - **a CI failure** — reproduce it, fix the cause, prove the fix
 - **an existing pull request** — findings for, or a request to repair, a pull request named by number; this run must already be on its branch (see below)
 - **a description** — a plain statement of what to build or change

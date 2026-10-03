@@ -72,6 +72,7 @@ ci-probe: '{"state":"concluded","detail":"all checks green"}'
 # The mutation: the flip printed something that is not a URL.
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: "flip printed something that is not a pull request URL"
+deliver__delta-scope: '{"moved":false,"base":"fixturehead"}'
 deliver__polish-scope: '{"polish":false}'
 deliver__file-discoveries: '{"issues":[]}'
 deliver__fork: '{"fork":true}'

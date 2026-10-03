@@ -123,8 +123,8 @@ nodes:
   # ── Lenses ────────────────────────────────────────────────────────
   # Every reviewer is read-only by the engine's check, not only by its prompt:
   # lenses run in parallel in one checkout, so a reviewer that edits it can
-  # mislead the others. Seams runs on every round: it has found the most
-  # Critical findings and raised the fewest wrong blockers.
+  # mislead the others. Seams runs on every tier: a contract two sides must keep
+  # in agreement is as easy to break in a small change as in a large one.
   - id: seams
     command: review-seams
     context: fresh

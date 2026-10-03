@@ -43,6 +43,7 @@ validate__run: { status: red, summary: "stub: a check in the project gate failed
 validate__classify:
   red_cause: environment
   summary: ""
+delta-scope: '{"moved":false,"base":"fixturehead"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'

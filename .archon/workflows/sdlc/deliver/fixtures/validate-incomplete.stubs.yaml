@@ -43,6 +43,7 @@ review__publish:
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 validate__discover: { checks: [{ name: "lint", argv: ["bun", "-e", "console.log('lint passed')"] }, { name: "tests", argv: ["archon-fixture-command-that-does-not-exist"] }], quarantine: [], notes: "stub: the project's checks" }
+delta-scope: '{"moved":false,"base":"fixturehead"}'
 polish-scope: '{"polish":false}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'

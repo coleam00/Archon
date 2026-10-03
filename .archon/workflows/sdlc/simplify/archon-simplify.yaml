@@ -5,8 +5,9 @@ description: |
 
   One charter, two callers. Delivery runs it on the implementation before the pull
   request opens (`stage: pre-pr`), when a smaller shape is still cheap to adopt and
-  before any other reviewer spends effort on code it would delete. A standalone
-  review runs it as one of its lenses (`stage: review`).
+  before any other reviewer spends effort on code it would delete, and again over
+  each later change before it ships (`stage: delta`). A standalone review runs it as
+  one of its lenses (`stage: review`).
 
   Use when: a change needs its structure judged — "is this overbuilt", "simplify
   review".
@@ -20,12 +21,22 @@ inputs:
     description: >-
       review — a lens inside a review round, which reads that round's scope.md;
       pre-pr — delivery's check on the committed implementation before its pull
-      request exists.
+      request exists; delta — delivery's check on the commits made since `base`.
   work_order:
     default: ""
     description: >-
-      The accepted outcome and scope boundaries. Required reading in pre-pr, where
-      no scope.md exists yet; a review round carries it in scope.md instead.
+      The accepted outcome and scope boundaries. Required reading in pre-pr and
+      delta, where no scope.md exists; a review round carries it in scope.md instead.
+  base:
+    default: ""
+    description: >-
+      delta only — the commit the earlier structure pass judged. The delta stage
+      reviews the commits after it.
+  report:
+    default: "delta.md"
+    description: >-
+      delta only — the report's file name under $ARTIFACTS_DIR/simplify/, so two
+      delta passes in one run keep separate evidence.
 
 returns: simplify
 
@@ -40,7 +51,7 @@ nodes:
     output_format:
       type: object
       properties:
-        # True when the report holds any finding, Suggestions included: delivery
-        # hands every one to the owner to judge before the pull request opens.
+        # True when the report holds any finding: delivery hands every one to the
+        # owner to judge.
         findings: { type: boolean }
       required: [findings]
