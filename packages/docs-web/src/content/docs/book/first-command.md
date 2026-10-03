@@ -8,7 +8,7 @@ sidebar:
   order: 6
 ---
 
-You've seen commands do real work — investigating issues, writing code, posting reviews. In [Chapter 3](/book/how-it-works/), we traced how `archon-fix-github-issue` stitched seven of them together. Now you're going to write one yourself.
+You've seen commands do real work — investigating issues, writing code, posting reviews. In [Chapter 3](/book/how-it-works/), we traced how `archon-ship` stitched workflows built from them into one run. Now you're going to write one yourself.
 
 Commands are simpler than they look. They're plain markdown files. The AI reads them as instructions.
 
@@ -121,13 +121,23 @@ If you can't find test files for `$ARGUMENTS`, say so clearly and list the files
 
 ### Step 4: Test It
 
-You can invoke a command directly through `archon-assist`:
+A command runs as a node in a workflow, so wrap it in a one-node workflow. Create `.archon/workflows/try-run-tests.yaml`:
 
-```bash
-archon workflow run archon-assist "/command-invoke run-tests auth"
+```yaml
+name: try-run-tests
+description: Run the run-tests command once
+nodes:
+  - id: run
+    command: run-tests
 ```
 
-Archon routes the `/command-invoke run-tests` instruction to the AI, which finds your `.archon/commands/run-tests.md`, substitutes `$ARGUMENTS` with the entire argument you passed (`auth` here — `$ARGUMENTS` always holds the whole trigger message, never a single split token), and runs the task.
+Then run it against your checkout:
+
+```bash
+archon workflow run try-run-tests --no-worktree "auth"
+```
+
+Archon finds your `.archon/commands/run-tests.md`, substitutes `$ARGUMENTS` with the entire message you passed (`auth` here — `$ARGUMENTS` always holds the whole trigger message, never a single split token), and runs the task.
 
 You should see the AI find your auth module tests, run them, and produce a structured report.
 
@@ -161,25 +171,18 @@ Use `$ARTIFACTS_DIR` whenever your command writes output files that a later step
 
 ## Invoking Commands
 
-**From `archon-assist`** (interactive):
-```bash
-archon workflow run archon-assist "/command-invoke run-tests auth"
-```
-
-**From a workflow** (automated):
+**From a workflow node**:
 ```yaml
 nodes:
   - id: validate
     command: run-tests
-    prompt: "Run tests for the auth module"
 ```
 
-**Browse what's available**:
-```bash
-archon workflow run archon-assist "/commands"
-```
+The node receives the run's trigger message as `$ARGUMENTS`. A node takes either `command:` or `prompt:`, not both; put per-run instructions in the message you pass to `archon workflow run`.
 
-This lists every command available — your custom ones from `.archon/commands/` alongside Archon's bundled defaults. The bundled commands (like `archon-investigate-issue` and `archon-fix-issue`) are good reference material when you're deciding how to structure your own.
+**Browse what's available**: send `/commands` in chat to list the commands registered for the current project.
+
+Archon's bundled workflows keep their commands next to them, under `.archon/workflows/<pack>/<workflow>/commands/` (for example `.archon/workflows/sdlc/investigate/commands/investigate.md`). They are good reference material when you're deciding how to structure your own.
 
 ---
 

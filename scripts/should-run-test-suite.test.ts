@@ -66,7 +66,6 @@ describe('test-suite change decision', () => {
   });
 
   test.each([
-    ['.archon/commands/defaults/archon-assist.md', 'a legacy command prompt'],
     ['.archon/workflows/sdlc/implement/commands/implement.md', 'a packaged command prompt'],
     ['.claude/skills/archon-cli/SKILL.md', 'the bundled CLI skill'],
     ['packages/docs-web/src/content/docs/reference/provider-capabilities.md', 'a generated doc'],

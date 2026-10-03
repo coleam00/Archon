@@ -45,8 +45,7 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   // This fixture has project scripts and no installed bundled source tree.
-  getDefaultCommandsPath: () => join(testDir, 'absent-bundle', 'commands', 'defaults'),
-  getDefaultWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows', 'defaults'),
+  getBundledWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows'),
 }));
 
 // --- Imports (after all mock.module calls) ---

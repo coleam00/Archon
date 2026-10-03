@@ -1872,7 +1872,7 @@ describe('CommandHandler', () => {
       test('should match workflow name via suffix match', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
-            makeTestWorkflowWithSource({ name: 'archon-assist', description: 'General assistant' }),
+            makeTestWorkflowWithSource({ name: 'acme-assist', description: 'General assistant' }),
           ],
           errors: [],
         });
@@ -1880,14 +1880,14 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run assist');
 
         expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).definition.name).toBe('archon-assist');
+        expect(startRequest(result.workflow).definition.name).toBe('acme-assist');
       });
 
       test('should match workflow name via substring match', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
             makeTestWorkflowWithSource({
-              name: 'archon-smart-pr-review',
+              name: 'acme-smart-pr-review',
               description: 'Smart PR review',
             }),
           ],
@@ -1897,7 +1897,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run smart');
 
         expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).definition.name).toBe('archon-smart-pr-review');
+        expect(startRequest(result.workflow).definition.name).toBe('acme-smart-pr-review');
       });
 
       test('should return failure with candidates on ambiguous suffix match', async () => {

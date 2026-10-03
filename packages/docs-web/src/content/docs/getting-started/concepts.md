@@ -29,7 +29,7 @@ nodes:
 
 Nodes without dependencies run immediately. Nodes in the same dependency layer run in parallel. This means a workflow with three independent review nodes will fan out and run all three concurrently, then converge at a downstream node that depends on all of them.
 
-Archon ships with bundled default workflows. Run `archon workflow list` to see what's available, or browse `.archon/workflows/defaults/` for real examples.
+Archon ships with bundled workflows. Run `archon workflow list` to see what's available, or browse `.archon/workflows/sdlc/` in the Archon repository for real examples.
 
 ## Nodes
 
@@ -116,7 +116,7 @@ Register and run one with `--folder`:
 ```bash
 # From a multi-repo root (not itself a git repo)
 cd ~/platform          # contains auth-service/, billing-service/, ...
-archon workflow run assist --folder "List every service and its current branch"
+archon workflow run investigate --folder "How do these services call each other?"
 ```
 
 Folder projects differ from repo projects in a few honest ways:
