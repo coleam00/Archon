@@ -1,4 +1,5 @@
 import { describe, test, expect, mock } from 'bun:test';
+import type { WorkflowMessageMetadata } from '@archon/workflows/deps';
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -61,12 +62,12 @@ describe('HeadlessPlatform', () => {
   test('persists every future WorkflowMessageMetadata field by derivation (#2709)', async () => {
     mockAddMessage.mockClear();
     const platform = new HeadlessPlatform('conv-db-1');
-    await platform.sendMessage('ignored', 'done', {
+    const metadata: WorkflowMessageMetadata & { traceId: string } = {
       category: 'workflow_status',
       segment: 'new',
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      ...({ traceId: 'trace-abc' } as any),
-    } as Parameters<typeof platform.sendMessage>[2]);
+      traceId: 'trace-abc',
+    };
+    await platform.sendMessage('ignored', 'done', metadata);
     expect(mockAddMessage).toHaveBeenCalledWith('conv-db-1', 'assistant', 'done', {
       category: 'workflow_status',
       traceId: 'trace-abc',
