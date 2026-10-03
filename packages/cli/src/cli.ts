@@ -56,8 +56,7 @@ if (inheritedInstallContext) {
 // `utils/safe-console.ts` for the underlying shim, and #2400 for the full
 // rationale.
 import { installPipeSafeConsole } from './utils/safe-console';
-import { withDrainedExit } from './utils/exit-with-drain';
-import { exitWithDrain } from './utils/exit-with-drain';
+import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import {
   rejectConfigOnContinue,
