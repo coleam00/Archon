@@ -293,7 +293,7 @@ This is an exact, immutable fork contract:
 - Claude and Pi support immutable forks. Codex explicitly does not; an omitted fork capability is also unsupported.
 - A missing source handle, unavailable prior context, missing branch handle, or provider that reuses the source session fails the node. Named resume never falls back to a fresh session.
 - Two parallel consumers may name the same source; each receives its own branch while the source remains unchanged.
-- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Session IDs remain outside workflow events and API payloads.
+- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
 
 This is separate from `persist_session`: `{ resume: source }` selects ancestry within one governed run, while `persist_session` continues the same node across separate workflow invocations. If both apply to a consumer, the named source wins for the current invocation and the resulting branch is still saved for its next invocation.
 
@@ -947,7 +947,7 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 
 When a workflow-level `persist_sessions: true` is combined with any of these node types, the capability check and persistence logic both skip the non-applicable nodes — no false validation errors, no silent runtime mistakes.
 
-To continue a node's conversation outside Archon, read its session id from `archon workflow get <run-id> --verbose` and pass it to the provider's own resume command, such as `claude --resume <id>`.
+To continue a node's conversation outside Archon, read its session id from `archon workflow get <run-id> --verbose` and pass it to the provider's own resume command, such as `claude --resume <id>`. Claude Code finds a session by the directory it ran in, so run that command from the node's working directory: the run's worktree when the run used one.
 
 ### `context: fresh` overrides
 

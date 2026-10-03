@@ -588,8 +588,9 @@ work and invalid reported numbers. A reported zero stays zero. Historical nodes 
 when their rows lack these facts; they do not receive a guessed model or start time.
 
 `timing.durationMs` is elapsed wall time, not active compute time. Resumed loop durations can
-include time spent paused; bare approval retains the duration observed before the pause. Public
-records contain at most eight session-ID characters, never the full continuation handle. JSONL
+include time spent paused; bare approval retains the duration observed before the pause.
+`execution.binding.sessionPreview` holds at most eight session-ID characters; the full id is
+in the node's `sessionIds`, described below. JSONL
 transcripts retain the names `node_start`, `node_complete` and `node_error`; their `execution`
 metadata describes the same fact as the durable node event. Suspended nodes remain active and
 appear as running until their gate or wait resolves.
@@ -636,7 +637,9 @@ ASCII `...`, while failed nodes include `error` (or `Unknown error` when none wa
 recorded). Nodes whose provider reported a session include `sessionIds`: the full
 session id of each attempt and loop iteration, in order. Human `--verbose` output prints
 them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in
-the provider's own tool, for example with `claude --resume <id>`.
+the provider's own tool, for example with `claude --resume <id>`. Claude Code finds a
+session by the directory it ran in, so run it from the node's working directory: the run's
+worktree when the run used one.
 
 Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
 debugging. Raw events are not the recommended integration surface.
