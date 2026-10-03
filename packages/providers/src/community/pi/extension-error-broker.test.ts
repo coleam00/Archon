@@ -91,7 +91,8 @@ describe('Pi extension process-error broker', () => {
       secondStarted = true;
       return turn;
     });
-    await Promise.resolve();
+    // A macrotask drains every pending microtask, so an ungated second turn would have started.
+    await new Promise(resolve => setTimeout(resolve, 0));
     expect(secondStarted).toBe(false);
 
     first.close();

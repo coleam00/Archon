@@ -24,6 +24,7 @@ import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
 import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-error-broker';
+import { Semaphore } from './semaphore';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -47,40 +48,12 @@ import { beginPiExtensionTurn, piExtensionFailureEvidence } from './extension-er
 // ─── Concurrency throttle ────────────────────────────────────────────────────
 
 /**
- * Simple counting semaphore for capping concurrent Pi `session.prompt()` calls.
- * Pi/Minimax has no built-in SDK-level throttling; without this, large parallel
- * workflow batches (e.g. 10+ concurrent review PRs × 5 aspects each) hit rate
- * limits and cascade-fail. Module-level so it's shared across all PiProvider
- * instances within a process — Pi concurrency is global (one upstream backend).
+ * Caps concurrent Pi `session.prompt()` calls. Pi/Minimax has no built-in
+ * SDK-level throttling; without this, large parallel workflow batches (e.g. 10+
+ * concurrent review PRs × 5 aspects each) hit rate limits and cascade-fail.
+ * Module-level so it's shared across all PiProvider instances within a process —
+ * Pi concurrency is global (one upstream backend).
  */
-class Semaphore {
-  private available: number;
-  private readonly waiters: (() => void)[] = [];
-
-  constructor(count: number) {
-    this.available = count;
-  }
-
-  acquire(): Promise<void> {
-    if (this.available > 0) {
-      this.available--;
-      return Promise.resolve();
-    }
-    return new Promise<void>(resolve => {
-      this.waiters.push(resolve);
-    });
-  }
-
-  release(): void {
-    const next = this.waiters.shift();
-    if (next) {
-      next();
-      return;
-    }
-    this.available++;
-  }
-}
-
 let piSemaphore: Semaphore | undefined;
 
 /**
@@ -897,9 +870,7 @@ export class PiProvider implements IAgentProvider {
     // A detached process error carries no session id. Keep turns that actually
     // loaded extension code single-filed so a matching stack has one owner.
     const extensionTurn =
-      enableExtensions && extensionPaths.length > 0
-        ? await beginPiExtensionTurn(extensionPaths)
-        : undefined;
+      extensionPaths.length > 0 ? await beginPiExtensionTurn(extensionPaths) : undefined;
     try {
       const { session, modelFallbackMessage } = await createAgentSession({
         cwd,

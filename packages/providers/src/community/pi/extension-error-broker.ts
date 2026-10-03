@@ -1,29 +1,12 @@
 import { createLogger } from '@archon/paths';
 import type { ExtensionError } from '@earendil-works/pi-coding-agent';
 
+import { Semaphore } from './semaphore';
+
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi.extension-error-broker');
   return cachedLog;
-}
-
-class TurnGate {
-  private available = true;
-  private readonly waiters: (() => void)[] = [];
-
-  acquire(): Promise<void> {
-    if (this.available) {
-      this.available = false;
-      return Promise.resolve();
-    }
-    return new Promise(resolve => this.waiters.push(resolve));
-  }
-
-  release(): void {
-    const next = this.waiters.shift();
-    if (next) next();
-    else this.available = true;
-  }
 }
 
 export interface PiExtensionTurn {
@@ -41,7 +24,7 @@ interface ActiveTurn {
   readonly turn: PiExtensionTurn;
 }
 
-const gate = new TurnGate();
+const gate = new Semaphore(1);
 const failureEvidence = new WeakMap<Error, string>();
 let activeTurn: ActiveTurn | undefined;
 
