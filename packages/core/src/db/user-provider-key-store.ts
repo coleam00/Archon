@@ -285,14 +285,22 @@ async function resolveOAuthCredential(
       { err: err as Error, userId, provider },
       'user_provider_key.oauth_refresh_failed'
     );
-    const evidence = (err as Error).message || 'The token refresh failed without a message.';
-    // Only Archon's own OpenAI flow reports an HTTP status. A token endpoint that
-    // answers 4xx rejected the grant; anything else (network, timeout, outage, Pi's
-    // untyped refresh errors) leaves the credential's health unknown.
-    if (err instanceof OpenAiTokenError && err.status && !isVendorUnavailableStatus(err.status)) {
-      return { state: 'unusable', source: 'archon', evidence };
+    if (!(err instanceof OpenAiTokenError)) {
+      // Pi's refresh errors embed the vendor response body, which can carry account
+      // identifiers or issued tokens. The full error stays in the log above only.
+      return {
+        state: 'check_failed',
+        source: 'archon',
+        evidence: "The vendor's token refresh failed.",
+      };
     }
-    return { state: 'check_failed', source: 'archon', evidence };
+    // Archon's own OpenAI flow reports an HTTP status and a body-free message. A token
+    // endpoint that answers 4xx rejected the grant; anything else (network, timeout,
+    // outage) leaves the credential's health unknown.
+    if (err.status && !isVendorUnavailableStatus(err.status)) {
+      return { state: 'unusable', source: 'archon', evidence: err.message };
+    }
+    return { state: 'check_failed', source: 'archon', evidence: err.message };
   }
   if (!result) {
     getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_api_key');

@@ -279,13 +279,13 @@ describe('user-provider-key-store', () => {
       });
     });
 
-    test('Pi refresh throws → check_failed with its message as evidence (cause unknown)', async () => {
+    test('Pi refresh throws → check_failed with fixed evidence (cause unknown)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
       mockGetOAuthApiKey.mockRejectedValueOnce(new Error('Anthropic token refresh failed'));
       expect(await getDecryptedProviderCredential('user-1', 'claude')).toEqual({
         state: 'check_failed',
         source: 'archon',
-        evidence: 'Anthropic token refresh failed',
+        evidence: "The vendor's token refresh failed.",
       });
     });
 
@@ -446,7 +446,6 @@ describe('user-provider-key-store', () => {
         new MockOpenAiTokenError('request failed: fetch failed'),
         'check_failed',
       ],
-      ['an untyped error', new Error('response missing access_token'), 'check_failed'],
     ])('openai refresh failure from %s is reported, never thrown', async (_label, error, state) => {
       mockMintOpenAi.mockRejectedValueOnce(error);
       mockQuery.mockResolvedValueOnce(createQueryResult([openaiOauthRow()]));
@@ -476,6 +475,21 @@ describe('user-provider-key-store', () => {
           secret: 'minted-oauth-key',
           check: async () => {
             mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+            return getStoredCredentialStatus('user-1', 'claude');
+          },
+        },
+        {
+          // Pi's refresh errors embed the vendor response body, which can carry tokens.
+          name: 'refresh failure',
+          expected: 'check_failed',
+          secret: 'sk-ant-ort01-PLANTED',
+          check: async () => {
+            mockQuery.mockResolvedValueOnce(createQueryResult([oauthRow()]));
+            mockGetOAuthApiKey.mockRejectedValueOnce(
+              new Error(
+                'HTTP request failed. status=400; body={"refresh_token":"sk-ant-ort01-PLANTED"}'
+              )
+            );
             return getStoredCredentialStatus('user-1', 'claude');
           },
         },
