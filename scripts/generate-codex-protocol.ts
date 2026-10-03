@@ -36,6 +36,7 @@ const ROOTS = [
   'v2/ThreadResumeResponse',
   'v2/TurnStartResponse',
   'v2/TurnInterruptResponse',
+  'v2/LoginAccountResponse',
 ];
 
 async function generate(): Promise<Map<string, string>> {

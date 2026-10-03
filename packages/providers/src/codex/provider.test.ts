@@ -265,7 +265,8 @@ describe('CodexProvider', () => {
   describe('API key opt-in', () => {
     test('CODEX_API_KEY logs in with the key, held only by the process', async () => {
       const { provider, server } = providerWith();
-      await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } });
+      const chunks = await run(provider, { env: { CODEX_API_KEY: 'sk-test-key' } });
+      expect(resultOf(chunks).failure).toBeUndefined();
       const process0 = server.processes[0];
       expect(process0.args).toEqual(['app-server', '-c', 'cli_auth_credentials_store="ephemeral"']);
       expect(process0.methods.slice(0, 2)).toEqual(['initialize', 'account/login/start']);

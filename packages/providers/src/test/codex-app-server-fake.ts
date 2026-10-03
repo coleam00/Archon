@@ -10,10 +10,12 @@ import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
 import type { Spawner } from '../codex/app-server';
+import type { ClientRequest } from '../codex/protocol/ClientRequest';
 import type { InitializeResponse } from '../codex/protocol/InitializeResponse';
 import type { ServerNotification } from '../codex/protocol/ServerNotification';
 import type { CodexErrorInfo } from '../codex/protocol/v2/CodexErrorInfo';
 import type { FileUpdateChange } from '../codex/protocol/v2/FileUpdateChange';
+import type { LoginAccountResponse } from '../codex/protocol/v2/LoginAccountResponse';
 import type { McpToolCallStatus } from '../codex/protocol/v2/McpToolCallStatus';
 import type { RateLimitWindow } from '../codex/protocol/v2/RateLimitWindow';
 import type { Thread } from '../codex/protocol/v2/Thread';
@@ -25,6 +27,9 @@ import type { TurnError } from '../codex/protocol/v2/TurnError';
 import type { TurnInterruptResponse } from '../codex/protocol/v2/TurnInterruptResponse';
 import type { TurnStartResponse } from '../codex/protocol/v2/TurnStartResponse';
 import type { TurnStatus } from '../codex/protocol/v2/TurnStatus';
+
+/** A request method, from the generated protocol: a renamed method fails type-check here. */
+type Method = ClientRequest['method'];
 
 type CommandExecution = Extract<ThreadItem, { type: 'commandExecution' }>;
 type McpToolCall = Extract<ThreadItem, { type: 'mcpToolCall' }>;
@@ -42,7 +47,7 @@ export interface FakeTurnScript {
    */
   startupFailure?: { code: number; stderr: string } | { signal: NodeJS.Signals; stderr: string };
   /** JSON-RPC errors by method. */
-  errors?: Record<string, { code: number; message: string }>;
+  errors?: Partial<Record<Method, { code: number; message: string }>>;
   /** Fail the spawn itself with this errno code. */
   spawnError?: string;
   /** Never answer `turn/interrupt`, as a wedged Codex would not. */
@@ -164,12 +169,14 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         newline = buffered.indexOf('\n');
         const message = JSON.parse(line) as { id?: number; method?: string; params?: unknown };
         if (typeof message.method !== 'string') continue;
-        const { method, id } = message;
-        if (id === undefined) {
-          record.notifications.push(method);
-          if (method === 'initialized') initialized = true;
+        if (message.id === undefined) {
+          record.notifications.push(message.method);
+          if (message.method === 'initialized') initialized = true;
           continue;
         }
+        const id = message.id;
+        // The cast types the cases below; a method outside the union reaches `default`.
+        const method = message.method as Method;
         record.requests.push({ method, params: message.params as Record<string, unknown> });
         if (method !== 'initialize' && !initialized) {
           send({ id, error: { code: -32600, message: 'Not initialized' } });
@@ -208,8 +215,16 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
             send({ id, result: {} satisfies TurnInterruptResponse });
             completeTurn('interrupted');
             break;
+          case 'account/login/start':
+            send({ id, result: { type: 'apiKey' } satisfies LoginAccountResponse });
+            break;
           default:
-            send({ id, result: {} });
+            // What Codex answers for a method it does not serve. The fake serves only what
+            // the provider sends, so a new request fails the test until it is scripted here.
+            send({
+              id,
+              error: { code: -32600, message: `Invalid request: unknown variant \`${method}\`` },
+            });
         }
       }
     });
