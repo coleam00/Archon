@@ -1136,6 +1136,14 @@ async function snapshotCheckout(
 }
 
 /**
+ * A node whose `mutates_checkout: false` the engine enforces: exec and agent nodes.
+ * Every other node may write to the checkout as far as layer scheduling knows.
+ */
+function isCheckoutGuarded(node: DagNode): boolean {
+  return node.mutates_checkout === false && (isExecNode(node) || isAgentNode(node));
+}
+
+/**
  * Enforce a node's `mutates_checkout: false` declaration (#2771): when the node ran
  * successfully but the pre-run snapshot changed, rewrite its result to a failure that
  * names the node and lists what moved, and persist the standard `node_failed` event so
@@ -1151,7 +1159,8 @@ async function assertCheckoutUntouched(
   before: string | undefined,
   result: NodeExecutionResult,
   deps: WorkflowDeps,
-  logDir: string
+  logDir: string,
+  concurrentGuardedSiblings: readonly string[] = []
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -1166,7 +1175,10 @@ async function assertCheckoutUntouched(
     .flatMap(porcelainPaths)
     .slice(0, 10)
     .join(', ');
-  const error = `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`;
+  const error =
+    concurrentGuardedSiblings.length === 0
+      ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
+      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed while it ran beside the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')}: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
   if (result.execution === undefined) {
     throw new Error(`Node '${node.id}' completed without its execution record`);
@@ -9046,6 +9058,12 @@ interface RunLayersContext extends RunInputs, RunDerived {
   nodeInvocation?: NodeInvocation;
   /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
   currentExecution?: NodeExecutionRecord;
+  /**
+   * Guarded siblings running at the same time as this guarded node, named in its
+   * `mutates_checkout: false` violation because any of them may be the writer.
+   * Empty when the node ran alone in its window. Set per node; never inherited.
+   */
+  concurrentGuardedSiblings?: readonly string[];
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
@@ -9285,19 +9303,28 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
       ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
     }
 
-    // Build a thunk per node so the layer can run either concurrently or, when any
-    // node guards its checkout, strictly sequentially: the `mutates_checkout: false`
-    // assertion snapshots before and asserts after a node's own execution, so a
-    // concurrent sibling's write landing inside that window would be falsely
-    // attributed to the guarded node. Serializing the whole layer keeps that window
-    // exclusive — including loop/loop_group/workflow siblings whose internal
-    // execution would otherwise overlap it.
+    // Build a thunk per node so the layer can run either concurrently or strictly
+    // sequentially. The `mutates_checkout: false` assertion snapshots before and
+    // asserts after a node's own execution, so when a guarded node shares the layer
+    // with a node that may write (any unguarded node, including loop/loop_group/
+    // workflow siblings whose internal execution would overlap the window), that
+    // sibling's legitimate write would be blamed on the guarded node: such a mixed
+    // layer runs sequentially. A layer of guarded nodes only runs concurrently, since
+    // no node in it may write: the writer still sees its own write and fails, and a
+    // sibling whose window overlapped fails with it, its error naming the siblings.
+    const guardedCount = layer.filter(isCheckoutGuarded).length;
+    const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
+    const guardedSiblingsOf = (node: DagNode): readonly string[] =>
+      !serializeLayer && isCheckoutGuarded(node)
+        ? layer.filter(n => n !== node).map(n => n.id)
+        : [];
     const nodeThunks = layer.map(
       (node): (() => Promise<LayerNodeResult>) =>
         async (): Promise<LayerNodeResult> => {
           const ctx: RunLayersContext = {
             ...parentCtx,
             currentExecution: undefined,
+            concurrentGuardedSiblings: guardedSiblingsOf(node),
             nodeInvocation:
               parentCtx.unfinishedInvocations?.get(
                 nodeInvocationKey(parentCtx.stepNamePrefix + node.id, parentCtx.loopGroupPath)
@@ -9620,7 +9647,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       treeBefore,
                       output,
                       ctx.deps,
-                      ctx.logDir
+                      ctx.logDir,
+                      ctx.concurrentGuardedSiblings
                     ),
                   };
                 }
@@ -9661,7 +9689,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     treeBefore,
                     output,
                     ctx.deps,
-                    ctx.logDir
+                    ctx.logDir,
+                    ctx.concurrentGuardedSiblings
                   ),
                 };
               }
@@ -10084,7 +10113,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               treeBefore,
               retriedOutput,
               ctx.deps,
-              ctx.logDir
+              ctx.logDir,
+              ctx.concurrentGuardedSiblings
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
@@ -10220,9 +10250,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
           }
         }
     );
-    // A guarded node in the layer forces fully sequential execution (see the thunk
-    // comment above); an unguarded layer keeps the concurrent `allSettled` path.
-    const layerResults = layer.some(node => node.mutates_checkout === false)
+    // A layer mixing guarded and unguarded nodes runs sequentially (see the thunk
+    // comment above); every other layer keeps the concurrent `allSettled` path.
+    const layerResults = serializeLayer
       ? await settleSequentially(nodeThunks)
       : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
