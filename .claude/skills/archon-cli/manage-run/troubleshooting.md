@@ -170,7 +170,7 @@ A `persist_session` node whose provider couldn't restore the prior session runs 
 
 ### `cannot fork a session` warning
 
-The node's provider cannot fork a session (no `sessionFork` in the [provider capabilities](https://archon.diy/reference/provider-capabilities/)), so a `persist_session` node on it never continues an earlier run's session: every run starts fresh and records a `node_session_not_continued` event. This is expected, not broken state, and `reset-sessions` does not change it. To carry context across runs, move the node to a provider that forks sessions, or have it write what the next run needs as an artifact and read that instead. If neither applies, remove `persist_session` from the node.
+The node's provider cannot fork a session (no `sessionFork` in the [provider capabilities](https://archon.diy/reference/provider-capabilities/)), so a `persist_session` node on it never continues an earlier run's session: every run starts fresh. `archon validate workflows` reports this when the provider is written in the workflow file. Once an earlier run has saved a session, each later run also posts this warning in chat and records a `node_session_not_continued` event naming the session it skipped. This is expected, not broken state, and `reset-sessions` does not change it. To carry context across runs, move the node to a provider that forks sessions, or have it write what the next run needs as an artifact and read that instead. If neither applies, remove `persist_session` from the node.
 
 ## Useful Diagnostic Commands
 
