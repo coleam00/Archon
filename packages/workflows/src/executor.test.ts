@@ -1487,7 +1487,7 @@ describe('executeWorkflow', () => {
       // Provider is explicit; the model string is forwarded verbatim to
       // whichever SDK the resolved provider names. A workflow that sets
       // provider:codex with a Claude-looking model gets the request handed
-      // to the codex SDK as-is — the SDK decides whether to accept it.
+      // to Codex as-is — Codex decides whether to accept it.
       const store = makeStore();
       const deps = makeDeps(store);
       await executeWorkflow(
