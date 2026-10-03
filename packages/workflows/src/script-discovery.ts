@@ -299,9 +299,7 @@ async function discoverBundledPackagedScripts(
   // binary's embedded ones to files, so the filesystem path serves both builds.
   if (roots.kind === 'captured') return discoverPackagedScripts(roots.bundledWorkflows, 'bundled');
   if (isBinaryBuild()) return materializeBundledScripts();
-  const files =
-    (await collectInstalledBundleSources(roots.bundledWorkflows, dirname(roots.bundledCommands))) ??
-    [];
+  const files = (await collectInstalledBundleSources(roots.bundledWorkflows)) ?? [];
   const scripts = new Map<string, ScriptDefinition>();
   for (const file of files) {
     if (file.kind !== 'script' || file.entry === undefined) continue;

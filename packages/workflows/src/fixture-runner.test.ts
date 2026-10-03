@@ -30,8 +30,7 @@ afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
-  getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
-  getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
+  getBundledWorkflowsPath: () => bundledDefaultsRoot,
 }));
 
 import { execFileAsync, resolveBashPath } from '@archon/git';
@@ -1154,8 +1153,8 @@ describe('runFixtures exec-code isolation (#2851)', () => {
    * `git worktree add` has nothing to check out without a HEAD commit, so every exec-code
    * test needs its caller to be a real repository. Built in place that is three git
    * processes per test, and process creation is what this block costs on a contended
-   * Windows runner — the parity test below spent 5015ms of a 5000ms budget there. A plain
-   * repository's metadata holds no absolute paths, so copying a prepared one is an
+   * Windows runner — the parity test below spent 5015ms of the 5000ms budget it then
+   * had. A plain repository's metadata holds no absolute paths, so copying a prepared one is an
    * independent repository at file-copy price: ~0.8ms measured locally against ~50ms for
    * the three processes.
    *

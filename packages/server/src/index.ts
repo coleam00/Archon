@@ -54,8 +54,14 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import {
+  claimPiExtensionProcessError,
+  registerBuiltinProviders,
+  registerCommunityProviders,
+} from '@archon/providers';
 import { getVendorCatalog } from '@archon/core';
+import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
+import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
@@ -88,10 +94,10 @@ import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './route
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
 import {
+  resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
-  workflowResumeConversationId,
-  workflowResumeTargetForConversation,
+  workflowResumeTargetForRun,
 } from './services/workflow-resume-service';
 import {
   handleMessage,
@@ -119,7 +125,7 @@ import {
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
-import * as conversationDb from '@archon/core/db/conversations';
+import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
   createLogger,
@@ -209,11 +215,12 @@ function createMessageErrorHandler(
  * Exported for testability. Filters specifically for SDK cleanup races
  * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
  * a DAG node abort). Those are logged at error level but do not exit the process.
- * All other unhandled rejections are unexpected bugs — they are logged at fatal
- * level and the process exits as soon as queued telemetry flushes (bounded, so
- * still Fail Fast).
+ * A stack-attested error from the one active Pi extension turn is handed back to
+ * that node. Every other rejection is logged at fatal level and exits after
+ * queued telemetry flushes (bounded, so still Fail Fast).
  */
 export function handleUnhandledRejection(reason: unknown): void {
+  if (claimPiExtensionProcessError(reason)) return;
   const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
   // SDK cleanup race: PostToolUse hook writes to a closed pipe after a DAG node
   // abort. Safe to absorb — these are transient artifacts, not application bugs.
@@ -224,6 +231,19 @@ export function handleUnhandledRejection(reason: unknown): void {
   // All other unhandled rejections are unexpected — crash loudly so they are
   // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
+  void exitAfterTelemetryFlush(1);
+}
+
+/**
+ * Handles exceptions that escape detached Pi extension callbacks. Errors whose
+ * stacks do not identify an active extension retain the fatal process fallback.
+ */
+export function handleUncaughtException(
+  error: Error,
+  origin?: NodeJS.UncaughtExceptionOrigin
+): void {
+  if (claimPiExtensionProcessError(error)) return;
+  getLog().fatal({ err: error, origin }, 'uncaught_exception.fatal');
   void exitAfterTelemetryFlush(1);
 }
 
@@ -297,19 +317,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // shared Claude key — auth is delivered per request from the encrypted store,
   // so it must NOT trip the no-credentials exit (#1983).
   const hasClaudeCredentials = hasClaudeBootAuthPosture(process.env);
-  const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const codexAuth = readCodexBootAuth(process.env);
+  if (codexAuth.deprecated.length > 0) {
+    getLog().warn(
+      { hint: formatCodexSetupDeprecation(codexAuth.deprecated) },
+      'codex_setup_env_deprecated'
+    );
+  }
+  const hasCodexCredentials = codexAuth.hasCredentials;
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     getLog().fatal(
       {
         checked: {
           claude: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_USE_GLOBAL_AUTH'],
-          codex: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'],
+          codex: CODEX_BOOT_CHECKED,
         },
         hints: [
           'Set CLAUDE_USE_GLOBAL_AUTH=true in .env (requires `claude /login` first)',
           'Or set CLAUDE_API_KEY in .env',
-          'Or set CODEX_ID_TOKEN + CODEX_ACCESS_TOKEN in .env',
+          `Or set ${CODEX_BOOT_CHECKED.join(' + ')} in .env`,
           'See .env.example for all options',
         ],
         envFile: BUNDLED_IS_BINARY ? getArchonEnvPath() : envPath,
@@ -326,10 +353,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
   }
   if (!hasCodexCredentials) {
-    getLog().warn(
-      { checked: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'] },
-      'codex_credentials_missing'
-    );
+    getLog().warn({ checked: CODEX_BOOT_CHECKED }, 'codex_credentials_missing');
   }
 
   // Test database connection
@@ -389,6 +413,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const workflowBridge = new WorkflowEventBridge(transport);
   const webAdapter = new WebAdapter(transport, persistence, workflowBridge);
   await webAdapter.start();
+  const workflowPlatforms = new Map<string, IWorkflowPlatform>([
+    [webAdapter.getPlatformType(), webAdapter],
+  ]);
   persistence.startPeriodicFlush();
 
   // Stream workflow runs started in ANY process (incl. the `archon` CLI / `--detach`)
@@ -487,6 +514,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getUserToken,
       });
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub (App)');
       getLog().info(
         { slug: githubAppAuthProvider.slug, defaultInstallationId },
@@ -503,6 +531,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const auth: GitHubAuth = { kind: 'pat', token: patToken };
       github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub');
       getLog().info('github.adapter_mode_pat');
     } else {
@@ -521,6 +550,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         giteaBotMention
       );
       await gitea.start();
+      workflowPlatforms.set(gitea.getPlatformType(), gitea);
       activePlatforms.push('Gitea');
     } else {
       getLog().info('gitea_adapter_skipped');
@@ -538,6 +568,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         gitlabBotMention
       );
       await gitlab.start();
+      workflowPlatforms.set(gitlab.getPlatformType(), gitlab);
       activePlatforms.push('GitLab');
     } else {
       getLog().info('gitlab_adapter_skipped');
@@ -613,6 +644,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // unrelated bot misconfiguration. See #1365.
       try {
         await discord.start();
+        workflowPlatforms.set(discord.getPlatformType(), discord);
         activePlatforms.push('Discord');
       } catch (error) {
         const err = error as Error;
@@ -687,7 +719,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
       // refuses new event-handler registrations once the connection is open,
       // so `app.action(...)` calls inside the bridge must run first.
-      slackBridge = new SlackWorkflowBridge(slack);
+      workflowPlatforms.set(slack.getPlatformType(), slack);
+      slackBridge = new SlackWorkflowBridge(slack, async (runId, slackUserId) => {
+        const run = await workflowDb.getWorkflowRun(runId);
+        if (!run) return false;
+        const actorUserId = await resolveUserId('slack', slackUserId, undefined);
+        const target = await workflowResumeTargetForRun(run, workflowPlatforms);
+        return resumeWorkflowRunFromServer(run, actorUserId, target);
+      });
       slackBridge.attach();
 
       await slack.start();
@@ -992,6 +1031,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     try {
       await telegramAdapter.start();
+      workflowPlatforms.set(telegramAdapter.getPlatformType(), telegramAdapter);
       activePlatforms.push('Telegram');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1006,34 +1046,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // adapter is initialized. Web background runs execute against a hidden worker
   // conversation but deliver to their visible parent; other runs use their owning
   // conversation directly.
-  const workflowPlatforms = new Map<string, IWorkflowPlatform>();
-  for (const platform of [webAdapter, github, gitea, gitlab, discord, slack, telegram]) {
-    if (platform !== null) workflowPlatforms.set(platform.getPlatformType(), platform);
-  }
-  startWorkflowContinuationScheduler(async run => {
-    const conversation = await conversationDb.getConversationById(
-      workflowResumeConversationId(run)
-    );
-    if (!conversation) {
-      return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
-    }
-    if (run.parent_conversation_id !== null) {
-      const parent = await conversationDb.getConversationById(run.parent_conversation_id);
-      if (!parent?.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'parent conversation no longer exists' };
-      }
-      if (!conversation.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'worker conversation has no platform id' };
-      }
-      return workflowResumeTargetForConversation(
-        parent,
-        workflowPlatforms,
-        conversation.platform_conversation_id,
-        parent.platform_conversation_id
-      );
-    }
-    return workflowResumeTargetForConversation(conversation, workflowPlatforms);
-  }, requestResourceStartDrain);
+  startWorkflowContinuationScheduler(
+    run => workflowResumeTargetForRun(run, workflowPlatforms),
+    requestResourceStartDrain
+  );
   if (resourceStartHostId)
     getLog().info({ hostId: resourceStartHostId }, 'resource_start_host_enabled');
 
@@ -1089,7 +1105,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 
-  // Guard against SDK cleanup races: when a DAG node is aborted mid-execution,
+  // Guard against SDK cleanup races and hand stack-attested Pi extension
+  // failures back to their serialized node turn. When a DAG node is aborted,
   // the Claude Agent SDK's PostToolUse hook may be in-flight. After the hook
   // returns { continue: true }, handleControlRequest() tries to write() back to
   // the subprocess pipe — but the pipe is already closed (abort fired). The
@@ -1097,6 +1114,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // because it occurs AFTER the for-await generator loop exits (and thus outside
   // the try/catch in claude.ts). These are SDK cleanup races, not fatal app errors.
   process.on('unhandledRejection', handleUnhandledRejection);
+  process.on('uncaughtException', handleUncaughtException);
 
   getLog().info({ activePlatforms, port }, 'server_ready');
 

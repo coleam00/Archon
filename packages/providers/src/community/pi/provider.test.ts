@@ -7,6 +7,7 @@ import type {
   AgentSessionEvent,
   CreateAgentSessionOptions,
   CreateAgentSessionResult,
+  ExtensionError,
   ModelRegistry,
 } from '@earendil-works/pi-coding-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
@@ -322,22 +323,32 @@ import { ARCHON_PI_ANTHROPIC_OAUTH_SYSTEM_PROMPT, PiProvider } from './provider'
 import { PI_CAPABILITIES } from './capabilities';
 // Same module instance the provider dynamic-imports, so clearing this cache
 // resets the loader the provider reuses across calls (issue #1877).
+import { runProviderConformance } from '@archon/provider-contract/conformance';
 import {
   getOrCreateReloadedExtensionLoader,
   resetReloadedExtensionLoaderCache,
 } from './resource-loader';
+import { claimPiExtensionProcessError } from './extension-error-broker';
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
-async function consume(
-  generator: AsyncGenerator<unknown>
-): Promise<{ chunks: unknown[]; error?: Error }> {
+async function consume(generator: AsyncGenerator<unknown>): Promise<{
+  chunks: unknown[];
+  error?: Error;
+  /** The typed failure the turn's result reported, if it failed. */
+  failure?: { class: string; evidence: string };
+}> {
   const chunks: unknown[] = [];
+  let failure: { class: string; evidence: string } | undefined;
   try {
-    for await (const chunk of generator) chunks.push(chunk);
-    return { chunks };
+    for await (const chunk of generator) {
+      chunks.push(chunk);
+      const result = chunk as { type?: string; failure?: { class: string; evidence: string } };
+      if (result.type === 'result' && result.failure) failure = result.failure;
+    }
+    return { chunks, failure };
   } catch (err) {
-    return { chunks, error: err as Error };
+    return { chunks, failure, error: err as Error };
   }
 }
 
@@ -451,9 +462,9 @@ describe('PiProvider', () => {
     expect(stub.piConfig).toEqual({});
   });
 
-  test('throws when no model is configured', async () => {
-    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(error?.message).toContain('Pi provider requires a model');
+  test('reports a failure when no model is configured', async () => {
+    const { failure } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(failure?.evidence).toContain('Pi provider requires a model');
   });
 
   test('falls back to the operator Pi default (settings.json) when no model is configured', async () => {
@@ -478,14 +489,14 @@ describe('PiProvider', () => {
     expect(mockModelRegistryFind).toHaveBeenCalledWith('google', 'gemini-2.5-pro');
   });
 
-  test('still throws when no model and settings default is incomplete (provider without model)', async () => {
+  test('still reports a failure when no model and settings default is incomplete (provider without model)', async () => {
     // A partial default (provider set but no model, or vice versa) must NOT
     // silently resolve — fail fast with the actionable "requires a model" error.
     mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
       defaultProvider: 'google',
     }));
-    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(error?.message).toContain('Pi provider requires a model');
+    const { failure } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(failure?.evidence).toContain('Pi provider requires a model');
     expect(mockLogger.info).not.toHaveBeenCalledWith(
       expect.anything(),
       'pi.model_defaulted_from_settings'
@@ -500,19 +511,20 @@ describe('PiProvider', () => {
     mockSettingsManagerDrainErrors.mockImplementation(() => [
       { scope: 'global', error: new Error('bad settings.json') },
     ]);
-    const { error } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
-    expect(error?.message).toContain('Pi provider requires a model');
+    const { failure } = await consume(new PiProvider().sendQuery('hi', '/tmp'));
+    expect(failure?.evidence).toContain('Pi provider requires a model');
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ scope: 'global' }),
       'pi.settings_default_model_read_error'
     );
   });
 
-  test('throws when model ref is malformed', async () => {
-    const { error } = await consume(
+  test('reports a failure when model ref is malformed', async () => {
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'sonnet' })
     );
-    expect(error?.message).toContain('Invalid Pi model ref');
+    expect(failure?.class).toBe('misconfigured');
+    expect(failure?.evidence).toContain('Invalid Pi model ref');
   });
 
   test('logs credential hint when Pi provider id is unknown AND no creds available', async () => {
@@ -781,16 +793,16 @@ describe('PiProvider', () => {
     });
 
     try {
-      const { error } = await consume(
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'mygw/demo',
           env: { MYGW_API_KEY: 'request-secret' },
           protectedEnvKeys: [],
         })
       );
-      expect(error).toBeDefined();
-      expect(error?.message).toContain('Pi auth storage init failed');
-      expect(error?.message).toContain('simulated SDK failure');
+      expect(failure?.class).toBe('unknown');
+      expect(failure?.evidence).toContain('Pi auth storage init failed');
+      expect(failure?.evidence).toContain('simulated SDK failure');
       // Capture the path from the call that DID happen (before the throw).
       const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
         | { modelsPath?: string }
@@ -856,7 +868,7 @@ describe('PiProvider', () => {
     process.env.TEMP = scratchTmp;
 
     try {
-      const { error } = await consume(
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'mygw/demo',
           env: { MYGW_API_KEY: 'request-secret' },
@@ -869,10 +881,10 @@ describe('PiProvider', () => {
       // above, so orchestrator pattern-matchers that key on this prefix see
       // the FS error too. Raw 'EEXIST: file already exists, mkdir …' must
       // NOT leak through unframed.
-      expect(error).toBeDefined();
-      expect(error?.message).toContain('Pi auth storage init failed');
-      expect(error?.message).toMatch(/EEXIST|file already exists/);
-      expect(error?.message).toContain('~/.pi/agent/auth.json');
+      expect(failure?.class).toBe('unknown');
+      expect(failure?.evidence).toContain('Pi auth storage init failed');
+      expect(failure?.evidence).toMatch(/EEXIST|file already exists/);
+      expect(failure?.evidence).toContain('~/.pi/agent/auth.json');
       expect(mockLogger.error).toHaveBeenCalledWith(
         expect.objectContaining({ piProvider: 'mygw' }),
         'pi.auth_storage_init_failed'
@@ -995,16 +1007,16 @@ describe('PiProvider', () => {
       throw new Error('Unexpected token } in JSON at position 42');
     });
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
       })
     );
 
-    expect(error).toBeDefined();
-    expect(error?.message).toContain('Pi auth storage init failed');
-    expect(error?.message).toContain('Unexpected token');
-    expect(error?.message).toContain('~/.pi/agent/auth.json');
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain('Pi auth storage init failed');
+    expect(failure?.evidence).toContain('Unexpected token');
+    expect(failure?.evidence).toContain('~/.pi/agent/auth.json');
     expect(mockLogger.error).toHaveBeenCalledWith(
       expect.objectContaining({ piProvider: 'google' }),
       'pi.auth_storage_init_failed'
@@ -1030,14 +1042,15 @@ describe('PiProvider', () => {
     });
 
     resetScript(scriptedAgentEnd());
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'lm-studio/some-model',
       })
     );
 
-    expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('pi update --models');
+    expect(failure?.class).toBe('misconfigured');
+    expect(failure?.evidence).toContain('Pi model not found');
+    expect(failure?.evidence).toContain('pi update --models');
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({
         piProvider: 'lm-studio',
@@ -1048,16 +1061,17 @@ describe('PiProvider', () => {
     );
   });
 
-  test('throws when env var missing AND auth.json has no entry', async () => {
+  test('reports a failure when env var missing AND auth.json has no entry', async () => {
     // GEMINI_API_KEY not set (beforeEach deletes it), fileCreds empty
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(error?.message).toContain('no credentials for provider');
-    expect(error?.message).toContain('GEMINI_API_KEY');
-    expect(error?.message).toContain('/login');
+    expect(failure?.class).toBe('auth');
+    expect(failure?.evidence).toContain('no credentials for provider');
+    expect(failure?.evidence).toContain('GEMINI_API_KEY');
+    expect(failure?.evidence).toContain('/login');
   });
 
   test('uses OAuth credential from ~/.pi/agent/auth.json when no env var set', async () => {
@@ -1101,7 +1115,7 @@ describe('PiProvider', () => {
     expect(mockGetAuth).toHaveBeenCalledWith('anthropic');
   });
 
-  test('throws when ModelRegistry.find returns undefined', async () => {
+  test('reports a failure when ModelRegistry.find returns undefined', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = '/custom/pi-agent';
@@ -1110,18 +1124,18 @@ describe('PiProvider', () => {
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     resetScript(scriptedAgentEnd());
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/unknown-model-id',
       })
     );
     // A known provider with an unknown model id is a stale catalog, not a
     // missing provider extension, so the extension remedy must not appear.
-    expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('pi update --models');
-    expect(error?.message).toContain(join('/custom/pi-agent', 'models-store.json'));
-    expect(error?.message).not.toContain('provider extension');
-    expect(error?.message).not.toContain('enableExtensions');
+    expect(failure?.evidence).toContain('Pi model not found');
+    expect(failure?.evidence).toContain('pi update --models');
+    expect(failure?.evidence).toContain(join('/custom/pi-agent', 'models-store.json'));
+    expect(failure?.evidence).not.toContain('provider extension');
+    expect(failure?.evidence).not.toContain('enableExtensions');
     if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
   });
@@ -1132,15 +1146,15 @@ describe('PiProvider', () => {
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     mockModelRegistryFind.mockImplementationOnce(() => undefined);
     resetScript(scriptedAgentEnd());
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'nonexistent/some-model',
       })
     );
-    expect(error?.message).toContain('Pi model not found');
-    expect(error?.message).toContain('provider extension');
-    expect(error?.message).toContain('enableExtensions: true');
-    expect(error?.message).toContain('pi update --models');
+    expect(failure?.evidence).toContain('Pi model not found');
+    expect(failure?.evidence).toContain('provider extension');
+    expect(failure?.evidence).toContain('enableExtensions: true');
+    expect(failure?.evidence).toContain('pi update --models');
   });
 
   test('deferred resolution: calls session.setModel when find() resolves after bindExtensions', async () => {
@@ -1361,7 +1375,7 @@ describe('PiProvider', () => {
     expect(mockSetRuntimeApiKey).toHaveBeenCalledWith('anthropic', 'sk-ant-oat01-proc');
   });
 
-  test('coalesces text_delta events into a single assistant chunk (#1814)', async () => {
+  test('coalesces text_delta events into a single agent_message_chunk (#1814)', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
       {
@@ -1419,12 +1433,13 @@ describe('PiProvider', () => {
     // (flushed before the terminal result) so downstream consumers don't see
     // fragmented "Hello\n\n world" output — see #1814.
     expect(chunks).toEqual([
-      { type: 'assistant', content: 'Hello world' },
-      expect.objectContaining({ type: 'result', stopReason: 'stop' }),
+      { type: 'agent_message_chunk', text: 'Hello world' },
+      expect.objectContaining({ type: 'result', stopReason: 'end_turn' }),
+      { type: 'settled' },
     ]);
   });
 
-  test('yields tool + tool_result chunks for tool_execution events', async () => {
+  test('yields tool_call + tool_call_update for tool_execution events', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript([
       {
@@ -1470,23 +1485,24 @@ describe('PiProvider', () => {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(chunks.length).toBe(3);
-    expect(chunks[0]).toMatchObject({
-      type: 'tool',
-      toolName: 'read',
-      toolInput: { path: '/x' },
+    expect(chunks.length).toBe(4);
+    expect(chunks[3]).toEqual({ type: 'settled' });
+    expect(chunks[0]).toEqual({
+      type: 'tool_call',
       toolCallId: 'call-1',
+      name: 'read',
+      rawInput: { path: '/x' },
     });
-    expect(chunks[1]).toMatchObject({
-      type: 'tool_result',
-      toolName: 'read',
-      toolOutput: 'contents',
+    expect(chunks[1]).toEqual({
+      type: 'tool_call_update',
       toolCallId: 'call-1',
+      status: 'completed',
+      output: 'contents',
     });
     expect(chunks[2]).toMatchObject({ type: 'result' });
   });
 
-  test('resumeSessionId not found → fresh session + system warning', async () => {
+  test('resumeSessionId not found → fresh session + pi.resume_failed warning', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     mockSessionList.mockImplementationOnce(async () => []);
     resetScript([
@@ -1525,12 +1541,14 @@ describe('PiProvider', () => {
     expect(mockSessionList).toHaveBeenCalled();
     expect(mockSessionCreate).toHaveBeenCalledWith('/tmp');
     expect(mockSessionOpen).not.toHaveBeenCalled();
-    // Resume failure surfaces as a system warning
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    // Resume failure surfaces as a warning
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(true);
+    expect(
+      warnings.some(c => c.code === 'pi.resume_failed' && c.message.includes('Could not resume'))
+    ).toBe(true);
     // ...and as resumed:false on the result chunk so the executor can surface it.
     expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
       resumed: false,
@@ -1578,11 +1596,13 @@ describe('PiProvider', () => {
     expect(mockSessionForkFrom).not.toHaveBeenCalled();
     expect(mockSessionCreate).not.toHaveBeenCalled();
     // No resume_failed warning
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('Could not resume'))).toBe(false);
+    expect(
+      warnings.some(c => c.code === 'pi.resume_failed' && c.message.includes('Could not resume'))
+    ).toBe(false);
     // A warm resume reports resumed:true on the result chunk.
     expect(chunks.find(c => (c as { type?: string }).type === 'result')).toMatchObject({
       resumed: true,
@@ -1748,7 +1768,7 @@ describe('PiProvider', () => {
     expect(callArgs.noTools).toBe('builtin');
   });
 
-  test('unknown tool names yield system warning', async () => {
+  test('unknown tool names yield a pi.unknown_tools warning', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -1759,11 +1779,13 @@ describe('PiProvider', () => {
       })
     );
 
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('WebFetch'))).toBe(true);
+    expect(
+      warnings.some(c => c.code === 'pi.unknown_tools' && c.message.includes('WebFetch'))
+    ).toBe(true);
   });
 
   test('denied_tools alone starts from full built-in set', async () => {
@@ -2166,7 +2188,7 @@ describe('PiProvider', () => {
     expect(loaderArgs?.noExtensions).toBe(true);
   });
 
-  test('nodeConfig.skills with unknown name yields system warning, does not abort', async () => {
+  test('nodeConfig.skills with unknown name yields a warning, does not abort', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -2177,11 +2199,15 @@ describe('PiProvider', () => {
       })
     );
     expect(error).toBeUndefined();
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('definitely-does-not-exist'))).toBe(true);
+    expect(
+      warnings.some(
+        c => c.code === 'pi.skills_unresolved' && c.message.includes('definitely-does-not-exist')
+      )
+    ).toBe(true);
 
     // DefaultResourceLoader instantiated without additionalSkillPaths (all missing)
     const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
@@ -2208,21 +2234,121 @@ describe('PiProvider', () => {
 
   // ─── Error + lifecycle paths (review: "zero test coverage") ─────────
 
-  test('session.prompt rejection surfaces as thrown error to consumer', async () => {
+  test('session.prompt rejection surfaces as a typed failure', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     const promptError = new Error('pi backend exploded');
     mockPrompt.mockImplementationOnce(async () => {
       throw promptError;
     });
 
-    const { error } = await consume(
+    const { failure } = await consume(
       new PiProvider().sendQuery('hi', '/tmp', undefined, {
         model: 'google/gemini-2.5-pro',
       })
     );
-    expect(error?.message).toBe('pi backend exploded');
+    expect(failure).toEqual({ class: 'unknown', evidence: 'pi backend exploded' });
     // dispose still happens on error path
     expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('conforms to the provider contract', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const erroredAgentEnd = (): FakeEvent[] => {
+      const events = scriptedAgentEnd();
+      const end = events[0] as { messages: Record<string, unknown>[] };
+      end.messages[0].stopReason = 'error';
+      end.messages[0].errorMessage = '429 Too Many Requests: rate limit exceeded';
+      return events;
+    };
+    // Pi aborts mid-tool: `bash` started and never ended before the agent loop stopped.
+    const interruptedToolTurn = (): FakeEvent[] => {
+      const [agentEnd] = scriptedAgentEnd();
+      if (agentEnd.type !== 'agent_end') throw new Error('scriptedAgentEnd changed shape');
+      return [
+        {
+          type: 'tool_execution_start',
+          toolCallId: 'read-1',
+          toolName: 'read',
+          args: { path: '/x' },
+        },
+        {
+          type: 'tool_execution_end',
+          toolCallId: 'read-1',
+          toolName: 'read',
+          result: 'contents',
+          isError: false,
+        },
+        {
+          type: 'tool_execution_start',
+          toolCallId: 'bash-1',
+          toolName: 'bash',
+          args: { command: 'sleep 60' },
+        },
+        {
+          ...agentEnd,
+          messages: agentEnd.messages.map(m => ({ ...m, stopReason: 'aborted' }) as typeof m),
+        },
+      ];
+    };
+    const violations = await runProviderConformance({
+      capabilities: new PiProvider().getCapabilities(),
+      turns: [
+        {
+          name: 'completed prompt',
+          run: () => {
+            resetScript(scriptedAgentEnd());
+            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+              model: 'google/gemini-2.5-pro',
+            });
+          },
+        },
+      ],
+      toolTurn: {
+        name: 'interrupted tool turn',
+        run: () => {
+          resetScript(interruptedToolTurn());
+          return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+            model: 'google/gemini-2.5-pro',
+          });
+        },
+      },
+      failureCases: [
+        {
+          name: 'errored turn',
+          expected: 'unknown',
+          evidence: '429 Too Many Requests',
+          run: () => {
+            resetScript(erroredAgentEnd());
+            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+              model: 'google/gemini-2.5-pro',
+            });
+          },
+        },
+        {
+          name: 'rejected prompt',
+          expected: 'unknown',
+          evidence: 'pi backend exploded',
+          run: () => {
+            mockPrompt.mockImplementationOnce(async () => {
+              throw new Error('pi backend exploded');
+            });
+            return new PiProvider().sendQuery('hi', '/tmp', undefined, {
+              model: 'google/gemini-2.5-pro',
+            });
+          },
+        },
+        {
+          name: 'no model configured',
+          expected: 'misconfigured',
+          evidence: 'Pi provider requires a model',
+          run: () => {
+            delete process.env.GEMINI_API_KEY;
+            return new PiProvider().sendQuery('hi', '/tmp');
+          },
+        },
+      ],
+    });
+    expect(violations).toEqual([]);
   });
 
   test('pre-aborted signal triggers session.abort before any yielding', async () => {
@@ -2290,7 +2416,7 @@ describe('PiProvider', () => {
     expect(mockAbort).toHaveBeenCalled();
   });
 
-  test('modelFallbackMessage yields a system chunk before the agent runs', async () => {
+  test('modelFallbackMessage yields a pi.model_fallback warning before the agent runs', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     mockCreateAgentSession.mockImplementationOnce(
       async (): Promise<CreateAgentSessionResult> =>
@@ -2303,11 +2429,15 @@ describe('PiProvider', () => {
         model: 'google/gemini-2.5-pro',
       })
     );
-    const systemChunks = chunks.filter(
-      (c): c is { type: 'system'; content: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'system'
+    const warnings = chunks.filter(
+      (c): c is { type: 'warning'; code: string; message: string } =>
+        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'warning'
     );
-    expect(systemChunks.some(c => c.content.includes('sonnet-5 not available'))).toBe(true);
+    expect(
+      warnings.some(
+        c => c.code === 'pi.model_fallback' && c.message.includes('sonnet-5 not available')
+      )
+    ).toBe(true);
   });
 
   // ─── structured output (best-effort JSON via prompt engineering) ──────
@@ -2512,6 +2642,80 @@ describe('PiProvider', () => {
     expect(mockBindExtensions).toHaveBeenCalledTimes(1);
     const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
     expect(bindings.uiContext).toBeDefined();
+  });
+
+  test('a detached extension timer failure becomes the node turn failure', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const extensionPath = '/extensions/fake-extension.ts';
+    const loadedExtension = () =>
+      ({
+        extensions: [{ path: extensionPath, resolvedPath: extensionPath }],
+        errors: [],
+        runtime: mockLoaderRuntime,
+      }) as unknown as ReturnType<typeof mockGetExtensions>;
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    const timerError = new Error('extension timer failed');
+    timerError.stack =
+      `Error: extension timer failed\n    at callback (${extensionPath}:4:2)\n` +
+      '    at timer (bun:1:1)';
+    let claimed = false;
+    mockPrompt.mockImplementationOnce(
+      () =>
+        new Promise<void>(() => {
+          setTimeout(() => {
+            claimed = claimPiExtensionProcessError(timerError);
+          }, 0);
+        })
+    );
+
+    const result = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(claimed).toBe(true);
+    expect(result.failure).toEqual({ class: 'unknown', evidence: timerError.stack });
+    expect(result.chunks.at(-1)).toEqual({ type: 'settled' });
+    expect(mockAbort).toHaveBeenCalledTimes(1);
+    expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('Pi structured extension errors fail the turn with the supplied stack', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const extensionPath = '/extensions/fake-extension.ts';
+    const loadedExtension = () =>
+      ({
+        extensions: [{ path: extensionPath, resolvedPath: extensionPath }],
+        errors: [],
+        runtime: mockLoaderRuntime,
+      }) as unknown as ReturnType<typeof mockGetExtensions>;
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    const extensionStack = `Error: extension handler failed\n    at handler (${extensionPath}:9:3)`;
+    mockBindExtensions.mockImplementationOnce(async bindings => {
+      const onError = (bindings as { onError?: (error: ExtensionError) => void }).onError;
+      onError?.({
+        extensionPath,
+        event: 'session_start',
+        error: 'extension handler failed',
+        stack: extensionStack,
+      });
+    });
+
+    const result = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(result.failure?.class).toBe('unknown');
+    expect(result.failure?.evidence).toContain(extensionPath);
+    expect(result.failure?.evidence).toContain(extensionStack);
+    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(mockDispose).toHaveBeenCalledTimes(1);
   });
 
   // ─── extensionFlags pass-through ──────────────────────────────────────
@@ -3157,15 +3361,15 @@ describe('PiProvider', () => {
       mockModelRegistryFind.mockImplementationOnce(() => undefined);
       resetScript(scriptedAgentEnd());
 
-      const { error } = await consume(
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'cursor/removed-model',
         })
       );
 
-      expect(error?.message).toContain('comes from an installed Pi extension');
-      expect(error?.message).toContain('Check the extension configuration and model name');
-      expect(error?.message).not.toContain('pi update --models');
+      expect(failure?.evidence).toContain('comes from an installed Pi extension');
+      expect(failure?.evidence).toContain('Check the extension configuration and model name');
+      expect(failure?.evidence).not.toContain('pi update --models');
     });
 
     test('a failing re-apply warns and does not fail nodes using other providers', async () => {

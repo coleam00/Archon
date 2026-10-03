@@ -218,7 +218,8 @@ export const workflowBaseSchema = z.object({
   /**
    * Default for `persist_session` on every AI node in this workflow.
    * Individual nodes can override with `persist_session: false`.
-   * Requires the resolved provider to declare `sessionResume: true`.
+   * Requires the resolved provider to declare `sessionResume: true`; only a
+   * provider that also declares `sessionFork: true` continues the session.
    */
   persist_sessions: z.boolean().optional(),
   tags: z.array(z.string().min(1)).optional(),
@@ -257,8 +258,7 @@ export const workflowBaseSchema = z.object({
    * Marks the workflow deprecated (#2781): run-start surfaces announce removal
    * in an upcoming release with a switch/copy escape hatch, while it keeps
    * running normally. Metadata-only — never blocks or alters execution.
-   * Bundled defaults carry it during a deprecation window; nothing may ship it
-   * on the exempt `archon-assist` default.
+   * Bundled defaults carry it during a deprecation window.
    */
   deprecated: workflowDeprecationSchema.optional(),
 });

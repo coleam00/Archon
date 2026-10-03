@@ -18,7 +18,7 @@ export function formatToolCall(toolName: string, toolInput?: Record<string, unkn
 
   // Add brief command/input info if available
   if (toolInput) {
-    const briefInfo = extractBriefInfo(toolName, toolInput);
+    const briefInfo = formatToolInputBrief(toolName, toolInput);
     if (briefInfo) {
       message += `\n${briefInfo}`;
     }
@@ -34,7 +34,10 @@ export function formatToolCall(toolName: string, toolInput?: Record<string, unkn
  * @param toolInput - Tool input parameters
  * @returns Brief description of what the tool is doing
  */
-function extractBriefInfo(toolName: string, toolInput: Record<string, unknown>): string | null {
+export function formatToolInputBrief(
+  toolName: string,
+  toolInput: Record<string, unknown>
+): string | null {
   // Bash commands - show the command (truncated)
   if (toolName === 'Bash' && toolInput.command) {
     const cmd = toolInput.command as string;

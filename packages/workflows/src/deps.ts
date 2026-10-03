@@ -12,6 +12,8 @@ import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type {
   IAgentProvider,
   MessageChunk,
+  ProviderChunk,
+  ProviderEvent,
   TokenUsage,
   SendQueryOptions,
   NodeConfig,
@@ -66,6 +68,16 @@ export interface WorkflowMessageMetadata {
 // Narrow platform interface (subset of IPlatformAdapter)
 // ---------------------------------------------------------------------------
 
+/**
+ * What an adapter can render as a structured event: a provider's tool call or its
+ * update, a turn's result (for its session id), a status line, or a workflow dispatch.
+ */
+export type PlatformStructuredEvent =
+  | Extract<ProviderEvent, { type: 'tool_call' | 'tool_call_update' }>
+  | Extract<ProviderChunk, { type: 'result' }>
+  | { type: 'system_status'; content: string }
+  | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
+
 export interface IWorkflowPlatform {
   sendMessage(
     conversationId: string,
@@ -80,7 +92,7 @@ export interface IWorkflowPlatform {
    * core command handler parses, `/workflow <command>`.
    */
   formatWorkflowCommand?(command: string): string;
-  sendStructuredEvent?(conversationId: string, event: MessageChunk): Promise<void>;
+  sendStructuredEvent?(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
   emitRetract?(conversationId: string): Promise<void>;
 }
 

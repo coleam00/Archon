@@ -10,14 +10,14 @@ sidebar:
 ---
 
 DAG workflow nodes support an `mcp` field that attaches MCP (Model Context Protocol)
-servers to individual nodes. Claude workflow nodes exclude ambient user/project/plugin
-MCP by default and expose exactly the external servers in their declared file, plus
+servers to individual nodes. Claude and Codex workflow nodes exclude ambient
+user/project/plugin MCP by default, including the servers of plugins the node names with
+`plugins:`, and expose exactly the external servers in their declared file, plus
 governed native tools that Archon injects for the current workflow when applicable.
-Codex is an explicit exception: its SDK adds declared servers to ambient configuration
-rather than replacing it.
 
-MCP works with Claude, Codex, and Copilot workflow nodes. Pi and OpenCode nodes
-currently warn and ignore the `mcp` field.
+MCP works with Claude, Codex, and Copilot workflow nodes. On Pi and OpenCode, a
+node with `mcp:` fails the run before any node starts, and `archon validate workflows`
+reports it as an error.
 
 ## Quick Start
 
@@ -186,9 +186,17 @@ author-declared MCP servers. Archon may still inject its own governed native-too
 server for a node that requests an engine capability. This does not disable
 `CLAUDE.md`, built-in agents, or filesystem-defined agents.
 
-Codex nodes pass the same MCP config as per-node `mcp_servers` overrides to the
-Codex SDK, so the servers are available for that node without requiring global
-`~/.codex/config.toml` setup.
+Codex nodes pass the same MCP config as per-node `mcp_servers` overrides on the
+Codex thread, so the servers are available for that node without requiring global
+`~/.codex/config.toml` setup. Every other server in the user's or project's Codex
+config, every plugin's server, and ChatGPT apps are turned off for the node's thread.
+Before the turn starts, Archon asks Codex which servers the thread loaded and fails the
+node as misconfigured if any undeclared server is live. The servers you configured are
+left untouched for interactive Codex sessions.
+
+A Codex node cannot declare a server under a name your Codex `config.toml` already
+uses. Codex would merge the two definitions into one, so the node fails before it starts
+with an instruction to rename the server in the `mcp:` file.
 
 ## MCP-Only Nodes
 
@@ -222,21 +230,38 @@ MCP server connection failed: github (failed)
 The node continues executing but without the tools from the failed server.
 Check your config file path, server command, and environment variables if this happens.
 
-Claude's strict workflow configuration prevents undeclared user/plugin MCPs from
-starting, so their connection failures do not affect the run. Codex can still
-inherit ambient servers as described below.
+Claude's and Codex's strict workflow configuration prevents undeclared user/plugin MCPs
+from starting, so their connection failures do not affect the run.
 
-### Codex ambient MCP limitation
+### Servers that ship in a Claude plugin
 
-Codex's SDK applies node `mcp:` servers as additive configuration overrides. It
-does not replace the ambient user/project/plugin MCP catalog: with no node `mcp:`,
-ambient servers may remain available, and with a declared file, both ambient and
-declared servers may be present. `mcp_servers={}` does not clear inherited entries,
-and the current SDK has no wildcard/default global-off control.
+Naming a plugin with `plugins:` does not connect its MCP servers. To use one, declare
+it in the node's `mcp:` file under the name Claude Code gives plugin servers,
+`plugin:<plugin>:<server>`. That name lets Claude reuse the sign-in it already stored
+for the plugin's server. Copy the server's definition from `claude plugin list --json`:
 
-Archon therefore does not describe Codex `mcp:` as an exclusive tool boundary.
-It preserves runnable additive behavior and reports the limitation rather than
-mutating user configuration or rejecting the workflow.
+```json
+{
+  "plugin:posthog:posthog": {
+    "type": "http",
+    "url": "https://mcp.posthog.com/mcp",
+    "headers": { "x-posthog-mcp-consumer": "plugin" }
+  }
+}
+```
+
+Its tools appear as `mcp__plugin_posthog_posthog__*`. This works for `http` and `sse`
+servers. A `stdio` server, or a definition that uses Claude plugin placeholders such as
+`${CLAUDE_PLUGIN_ROOT}`, cannot be restated this way, because Archon does not expand
+those placeholders.
+
+### Servers that ship in a Codex plugin
+
+Naming a Codex plugin with `plugins:` does not connect its MCP servers either. To use
+one, declare it in the node's `mcp:` file under the name the plugin's `.mcp.json`
+gives it. Codex lets the declared
+definition replace the plugin's, and the node sees only the declared one. A definition
+that depends on paths inside the plugin's directory cannot be restated this way.
 
 ## Workflow Examples
 
@@ -317,10 +342,10 @@ nodes:
 
 ## Push Notifications (ntfy)
 
-Some built-in workflows (like `archon-smart-pr-review`) include an optional
-notification node that sends a push notification to your phone when the workflow
-completes. It's gated behind a `when:` condition — if you haven't configured ntfy,
-the node is silently skipped.
+A workflow can end with an optional notification node that sends a push
+notification to your phone when the workflow completes. Gate it behind a `when:`
+condition so the node is skipped when ntfy isn't configured. No bundled workflow
+includes one; add the nodes below to your own workflows.
 
 ### Setup (30 seconds)
 
@@ -378,8 +403,8 @@ to generate a meaningful summary.
 # Verify your phone receives notifications
 curl -d "Hello from Archon" ntfy.sh/YOUR_TOPIC_NAME
 
-# Run a workflow with notifications
-bun run cli workflow run archon-smart-pr-review "Review PR #123"
+# Run one of your workflows that includes the notify node
+bun run cli workflow run my-workflow "Review PR #123"
 ```
 
 ## MCP vs allowed_tools/denied_tools vs hooks

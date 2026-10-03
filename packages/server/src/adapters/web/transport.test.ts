@@ -90,7 +90,7 @@ describe('SSETransport', () => {
           resolve();
         }, 50);
       });
-    }, 1_000);
+    });
   });
 
   describe('removeStream', () => {
@@ -142,7 +142,7 @@ describe('SSETransport', () => {
           resolve();
         }, 50);
       });
-    }, 1_000);
+    });
   });
 
   describe('emit', () => {
@@ -291,6 +291,6 @@ describe('SSETransport', () => {
           resolve();
         }, 50);
       });
-    }, 1_000);
+    });
   });
 });

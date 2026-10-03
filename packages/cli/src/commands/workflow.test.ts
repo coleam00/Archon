@@ -76,6 +76,7 @@ import {
   pendingDurableWait,
   hasUnresolvedWriteback,
   buildNodeSummaries,
+  NODE_SUMMARY_EVENT_TYPES,
   resolveCliExitCode,
   WorkflowRunFailedError,
   DETACHED_RUN_FAILED_EXIT_CODE,
@@ -578,8 +579,9 @@ mock.module('@archon/core/db/workflows', () => ({
 
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mock(() => Promise.resolve([])),
-  listNodeLifecycleEvents: mock(() => Promise.resolve(new Map())),
+  listEventsForRuns: mock(() => Promise.resolve(new Map())),
   createWorkflowEvent: mock(() => Promise.resolve()),
+  PROVIDER_EVENT_ROW_TYPES: ['provider_event', 'tool_called'],
 }));
 
 // Reset-sessions runs the real resetWorkflowNodeSessions operation over this mocked
@@ -588,7 +590,7 @@ mock.module('@archon/core/db/workflow-events', () => ({
 const mockDeleteNodeSessions = mock(() => Promise.resolve({ deleted: 0 }));
 mock.module('@archon/core/db/workflow-node-sessions', () => ({
   deleteWorkflowNodeSessions: mockDeleteNodeSessions,
-  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  listWorkflowNodeSessions: mock(() => Promise.resolve([])),
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
 }));
 
@@ -972,14 +974,14 @@ describe('workflowListCommand', () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-assist' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist' }),
         makeTestWorkflowWithSource({ name: 'archon-plan' }),
       ],
       errors: [],
     });
 
     await expect(workflowListCommand('/test/path', { name: 'missing' })).rejects.toThrow(
-      "Workflow 'missing' not found.\n\nAvailable workflows:\n  - archon-assist\n  - archon-plan"
+      "Workflow 'missing' not found.\n\nAvailable workflows:\n  - acme-assist\n  - archon-plan"
     );
   });
 
@@ -2799,7 +2801,7 @@ describe('workflowRunCommand', () => {
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Help' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Help' }),
         makeTestWorkflowWithSource({ name: 'archon-plan', description: 'Plan' }),
       ],
       errors: [],
@@ -2818,12 +2820,12 @@ describe('workflowRunCommand', () => {
       default_cwd: '/test/path',
     });
 
-    // Should resolve successfully — "assist" suffix-matches "archon-assist"
+    // Should resolve successfully — "assist" suffix-matches "acme-assist"
     await workflowRunCommand('/test/path', 'assist', 'hello');
 
     // Verify suffix matching tier was used
     expect(mockLogger.info).toHaveBeenCalledWith(
-      expect.objectContaining({ requested: 'assist', matched: 'archon-assist' }),
+      expect.objectContaining({ requested: 'assist', matched: 'acme-assist' }),
       'workflow.resolve_suffix_match'
     );
   });
@@ -2833,13 +2835,13 @@ describe('workflowRunCommand', () => {
 
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
-        makeTestWorkflowWithSource({ name: 'archon-smart-pr-review', description: 'Smart review' }),
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Help' }),
+        makeTestWorkflowWithSource({ name: 'acme-smart-pr-review', description: 'Smart review' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Help' }),
       ],
       errors: [],
     });
 
-    // "smart" substring-matches only "archon-smart-pr-review"
+    // "smart" substring-matches only "acme-smart-pr-review"
     // Will fail downstream at executeWorkflow mock, but must NOT throw "not found"
     const error = await workflowRunCommand('/test/path', 'smart', 'hello').catch(
       (e: unknown) => e as Error
@@ -2857,7 +2859,7 @@ describe('workflowRunCommand', () => {
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }),
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Long' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Long' }),
       ],
       errors: [],
     });
@@ -2909,10 +2911,10 @@ describe('workflowRunCommand', () => {
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({
-          name: 'archon-comprehensive-pr-review',
+          name: 'acme-comprehensive-pr-review',
           description: 'Full review',
         }),
-        makeTestWorkflowWithSource({ name: 'archon-smart-pr-review', description: 'Smart review' }),
+        makeTestWorkflowWithSource({ name: 'acme-smart-pr-review', description: 'Smart review' }),
       ],
       errors: [],
     });
@@ -2930,7 +2932,7 @@ describe('workflowRunCommand', () => {
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
       workflows: [
         makeTestWorkflowWithSource({ name: 'assist', description: 'Short name' }),
-        makeTestWorkflowWithSource({ name: 'archon-assist', description: 'Long name' }),
+        makeTestWorkflowWithSource({ name: 'acme-assist', description: 'Long name' }),
       ],
       errors: [],
     });
@@ -4768,6 +4770,31 @@ describe('workflowStatusCommand', () => {
     expect(stdoutSpy).not.toHaveBeenCalled();
   });
 
+  it('leaves provider events out of verbose node summaries, which never read them', async () => {
+    const workflowEventsDb = await import('@archon/core/db/workflow-events');
+    mockListDashboardRuns.mockResolvedValueOnce(
+      statusRuns([
+        {
+          id: 'run-summary',
+          workflow_name: 'implement',
+          working_path: '/workspace/project-a',
+          status: 'running',
+          started_at: new Date(),
+          active_nodes: [],
+        },
+      ])
+    );
+    const eventsSpy = workflowEventsDb.listWorkflowEvents as ReturnType<typeof mock>;
+    eventsSpy.mockClear();
+    eventsSpy.mockResolvedValueOnce([]);
+
+    await workflowStatusCommand('/workspace/project-a', { json: true, verbose: true });
+
+    expect(eventsSpy).toHaveBeenCalledWith('run-summary', {
+      excludeEventTypes: ['provider_event', 'tool_called'],
+    });
+  });
+
   it('fetches verbose raw events only for runs selected by the project scope', async () => {
     const workflowEventsDb = await import('@archon/core/db/workflow-events');
     const codebaseDb = await import('@archon/core/db/codebases');
@@ -6464,6 +6491,247 @@ describe('workflowLogsCommand', () => {
     expect(workflowDb.resumeWorkflowRun).not.toHaveBeenCalled();
   });
 
+  it('renders every transcript row kind as text and skips rows it cannot render', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const rows = [
+      { type: 'workflow_start', workflow_name: 'fix-issue', content: 'fix #1' },
+      { type: 'node_start', step: 'plan', content: 'plan-cmd' },
+      { type: 'node_start', step: 'lint', content: '<bash>' },
+      { type: 'assistant', content: 'Reading the issue.\n\nThen planning.' },
+      { type: 'tool', tool_name: 'Bash', tool_input: { command: 'git   status\n--short' } },
+      { type: 'tool', tool_name: '/bin/zsh -lc "ls\n-la"', tool_input: {} },
+      { type: 'watchdog_reset', step: 'plan', chunk_type: 'assistant', chunk_count: 3 },
+      { type: 'step_start', step: 'legacy' },
+      { type: 'node_complete', step: 'plan', content: 'plan-cmd', duration_ms: 1234 },
+      {
+        type: 'exec_output',
+        step: 'lint',
+        content: '<bash>',
+        exit_code: 2,
+        stdout_tail: 'ok\n',
+        stderr_tail: 'bad\nworse\n',
+      },
+      { type: 'node_error', step: 'lint', error: 'exit 2' },
+      {
+        type: 'node_skipped',
+        step: 'docs',
+        content: 'when_condition',
+        cause: { kind: 'condition', expr: "$x == 'y'" },
+      },
+      { type: 'node_skipped', step: 'old', content: 'when_condition' },
+      { type: 'node_suspended', step: 'review-gate', content: 'approval' },
+      { type: 'gate_decision', step: 'review-gate', decision: 'approve', content: 'looks good' },
+      {
+        type: 'gate_decision',
+        step: 'review-gate',
+        decision: 'reject',
+        content: 'two things:\nfix the test',
+      },
+      { type: 'workflow_resume', workflow_name: 'fix-issue' },
+      { type: 'workflow_error', error: 'lint failed' },
+      { type: 'workflow_complete' },
+    ];
+    writeFileSync(
+      transcriptPath,
+      `${rows.map(row => JSON.stringify(row)).join('\n')}\nnot json\n[1,2]\n`
+    );
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('failed'));
+
+    expect(await workflowLogsCommand(run('failed').id, false, undefined, 'text')).toBe(0);
+    expect(stdoutText()).toBe(
+      [
+        '[workflow] Started fix-issue',
+        '[plan] Started (plan-cmd)',
+        '[lint] Started',
+        '  Reading the issue.',
+        '',
+        '  Then planning.',
+        '  tool: Bash git status --short',
+        '  tool: /bin/zsh -lc "ls -la"',
+        '[plan] Completed (1.2s)',
+        '[lint] Output (exit 2)',
+        '  ok',
+        '  stderr:',
+        '    bad',
+        '    worse',
+        '[lint] Failed: exit 2',
+        "[docs] Skipped (condition: $x == 'y')",
+        '[old] Skipped (when_condition)',
+        '[review-gate] Waiting (approval)',
+        '[review-gate] Gate: approve (looks good)',
+        '[review-gate] Gate: reject',
+        '  two things:',
+        '  fix the test',
+        '[workflow] Resumed fix-issue',
+        '[workflow] Failed: lint failed',
+        '[workflow] Completed',
+        '',
+      ].join('\n')
+    );
+    expect(stderrText()).toBe('');
+  });
+
+  it('renders provider events under their node, naming each tool call in its outcome', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    let seq = 0;
+    const event = (step: string, attemptId: string, providerEvent: Record<string, unknown>) => ({
+      type: 'provider_event',
+      workflow_id: 'run-1',
+      ts: '2026-10-03T00:00:00.000Z',
+      step,
+      attemptId,
+      seq: seq++,
+      observedAt: '2026-10-03T00:00:00.000Z',
+      event: providerEvent,
+    });
+    const rows = [
+      { type: 'node_start', step: 'plan', content: '<inline>' },
+      { type: 'node_start', step: 'lint', content: '<inline>' },
+      event('plan', 'a1', { type: 'agent_thought_chunk', text: 'Check the\nissue first.' }),
+      event('plan', 'a1', { type: 'agent_message_chunk', text: 'Reading.\n\nThen planning.' }),
+      event('plan', 'a1', {
+        type: 'tool_call',
+        toolCallId: 'c1',
+        name: 'Bash',
+        rawInput: { command: 'git status' },
+      }),
+      // The other node reuses the call id; its outcome must not take plan's tool name.
+      event('lint', 'a2', {
+        type: 'tool_call',
+        toolCallId: 'c1',
+        name: 'command_execution',
+        title: '/bin/zsh -lc "bun run lint"',
+        rawInput: { command: '/bin/zsh -lc "bun run lint"' },
+      }),
+      event('plan', 'a1', {
+        type: 'tool_call_update',
+        toolCallId: 'c1',
+        status: 'completed',
+        output: 'one\ntwo\nthree\nfour\n',
+        exitCode: 0,
+      }),
+      event('lint', 'a2', {
+        type: 'tool_call_update',
+        toolCallId: 'c1',
+        status: 'failed',
+        output: 'error: bad',
+        outputTruncated: true,
+        exitCode: 1,
+      }),
+      event('lint', 'a2', { type: 'warning', code: 'codex.x', message: 'model fell back' }),
+      event('lint', 'a2', { type: 'mcp_server_status', server: 'gh', status: 'connected' }),
+      event('lint', 'a2', {
+        type: 'mcp_server_status',
+        server: 'db',
+        status: 'failed',
+        error: 'timeout',
+      }),
+      event('lint', 'a2', { type: 'compaction', phase: 'started', trigger: 'auto' }),
+      event('lint', 'a2', {
+        type: 'compaction',
+        phase: 'completed',
+        tokensBefore: 9000,
+        tokensAfter: 2000,
+      }),
+      event('lint', 'a2', {
+        type: 'subtask',
+        taskId: 't1',
+        status: 'started',
+        description: 'scan',
+      }),
+      event('lint', 'a2', { type: 'subtask', taskId: 't1', status: 'running', summary: 'half' }),
+      event('lint', 'a2', { type: 'subtask', taskId: 't1', status: 'completed', summary: 'done' }),
+      event('lint', 'a2', {
+        type: 'hook',
+        hookId: 'h1',
+        hookName: 'guard',
+        hookEvent: 'PreToolUse',
+        status: 'started',
+      }),
+      event('lint', 'a2', {
+        type: 'hook',
+        hookId: 'h1',
+        hookName: 'guard',
+        hookEvent: 'PreToolUse',
+        status: 'failed',
+        exitCode: 2,
+      }),
+      event('lint', 'a2', { type: 'state_update', state: 'running' }),
+      event('lint', 'a2', { type: 'state_update', state: 'requires_action' }),
+      // A newer event type, and a line missing its event: neither renders nor throws.
+      event('lint', 'a2', { type: 'plan_update', entries: [] }),
+      {
+        type: 'provider_event',
+        workflow_id: 'run-1',
+        ts: '2026-10-03T00:00:00.000Z',
+        step: 'lint',
+      },
+      { type: 'node_complete', step: 'plan', duration_ms: 1000 },
+    ];
+    writeFileSync(transcriptPath, `${rows.map(row => JSON.stringify(row)).join('\n')}\n`);
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(run('completed'));
+
+    expect(await workflowLogsCommand(run('completed').id, false, undefined, 'text')).toBe(0);
+    expect(stdoutText()).toBe(
+      [
+        '[plan] Started',
+        '[lint] Started',
+        '[plan]',
+        '  thinking: Check the issue first.',
+        '  Reading.',
+        '',
+        '  Then planning.',
+        '  tool: Bash git status',
+        '[lint]',
+        '  tool: /bin/zsh -lc "bun run lint"',
+        '[plan]',
+        '  completed: Bash (exit 0)',
+        '    (1 earlier lines)',
+        '    two',
+        '    three',
+        '    four',
+        '[lint]',
+        '  failed: /bin/zsh -lc "bun run lint" (exit 1, output truncated)',
+        '    error: bad',
+        '  warning: model fell back (codex.x)',
+        '  mcp db: failed (timeout)',
+        '  compaction started (auto)',
+        '  compaction completed: 9000 -> 2000 tokens',
+        '  subtask started: scan',
+        '  subtask completed: done',
+        '  hook failed: guard (PreToolUse, exit 2)',
+        '  waiting on the user',
+        '[plan] Completed (1s)',
+        '',
+      ].join('\n')
+    );
+  });
+
+  it('follows as text, rendering a row only once it is whole', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const nodeRow = JSON.stringify({ type: 'node_start', step: 'build' });
+    const splitAt = 10;
+    writeFileSync(
+      transcriptPath,
+      `${JSON.stringify({ type: 'workflow_start', workflow_name: 'wf' })}\n${nodeRow.slice(0, splitAt)}`
+    );
+    let stdoutAfterFirstDrain = '';
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>)
+      .mockResolvedValueOnce(run('running'))
+      .mockImplementationOnce(() => {
+        stdoutAfterFirstDrain = stdoutText();
+        appendFileSync(
+          transcriptPath,
+          `${nodeRow.slice(splitAt)}\n${JSON.stringify({ type: 'workflow_complete' })}\n`
+        );
+        return Promise.resolve(run('completed'));
+      });
+
+    expect(await workflowLogsCommand(run('running').id, true, undefined, 'text')).toBe(0);
+    expect(stdoutAfterFirstDrain).toBe('[workflow] Started wf\n');
+    expect(stdoutText()).toBe('[workflow] Started wf\n[build] Started\n[workflow] Completed\n');
+  });
+
   it('fails if the transcript shrinks behind the current offset', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     writeFileSync(transcriptPath, `${JSON.stringify({ type: 'workflow_start' })}\n`);
@@ -7186,14 +7454,16 @@ describe('workflowRunsCommand', () => {
       created_at: '2026-09-27T10:00:01.000Z',
     };
 
-    async function listOnce(): Promise<Mock<(ids: readonly string[]) => Promise<unknown>>> {
+    async function listOnce(): Promise<
+      Mock<(ids: readonly string[], types: readonly string[]) => Promise<unknown>>
+    > {
       const workflowDb = await import('@archon/core/db/workflows');
       const eventsDb = await import('@archon/core/db/workflow-events');
       (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce(
         structuredClone(listed)
       );
-      const eventsSpy = eventsDb.listNodeLifecycleEvents as unknown as Mock<
-        (ids: readonly string[]) => Promise<unknown>
+      const eventsSpy = eventsDb.listEventsForRuns as unknown as Mock<
+        (ids: readonly string[], types: readonly string[]) => Promise<unknown>
       >;
       eventsSpy.mockClear();
       return eventsSpy;
@@ -7211,7 +7481,7 @@ describe('workflowRunsCommand', () => {
       await workflowRunsCommand('/test/path', { json: true, verbose: true });
 
       expect(eventsSpy).toHaveBeenCalledTimes(1);
-      expect(eventsSpy).toHaveBeenCalledWith(['run-gate', 'run-wait']);
+      expect(eventsSpy).toHaveBeenCalledWith(['run-gate', 'run-wait'], NODE_SUMMARY_EVENT_TYPES);
       const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as {
         runs: Array<{ id: string; nodes: Array<{ nodeId: string; state: string }> }>;
         total: number;
@@ -7265,7 +7535,7 @@ describe('workflowRunsCommand', () => {
       (workflowDb.findOpenWorkRuns as ReturnType<typeof mock>).mockResolvedValueOnce([
         { id: 'run-open', status: 'failed', metadata: {}, completed_at: null },
       ]);
-      (eventsDb.listNodeLifecycleEvents as ReturnType<typeof mock>).mockRejectedValueOnce(
+      (eventsDb.listEventsForRuns as ReturnType<typeof mock>).mockRejectedValueOnce(
         new Error('database is locked')
       );
 
@@ -11527,20 +11797,32 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
-  it('should not write tool_started without verbose', async () => {
+  const providerEvent = (
+    seq: number,
+    observedAt: string,
+    event: Extract<WorkflowEmitterEvent, { type: 'provider_event' }>['event']
+  ): WorkflowEmitterEvent => ({
+    type: 'provider_event',
+    runId: 'run-1',
+    stepName: 'classify',
+    attemptId: 'attempt-1',
+    seq,
+    observedAt,
+    event,
+  });
+
+  it('should not write tool lines without verbose', async () => {
     setupWorkflowMocks();
 
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      if (capturedSubscribeHandler) {
-        capturedSubscribeHandler({
-          type: 'tool_started',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
+      capturedSubscribeHandler?.(
+        providerEvent(0, '2026-10-02T10:00:00.000Z', {
+          type: 'tool_call',
           toolCallId: 'call-1',
-        });
-      }
+          name: 'Bash',
+        })
+      );
       return { success: true, workflowRunId: 'run-1' };
     });
 
@@ -11549,60 +11831,101 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(stderrSpy).not.toHaveBeenCalledWith(expect.stringContaining('tool: Bash'));
   });
 
-  it('should write tool_started with verbose', async () => {
+  it('keeps two attempts that reuse a call id apart', async () => {
     setupWorkflowMocks();
 
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      if (capturedSubscribeHandler) {
-        capturedSubscribeHandler({
-          type: 'tool_started',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
+      const inAttempt = (
+        attemptId: string,
+        seq: number,
+        observedAt: string,
+        event: Extract<WorkflowEmitterEvent, { type: 'provider_event' }>['event']
+      ): WorkflowEmitterEvent => ({
+        type: 'provider_event',
+        runId: 'run-1',
+        stepName: attemptId === 'attempt-1' ? 'left' : 'right',
+        attemptId,
+        seq,
+        observedAt,
+        event,
+      });
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-1', 0, '2026-10-02T10:00:00.000Z', {
+          type: 'tool_call',
           toolCallId: 'call-1',
-        });
-        capturedSubscribeHandler({
-          type: 'tool_completed',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
-          durationMs: 42,
+          name: 'Read',
+        })
+      );
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-2', 0, '2026-10-02T10:00:00.010Z', {
+          type: 'tool_call',
           toolCallId: 'call-1',
-          toolOutcome: 'error',
-          exitCode: 1,
-        });
-      }
+          name: 'Bash',
+        })
+      );
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-1', 1, '2026-10-02T10:00:00.030Z', {
+          type: 'tool_call_update',
+          toolCallId: 'call-1',
+          status: 'completed',
+        })
+      );
+      capturedSubscribeHandler?.(
+        inAttempt('attempt-2', 1, '2026-10-02T10:00:00.110Z', {
+          type: 'tool_call_update',
+          toolCallId: 'call-1',
+          status: 'completed',
+        })
+      );
       return { success: true, workflowRunId: 'run-1' };
     });
 
     await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (started, call-1)\n');
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms, call-1, error, exit 1)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[left] tool: Read (30ms, call-1, completed)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[right] tool: Bash (100ms, call-1, completed)\n');
   });
 
-  it('should render a legacy tool completion without optional metadata', async () => {
+  it('should write a tool call and its completion with verbose', async () => {
     setupWorkflowMocks();
 
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      if (capturedSubscribeHandler) {
-        capturedSubscribeHandler({
-          type: 'tool_completed',
-          runId: 'run-1',
-          toolName: 'Bash',
-          stepName: 'classify',
-          durationMs: 42,
+      capturedSubscribeHandler?.(
+        providerEvent(0, '2026-10-02T10:00:00.000Z', {
+          type: 'tool_call',
           toolCallId: 'call-1',
-        });
-      }
+          name: 'Bash',
+          title: 'ls -la',
+        })
+      );
+      capturedSubscribeHandler?.(
+        providerEvent(1, '2026-10-02T10:00:00.042Z', {
+          type: 'tool_call_update',
+          toolCallId: 'call-1',
+          status: 'failed',
+          exitCode: 1,
+        })
+      );
+      // A completion whose start this process never saw still names its call.
+      capturedSubscribeHandler?.(
+        providerEvent(2, '2026-10-02T10:00:01.000Z', {
+          type: 'tool_call_update',
+          toolCallId: 'call-2',
+          status: 'completed',
+        })
+      );
       return { success: true, workflowRunId: 'run-1' };
     });
 
     await workflowRunCommand('/test/path', 'plan', 'hello', { verbose: true });
 
-    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: Bash (42ms, call-1)\n');
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: ls -la (started, call-1)\n');
+    expect(stderrSpy).toHaveBeenCalledWith(
+      '[classify] tool: ls -la (42ms, call-1, failed, exit 1)\n'
+    );
+    expect(stderrSpy).toHaveBeenCalledWith('[classify] tool: call-2 (call-2, completed)\n');
   });
 
   it('should call unsubscribe even when executeWorkflow throws', async () => {

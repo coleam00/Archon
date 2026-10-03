@@ -10,7 +10,9 @@ export const providerInfoSchema = z
   .object({
     id: z.string(),
     displayName: z.string(),
-    capabilities: providerCapabilitiesSchema.openapi('ProviderCapabilities'),
+    // Rebuilt from its shape: zod copies `.openapi` onto a schema only when it is created
+    // after `@hono/zod-openapi` loads, and the providers load the contract package first.
+    capabilities: z.object(providerCapabilitiesSchema.shape).openapi('ProviderCapabilities'),
     builtIn: z.boolean(),
     effortLevels: z.array(z.enum(EFFORT_LADDER)).optional(),
   })

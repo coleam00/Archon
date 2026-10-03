@@ -35,13 +35,11 @@ nodes:
     context: fresh
 ```
 
-> **Using defaults as templates:** Archon ships default workflows in `.archon/workflows/defaults/` (21 bundled into the binary; source builds also load them from disk). Browse them for real-world examples, then copy and modify:
+> **Bundled workflows as templates:** Archon bundles the `sdlc` pack from `.archon/workflows/sdlc/` in its repository (compiled into the binary; source builds also load it from disk). Browse it for real-world examples, then copy and modify. Copy the whole pack folder: its workflows include each other and share modules in `sdlc/.shared/`.
 > ```bash
-> cp .archon/workflows/defaults/archon-fix-github-issue.yaml .archon/workflows/my-fix-issue.yaml
+> cp -R /path/to/Archon/.archon/workflows/sdlc .archon/workflows/
 > ```
-> Same-named files in `.archon/workflows/` override the bundled defaults.
-
-> **Legacy bundled defaults:** The flat `.archon/workflows/defaults/` and `.archon/commands/defaults/` directories contain Archon's existing bundled files. `defaults` is not a reserved pack name in the packaged layout below; authors may choose any safe pack and workflow directory names.
+> Same-named workflows in `.archon/workflows/` override the bundled ones. Bundled commands live inside each workflow's own `commands/` folder; there is no shared bundled command directory.
 
 ---
 
@@ -198,7 +196,7 @@ nodes:
     provider: claude             # Per-node provider override
     model: haiku                 # Per-node model override
     # hooks:                     # Optional: per-node SDK hook callbacks (Claude only) — see hooks guide
-    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude/Codex/Copilot; Codex is additive)
+    # mcp: .archon/mcp/servers.json  # Optional: per-node MCP servers (Claude/Codex/Copilot)
     # skills: [remotion-best-practices]  # Optional: per-node skills (Claude/Pi/Copilot); Codex uses explicit $skill-name
 ```
 
@@ -231,6 +229,7 @@ nodes:
 | `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | — | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
 | `idle_timeout` | number | — | Kill node if idle for this many milliseconds |
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
+| `mutates_checkout` | boolean | — | `false` asserts this node leaves the git checkout untouched. The engine compares `git status` before and after the node and fails it, naming the changed paths, if anything outside the run's artifacts, state, and log directories changed. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
 | `always_run` | boolean | `false` | Opt out of resume caching: re-run this node on resume even if a prior run completed it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
 | `output_type` | string | — | Semantic label for this node's output (e.g. `'plan'`, `'findings'`, `'code'`). When set, the executor writes a typed output + metadata pair after the node completes (best-effort). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `<id>.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain). |
 
@@ -244,8 +243,9 @@ nodes:
 | `allowed_tools` | string[] | — | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
 | `denied_tools` | string[] | — | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
 | `hooks` | object | — | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
-| `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot; Codex adds servers to ambient config rather than replacing it. See [MCP Servers](/guides/mcp-servers/) |
-| `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name`; OpenCode does not implement this field. See [Skills](/guides/skills/) |
+| `mcp` | string | — | Path to MCP server config JSON file. Claude/Codex/Copilot. Any other provider fails the run before it starts. See [MCP Servers](/guides/mcp-servers/) |
+| `skills` | string[] | — | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
+| `plugins` | string[] | — | Exact plugin ids (`name@marketplace`) the node loads; omission/`[]` loads no user-installed plugin. Claude and Codex; any other provider fails the run before it starts. See [Plugins](#plugins) |
 | `agents` | object | — | Inline sub-agent definitions keyed by kebab-case ID. Claude only. See [Inline sub-agents](#inline-sub-agents) |
 | `effort` | `'minimal'`\|`'low'`\|`'medium'`\|`'high'`\|`'xhigh'`\|`'max'`\|`'ultra'`\|`'persistent'` | — | Reasoning depth. Every provider with a request-level reasoning control — Claude/Codex/Pi/Copilot. Codex accepts all eight; the others clamp unsupported rungs down to the nearest weaker value. OpenCode configures reasoning in `opencode.json`. Also settable at workflow level |
 | `maxBudgetUsd` | number | — | USD cost cap; node fails if exceeded. Claude only. Per-node only |
@@ -292,7 +292,7 @@ This is an exact, immutable fork contract:
 - Claude and Pi support immutable forks. Codex explicitly does not; an omitted fork capability is also unsupported.
 - A missing source handle, unavailable prior context, missing branch handle, or provider that reuses the source session fails the node. Named resume never falls back to a fresh session.
 - Two parallel consumers may name the same source; each receives its own branch while the source remains unchanged.
-- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Session IDs remain outside workflow events and API payloads.
+- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
 
 This is separate from `persist_session`: `{ resume: source }` selects ancestry within one governed run, while `persist_session` continues the same node across separate workflow invocations. If both apply to a consumer, the named source wins for the current invocation and the resulting branch is still saved for its next invocation.
 
@@ -377,6 +377,26 @@ it fails validation with an error directing the author to `effort:`.
 ```
 
 Omitting the field inherits the assistant-level `assistants.claude.settingSources` from `.archon/config.yaml`; if that is also unset, the default is `['project', 'user']`.
+
+### Plugins
+
+A Claude workflow node loads none of the Claude Code plugins installed on the machine: no plugin subagents, hooks, LSP servers, commands, skills or MCP servers. Your own settings, hooks, permissions and `CLAUDE.md` still load, and so do the plugins built into Claude Code (`@builtin`). A node that needs a plugin names it by its exact id, as `claude plugin list` prints it:
+
+```yaml
+- id: triage
+  prompt: Find the noisiest error groups from the last day.
+  plugins: [posthog@claude-plugins-official]
+  skills: [posthog:investigating-error-issue]   # a plugin's skills are still selected one by one
+  mcp: .archon/mcp/posthog.json                 # and its MCP servers are declared like any other
+```
+
+A named plugin brings its agents, hooks, LSP servers and commands. Its skills reach the node only when `skills:` names them, and its MCP servers only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-claude-plugin)).
+
+The node fails before its first model turn when a named plugin is not installed, or when Claude Code reports a loaded plugin the node did not name, for example one synced from claude.ai or loaded by another route.
+
+A Codex workflow node works the same way. It loads none of the user's Codex plugins and no ChatGPT apps, while the user's `config.toml` settings, hooks and `AGENTS.md` still load. A node names a plugin by the id `codex plugin list` prints, such as `github@openai-curated`. A named Codex plugin brings its skills, which the node body invokes as `$<plugin>:<skill>`, and its hooks. Its MCP servers reach the node only through `mcp:` (see [MCP Servers](/guides/mcp-servers/#servers-that-ship-in-a-codex-plugin)), and its apps stay off. A named plugin is turned on for the node even if you turned plugins off globally in Codex. The node fails before its turn starts when a named plugin is not installed in the Codex home in use.
+
+`plugins:` on a provider that cannot load exactly the named plugins fails the run before any node starts, and `archon validate workflows` reports it as an error. `mcp:` and a non-empty `skills:` follow the same rule on a provider without that capability.
 
 **Workflow-level defaults** (inherited by all Claude nodes unless overridden per-node):
 
@@ -579,11 +599,11 @@ status=$emit.output.status
 
 ### `output_format` for Structured JSON
 
-Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex (v0.116.0+), the schema is passed via `TurnOptions.outputSchema` and the agent's inline JSON response is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
+Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex, the schema is sent as the turn's `outputSchema` and the agent's final JSON message is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
 
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
 >
-> **Codex strict-mode `required` coverage.** OpenAI's Structured Outputs validator also rejects any object schema where a key declared in `properties` is absent from `required`. Unlike `additionalProperties`, Archon does NOT normalize this for you — doing so would silently change an optional field into a required one. Instead, the launch preflight and `archon validate workflows` report the violation before any run starts. Include every property key in `required`. To express an *optional* field, give its type an absent-value form: a `["string","null"]` union, or an enum with a sentinel like `"none"` — the field is then always "present" in the output, carrying the sentinel when not applicable.
+> **Codex strict-mode object schemas.** OpenAI's Structured Outputs validator rejects an object schema that omits `properties`, or where a key declared in `properties` is absent from `required`. Unlike `additionalProperties`, Archon does NOT normalize these cases for you: it cannot infer a bare object's intended shape, and filling `required` would silently change an optional field into a required one. Instead, the launch preflight and `archon validate workflows` report the node and exact schema path before any run starts. Declare every object's properties and include every property key in `required`. To express an *optional* value, give its type an absent-value form: a `["string","null"]` or `["object","null"]` union, or an enum with a sentinel like `"none"` — the field is then always "present" in the output, carrying the absent value when not applicable.
 
 ```yaml
 nodes:
@@ -734,7 +754,7 @@ YAML declares the engine-visible coordination condition; computation stays in a 
 
 ## Retry Configuration
 
-**AI nodes** (`command:`, `prompt:`) automatically retry on **transient** errors (SDK subprocess crashes, rate limits, network timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
+**AI nodes** (`command:`, `prompt:`) automatically retry on **transient** errors (failures the provider reports as transient or rate-limited, and timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
 
 **Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry — they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop:` and `loop_group:` manage their own iteration and don't accept `retry:`.
 
@@ -771,19 +791,59 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:` — omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 1000–60000 | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = SDK crashes, rate limits, network timeouts only. `'all'` = any error including unknown errors (FATAL errors such as auth failures are never retried regardless) |
+| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = transient and rate-limited failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
-Archon classifies errors into three buckets before deciding whether to retry:
+Archon sorts a failed attempt into one of three buckets before deciding whether to retry. The bucket comes from the kind of failure Archon recorded, never from the error message. For a provider error, the provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
 
-| Class | Examples | Retried by default? |
-|-------|----------|---------------------|
-| **FATAL** | Auth failure, permission denied, credit balance exhausted | Never (even with `on_error: all`) |
-| **TRANSIENT** | Process crashed (`exited with code`), rate limit, network timeout | Yes |
-| **UNKNOWN** | Unrecognised error messages | No (unless `on_error: all`) |
+| Bucket | Provider failure classes | Retried by default? |
+|--------|--------------------------|---------------------|
+| **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded`, `misconfigured` | Never (even with `on_error: all`) |
+| **TRANSIENT** | `transient`, `rate_limited` (rate limits get a longer retry budget and backoff) | Yes |
+| **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
-A provider that reports a typed failure class on its result decides the bucket itself, whatever its error message says: `auth`, `quota_exhausted` and `budget_exceeded` are FATAL, `transient` and `rate_limited` are TRANSIENT (rate limits get a longer retry budget and backoff), and `unknown` is UNKNOWN. The message examples in the table above apply only to errors a provider has not classified.
+`misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable MCP config file. Fix the configuration and run again.
+
+Every built-in provider reports a typed class:
+
+- **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
+- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `transient` for overload, a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
+- **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`.
+- **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
+- **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
+
+Set `on_error: all` on a node that should retry `unknown` failures.
+
+#### Failures the engine detects
+
+Archon puts a failure it detects itself in a bucket by its kind:
+
+| Failure | Bucket | Retried by default? |
+|---------|--------|---------------------|
+| A timeout: an AI node's `idle_timeout`, or a `bash:`/`script:` node's `timeout` | TRANSIENT | Yes. Each retry of a hung AI node can wait another full `idle_timeout` |
+| An AI provider stream that ends without any output | TRANSIENT | Yes |
+| A `bash:`/`script:` node that exits non-zero or cannot start | UNKNOWN | No (unless `on_error: all`). What the script printed does not matter |
+| An AI node's structured output that fails its `output_format` after reasks | UNKNOWN | No (unless `on_error: all`) |
+| A `bash:`/`script:` node's stdout that fails its `output_format` | — | Never |
+| A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
+| A cancelled node | FATAL | Never |
+| A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
+
+A failure recorded before Archon stored failure kinds counts as UNKNOWN.
+
+#### Pi retries inside its own runtime
+
+Pi retries a failed model call itself before Archon sees the failure. Archon reads Pi's settings from `~/.pi/agent/settings.json` and the project's `.pi/settings.json`, and does not change them:
+
+| Pi setting | Default | Effect |
+|------------|---------|--------|
+| `retry.enabled` | `true` | Pi retries a turn that failed with an error it judges transient (overload, rate limit, server error, network failure, timeout) |
+| `retry.maxRetries` | `3` | Retries per turn |
+| `retry.baseDelayMs` | `2000` | First delay, doubling each retry (2s, 4s, 8s) |
+| `retry.provider.maxRetries` | `0` | A separate HTTP-level retry, in the Anthropic, OpenAI, Azure and Google adapters, that reads the status code and honors `Retry-After`. Off by default |
+
+See Pi's [settings reference](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md#network-and-retries) for the full list. A failure that outlasts Pi's retries reaches Archon as `unknown`, so by default Archon does not retry it again. To add node-level retries on top, set `retry: { on_error: all }` on the node. The attempts then multiply: with Pi's defaults and `max_attempts: 2`, the failing model call can be sent up to 12 times (3 node attempts × 4 Pi attempts each), and each node retry also repeats the model calls the node made before it failed. To leave retrying to Archon alone, set `"retry": { "enabled": false }` in Pi's settings.
 
 ### Retry Notifications
 
@@ -793,20 +853,18 @@ Before each retry the platform receives a message like:
 Node `node-id` failed with transient error (attempt 1/3). Retrying in 3s...
 ```
 
-### Two-Layer Retry Stack
+### One Retry Layer
 
-Archon uses two independent retry layers:
+The node retry is the only retry Archon adds. Every provider makes one attempt per call and reports a typed failure; the engine decides whether to try again:
 
 ```
-SDK subprocess retry (claude.ts)  — 3 total attempts, 2 s base backoff
-    ↓ only if all SDK retries exhausted
 Node retry (dag-executor)  — AI nodes: default 2 retries, 3 s base backoff;
                              bash/script: only when retry: is set
     ↓ only if all node retries exhausted
 Workflow fails → user opts in to resume on next invocation
 ```
 
-This means a single transient crash may trigger up to **3 SDK retries** before a single node retry attempt is consumed. The SDK layer only applies to AI nodes; `bash:`/`script:` nodes have no SDK layer, so their `retry:` block wraps the raw subprocess directly.
+The vendors' own clients may still retry an individual API request inside one attempt (Claude Code's API retries, Pi's `retry` setting); that is the provider's native behaviour and its configuration.
 
 > **DAG resume**: For `nodes:` (DAG) workflows, resume is opt-in — pass `--resume` to `archon workflow run`, run `archon workflow resume <id>`, or use the web UI resume button. Plain `archon workflow run <name>` always starts a fresh run. See [DAG Resume on Failure](#dag-resume-on-failure) below.
 
@@ -869,7 +927,7 @@ On resume, `fetch-data` re-runs regardless of prior success, so `process-data` r
 
 ## Persistent Sessions Across Re-Runs
 
-Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role.
+Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role. Only a provider that can fork a session continues it; with any other provider the node starts fresh on every run (see [Concurrent runs](#concurrent-runs)).
 
 ```yaml
 name: feature-dev
@@ -895,9 +953,18 @@ Run it once with `"add OAuth login"`, again with `"now add MFA"` — each role c
 
 ### Scope
 
-Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The default scope is the current conversation's UUID — so each chat thread has its own per-node memory.
+Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The scope is the conversation that launched the run, so each chat thread has its own per-node memory. A run the Web UI or REST API starts in the background still belongs to the chat it was launched from, so runs from one chat continue each other's sessions.
 
-Chat and REST reuse a stable conversation across turns, so resume works automatically. The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
+The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
+
+### Concurrent runs
+
+Two runs of the same workflow in the same scope can run at the same time. Neither waits for the other, and they never write into the same provider conversation:
+
+- When a run starts, it reads the scope's persisted sessions once. Each `persist_session` node continues from that copy, not from a session another run saved after this run started.
+- The node continues the saved session only when its provider can **fork** it (declares `sessionFork: true`). The fork is a new session with the saved history, so the saved one stays unchanged. Claude and Pi fork.
+- A provider that cannot fork would resume the saved session in place, so two runs could append to one conversation. Instead, the node does not continue it. The run records a `node_session_not_continued` workflow event naming the session it skipped (an 8-character preview) and posts a notice in the conversation. `archon validate workflows` also warns before any run, but only for a node whose provider is written in the workflow file itself; a node from an included block, or one whose provider comes from config defaults or a `model:` alias, is checked only when it runs. Codex, OpenCode and Copilot are in this group today, so their `persist_session` nodes do not carry context between runs; pass state between runs through artifacts instead.
+- When a node finishes with a session, that session becomes the saved one. With overlapping runs, the run whose node finished last wins. A node that finishes without a session id leaves the saved session as it was.
 
 ### Workflow-level default
 
@@ -910,7 +977,7 @@ nodes:
 
 ### Capability requirement
 
-The resolved provider must declare `sessionResume: true` in its capabilities. The loader rejects workflows that set `persist_session: true` against a non-resume-capable provider at the explicit-provider level; the executor catches the implicit-default-provider case at runtime.
+The resolved provider must declare `sessionResume: true` in its capabilities. The loader rejects workflows that set `persist_session: true` against a non-resume-capable provider at the explicit-provider level; the executor catches the implicit-default-provider case at runtime. Continuing a session across runs also needs `sessionFork: true`; see [Concurrent runs](#concurrent-runs).
 
 ### Supported node types
 
@@ -921,6 +988,8 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 - **`loop:` / `loop_group:`** — have their own per-iteration session threading. Cross-run persistence isn't wired for them in this release; the field is warn-and-dropped on loop and loop_group nodes. Use a `prompt:` node if you need cross-run memory.
 
 When a workflow-level `persist_sessions: true` is combined with any of these node types, the capability check and persistence logic both skip the non-applicable nodes — no false validation errors, no silent runtime mistakes.
+
+To continue a node's conversation outside Archon, read its session id from `archon workflow get <run-id> --verbose` and pass it to the provider's own resume command, such as `claude --resume <id>`. Claude Code finds a session by the directory it ran in, so run that command from the node's working directory: the run's worktree when the run used one.
 
 ### `context: fresh` overrides
 
@@ -940,19 +1009,21 @@ Cross-scope resets are guarded so a dropped scope can't silently wipe every conv
 
 ### Cost caveat
 
-Persistent sessions on Codex/Pi replay the full rollout on each turn, so token cost grows with iteration depth. Claude auto-compacts. If a workflow's persistent sessions get expensive, reset them and start fresh.
+Persistent sessions on Pi replay the full rollout on each turn, so token cost grows with iteration depth. Claude auto-compacts. If a workflow's persistent sessions get expensive, reset them and start fresh.
 
 ### When a resume can't be restored
 
-If the stored session is gone (Codex thread expired, Pi JSONL missing or moved, OpenCode session not found), the provider can't resume it. Rather than silently pretending nothing was lost, the provider starts a **fresh** session for that node and the executor surfaces a visible warning:
+If the stored session is gone (for example, a Pi JSONL file was moved), the provider can't resume it. Rather than silently pretending nothing was lost, the provider starts a **fresh** session for that node and the executor surfaces a visible warning:
 
 > ⚠️ Node `planner`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.
 
 The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run — the fresh session is already a clean start, so re-running would only repeat it. Expect this only for `persist_session` nodes whose prior session became unavailable; warm resumes and first-time runs are unaffected.
 
+Codex does not fall back: a thread it cannot resume fails the node as `unknown`, with Codex's own error as evidence (for example `no rollout found for thread id …`). Codex reports a missing thread with the same JSON-RPC code as any other invalid request, so Archon cannot tell it apart safely enough to start over on its own. Codex cannot fork a session, so a `persist_session` node on Codex never continues an earlier run's thread (see [Concurrent runs](#concurrent-runs)); a Codex resume only continues a thread from the same run, which is gone only if something removed it mid-run.
+
 #### By-reference recovery via scope artifacts
 
-A lost session doesn't have to mean lost context. Workflows that use `persist_session` also get a **stable cross-invocation artifact scope** at `scopes/<workflow>/<scope>/` (a sibling of the per-run `runs/<id>/` directory, under the same artifacts root; the scope is the conversation UUID — the same key sessions use). Whenever a persistence-participating node also declares an `output_type`, the engine mirrors its typed output sidecar (`nodes/<id>.md` + `nodes/<id>.meta.json`) into that scope directory in addition to the run directory.
+A lost session doesn't have to mean lost context. Workflows that use `persist_session` also get a **stable cross-invocation artifact scope** at `scopes/<workflow>/<scope>/` (a sibling of the per-run `runs/<id>/` directory, under the same artifacts root; the scope is the launching conversation's UUID — the same key sessions use). Whenever a persistence-participating node also declares an `output_type`, the engine mirrors its typed output sidecar (`nodes/<id>.md` + `nodes/<id>.meta.json`) into that scope directory in addition to the run directory.
 
 On a cold resume, the warning then goes further: if the scope directory holds typed artifacts from an *earlier* invocation, the message lists them **by reference** (file paths — never pasted content), so the recovered context can be read on demand:
 
@@ -974,10 +1045,6 @@ Notes:
 - **Opt-in only.** Workflows without `persist_session` get no scope directory, no mirroring, and no pointer — default behavior is unchanged. Persist nodes without `output_type` keep session continuity but leave nothing behind for recovery.
 - **Last writer wins.** Concurrent runs of the same workflow in the same scope write per-node files into the shared scope directory; the most recent run's output for a given node is what a later cold resume sees.
 - **CLI caveat.** Each `archon workflow run` mints a fresh conversation UUID (a fresh scope) unless you pass `--conversation-id <id>` — the same caveat as session persistence itself.
-
-### Distinct from `AgentRequestOptions.persistSession`
-
-The Claude Agent SDK also has a `persistSession` flag controlling whether the SDK writes its session transcript to disk. That is a *different* concept — local file persistence inside the SDK. This `persist_session:` field is about Archon's database-stored cross-run session ID for workflow nodes. The two operate at different layers and don't conflict.
 
 ---
 
@@ -1142,7 +1209,7 @@ nodes:
 When a node sets `output_type`, the executor writes a typed sidecar after the node completes:
 
 - `$ARTIFACTS_DIR/nodes/<id>.md` — the node's output text
-- `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`, and `sessionId` when available)
+- `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`)
 
 That exact layout remains the contract for top-level nodes. A typed node inside a `loop_group`
 writes one pair per successful body execution instead: `nodes/loop.<owner-digest>__<body>.md` and
@@ -1152,11 +1219,11 @@ cannot alias another execution. Metadata keeps the readable provenance as
 `loopGroupPath: [{ groupId, iteration }, ...]`. A body node expanded from an `include:` retains its
 load-time `<include>__<node>` ID in metadata and as the sanitized body suffix.
 
-This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
+This works on **every** node type, `bash`/`script` included. The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 
 #### Reading typed artifacts by type
 
-Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`/`sessionId`), and `path` is relative to `$ARTIFACTS_DIR`.
+Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`), and `path` is relative to `$ARTIFACTS_DIR`.
 
 ```ts
 // A script: read the listing the same way in host or container runs.
@@ -1313,20 +1380,20 @@ own. The composing workflow contributes ordering and gates; it does not reach in
 
 ```yaml
 nodes:
-  - id: finalize-pr
-    command: archon-finalize-pr
+  - id: pr
+    include: archon-pr
 
-  # Inlines every node from archon-review-block, attached after finalize-pr.
+  # Inlines every node from archon-review, attached after pr.
   - id: review
-    include: archon-review-block
-    depends_on: [finalize-pr]
+    include: archon-review
+    depends_on: [pr]
 
   - id: summary
-    command: archon-workflow-summary
-    depends_on: [review]   # resolves to the review block's terminal node
+    prompt: "Summarize the review findings for the PR author."
+    depends_on: [review]   # resolves to the included workflow's terminal node
 ```
 
-The include target (`archon-review-block` here) is an ordinary workflow file discovered by
+The include target (`archon-review` here) is an ordinary workflow file discovered by
 name, honoring the usual precedence (`bundled` < `~/.archon/workflows/` < repo
 `.archon/workflows/`).
 
@@ -1372,8 +1439,8 @@ behave exactly as if you had written the nodes by hand. A top-level include prod
 nodes; an include in a `loop_group` body produces body-local nodes. There is no separate child run.
 
 - **Namespacing.** Each included node `n` receives id `<includeId>__<n.id>` (double
-  underscore) within that scope. Including `archon-review-block` under `id: review` yields
-  `review__verify-pr-base`, `review__sync`, `review__implement-fixes`, and so on. These
+  underscore) within that scope. Including `archon-review` under `id: review` yields
+  `review__scope`, `review__code`, `review__synthesize`, and so on. These
   namespaced ids are what appear in the event stream and in `archon workflow get <id>`;
   body-local events additionally carry their enclosing group prefix.
 - **Edges and command bodies.** Internal `depends_on` edges and `$id.output` references are
@@ -1500,7 +1567,7 @@ in the child's run metadata.
   (`A` includes `B` includes `A`) and over-deep chains are load errors that drop only the
   offending workflow — other workflows still load.
 
-A workflow used purely as a building block (like `archon-review-block`) still appears in
+A workflow used purely as a building block still appears in
 `archon workflow list`. Mark it as a building block in its `description:` so it isn't picked
 for a standalone run.
 
@@ -2576,7 +2643,7 @@ Model and options are resolved in this order:
 
 1. **Workflow-level** - Explicit settings in the workflow YAML
 2. **Config defaults** - `assistants.*` in `.archon/config.yaml`
-3. **SDK defaults** - Built-in defaults from Claude/Codex SDKs
+3. **Provider defaults** - Built-in defaults of the Claude Agent SDK and of Codex (including your own Codex `config.toml`)
 
 For the Claude SDK advanced options (`effort`, `fallbackModel`, `betas`, `sandbox`) a per-node value sits above the workflow level: a node uses its own value if set, otherwise it inherits the workflow-level default. See [Claude SDK Advanced Options](#claude-sdk-advanced-options).
 
@@ -3225,9 +3292,10 @@ Print the current JSONL transcript, or follow it through completion:
 ```bash
 archon workflow logs {workflow-id}
 archon workflow logs {workflow-id} --follow
+archon workflow logs {workflow-id} --follow --format text   # the same rows, readable
 ```
 
-Each line is a JSON event (step start, AI response, tool call, retained subprocess output,
+Each line of the default output is a JSON event (step start, AI response, tool call, retained subprocess output,
 etc.). `archon workflow get {workflow-id}` also prints the resolved local transcript path.
 
 ---
@@ -3269,14 +3337,15 @@ Before deploying a workflow:
 8. **`allowed_tools` / `denied_tools`** — restrict tools per node (all providers except Codex)
 9. **`retry:`** — AI nodes auto-retry transient errors (default: 2 retries / 3 total attempts, 3 s backoff); `bash:`/`script:` retry only with an explicit `retry:` block
 10. **`hooks`** — attach SDK hook callbacks to Claude nodes for tool control and context injection
-11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude/Codex/Copilot; Codex configuration is additive)
+11. **`mcp:`** — attach per-node MCP servers via JSON config (Claude/Codex/Copilot)
 12. **`skills:`** — select exact active skills on Claude and declare skills for Pi/Copilot; Codex workflow bodies use explicit `$skill-name`
-13. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
-14. **`effort`** — reasoning depth per node or workflow, on every provider that has request-level reasoning control (Claude/Codex/Pi/Copilot)
-15. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
-16. **`systemPrompt`** — override the default system prompt per node (Claude only)
-17. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
-18. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar for cross-node/cross-run lookup by type (any node type). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain)
-19. **Loop nodes** — use `loop:` within a DAG node for iterative execution until a declared completion condition is met
-20. **Defaults as templates** — browse `.archon/workflows/defaults/` for real examples to copy and modify
-21. **Test thoroughly** — each command, the artifact flow, and edge cases
+13. **`plugins:`** — name the Claude or Codex plugins a node loads; every other installed plugin stays off
+14. **`agents:`** — inline Claude sub-agent definitions invokable via the `Task` tool
+15. **`effort`** — reasoning depth per node or workflow, on every provider that has request-level reasoning control (Claude/Codex/Pi/Copilot)
+16. **`maxBudgetUsd`** — set a USD cost cap per node; fails with error if exceeded (Claude only)
+17. **`systemPrompt`** — override the default system prompt per node (Claude only)
+18. **`sandbox`** — OS-level filesystem/network restrictions per node or workflow (Claude only)
+19. **`output_type`** — tag a node's output with a semantic type; the engine writes a typed sidecar for cross-node/cross-run lookup by type (any node type). Top-level nodes use `$ARTIFACTS_DIR/nodes/<id>.md` + `.meta.json`; loop-body executions use [iteration-specific paths](#the-artifact-chain)
+20. **Loop nodes** — use `loop:` within a DAG node for iterative execution until a declared completion condition is met
+21. **Bundled workflows as templates** — browse `.archon/workflows/sdlc/` in the Archon repository for real examples to copy and modify
+22. **Test thoroughly** — each command, the artifact flow, and edge cases

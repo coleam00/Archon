@@ -1,3 +1,4 @@
+import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
@@ -44,8 +45,7 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   // This fixture has project scripts and no installed bundled source tree.
-  getDefaultCommandsPath: () => join(testDir, 'absent-bundle', 'commands', 'defaults'),
-  getDefaultWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows', 'defaults'),
+  getBundledWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows'),
 }));
 
 // --- Imports (after all mock.module calls) ---
@@ -140,6 +140,7 @@ function createMockStore(): IWorkflowStore {
     createWorkflowEvent: mock(() => Promise.resolve()),
     persistWorkflowEvent: mock(() => Promise.resolve()),
     persistWorkflowEventIfRunning: mock(() => Promise.resolve({ persisted: true })),
+    listProviderEvents: mock(() => Promise.resolve([])),
     getDagResumeSnapshot: mock(() =>
       Promise.resolve({
         completedNodeOutputs: new Map<string, { output: string }>(),
@@ -151,17 +152,16 @@ function createMockStore(): IWorkflowStore {
     ),
     getCodebase: mock(() => Promise.resolve(null)),
     getCodebaseEnvVars: mock(() => Promise.resolve({})),
-    getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+    listWorkflowNodeSessions: mock(() => Promise.resolve([])),
     listWorkflowRunNodeSessions: mock(() => Promise.resolve([])),
     upsertWorkflowRunNodeSession: mock(() => Promise.resolve()),
     upsertWorkflowNodeSession: mock(() => Promise.resolve()),
-    deleteWorkflowNodeSessions: mock(() => Promise.resolve({ deleted: 0 })),
   };
 }
 
 const mockSendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQuery']>(
   async function* (_prompt, _cwd, _resumeSessionId, _options) {
-    yield { type: 'assistant', content: 'AI response' };
+    yield { type: 'agent_message_chunk', text: 'AI response' };
     yield { type: 'result', sessionId: 'session-id' };
   }
 );
@@ -174,6 +174,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
     mcp: true,
     hooks: true,
     skills: true,
+    plugins: false,
     agents: true,
     toolRestrictions: true,
     structuredOutput: 'enforced' as const,
@@ -193,7 +194,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
 function createMockDeps(): WorkflowDeps {
   return {
     store: createMockStore(),
-    getAgentProvider: mockGetAgentProvider,
+    getAgentProvider: provider => settlingProvider(mockGetAgentProvider(provider)),
     loadConfig: mock(() =>
       Promise.resolve({
         assistant: 'claude' as const,

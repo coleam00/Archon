@@ -17,8 +17,7 @@ mock.module('@archon/paths', () => ({
   getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getArchonWorktreesPath: mock(() => '/home/test/.archon/worktrees'),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/app/.archon/workflows'),
 }));
 
 const mockQuery = createMockQuery();
@@ -43,7 +42,7 @@ import {
   listWorkflowEvents,
   listRecentEvents,
   listActiveWorkflowNodeIds,
-  listNodeLifecycleEvents,
+  listEventsForRuns,
   getDagResumeSnapshot,
 } from './workflow-events';
 
@@ -115,6 +114,33 @@ describe('workflow-events', () => {
         workflow_run_id: 'run-456',
         event_type: 'loop_iteration_started',
       });
+    });
+
+    test('a lost provider event is logged with its node, attempt and seq', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('database is locked'));
+      mockLogger.error.mockClear();
+
+      await createWorkflowEvent({
+        workflow_run_id: 'run-456',
+        event_type: 'provider_event',
+        step_name: 'implement',
+        data: {
+          attemptId: 'attempt-1',
+          seq: 7,
+          observedAt: '2026-10-02T10:00:00.000Z',
+          event: { type: 'agent_message_chunk', text: 'hi' },
+        },
+      });
+
+      expect(mockLogger.error).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-456',
+          stepName: 'implement',
+          attemptId: 'attempt-1',
+          seq: 7,
+        }),
+        'db.workflow_event_create_failed'
+      );
     });
   });
 
@@ -353,8 +379,8 @@ describe('workflow-events', () => {
     });
   });
 
-  describe('listNodeLifecycleEvents', () => {
-    test('groups node lifecycle rows by run in one query, with an entry for every run', async () => {
+  describe('listEventsForRuns', () => {
+    test('groups the requested event types by run in one query, with an entry for every run', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           { workflow_run_id: 'run-a', step_name: 'plan', event_type: 'node_started', data: '{}' },
@@ -368,24 +394,17 @@ describe('workflow-events', () => {
         ])
       );
 
-      const result = await listNodeLifecycleEvents(['run-a', 'run-b', 'run-c']);
+      const result = await listEventsForRuns(
+        ['run-a', 'run-b', 'run-c'],
+        ['node_started', 'node_completed', 'node_failed']
+      );
 
       expect(mockQuery).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenCalledWith(
         expect.stringContaining(
           'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
         ),
-        [
-          'run-a',
-          'run-b',
-          'run-c',
-          'node_started',
-          'node_suspended',
-          'node_completed',
-          'node_failed',
-          'node_skipped',
-          'node_skipped_prior_success',
-        ]
+        ['run-a', 'run-b', 'run-c', 'node_started', 'node_completed', 'node_failed']
       );
       expect([...result.keys()]).toEqual(['run-a', 'run-b', 'run-c']);
       expect(result.get('run-a')?.map(row => [row.event_type, row.data])).toEqual([
@@ -399,13 +418,13 @@ describe('workflow-events', () => {
     test('throws wrapped error on query failure', async () => {
       mockQuery.mockRejectedValueOnce(new Error('connection lost'));
 
-      await expect(listNodeLifecycleEvents(['run-a'])).rejects.toThrow(
-        'Failed to list node lifecycle events: connection lost'
+      await expect(listEventsForRuns(['run-a'], ['node_started'])).rejects.toThrow(
+        'Failed to list events for runs: connection lost'
       );
     });
 
     test('returns an empty map without querying for an empty run list', async () => {
-      expect(await listNodeLifecycleEvents([])).toEqual(new Map());
+      expect(await listEventsForRuns([], ['node_started'])).toEqual(new Map());
       expect(mockQuery).not.toHaveBeenCalled();
     });
   });

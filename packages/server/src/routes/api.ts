@@ -72,8 +72,7 @@ import {
   createLogger,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
-  getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
@@ -238,7 +237,7 @@ async function findWorkflowAt(
 }
 
 function isBundledWorkflowsRoot(workflowsRoot: string): boolean {
-  return resolve(workflowsRoot) === resolve(dirname(getDefaultWorkflowsPath()));
+  return resolve(workflowsRoot) === resolve(getBundledWorkflowsPath());
 }
 
 function findBundledWorkflow(
@@ -273,6 +272,7 @@ import * as envVarDb from '@archon/core/db/env-vars';
 import * as isolationEnvDb from '@archon/core/db/isolation-environments';
 import * as workflowDb from '@archon/core/db/workflows';
 import * as workflowEventDb from '@archon/core/db/workflow-events';
+import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
@@ -300,6 +300,8 @@ import {
   commandListResponseSchema,
   workflowRunListResponseSchema,
   workflowRunDetailSchema,
+  providerEventsQuerySchema,
+  providerEventsResponseSchema,
   workflowRunByWorkerResponseSchema,
   cancelWorkflowRunResponseSchema,
   workflowRunActionResponseSchema,
@@ -350,7 +352,6 @@ import {
 import {
   TIER_NAMES,
   isTierName,
-  isEffortValidForProvider,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
@@ -1158,6 +1159,25 @@ const getWorkflowRunRoute = createRoute({
       content: { 'application/json': { schema: workflowRunDetailSchema } },
       description: 'Workflow run detail',
     },
+    404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const getProviderEventsRoute = createRoute({
+  method: 'get',
+  path: '/api/workflows/runs/{runId}/provider-events',
+  tags: ['Workflows'],
+  summary: "List a run's provider events",
+  description:
+    "Every event the run's providers streamed (text, thinking, tool calls with output, warnings, MCP status, compaction, subtasks, hooks, state), as the engine recorded them. Grouped by node; each node's in emission order. Rows written before the engine recorded envelopes come back translated, with a null attemptId.",
+  request: { params: z.object({ runId: z.string() }), query: providerEventsQuerySchema },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: providerEventsResponseSchema } },
+      description: 'Provider events',
+    },
+    400: jsonError('Invalid cursor'),
     404: jsonError('Not found'),
     500: jsonError('Server error'),
   },
@@ -2117,11 +2137,17 @@ export function registerApiRoutes(
         .map(p => p.id)
         .join(', ')}`;
     }
-    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
-      return (
-        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
-        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
-      );
+    if (entry.effort !== undefined) {
+      const validEfforts = validEffortsForProvider(entry.provider);
+      if (validEfforts === null) {
+        return `Provider '${entry.provider}' does not support effort (${label}).`;
+      }
+      if (!validEfforts.includes(entry.effort)) {
+        return (
+          `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
+          `Valid: ${validEfforts.join(', ')}`
+        );
+      }
     }
     return null;
   }
@@ -4286,7 +4312,11 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      const events = await workflowEventDb.listWorkflowEvents(runId);
+      // Provider events are served by their own route, per node; a long run has
+      // thousands and they would dominate this payload.
+      const events = await workflowEventDb.listWorkflowEvents(runId, {
+        excludeEventTypes: workflowEventDb.PROVIDER_EVENT_ROW_TYPES,
+      });
 
       // Look up the run's conversation platform ID.
       // For web runs (parent_conversation_id set): conversation_id is the worker conversation → set worker_platform_id
@@ -4324,6 +4354,29 @@ export function registerApiRoutes(
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');
       return apiError(c, 500, 'Failed to get workflow run');
+    }
+  });
+
+  // GET /api/workflows/runs/:runId/provider-events - A run's provider events
+  registerOpenApiRoute(getProviderEventsRoute, async c => {
+    const runId = c.req.param('runId') ?? '';
+    const { step, attemptId, afterSeq } = (
+      c.req as unknown as { valid(k: 'query'): z.infer<typeof providerEventsQuerySchema> }
+    ).valid('query');
+    try {
+      const run = await workflowDb.getWorkflowRun(runId);
+      if (!run) return apiError(c, 404, 'Workflow run not found');
+      // Read through the engine's store seam, not the DB module.
+      const events = await createWorkflowStore().listProviderEvents(
+        runId,
+        step !== undefined && attemptId !== undefined && afterSeq !== undefined
+          ? { stepName: step, after: { attemptId, seq: afterSeq } }
+          : { stepName: step }
+      );
+      return c.json({ events });
+    } catch (error) {
+      getLog().error({ err: error, runId }, 'list_provider_events_failed');
+      return apiError(c, 500, 'Failed to list provider events');
     }
   });
 
@@ -4455,9 +4508,7 @@ export function registerApiRoutes(
 
       if (!isBinaryBuild()) {
         try {
-          const hit =
-            (await tryReadWorkflowAt(getDefaultWorkflowsPath(), name)) ??
-            (await findPackagedWorkflowAt(dirname(getDefaultWorkflowsPath()), name));
+          const hit = await findPackagedWorkflowAt(getBundledWorkflowsPath(), name);
           if (hit) {
             const result = hit.parsed;
             if (result.error) {
@@ -4653,23 +4704,7 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
-      // 2. If not binary build, also check filesystem defaults
-      if (!isBinaryBuild()) {
-        try {
-          const defaultsPath = getDefaultCommandsPath();
-          const files = await findCommandFiles(defaultsPath);
-          for (const { commandName } of files) {
-            commandMap.set(commandName, 'bundled');
-          }
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            getLog().error({ err }, 'commands.list_defaults_failed');
-          }
-          // ENOENT: defaults path missing — not an error
-        }
-      }
-
-      // 3. Home-scoped commands (~/.archon/commands/) override bundled
+      // 2. Home-scoped commands (~/.archon/commands/) override bundled
       try {
         const homeCommandsPath = getHomeCommandsPath();
         const files = await findCommandFiles(homeCommandsPath);
@@ -4683,7 +4718,7 @@ export function registerApiRoutes(
         // ENOENT: home commands dir not created yet — not an error
       }
 
-      // 4. Project-defined commands override bundled AND global
+      // 3. Project-defined commands override bundled AND global
       if (workingDir) {
         const searchPaths = getCommandFolderSearchPaths();
         for (const folder of searchPaths) {

@@ -14,24 +14,19 @@ import { access, readFile, stat } from 'fs/promises';
 import {
   createLogger,
   getCommandFolderSearchPaths,
-  getDefaultCommandsPath,
   getHomeCommandsPath,
   findCommandFiles,
 } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_COMMANDS, BUNDLED_WORKFLOWS, isBinaryBuild } from './defaults/bundled-defaults';
-import {
-  bundledDefaultCommandPath,
-  bundlesPackagedResources,
-  listBundledDefaultCommands,
-} from './defaults/bundle-inventory';
+import { bundlesPackagedResources } from './defaults/bundle-inventory';
 import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
   compileOutputSchema,
   findInstalledSkillNames,
-  findRequiredPropertyGaps,
+  findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
   skillSearchRoots,
@@ -142,7 +137,7 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /**
- * Discover all available command names from search paths and bundled defaults.
+ * Discover all available flat command names from the project and home search paths.
  * Returns deduplicated, sorted list of command names.
  */
 export async function discoverAvailableCommands(
@@ -166,7 +161,7 @@ export async function discoverAvailableCommands(
 
   // 2. Home-scoped commands (~/.archon/commands/) — personal helpers reusable across repos.
   // ENOENT already returns []; we only catch other errors (EACCES/EPERM/EIO) so a broken
-  // home-scope doesn't take down repo/bundled discovery.
+  // home-scope doesn't take down repo discovery.
   const homePath = getHomeCommandsPath();
   try {
     const homeCommands = await findCommandFiles(homePath);
@@ -175,20 +170,6 @@ export async function discoverAvailableCommands(
     }
   } catch (err) {
     getLog().warn({ err, path: homePath }, 'commands.home_discovery_failed');
-  }
-
-  // 3. Bundled defaults
-  const loadDefaults = config?.loadDefaultCommands !== false;
-  if (loadDefaults) {
-    if (isBinaryBuild()) {
-      for (const name of Object.keys(BUNDLED_COMMANDS)) {
-        if (parsePackagedResourceReference(name) === null) names.add(name);
-      }
-    } else {
-      for (const name of await listBundledDefaultCommands(getDefaultCommandsPath())) {
-        names.add(name);
-      }
-    }
   }
 
   return [...names].sort();
@@ -216,7 +197,8 @@ async function resolveCommandInDir(rootDir: string, commandName: string): Promis
  * Resolution precedence (first hit wins):
  *   1. Repo-local — `<cwd>/.archon/commands/` and configured folders
  *   2. Home-scoped — `~/.archon/commands/` (personal helpers, reusable across repos)
- *   3. Bundled defaults — embedded in the binary or the app's defaults folder
+ *
+ * Bundled commands are always packaged (`pack/workflow/name`) and resolve above.
  */
 async function resolveCommand(
   commandName: string,
@@ -261,38 +243,12 @@ async function resolveCommand(
 
   // 2. Home-scoped commands (~/.archon/commands/).
   // ENOENT on the home dir already returns null; only wrap for other errors so a
-  // broken home-scope doesn't prevent bundled-default resolution.
+  // broken home-scope reads as unresolved rather than failing validation.
   try {
     const homeResolved = await resolveCommandInDir(getHomeCommandsPath(), commandName);
     if (homeResolved) return homeResolved;
   } catch (err) {
     getLog().warn({ err, commandName }, 'commands.home_resolve_failed');
-  }
-
-  // 3. Bundled defaults
-  const loadDefaults = config?.loadDefaultCommands !== false;
-  if (loadDefaults) {
-    if (isBinaryBuild()) {
-      if (commandName in BUNDLED_COMMANDS) {
-        return `[bundled:${commandName}]`;
-      }
-    } else {
-      const path = await bundledDefaultCommandPath(getDefaultCommandsPath(), commandName);
-      // A miss is ENOENT; any other stat failure belongs to the caller, not to a silent null.
-      if (path !== null) {
-        try {
-          if ((await stat(path)).isFile()) return path;
-        } catch (error) {
-          const err = error as NodeJS.ErrnoException;
-          if (err.code !== 'ENOENT') {
-            getLog().error({ err, path, commandName }, 'bundled_default_command_inspection_failed');
-            throw new Error(`Cannot inspect bundled default '${commandName}': ${err.message}`, {
-              cause: err,
-            });
-          }
-        }
-      }
-    }
   }
 
   return null;
@@ -525,13 +481,13 @@ export async function validateWorkflowResources(
     const providerCaps =
       provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
 
-    // --- Strict-schema required coverage (#2945) ---
-    // A schema whose declared properties are not fully covered by 'required' is
-    // rejected by a provider that enforces OpenAI strict mode (Codex) at the
-    // first turn with HTTP 400 invalid_json_schema. Report it at validation time
-    // so `archon validate workflows` catches it before a live run burns setup
-    // costs. The set of provider-invoking kinds is the same one the launch
-    // preflight uses: every node kind that both enforces output_format
+    // --- Strict-schema compatibility (#2945, #3557) ---
+    // A schema with a bare object or incomplete 'required' coverage is rejected
+    // by a provider that enforces OpenAI strict mode (Codex) at the first turn
+    // with HTTP 400 invalid_json_schema. Report it at validation time so `archon
+    // validate workflows` catches it before a live run burns setup costs. The
+    // set of provider-invoking kinds is the same one the launch preflight uses:
+    // every node kind that both enforces output_format
     // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
     // loop; not exec/bash/script, and not a wait's engine-injected schema).
     if (
@@ -542,14 +498,24 @@ export async function validateWorkflowResources(
       node.output_format !== undefined &&
       providerCaps?.requiresAllPropertiesRequired
     ) {
-      for (const gap of findRequiredPropertyGaps(node.output_format, 'output_format')) {
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'output_format',
-          message: `Node '${node.id}' declares properties not in 'required' at '${gap.schemaPath}': ${gap.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
-          hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
-        });
+      for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
+        if (issue.kind === 'missing-properties') {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'output_format',
+            message: `Node '${node.id}' declares an object schema without 'properties' at '${issue.schemaPath}'. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+            hint: 'Declare the object properties and list every property in required. When the value may be absent, use a nullable object such as type: ["object","null"].',
+          });
+        } else {
+          issues.push({
+            level: 'error',
+            nodeId: node.id,
+            field: 'output_format',
+            message: `Node '${node.id}' declares properties not in 'required' at '${issue.schemaPath}': ${issue.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+            hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
+          });
+        }
       }
     }
 
@@ -699,14 +665,13 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using MCP with a provider that doesn't support it
       if (providerCaps?.mcp === false) {
         issues.push({
-          level: 'warning',
+          level: 'error',
           nodeId: node.id,
           field: 'mcp',
-          message: `MCP servers are not supported by provider '${provider}' — this will be ignored`,
-          hint: 'Remove the mcp field or switch to a provider that supports MCP',
+          message: `Provider '${provider}' cannot load MCP servers — the run would fail before any node starts`,
+          hint: 'Remove the mcp field or switch to a provider whose mcp capability is true',
         });
       }
     }
@@ -782,7 +747,7 @@ export async function validateWorkflowResources(
                     : `Skill '${skillName}' not found in .agents/skills/ or .claude/skills/ (project or user scope)`,
                 hint:
                   provider === 'claude'
-                    ? `If this is not a built-in or plugin:skill name, check the spelling or create .claude/skills/${skillName}/SKILL.md`
+                    ? `A plugin:skill name also needs its plugin under plugins:. Otherwise check the spelling or create .claude/skills/${skillName}/SKILL.md`
                     : `Install with: npx skills add <repo> — or create manually at .agents/skills/${skillName}/SKILL.md`,
               });
             }
@@ -790,19 +755,29 @@ export async function validateWorkflowResources(
         }
       }
 
-      // Warn if using skills with a provider that doesn't support them
       if (providerCaps?.skills === false && node.skills.length > 0) {
         issues.push({
-          level: 'warning',
+          level: 'error',
           nodeId: node.id,
           field: 'skills',
-          message: `The skills field is not supported by provider '${provider}' — this will be ignored`,
+          message: `Provider '${provider}' cannot load named skills — the run would fail before any node starts`,
           hint:
             provider === 'codex'
-              ? 'Invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
-              : 'Remove the skills field or switch to a provider that supports skills',
+              ? 'Remove the skills field and invoke an installed Codex skill explicitly in the command or prompt with $skill-name'
+              : 'Remove the skills field or switch to a provider whose skills capability is true',
         });
       }
+    }
+
+    // --- Plugins: an error like mcp and skills — the engine refuses to run it ---
+    if ('plugins' in node && node.plugins?.length && providerCaps?.plugins === false) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'plugins',
+        message: `Provider '${provider}' cannot load named plugins — the run would fail before any node starts`,
+        hint: 'Remove the plugins field or switch to a provider whose plugins capability is true',
+      });
     }
 
     // --- Capability-driven warnings for hooks and tool restrictions ---

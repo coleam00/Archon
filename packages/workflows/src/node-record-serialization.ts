@@ -1,5 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import type { TokenUsage } from '@archon/providers/types';
+import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';
 import {
@@ -9,11 +10,14 @@ import {
   executionSpendSchema,
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
+  type NodeDescriptor,
   type NodeExecutionRecord,
   type NodeStateRecord,
   type ExecutionOutput,
 } from './schemas/node-execution';
 import { executionMetadata } from './node-execution';
+import { unqualifiedResourceName } from './packaged-workflow';
+import type { DagNode } from './schemas';
 
 /** Existing flat wire keys remain readable by older binaries. */
 export const serializedNodeDataSchema = z.object({
@@ -40,6 +44,7 @@ export const serializedNodeDataSchema = z.object({
   error: z.string().optional(),
   retryable: z.literal(false).optional(),
   failure_kind: nodeFailureKindSchema.optional(),
+  provider_failure: providerFailureSchema.optional(),
   reason: z.union([nodeSkipReasonSchema, z.literal('stale_dependency')]).optional(),
   cause: skipCauseSchema.optional(),
   expr: z.string().optional(),
@@ -71,6 +76,8 @@ export const serializedNodeDataSchema = z.object({
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
+  /** The full provider session id; only this durable row carries it. */
+  session_id: z.string().optional(),
 });
 export type SerializedNodeData = z.infer<typeof serializedNodeDataSchema>;
 
@@ -212,6 +219,9 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
             error: lifecycle.error,
             ...(lifecycle.retryable === false ? { retryable: false as const } : {}),
             ...(lifecycle.failureKind !== undefined ? { failure_kind: lifecycle.failureKind } : {}),
+            ...(lifecycle.providerFailure !== undefined
+              ? { provider_failure: lifecycle.providerFailure }
+              : {}),
           }
         : {}),
       ...(lifecycle.status === 'skipped'
@@ -243,6 +253,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
       ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
       ...(d?.expr !== undefined ? { expr: d.expr } : {}),
+      ...(record.sessionId !== undefined ? { session_id: record.sessionId } : {}),
     },
   };
 }
@@ -253,10 +264,9 @@ export type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
-/** Full session cursors never enter the record or its public projections. */
 export function serializeNodeOutput(
   record: NodeExecutionRecord,
-  continuation: { sessionId?: string; resumed?: boolean } = {}
+  continuation: { resumed?: boolean } = {}
 ): NodeExecutionResult {
   const common = {
     output: record.output?.text ?? '',
@@ -273,6 +283,7 @@ export function serializeNodeOutput(
       : {}),
     execution: executionMetadata(record),
   };
+  const session = record.sessionId !== undefined ? { sessionId: record.sessionId } : {};
   const lifecycle = record.lifecycle;
   switch (lifecycle.status) {
     case 'failed':
@@ -282,21 +293,28 @@ export function serializeNodeOutput(
         error: lifecycle.error,
         ...(lifecycle.retryable === false ? { retryable: false } : {}),
         ...(lifecycle.failureKind !== undefined ? { failureKind: lifecycle.failureKind } : {}),
+        ...(lifecycle.providerFailure !== undefined
+          ? { providerFailure: lifecycle.providerFailure }
+          : {}),
       };
     case 'skipped':
       return { ...common, state: 'skipped', cause: lifecycle.cause };
     case 'completed':
-      return { ...common, ...continuation, state: 'completed' };
+      return { ...common, ...session, ...continuation, state: 'completed' };
     case 'started':
     case 'suspended':
-      return { ...common, ...continuation, state: 'running' };
+      return { ...common, ...session, ...continuation, state: 'running' };
   }
 }
 
-export function nodeRecordName(record: NodeStateRecord): string {
-  return record.node.kind === 'agent' && record.node.source.kind === 'command'
-    ? record.node.source.name
-    : record.node.id;
+/**
+ * The label progress surfaces show for a node: the command name for a command node, else
+ * the node id. A packaged command's internal reference is reduced to its bare name; the
+ * qualified reference stays in persisted `data.command` and transcript content.
+ */
+export function nodeDisplayName(node: NodeDescriptor | DagNode): string {
+  if (node.kind !== 'agent' || node.source.kind !== 'command') return node.id;
+  return unqualifiedResourceName(node.source.name);
 }
 
 export function serializeNodeTranscript(
@@ -348,7 +366,11 @@ export function serializeNodeTranscript(
 export function serializeNodeEmitter(
   record: NodeStateRecord
 ): import('./event-emitter').WorkflowEmitterEvent | undefined {
-  const base = { runId: record.runId, nodeId: record.node.id, nodeName: nodeRecordName(record) };
+  const base = {
+    runId: record.runId,
+    nodeId: record.node.id,
+    nodeName: nodeDisplayName(record.node),
+  };
   if ('cache' in record)
     return record.cache.action === 'replayed'
       ? { ...base, type: 'node_skipped_prior_success' }

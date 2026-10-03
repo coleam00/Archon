@@ -45,13 +45,13 @@ Use `archon forge resolve --data <json>` for an explicit remote, `archon forge c
 archon workflow list --cwd /path/to/repo
 
 # Run a workflow (auto-creates isolated worktree by default)
-archon workflow run assist --cwd /path/to/repo "Explain the authentication flow"
+archon workflow run investigate --cwd /path/to/repo "Why does login fail after a password reset?"
 
 # Explicit branch name for the worktree
 archon workflow run plan --cwd /path/to/repo --branch feature-auth "Add OAuth support"
 
 # Opt out of isolation (run in live checkout)
-archon workflow run assist --cwd /path/to/repo --no-worktree "Quick question"
+archon workflow run investigate --cwd /path/to/repo --no-worktree "Why does the nightly build fail?"
 ```
 
 **Note:** Workflow and isolation commands normally require running from within a git repository (running from subdirectories automatically resolves to the repo root). A non-git directory also works if it's a registered [folder project](/getting-started/concepts/#folder-projects-non-git-workspaces) — or on first use by passing `--folder`, which registers it and runs in place. The `version`, `help`, `chat`, `setup`, `serve`, and `doctor` commands work anywhere.
@@ -109,14 +109,14 @@ archon setup --spawn              # open in a new terminal window
 
 ### `doctor`
 
-Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, Codex binary resolution (env → config → vendor → autodetect, reporting which source resolved), gh CLI auth, Pi auth (when Pi is configured as default), OpenCode runtime SDK presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials (connected provider count, best-effort), and adapter token pings (Slack/Telegram, best-effort).
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, Codex binary resolution (env → config → vendor → autodetect, reporting which source resolved), gh CLI auth, Pi auth (when Pi is configured as default), OpenCode runtime SDK presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials connected in Archon, and adapter token pings (Slack/Telegram, best-effort).
 
 ```bash
 archon doctor
 archon doctor --full   # also probe the OpenCode runtime SDK even when it isn't the configured assistant
 ```
 
-The Codex check skips (never fails) when Codex isn't the configured assistant anywhere and no OpenAI credential is connected, so Claude-only users aren't nagged about a binary they'll never use. The OpenCode check only probes that the embedded runtime SDK module resolves — it never boots the runtime (which spawns a child process and binds a port) — and skips unless OpenCode is the configured assistant or `--full` is passed.
+The Codex check skips (never fails) when Codex isn't the configured assistant anywhere and no OpenAI credential is connected, so Claude-only users aren't nagged about a binary they'll never use. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The OpenCode check only probes that the embedded runtime SDK module resolves — it never boots the runtime (which spawns a child process and binds a port) — and skips unless OpenCode is the configured assistant or `--full` is passed.
 
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
@@ -222,7 +222,7 @@ archon workflow list --cwd /path/to/repo
 archon workflow list --cwd /path/to/repo --json
 
 # Exact, untouched description for one candidate
-archon workflow list archon-fix-github-issue-codex --full --json
+archon workflow list archon-review --full --json
 ```
 
 Discovers flat, one-level grouped, and exact `<pack>/<workflow>/` packaged layouts from `.archon/workflows/` and `~/.archon/workflows/`, plus bundled defaults. See [Global Workflows](/guides/global-workflows/).
@@ -247,7 +247,7 @@ Run a workflow with an optional user message.
 
 ```bash
 # Basic usage
-archon workflow run assist --cwd /path/to/repo "What does this function do?"
+archon workflow run investigate --cwd /path/to/repo "Why does the export job time out?"
 
 # With isolation
 archon workflow run plan --cwd /path/to/repo --branch feature-x "Add caching"
@@ -478,10 +478,10 @@ Every node in the new run uses that selected checkout, including bash/script del
 **Name Matching:**
 
 Workflow names are resolved using a 4-tier fallback hierarchy. This applies consistently across the CLI and all chat platforms (Slack, Telegram, Web, GitHub, Discord):
-1. **Exact match** - `archon-assist` matches `archon-assist`
-2. **Case-insensitive** - `Archon-Assist` matches `archon-assist`
-3. **Suffix match** - `assist` matches `archon-assist` (looks for `-assist` suffix)
-4. **Substring match** - `smart` matches `archon-smart-pr-review`
+1. **Exact match** - `archon-investigate` matches `archon-investigate`
+2. **Case-insensitive** - `Archon-Investigate` matches `archon-investigate`
+3. **Suffix match** - `investigate` matches `archon-investigate` (looks for `-investigate` suffix)
+4. **Substring match** - `deliv` matches `archon-deliver`
 
 If multiple workflows match at the same tier, an error lists the candidates:
 ```
@@ -605,8 +605,9 @@ work and invalid reported numbers. A reported zero stays zero. Historical nodes 
 when their rows lack these facts; they do not receive a guessed model or start time.
 
 `timing.durationMs` is elapsed wall time, not active compute time. Resumed loop durations can
-include time spent paused; bare approval retains the duration observed before the pause. Public
-records contain at most eight session-ID characters, never the full continuation handle. JSONL
+include time spent paused; bare approval retains the duration observed before the pause.
+`execution.binding.sessionPreview` holds at most eight session-ID characters; the full id is
+in the node's `sessionIds`, described below. JSONL
 transcripts retain the names `node_start`, `node_complete` and `node_error`; their `execution`
 metadata describes the same fact as the durable node event. Suspended nodes remain active and
 appear as running until their gate or wait resolves.
@@ -650,7 +651,12 @@ entry includes `nodeId` and `state`; nodes with a start event include the origin
 `startedAt`, and terminal nodes with both start and end events include `durationMs`.
 Completed nodes may include an `outputPreview`, truncated after 200 characters with
 ASCII `...`, while failed nodes include `error` (or `Unknown error` when none was
-recorded).
+recorded). Nodes whose provider reported a session include `sessionIds`: the full
+session id of each attempt and loop iteration, in order. Human `--verbose` output prints
+them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in
+the provider's own tool, for example with `claude --resume <id>`. Claude Code finds a
+session by the directory it ran in, so run it from the node's working directory: the run's
+worktree when the run used one.
 
 Add `--events` to `--json --verbose` to return raw `events` rows instead of `nodes` for
 debugging. Raw events are not the recommended integration surface.
@@ -662,6 +668,7 @@ Print the run's existing JSONL transcript, or follow it as rows are appended:
 ```bash
 archon workflow logs <run-id>
 archon workflow logs <run-id> --follow
+archon workflow logs <run-id> --follow --format text
 ```
 
 Without `--follow`, the command copies the snapshot that exists at invocation time to
@@ -675,9 +682,35 @@ approval or rejection appends a `gate_decision` row with the gate's `step`, the
 
 Stdout is the transcript's exact JSONL, with no log messages or wrapper document. Each
 line is one persisted event and fields may be added over time, so consumers should parse
-the fields they need and tolerate others. `--json` is invalid because the output is
+the fields they need and tolerate others.
+
+Provider activity (agent text, thinking, tool calls with their input and output,
+warnings, MCP status, compaction, subtasks, hooks and state) is written as
+`provider_event` lines: the line frame (`type`, `workflow_id`, `ts`, `step`) plus the
+engine envelope `attemptId`, `seq`, `observedAt` and `event`, where `event` is the
+provider's object unchanged. `seq` counts one node attempt's events from 0. Transcripts
+written before this line type have `assistant` lines (`content`) and `tool` lines
+(`tool_name`, `tool_input`) instead, with no step, call id or output. `--json` is invalid because the output is
 already JSONL and a live stream cannot satisfy the CLI's one-document JSON contract;
 `--events` is also limited to `workflow status/get`.
+
+`--format text` reads the same transcript, with the same snapshot and follow behaviour,
+and prints it for a person instead: workflow start, resume, completion and failure; node
+start, completion with its duration, failure and skip with its cause; gate waits and
+decisions; and each subprocess's retained output with its exit code. Each node is named
+by its node id, and a command node's start line also names its command.
+
+A node's provider activity is indented beneath it: agent text in full, thinking on one
+line, one line per tool call, and each call's outcome naming the tool with its exit code
+and the last lines of its output. Warnings, MCP servers that failed, need auth or are
+disabled, compaction, subtask starts and ends, failed or cancelled hooks, and waits on
+the user get one line each; progress-only events (running subtasks, started or
+successful hooks, connected or pending MCP servers) are left out.
+`provider_event` lines record their node, so when parallel nodes interleave a `[node]`
+line marks each switch. The older `assistant` and `tool` lines record no node and are
+indented without a label. Rows the text view does not render (watchdog renewals,
+historical rows, row or event types newer than the CLI, or a line that is not JSON) are
+left out; `--format jsonl`, the default, keeps every row.
 
 A missing or empty snapshot exits `1`; for a live run the diagnostic points to
 `--follow`. Follow mode waits while the run is live, performs a final read after a
@@ -912,7 +945,7 @@ just outside your shell. The ack carries `continues: true` to say so:
   "action": "approve",
   "detached": true,
   "continues": true,
-  "workflowName": "assist",
+  "workflowName": "my-workflow",
   "logPath": "~/.archon/logs/detached-run-<id>.log"
 }
 ```
@@ -1190,6 +1223,7 @@ archon version
 | `--json` | Output machine-readable JSON (workflow `list`, `status`, `runs`, `get`, `wait`, and the write commands `approve`/`reject`/`abandon`/`resume`). Implies log suppression so stdout is exactly the JSON payload. |
 | `--timeout <seconds>` | For `workflow wait`: give up after N seconds and exit `3`. Omitted means wait indefinitely. |
 | `--follow` | For `workflow logs`: wait for the transcript and stream appended rows until the run ends. |
+| `--format <jsonl\|text>` | For `workflow logs`: `jsonl` (default) prints the exact transcript; `text` renders it as progress lines for a person. |
 | `--events` | With verbose JSON workflow `status`/`get`, return raw event rows instead of ordered node summaries. |
 | `--help`, `-h` | Show help message |
 
@@ -1252,11 +1286,11 @@ archon chat "How does error handling work in this codebase?"
 # Interactive setup wizard
 archon setup
 
-# Quick question (auto-isolated in archon/task-assist-<timestamp>)
-archon workflow run assist --cwd ~/projects/my-app "How does error handling work here?"
+# Investigate a bug (auto-isolated on a generated archon/task-... branch)
+archon workflow run investigate --cwd ~/projects/my-app "Why do API errors return 500 instead of 400?"
 
-# Quick question without isolation
-archon workflow run assist --cwd ~/projects/my-app --no-worktree "How does error handling work here?"
+# Investigate without isolation
+archon workflow run investigate --cwd ~/projects/my-app --no-worktree "Why do API errors return 500 instead of 400?"
 
 # Plan a feature (auto-isolated)
 archon workflow run plan --cwd ~/projects/my-app "Add rate limiting to the API"

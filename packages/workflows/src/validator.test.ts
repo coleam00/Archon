@@ -2,11 +2,13 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, symlink as fsSymlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import { registerBuiltinProviders, registerPiProvider, clearRegistry } from '@archon/providers';
 
-// Bootstrap provider registry (needed by capability-driven warnings in validator)
+// Bootstrap provider registry (needed by capability-driven checks in validator).
+// Pi supplies a provider whose mcp capability is false.
 clearRegistry();
 registerBuiltinProviders();
+registerPiProvider();
 
 import {
   levenshtein,
@@ -226,7 +228,7 @@ describe('validateWorkflowResources — command nodes', () => {
 describe('validateWorkflowResources — bundled workflow: target check', () => {
   test('bundled workflow with a real bundled workflow: target passes', async () => {
     const workflow = makeWorkflow('test', [
-      { id: 'sub', kind: 'workflow', workflow: 'archon-assist' } as DagNode,
+      { id: 'sub', kind: 'workflow', workflow: 'archon-review' } as DagNode,
     ]);
     const issues = await validateWorkflowResources(workflow, tmpDir, {
       workflowSource: 'bundled',
@@ -455,12 +457,15 @@ describe('validateWorkflowResources — loop.command', () => {
     expect(errors[0].message).toContain('Invalid command name');
   });
 
-  test('no issues when loop.command resolves to a bundled default', async () => {
-    // Bundled-default fallback: a `loop.command` referencing a known bundled
-    // command (e.g. `archon-ralph-generate`) must resolve when defaults are
-    // loaded, even with an empty repo `.archon/commands/`. This is the same
-    // precedence command-nodes already get (repo → home → bundled).
-    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', 'archon-ralph-generate')]);
+  test('no issues when loop.command resolves to a bundled packaged command', async () => {
+    // A `loop.command` naming a shipped pack command must resolve when defaults are
+    // loaded, even with an empty repo `.archon/commands/` — the same resolution
+    // command-nodes already get.
+    const command = formatPackagedResourceReference(
+      { source: 'bundled', pack: 'sdlc', workflow: 'deliver' },
+      'classify-review-scope'
+    );
+    const workflow = makeWorkflow('test', [makeLoopCommandNode('step1', command)]);
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const errors = issues.filter(i => i.level === 'error' && i.field === 'loop.command');
     expect(errors).toHaveLength(0);
@@ -598,6 +603,26 @@ describe('validateWorkflowResources — MCP validation', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const mcpWarnings = issues.filter(i => i.field === 'mcp' && i.level === 'warning');
     expect(mcpWarnings).toHaveLength(0);
+  });
+
+  test('MCP on a provider without the capability is an error', async () => {
+    const mcpPath = join(tmpDir, 'good.json');
+    await writeFile(mcpPath, '{"server": {"command": "npx"}}');
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do stuff' },
+          mcp: mcpPath,
+        } as unknown as DagNode,
+      ],
+      'pi'
+    );
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const error = issues.find(i => i.field === 'mcp' && i.level === 'error');
+    expect(error?.message).toContain("Provider 'pi' cannot load MCP servers");
   });
 });
 
@@ -1393,7 +1418,7 @@ describe('validateWorkflowResources — skills search roots', () => {
     expect(missingSkillIssues(issues)).toHaveLength(0);
   });
 
-  test('Codex warns about unsupported YAML skills without four-root validation', async () => {
+  test('Codex rejects YAML skills without four-root validation', async () => {
     await stageSkill(tmpDir, '.claude', 'claude-only');
     const workflow = makeWorkflow(
       'test',
@@ -1410,9 +1435,29 @@ describe('validateWorkflowResources — skills search roots', () => {
 
     const issues = await validateWorkflowResources(workflow, tmpDir);
     expect(missingSkillIssues(issues)).toHaveLength(0);
-    const warning = issues.find(issue => issue.level === 'warning' && issue.field === 'skills');
-    expect(warning?.message).toContain("not supported by provider 'codex'");
-    expect(warning?.hint).toContain('$skill-name');
+    const error = issues.find(issue => issue.level === 'error' && issue.field === 'skills');
+    expect(error?.message).toContain("Provider 'codex' cannot load named skills");
+    expect(error?.hint).toContain('$skill-name');
+  });
+
+  test('plugins on a provider without the capability is an error', async () => {
+    const workflow = makeWorkflow(
+      'test',
+      [
+        {
+          id: 'step1',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'do work' },
+          plugins: ['formatter@tools'],
+        } as unknown as DagNode,
+      ],
+      'pi'
+    );
+
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const error = issues.find(issue => issue.field === 'plugins');
+    expect(error?.level).toBe('error');
+    expect(error?.message).toContain("Provider 'pi' cannot load named plugins");
   });
 
   test('uses a node model alias provider for Claude skill validation', async () => {
@@ -1440,12 +1485,12 @@ describe('validateWorkflowResources — skills search roots', () => {
     // Claude-specific wording proves the alias-resolved provider drove the
     // check, rather than the workflow-level 'codex' default.
     expect(missing[0].message).toContain('Claude skill');
-    expect(issues.some(issue => issue.message.includes("not supported by provider 'codex'"))).toBe(
+    expect(issues.some(issue => issue.message.includes("Provider 'codex' cannot load"))).toBe(
       false
     );
   });
 
-  test('uses a workflow model alias provider for inherited Codex skill warnings', async () => {
+  test('uses a workflow model alias provider for inherited Codex skill errors', async () => {
     const workflow = {
       ...skillsWorkflow('missing'),
       model: '@codex-workflow',
@@ -1457,9 +1502,9 @@ describe('validateWorkflowResources — skills search roots', () => {
     });
 
     expect(missingSkillIssues(issues)).toHaveLength(0);
-    expect(issues.some(issue => issue.message.includes("not supported by provider 'codex'"))).toBe(
-      true
-    );
+    expect(
+      issues.some(issue => issue.message.includes("Provider 'codex' cannot load named skills"))
+    ).toBe(true);
   });
 
   test('Claude project-only settingSources rejects a user-only skill', async () => {
@@ -1598,7 +1643,7 @@ describe('validateWorkflowResources — output_format compiles', () => {
   });
 });
 
-describe('validateWorkflowResources — strict-schema required coverage (#2945)', () => {
+describe('validateWorkflowResources — strict-schema compatibility', () => {
   const looseSchema = {
     type: 'object',
     properties: { ready: { type: 'boolean' }, note: { type: 'string' } },
@@ -1623,6 +1668,27 @@ describe('validateWorkflowResources — strict-schema required coverage (#2945)'
     expect(errs[0].nodeId).toBe('plan');
     expect(errs[0].message).toContain('note');
     expect(errs[0].message).toContain('required');
+  });
+
+  test('Codex-routed nested bare object reports the node and schema path', async () => {
+    const workflow = makeWorkflow('test', [
+      makeAgent('scope', {
+        output_format: {
+          type: 'object',
+          properties: { pr: { type: 'object' } },
+          required: ['pr'],
+        },
+      }),
+    ]);
+
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    const errors = issues.filter(i => i.field === 'output_format' && i.level === 'error');
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].nodeId).toBe('scope');
+    expect(errors[0].message).toContain('output_format.properties.pr');
+    expect(errors[0].message).toContain("Provider 'codex'");
+    expect(errors[0].hint).toContain('["object","null"]');
   });
 
   test('Claude-routed same schema reports nothing', async () => {
@@ -1739,14 +1805,14 @@ describe('validateWorkflowResources — strict-schema required coverage (#2945)'
     expect(outputFormatIssues[0].message).toContain('returns:');
   });
 
-  test('bash node with output_format + gap under Codex is not flagged', async () => {
+  test('bash node with bare object output_format under Codex is not flagged', async () => {
     const workflow = makeWorkflow('test', [
       {
         id: 'run',
         kind: 'exec',
         runtime: 'sh',
         script: 'echo {}',
-        output_format: looseSchema,
+        output_format: { type: 'object' },
       } as unknown as DagNode,
     ]);
 

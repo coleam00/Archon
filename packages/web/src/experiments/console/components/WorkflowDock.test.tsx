@@ -23,7 +23,6 @@ const parallelRun: Run = {
   workingPath: null,
   userMessage: 'Implement the change',
   activeNodes: ['parallel-a', 'parallel-b'],
-  currentNode: null,
   lastTool: null,
 };
 

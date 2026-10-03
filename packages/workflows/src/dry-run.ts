@@ -866,8 +866,7 @@ type SimulatedCompletion =
  *
  * Note the reach of that middle rule (#2563): it fires whenever `until_bash` is
  * declared, INCLUDING alongside an `until:` whose sentinel the stub did not carry.
- * That combination previously simulated as a max-iterations failure, and a shipped
- * default uses it (`archon-adversarial-dev.yaml` declares both). Assuming completion
+ * That combination previously simulated as a max-iterations failure. Assuming completion
  * is the honest answer — the real run's `until_bash` may well have fired — but it
  * does mean a dry run cannot prove a prose stub trips `until:` on a loop that also
  * declares `until_bash`. Drop `until_bash` from the workflow, or stub the sentinel,

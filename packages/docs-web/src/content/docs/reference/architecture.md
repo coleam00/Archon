@@ -102,8 +102,8 @@ export interface IPlatformAdapter {
   // Stop the platform adapter gracefully
   stop(): void;
 
-  // Optional: Send a structured event (e.g., Web UI rich data)
-  sendStructuredEvent?(conversationId: string, event: MessageChunk): Promise<void>;
+  // Optional: Send a structured event (a tool call or its update, a result, a status line or a dispatch)
+  sendStructuredEvent?(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
 
   // Optional: Retract previously streamed text (workflow routing intercept)
   emitRetract?(conversationId: string): Promise<void>;
@@ -244,7 +244,7 @@ async sendMessage(conversationId: string, message: string): Promise<void> {
 }
 
 // Structured events for tool calls, workflow progress, errors
-async sendStructuredEvent(conversationId: string, event: MessageChunk): Promise<void> {
+async sendStructuredEvent(conversationId: string, event: PlatformStructuredEvent): Promise<void> {
   await this.emitSSE(conversationId, JSON.stringify(event));
 }
 ```
@@ -329,37 +329,29 @@ export interface IAgentProvider {
 
 ### MessageChunk Types
 
-`MessageChunk` is a discriminated union. Only the fields for each variant are present:
+`MessageChunk` is `ProviderChunk` from `@archon/provider-contract`: the events a provider streams during a turn, then one `result`, then one `settled`. The events are message and thought text (`agent_message_chunk`, `agent_thought_chunk`), tool calls and their updates (`tool_call`, `tool_call_update`), `warning`, `mcp_server_status`, `compaction`, `subtask`, `hook` and `state_update`. The schemas in `packages/provider-contract/src/events.ts` document every field, and the package README lists the rules a provider follows: whole text blocks, one update closing each tool call, capped tool output and coded warnings.
 
 ```typescript
-export type MessageChunk =
-  | { type: 'assistant'; content: string }
-  | { type: 'system'; content: string }
-  | { type: 'thinking'; content: string }
-  | {
-      type: 'result';
-      sessionId?: string;
-      tokens?: TokenUsage;
-      structuredOutput?: unknown;
-      isError?: boolean;
-      errorSubtype?: string;
-      errors?: string[];
-      cost?: number;
-      stopReason?: string;
-      numTurns?: number;
-      // Concrete provider-reported model. Omitted for providers such as Codex
-      // whose SDK completion events do not expose the resolved model.
-      resolvedModel?: ResolvedModel;
-      // Session-resume outcome: true = restored, false = requested but fell back
-      // to a fresh session, omitted = no resume requested. Set only when
-      // resumeSessionId was passed (stamp it via withResumedOutcome).
-      resumed?: boolean;
-    }
-  | { type: 'rate_limit'; rateLimitInfo: Record<string, unknown> }
-  | { type: 'tool'; toolName: string; toolInput?: Record<string, unknown>; toolCallId?: string }
-  | { type: 'tool_result'; toolName: string; toolOutput: string; toolCallId?: string }
-  | { type: 'workflow_dispatch'; workerConversationId: string; workflowName: string };
+yield { type: 'agent_message_chunk', text: 'Reading the file.' };
+yield { type: 'tool_call', toolCallId: 'call-1', name: 'Read', rawInput: { path: 'a.ts' } };
+yield { type: 'tool_call_update', toolCallId: 'call-1', status: 'completed', output: '...' };
+yield { type: 'result', sessionId: 'session-1', stopReason: 'end_turn' };
+// The turn is over and nothing more runs for it: always the last chunk.
+// The executor finishes a node on it, not on `result`.
+yield { type: 'settled' };
 ```
+
+### How the engine records provider events
+
+The engine keeps each event a workflow node's provider yields as the provider built it. `packages/workflows/src/provider-events.ts` wraps it in an envelope, `{attemptId, seq, observedAt, event}`, and records that envelope three ways:
+
+- a `provider_event` line in the run's JSONL log, framed by the log's `workflow_id`, `ts` and `step`;
+- a `provider_event` row in `remote_agent_workflow_events`, with the node's persisted step name in `step_name` and the envelope in `data`;
+- a `provider_event` emitter event, which the Web adapter sends to the run's conversation stream as an SSE `workflow_provider_event` frame.
+
+`attemptId` is the node attempt's id. `seq` counts the attempt's events from 0, across a structured-output reask and across a loop node's iterations. Store writes are not awaited, so a reader orders a node's events by attempt, then by `seq`, rather than by row order.
+
+Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(runId, {stepName?, after?})` returns each node's records in emission order, and `after: {attemptId, seq}` returns only what follows. The database store also translates rows written before envelopes existed (`tool_called`, `tool_completed`, `task_activity`, `hook_activity`) into the same vocabulary, with a null `attemptId`. `GET /api/workflows/runs/{runId}/provider-events` serves those records, and the console loads each node's records once, then appends live frames.
 
 ### Implementation Guide
 
@@ -385,21 +377,30 @@ export class YourAssistantProvider implements IAgentProvider {
     // Send query to AI and stream responses
     for await (const event of this.sdk.streamQuery(session, prompt)) {
       if (event.type === 'text_response') {
-        yield { type: 'assistant', content: event.text };
+        yield { type: 'agent_message_chunk', text: event.text };
       } else if (event.type === 'tool_call') {
         yield {
-          type: 'tool',
-          toolName: event.tool,
-          toolInput: event.parameters,
+          type: 'tool_call',
           toolCallId: event.id,
+          name: event.tool,
+          rawInput: event.parameters,
+        };
+      } else if (event.type === 'tool_result') {
+        yield {
+          type: 'tool_call_update',
+          toolCallId: event.id,
+          status: event.ok ? 'completed' : 'failed',
+          ...truncateToolOutput(event.output),
         };
       } else if (event.type === 'thinking') {
-        yield { type: 'thinking', content: event.reasoning };
+        yield { type: 'agent_thought_chunk', text: event.reasoning };
       }
     }
 
     // Yield session ID for persistence
     yield { type: 'result', sessionId: session.id };
+    // Nothing more runs for this turn
+    yield { type: 'settled' };
   }
 
   getType(): string {
@@ -481,58 +482,71 @@ if (trigger && shouldCreateNewSession(trigger)) {
 
 ### Streaming Event Mapping
 
-Different SDKs use different event types. Map them to MessageChunk types:
+Different SDKs use different event types. Map them to the contract's events (simplified excerpts; the providers also close interrupted tool calls, report subtasks, hooks and MCP status, and cap tool output):
 
 **Claude Code SDK** (`packages/providers/src/claude/provider.ts`):
 
 ```typescript
+let resultReported = false;
 for await (const msg of query({ prompt, options })) {
   if (msg.type === 'assistant') {
     for (const block of msg.message.content) {
       if (block.type === 'text') {
-        yield { type: 'assistant', content: block.text };
+        yield { type: 'agent_message_chunk', text: block.text };
       } else if (block.type === 'tool_use') {
         yield {
-          type: 'tool',
-          toolName: block.name,
-          toolInput: block.input,
+          type: 'tool_call',
+          toolCallId: block.id,
+          name: block.name,
+          rawInput: block.input,
         };
       }
     }
   } else if (msg.type === 'result') {
+    resultReported = true;
     yield { type: 'result', sessionId: msg.session_id };
+  } else if (msg.type === 'system' && msg.subtype === 'session_state_changed' && msg.state === 'idle') {
+    break; // turn over, background agents drained
   }
 }
+if (!resultReported) {
+  // A stream that closed without a result is a failed turn, never an empty success.
+  yield {
+    type: 'result',
+    isError: true,
+    errorSubtype: 'stream_ended_without_result',
+    failure: { class: 'unknown', evidence: 'Claude Code ended the turn without a result' },
+  };
+}
+yield { type: 'settled' };
 ```
 
-**Codex SDK** (`packages/providers/src/codex/provider.ts`):
+**Codex app-server** (`packages/providers/src/codex/provider.ts`): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
 
 ```typescript
-// A new thread's id is assigned during the run via the thread.started event,
-// not synchronously on startThread() — capture it for a resumable sessionId.
-let resolvedThreadId = thread.id;
-for await (const event of result.events) {
-  if (event.type === 'thread.started') {
-    resolvedThreadId = event.thread_id; // resumable id; persist_session depends on it
-    continue;
-  }
-  if (event.type === 'item.completed') {
-    switch (event.item.type) {
-      case 'agent_message':
-        yield { type: 'assistant', content: event.item.text };
-        break;
-      case 'command_execution':
-        yield { type: 'tool', toolName: event.item.command };
-        break;
-      case 'reasoning':
-        yield { type: 'thinking', content: event.item.text };
-        break;
-    }
-  } else if (event.type === 'turn.completed') {
-    yield { type: 'result', sessionId: resolvedThreadId };
-    break; // CRITICAL: Exit loop on turn completion
+const { thread } = await connection.request('thread/start', { cwd, sandbox, approvalPolicy, config });
+const { turn } = await connection.request('turn/start', { threadId: thread.id, input });
+for await (const notification of connection.notifications()) {
+  if (notification.method === 'item/started' && notification.params.item.type === 'commandExecution') {
+    // The command is the title the operator reads; the kind of tool is the name.
+    yield {
+      type: 'tool_call',
+      toolCallId: notification.params.item.id,
+      name: 'command_execution',
+      title: notification.params.item.command,
+    };
+  } else if (notification.method === 'item/completed' && notification.params.item.type === 'agentMessage') {
+    yield { type: 'agent_message_chunk', text: notification.params.item.text };
+  } else if (notification.method === 'turn/completed' && notification.params.turn.id === turn.id) {
+    const { error } = notification.params.turn;
+    // The failure class comes from the typed codexErrorInfo, never from the message.
+    yield error
+      ? { type: 'result', sessionId: thread.id, failure: classify(error.codexErrorInfo, error.message) }
+      : { type: 'result', sessionId: thread.id };
+    break;
   }
 }
+yield { type: 'settled' };
 ```
 
 ### Error Handling
@@ -1006,10 +1020,10 @@ const mode = platform.getStreamingMode();
 if (mode === 'stream') {
   // Send each chunk immediately
   for await (const msg of aiClient.sendQuery(...)) {
-    if (msg.type === 'assistant' && msg.content) {
-      await platform.sendMessage(conversationId, msg.content);
-    } else if (msg.type === 'tool' && msg.toolName) {
-      const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+    if (msg.type === 'agent_message_chunk') {
+      await platform.sendMessage(conversationId, msg.text);
+    } else if (msg.type === 'tool_call') {
+      const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
       await platform.sendMessage(conversationId, toolMessage);
     }
   }
@@ -1018,8 +1032,8 @@ if (mode === 'stream') {
   const assistantMessages: string[] = [];
 
   for await (const msg of aiClient.sendQuery(...)) {
-    if (msg.type === 'assistant' && msg.content) {
-      assistantMessages.push(msg.content);
+    if (msg.type === 'agent_message_chunk') {
+      assistantMessages.push(msg.text);
     }
     // Tool calls logged but not sent to user
   }
@@ -1417,8 +1431,8 @@ const newSession = await sessionDb.transitionSession(
 ```typescript
 try {
   for await (const msg of aiClient.sendQuery(...)) {
-    if (msg.type === 'assistant') {
-      await platform.sendMessage(conversationId, msg.content);
+    if (msg.type === 'agent_message_chunk') {
+      await platform.sendMessage(conversationId, msg.text);
     }
   }
 } catch (error) {

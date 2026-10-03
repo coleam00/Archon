@@ -146,6 +146,62 @@ describe('node record serializers', () => {
     });
   });
 
+  it('names a node by its bare command name on progress surfaces and keeps the qualified reference durable', () => {
+    const packaged = '__archon_pack__installed:Wirasm.archon-video:make::hooks';
+    const nameOf = (node: NodeExecutionRecord['node']) => {
+      const event = serializeNodeEmitter({ ...record(), node });
+      return event && 'nodeName' in event ? event.nodeName : undefined;
+    };
+
+    expect(
+      nameOf({ id: 'hooks-node', kind: 'agent', source: { kind: 'command', name: packaged } })
+    ).toBe('hooks');
+    expect(
+      nameOf({ id: 'review', kind: 'agent', source: { kind: 'command', name: 'review-pr' } })
+    ).toBe('review-pr');
+    expect(nameOf({ id: 'build', kind: 'exec', runtime: 'sh' })).toBe('build');
+
+    const source: NodeExecutionRecord = {
+      ...record(),
+      node: { id: 'hooks-node', kind: 'agent', source: { kind: 'command', name: packaged } },
+      diagnostics: { command: packaged },
+    };
+    expect(serializeNodeStateRecord(source)).toMatchObject({
+      step_name: 'group.review',
+      data: { command: packaged },
+    });
+    expect(serializeNodeTranscript(source)).toMatchObject({
+      step: 'hooks-node',
+      content: packaged,
+    });
+  });
+
+  it('writes the full session id to the durable row only, for completed and failed attempts', () => {
+    const sessionId = '0123456789abcdef-full-session-id';
+    const finished = [
+      finishNodeExecution(record(), { status: 'completed' }, { sessionId }),
+      finishNodeExecution(
+        record(),
+        { status: 'failed', error: 'boom', failureKind: 'transient' },
+        { sessionId }
+      ),
+    ];
+    for (const source of finished) {
+      const durable = serializeNodeStateRecord(source);
+      expect(durable.data.session_id).toBe(sessionId);
+      // The reader exposes it from the stored JSON, as `workflow get` reads it.
+      const restored = readNodeRecordEvent({ ...durable, data: JSON.stringify(durable.data) });
+      expect(restored?.data.session_id).toBe(sessionId);
+      expect(source.binding.sessionPreview).toBe('01234567');
+      // Whole-output assertions, so a field added later cannot carry the id either.
+      expect(JSON.stringify(serializeNodeTranscript(source))).not.toContain(sessionId);
+      expect(JSON.stringify(serializeNodeEmitter(source))).not.toContain(sessionId);
+      expect(JSON.stringify(restored?.metadata)).not.toContain(sessionId);
+    }
+    // The engine still threads the id to the next node through the node's output.
+    expect(serializeNodeOutput(finished[0])).toMatchObject({ state: 'completed', sessionId });
+  });
+
   it('only exposes a short provider session preview', () => {
     const started = startNodeExecution({
       runId: 'run',

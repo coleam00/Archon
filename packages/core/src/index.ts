@@ -167,7 +167,6 @@ export {
   canConnectToRunLiveOwner,
   RunLiveOwnerStopUnavailableError,
   RUN_LIVE_OWNER_IPC_TIMEOUT_MS,
-  RUN_LIVE_OWNER_CONTROL_HANDOFF_GRACE_MS,
 } from './services/run-live-owner';
 export type {
   RunLiveOwner,
@@ -289,7 +288,9 @@ export {
   deleteUserProviderKey,
   getDecryptedProviderCredential,
   listDecryptedUserProviderCredentials,
+  getStoredCredentialStatus,
   type SaveUserProviderKeyParams,
+  type StoredCredential,
 } from './db/user-provider-key-store';
 export {
   getUserAiPrefs,

@@ -217,6 +217,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     persistWorkflowEvent: mock(async () => {}),
     persistWorkflowEventIfRunning: mock(async () => ({ persisted: true })),
     findResumableRun: mock(async () => null),
+    listProviderEvents: mock(async () => []),
     getDagResumeSnapshot: mock(async () => ({
       completedNodeOutputs: new Map(),
       fanOutSnapshots: new Map(),
@@ -249,11 +250,10 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     releaseWritebackClaim: mock(async () => {}),
     cancelWorkflowRun: mock(async () => ({ cancelled: false })),
     cancelFanOutRun: mock(async () => ({ cancelled: false })),
-    getWorkflowNodeSession: mock(async () => null),
+    listWorkflowNodeSessions: mock(async () => []),
     listWorkflowRunNodeSessions: mock(async () => []),
     upsertWorkflowRunNodeSession: mock(async () => {}),
     upsertWorkflowNodeSession: mock(async () => {}),
-    deleteWorkflowNodeSessions: mock(async () => ({ deleted: 0 })),
     ...overrides,
   };
 }
@@ -1307,17 +1307,25 @@ describe('executeWorkflow', () => {
           order.push('notify');
           throw new Error('unauthorized');
         });
-        const result = await executeWorkflow(
-          makeDeps(store),
-          platform,
-          'conv-1',
-          '/tmp',
-          makeWorkflow(),
-          'test',
-          'db-conv-1'
-        );
+        // A critical send retries every failure with a 1s, 2s backoff; clamp the sleep.
+        const realSetTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+        let result: Awaited<ReturnType<typeof executeWorkflow>>;
+        try {
+          result = await executeWorkflow(
+            makeDeps(store),
+            platform,
+            'conv-1',
+            '/tmp',
+            makeWorkflow(),
+            'test',
+            'db-conv-1'
+          );
+        } finally {
+          globalThis.setTimeout = realSetTimeout;
+        }
         expect(result.success).toBe(false);
-        expect(order).toEqual(['notify', 'cancel']);
+        expect(order).toEqual(['notify', 'notify', 'notify', 'cancel']);
         expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
       }
@@ -1486,7 +1494,7 @@ describe('executeWorkflow', () => {
       // Provider is explicit; the model string is forwarded verbatim to
       // whichever SDK the resolved provider names. A workflow that sets
       // provider:codex with a Claude-looking model gets the request handed
-      // to the codex SDK as-is — the SDK decides whether to accept it.
+      // to Codex as-is — Codex decides whether to accept it.
       const store = makeStore();
       const deps = makeDeps(store);
       await executeWorkflow(
@@ -4198,6 +4206,40 @@ describe('telemetry wiring', () => {
     );
   });
 
+  it('reports usesPersistSession only when a node or composed fan-out may persist', async () => {
+    const persistFlag = async (nodes: WorkflowDefinition['nodes']): Promise<unknown> => {
+      mockCaptureWorkflowInvoked.mockClear();
+      const workflow = makeWorkflow({ persist_sessions: true, nodes });
+      await executeWorkflow(
+        makeDeps(makeStore()),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'msg',
+        'db-conv-1'
+      );
+      return mockCaptureWorkflowInvoked.mock.calls[0]?.[0]?.usesPersistSession;
+    };
+
+    expect(
+      await persistFlag([
+        { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'x' }, context: 'fresh' },
+        { id: 'b', kind: 'exec', runtime: 'sh', script: 'echo hi' },
+      ] as WorkflowDefinition['nodes'])
+    ).toBe(false);
+    expect(
+      await persistFlag([
+        {
+          id: 'fan',
+          kind: 'compose_fan_out',
+          include: 'persisting-block',
+          fan_out: { items: '["a"]', as: 'item', max_parallel: 1, join: 'all_done' },
+        },
+      ] as WorkflowDefinition['nodes'])
+    ).toBe(true);
+  });
+
   it('reports adoption booleans as false for a plain single-prompt workflow', async () => {
     mockCaptureWorkflowInvoked.mockClear();
     const store = makeStore();
@@ -5173,6 +5215,18 @@ describe('resolveScopeArtifactsDir', () => {
       name: 'plain',
       nodes: [
         { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'x' } },
+      ] as WorkflowDefinition['nodes'],
+    };
+    expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBeUndefined();
+  });
+
+  it('returns undefined when the only AI node opts out with context: fresh', () => {
+    const workflow = {
+      name: 'feature-dev',
+      persist_sessions: true,
+      nodes: [
+        { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'x' }, context: 'fresh' },
+        { id: 'b', kind: 'exec', runtime: 'sh', script: 'echo hi' },
       ] as WorkflowDefinition['nodes'],
     };
     expect(resolveScopeArtifactsDir(workflow, 'conv-1', ROOT)).toBeUndefined();

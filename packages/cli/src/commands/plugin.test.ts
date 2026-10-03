@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverPlugins } from '@archon/forge/discovery';
-import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
+import { compileDiscoveryPlugin } from '@archon/forge/test-fixtures';
+import {
+  removeTempTree,
+  skipCompiledBinaryTests,
+  testTimeout,
+  trackTempRoots,
+} from '@archon/paths/test-utils';
 import { pluginCommand, stagingName, type PluginEnvironment } from './plugin';
 
 // A local stand-in for GitHub: the repository is served over git's dumb HTTP
@@ -27,6 +33,9 @@ let pluginBinary: Uint8Array;
 const commits = new Map<string, string>();
 const manifests = new Map<string, unknown>();
 const releases = new Map<string, Release>();
+// Every test installs the compiled fixture. Bun still runs file-level hooks when every
+// test is skipped, so the hooks check this too.
+const skipCompiled = skipCompiledBinaryTests();
 const latestTag = 'v1.0.0';
 
 const manifest = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
@@ -63,21 +72,10 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
 }
 
 beforeAll(async () => {
+  if (skipCompiled) return;
   fixtureRoot = await mkdtemp(join(tmpdir(), 'plugin-install-fixture-'));
   // A real executable that answers forge discovery's metadata handshake as `github`.
-  const binaryPath = join(fixtureRoot, `archon-forge-github${hostExe}`);
-  const built = Bun.spawnSync(
-    [
-      process.execPath,
-      'build',
-      '--compile',
-      join(import.meta.dir, '../../../forge/src/fixtures/discovery-plugin.ts'),
-      '--outfile',
-      binaryPath,
-    ],
-    { stdout: 'pipe', stderr: 'pipe' }
-  );
-  if (built.exitCode !== 0) throw new Error(built.stderr.toString());
+  const binaryPath = compileDiscoveryPlugin(fixtureRoot);
   pluginBinary = new Uint8Array(await readFile(binaryPath));
 
   const repo = join(fixtureRoot, 'repo');
@@ -157,9 +155,10 @@ beforeAll(async () => {
     assets: { [hostAsset]: new Uint8Array([4, 4]) },
     checksums: checksumsFor({ [hostAsset]: new Uint8Array([4]) }),
   });
-});
+}, testTimeout(20_000));
 
 afterAll(async () => {
+  if (skipCompiled) return;
   await server.stop(true);
   await removeTempTree(fixtureRoot);
 });
@@ -220,7 +219,7 @@ const receiptOf = async (env: PluginEnvironment): Promise<Record<string, unknown
     await readFile(join(env.pluginsDir, 'installed', ...ID.split('/'), 'receipt.json'), 'utf8')
   ) as Record<string, unknown>;
 
-describe('archon plugin', () => {
+describe.skipIf(skipCompiled)('archon plugin', () => {
   test('installs the latest release where forge discovery finds it, then updates, lists and removes it', async () => {
     const env = await environment();
     const installed = await run(env, 'install', ID);

@@ -47,7 +47,7 @@ export async function reportUnpushedWorkInSource(
     if (dirty) parts.push('uncommitted changes');
 
     await platform.sendStructuredEvent(conversationId, {
-      type: 'system',
+      type: 'system_status',
       content:
         `source/ has ${parts.join(' and ')} on ${branch}. ` +
         'Push or commit + push to preserve — local-only state may be lost on the next worktree creation, manual checkout, or re-clone.',

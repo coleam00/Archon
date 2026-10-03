@@ -50,9 +50,9 @@ description: Plan a feature and implement it
 
 nodes:
   - id: plan
-    command: archon-create-plan
+    prompt: "Write an implementation plan for: $ARGUMENTS. Save it to $ARTIFACTS_DIR/plan.md."
   - id: implement
-    command: archon-implement-tasks
+    prompt: "Implement the plan in $ARTIFACTS_DIR/plan.md. Commit as you go."
     depends_on: [plan]
 ```
 
@@ -62,7 +62,7 @@ Run it:
 archon workflow run my-workflow --branch feature/auth-tokens "Add JWT refresh token support"
 ```
 
-Archon runs `archon-create-plan` with your input, waits for it to finish, then runs `archon-implement-tasks`. The AI carries its full conversation context from the planning node into the implementation node — it knows what it planned and can act on it immediately.
+Archon runs the `plan` node with your input in place of `$ARGUMENTS`, waits for it to finish, then runs `implement`. `$ARTIFACTS_DIR` is a directory Archon creates for each run, so nodes can hand files to each other. The AI carries its full conversation context from the planning node into the implementation node — it knows what it planned and can act on it immediately.
 
 This is the simplest useful workflow. Two nodes, no configuration, no coordination required from you.
 
@@ -78,20 +78,19 @@ description: Plan, implement, and validate a feature
 
 nodes:
   - id: plan
-    command: archon-create-plan
+    prompt: "Write an implementation plan for: $ARGUMENTS. Save it to $ARTIFACTS_DIR/plan.md."
   - id: implement
-    command: archon-implement-tasks
+    prompt: "Implement the plan in $ARTIFACTS_DIR/plan.md. Commit as you go."
     depends_on: [plan]
   - id: validate
     command: run-tests
     depends_on: [implement]
     context: fresh
-    prompt: "Run tests for the auth module"
 ```
 
 Two changes here:
 
-**`prompt:`** alongside `command:` passes extra instructions to the node — in this case, telling it to focus on the auth module.
+**`command: run-tests`** runs the command you built in Chapter 6, with the run's message as its `$ARGUMENTS`. A node takes either `command:` for a reusable command file or `prompt:` for inline instructions, never both.
 
 **`context: fresh`** starts a fresh AI conversation at this node. The AI discards everything from the planning and implementation nodes and comes in with only the command instructions and its current view of the codebase.
 
@@ -111,25 +110,24 @@ description: Plan, implement, validate, and review a feature
 
 nodes:
   - id: plan
-    command: archon-create-plan
+    prompt: "Write an implementation plan for: $ARGUMENTS. Save it to $ARTIFACTS_DIR/plan.md."
   - id: implement
-    command: archon-implement-tasks
+    prompt: "Implement the plan in $ARTIFACTS_DIR/plan.md. Commit as you go."
     depends_on: [plan]
   - id: validate
     command: run-tests
     depends_on: [implement]
     context: fresh
-    prompt: "Run tests for the auth module"
   - id: code-review
-    command: archon-code-review-agent
+    prompt: "Review this branch's changes for bugs. Write findings to $ARTIFACTS_DIR/review-code.md."
     depends_on: [validate]
     context: fresh
   - id: error-handling
-    command: archon-error-handling-agent
+    prompt: "Review this branch's error handling. Write findings to $ARTIFACTS_DIR/review-errors.md."
     depends_on: [validate]
     context: fresh
   - id: test-coverage
-    command: archon-test-coverage-agent
+    prompt: "Review this branch's test coverage. Write findings to $ARTIFACTS_DIR/review-tests.md."
     depends_on: [validate]
     context: fresh
 ```
@@ -150,34 +148,33 @@ description: Plan, implement, validate, review, and self-fix a feature
 
 nodes:
   - id: plan
-    command: archon-create-plan
+    prompt: "Write an implementation plan for: $ARGUMENTS. Save it to $ARTIFACTS_DIR/plan.md."
   - id: implement
-    command: archon-implement-tasks
+    prompt: "Implement the plan in $ARTIFACTS_DIR/plan.md. Commit as you go."
     depends_on: [plan]
   - id: validate
     command: run-tests
     depends_on: [implement]
     context: fresh
-    prompt: "Run tests for the auth module"
   - id: code-review
-    command: archon-code-review-agent
+    prompt: "Review this branch's changes for bugs. Write findings to $ARTIFACTS_DIR/review-code.md."
     depends_on: [validate]
     context: fresh
   - id: error-handling
-    command: archon-error-handling-agent
+    prompt: "Review this branch's error handling. Write findings to $ARTIFACTS_DIR/review-errors.md."
     depends_on: [validate]
     context: fresh
   - id: test-coverage
-    command: archon-test-coverage-agent
+    prompt: "Review this branch's test coverage. Write findings to $ARTIFACTS_DIR/review-tests.md."
     depends_on: [validate]
     context: fresh
   - id: self-fix
-    command: archon-implement-review-fixes
+    prompt: "Read the review findings in $ARTIFACTS_DIR/review-*.md and fix what they found. Commit the fixes."
     depends_on: [code-review, error-handling, test-coverage]
     context: fresh
 ```
 
-The `archon-implement-review-fixes` command reads the artifacts written by all three review agents, synthesizes their findings, and implements the recommended changes. `context: fresh` keeps it focused on the review findings rather than the full implementation history.
+The `self-fix` node reads the files written by all three review agents, synthesizes their findings, and implements the recommended changes. `context: fresh` keeps it focused on the review findings rather than the full implementation history.
 
 Run the complete workflow:
 
@@ -185,7 +182,7 @@ Run the complete workflow:
 archon workflow run my-workflow --branch feature/auth-tokens "Add JWT refresh token support"
 ```
 
-You've just built a mini version of `archon-idea-to-pr` — the same structure, condensed. That bundled workflow adds a few more nodes (scope confirmation, PR creation, final summary), but the core pattern is identical to what you built here.
+You've just built a condensed version of the pattern behind the bundled `archon-deliver` workflow. That workflow adds PR creation, a review loop that re-checks every correction, and a wait for CI, but the shape is the same: build, verify with fresh eyes, then fix.
 
 ---
 
@@ -209,7 +206,7 @@ Named resume is available to command and prompt nodes when the source is a trans
 ```yaml
 nodes:
   - id: plan
-    command: archon-create-plan
+    prompt: "Write an implementation plan for: $ARGUMENTS"
     model: opus        # use the more capable model for planning
 
   - id: validate

@@ -29,8 +29,33 @@ export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 export const resolvedModelSchema = z.object({ id: z.string() });
 export type ResolvedModel = z.infer<typeof resolvedModelSchema>;
 
+/**
+ * Why a turn stopped, in ACP's `StopReason` names. A provider omits a native reason it
+ * cannot map rather than inventing one.
+ */
+export const providerStopReasonSchema = z.enum([
+  'end_turn',
+  'max_tokens',
+  'max_turn_requests',
+  'refusal',
+  'cancelled',
+]);
+export type ProviderStopReason = z.infer<typeof providerStopReasonSchema>;
+
+/** Characters of a session id that may appear outside the node record. */
+export const SESSION_PREVIEW_LENGTH = 8;
+
+/**
+ * A session id can resume a conversation, so streams and logs carry only this preview.
+ * The full id is written to the node record alone.
+ */
+export function sessionPreview(sessionId: string): string {
+  return sessionId.slice(0, SESSION_PREVIEW_LENGTH);
+}
+
 /** The terminal result of one provider turn. Providers stream it as the `result` chunk. */
 export const providerResultSchema = z.object({
+  /** Required on every non-failing turn of a provider that declares `sessionResume`. */
   sessionId: z.string().optional(),
   tokens: tokenUsageSchema.optional(),
   structuredOutput: z.unknown().optional(),
@@ -45,7 +70,8 @@ export const providerResultSchema = z.object({
   /** SDK-provided error detail strings. Populated when isError is true. */
   errors: z.array(z.string()).optional(),
   cost: z.number().optional(),
-  stopReason: z.string().optional(),
+  /** Why the turn stopped, mapped from the SDK's native reason; absent when it has no ACP name. */
+  stopReason: providerStopReasonSchema.optional(),
   numTurns: z.number().optional(),
   /** Concrete model reported by the provider; omitted when its SDK does not expose one. */
   resolvedModel: resolvedModelSchema.optional(),

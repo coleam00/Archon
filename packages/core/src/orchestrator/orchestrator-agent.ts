@@ -17,14 +17,15 @@ import type {
   AttachedFile,
   WorkflowRequest,
 } from '../types';
-import type { SendQueryOptions, TokenUsage } from '@archon/providers/types';
+import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
+import { sessionPreview, toolCallDisplayName } from '@archon/provider-contract';
 import { ConversationNotFoundError, isWebAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '@archon/workflows/utils/tool-formatter';
-import { classifyAndFormatError } from '../utils/error-formatter';
+import { classifyAndFormatError, formatProviderFailure } from '../utils/error-formatter';
 import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { safeDeactivateSession } from '../state/session-transitions';
@@ -1673,7 +1674,13 @@ async function tryPersistSessionId(
     await sessionDb.updateSession(sessionId, assistantSessionId);
   } catch (error) {
     getLog().error(
-      { err: error as Error, sessionId, persistedValue: assistantSessionId },
+      {
+        err: error as Error,
+        sessionId,
+        ...(assistantSessionId
+          ? { persistedValuePreview: sessionPreview(assistantSessionId) }
+          : {}),
+      },
       'session_id_persist_failed'
     );
   }
@@ -2150,12 +2157,12 @@ export async function handleMessage(
     // (HEAD moved or sync failed). Skip the "up to date" case to avoid noise.
     if (syncError && platform.sendStructuredEvent) {
       await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
+        type: 'system_status',
         content: 'Sync failed \u2014 using local state',
       });
     } else if (syncResult?.state === 'diverged' && platform.sendStructuredEvent) {
       await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
+        type: 'system_status',
         content: `Local source/ has diverged from ${syncRemote ?? 'origin'}/${syncResult.branch} \u2014 manual merge or rebase needed`,
       });
     } else if (
@@ -2164,7 +2171,7 @@ export async function handleMessage(
       platform.sendStructuredEvent
     ) {
       await platform.sendStructuredEvent(conversationId, {
-        type: 'system',
+        type: 'system_status',
         content: `Fast-forwarded to ${syncRemote ?? 'origin'}/${syncResult.branch} \u2014 ${syncResult.previousHead} \u2192 ${syncResult.newHead}`,
       });
     }
@@ -2650,6 +2657,19 @@ interface ChatTurn {
   routed: boolean;
 }
 
+/**
+ * The chat message for a failed turn's result. The provider's typed failure decides the
+ * advice, as it decides retry in the workflow engine. A result without one comes from a
+ * provider that does not report `failure` yet; its subtype and SDK detail still go
+ * through the text formatter so actionable cases like "Not logged in" keep their advice
+ * (#1983).
+ */
+function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface): string {
+  if (msg.failure !== undefined) return formatProviderFailure(msg.failure);
+  const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
+  return classifyAndFormatError(new Error(errorDetail || 'AI result error'), surface);
+}
+
 function reportChatTurn(turn: ChatTurn, props: Parameters<typeof captureChatTurn>[0]): void {
   turn.reported = true;
   captureChatTurn(props);
@@ -2690,12 +2710,12 @@ async function handleStreamMode(
     session.assistant_session_id ?? undefined,
     requestOptions
   )) {
-    if (msg.type === 'assistant' && msg.content) {
+    if (msg.type === 'agent_message_chunk') {
       // Accumulate only while the command is not yet fully captured; post-command
       // trailing chunks would corrupt the project-name token if joined without a
       // whitespace boundary, causing the parse regex to overshoot.
       if (!commandFullyParsed) {
-        allMessages.push(msg.content);
+        allMessages.push(msg.text);
       }
       if (!commandDetected) {
         // Check for orchestrator commands BEFORE streaming to frontend.
@@ -2715,7 +2735,7 @@ async function handleStreamMode(
             commandFullyParsed = true;
           }
         } else {
-          await platform.sendMessage(conversationId, msg.content);
+          await platform.sendMessage(conversationId, msg.text);
         }
       } else if (!commandFullyParsed) {
         // Post-prefix: keep accumulating until the full command pattern is present.
@@ -2724,9 +2744,9 @@ async function handleStreamMode(
           commandFullyParsed = true;
         }
       }
-    } else if (msg.type === 'tool' && msg.toolName) {
+    } else if (msg.type === 'tool_call') {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+        const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
         await platform.sendMessage(conversationId, toolMessage, {
           category: 'tool_call_formatted',
         });
@@ -2734,17 +2754,19 @@ async function handleStreamMode(
           await platform.sendStructuredEvent(conversationId, msg);
         }
       }
-    } else if (msg.type === 'tool_result' && msg.toolName) {
+    } else if (msg.type === 'tool_call_update') {
       if (!commandDetected && platform.sendStructuredEvent) {
         await platform.sendStructuredEvent(conversationId, msg);
       }
+    } else if (msg.type === 'warning') {
+      if (!commandDetected) await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
     } else if (msg.type === 'result') {
       if (msg.isError && msg.errorSubtype === 'error_during_execution') {
         getLog().warn(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
-            staleSessionId: msg.sessionId,
+            ...(msg.sessionId ? { staleSessionIdPreview: sessionPreview(msg.sessionId) } : {}),
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
@@ -2762,25 +2784,18 @@ async function handleStreamMode(
       // defends against a third-party IAgentProvider that forwards the SDK
       // pair raw — without it, direct chat would surface a spurious error to
       // the user and drop the actual conversation output.
-      if (msg.isError && msg.errorSubtype !== 'success') {
+      if (msg.failure !== undefined || (msg.isError && msg.errorSubtype !== 'success')) {
         getLog().warn(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
+            failureClass: msg.failure?.class,
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
           'ai_result_error'
         );
-        // Carry the SDK error detail (not just the subtype code) into the
-        // formatter so it can classify actionable cases like "Not logged in"
-        // rather than emitting a generic message (#1983).
-        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
-        const syntheticError = new Error(errorDetail || 'AI result error');
-        await platform.sendMessage(
-          conversationId,
-          classifyAndFormatError(syntheticError, platform)
-        );
+        await platform.sendMessage(conversationId, resultFailureMessage(msg, platform));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }
@@ -2928,12 +2943,12 @@ async function handleBatchMode(
     session.assistant_session_id ?? undefined,
     requestOptions
   )) {
-    if (msg.type === 'assistant' && msg.content) {
+    if (msg.type === 'agent_message_chunk') {
       // Always record in allChunks for debug logging; accumulate assistantMessages
       // only while the command is not yet fully captured (same reason as stream mode).
-      allChunks.push({ type: 'assistant', content: msg.content });
+      allChunks.push({ type: 'assistant', content: msg.text });
       if (!commandFullyParsed) {
-        assistantMessages.push(msg.content);
+        assistantMessages.push(msg.text);
       }
 
       // Cap assistant-only chunks while no command has been detected.  Once
@@ -2971,19 +2986,22 @@ async function handleBatchMode(
           commandFullyParsed = true;
         }
       }
-    } else if (msg.type === 'tool' && msg.toolName) {
+    } else if (msg.type === 'tool_call') {
       if (!commandDetected) {
-        const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+        const toolMessage = formatToolCall(toolCallDisplayName(msg), msg.rawInput);
         allChunks.push({ type: 'tool', content: toolMessage });
-        getLog().debug({ toolName: msg.toolName }, 'tool_call');
+        getLog().debug({ toolName: msg.name }, 'tool_call');
       }
+    } else if (msg.type === 'warning') {
+      // A warning surfaces as it arrives, not batched into the reply.
+      if (!commandDetected) await platform.sendMessage(conversationId, `⚠️ ${msg.message}`);
     } else if (msg.type === 'result') {
       if (msg.isError && msg.errorSubtype === 'error_during_execution') {
         getLog().warn(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
-            staleSessionId: msg.sessionId,
+            ...(msg.sessionId ? { staleSessionIdPreview: sessionPreview(msg.sessionId) } : {}),
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
@@ -3001,25 +3019,18 @@ async function handleBatchMode(
       // defends against a third-party IAgentProvider that forwards the SDK
       // pair raw — without it, direct chat would surface a spurious error to
       // the user and drop the actual conversation output.
-      if (msg.isError && msg.errorSubtype !== 'success') {
+      if (msg.failure !== undefined || (msg.isError && msg.errorSubtype !== 'success')) {
         getLog().warn(
           {
             conversationId,
             errorSubtype: msg.errorSubtype,
+            failureClass: msg.failure?.class,
             errors: msg.errors,
             stopReason: msg.stopReason,
           },
           'ai_result_error'
         );
-        // Carry the SDK error detail (not just the subtype code) into the
-        // formatter so it can classify actionable cases like "Not logged in"
-        // rather than emitting a generic message (#1983).
-        const errorDetail = [msg.errorSubtype, ...(msg.errors ?? [])].filter(Boolean).join(': ');
-        const syntheticError = new Error(errorDetail || 'AI result error');
-        await platform.sendMessage(
-          conversationId,
-          classifyAndFormatError(syntheticError, platform)
-        );
+        await platform.sendMessage(conversationId, resultFailureMessage(msg, platform));
         if (newSessionId) {
           await tryPersistSessionId(session.id, newSessionId);
         }

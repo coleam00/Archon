@@ -50,7 +50,7 @@ nodes:
 - `allowed_tools` is a whitelist -- only listed tools are available. An empty list (`[]`) disables all tools.
 - `denied_tools` is a blacklist -- listed tools are blocked, all others are available.
 - These are mutually exclusive per node. If both are set, `allowed_tools` takes precedence.
-- Tool restrictions are currently supported for the Claude provider only. Codex nodes with `denied_tools` will log a warning; `allowed_tools` is not supported by the Codex SDK.
+- Tool restrictions are currently supported for the Claude provider only. Codex nodes with `denied_tools` will log a warning; `allowed_tools` is not supported by Codex.
 
 ## Data Privacy and Logging
 

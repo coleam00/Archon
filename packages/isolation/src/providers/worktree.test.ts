@@ -1914,7 +1914,7 @@ describe('WorktreeProvider', () => {
       });
 
       await expect(provider.create(request)).rejects.toThrow(
-        'Failed to create worktree for PR #42: Fetch origin pull/42/head:pr-42-review failed: error: cannot lock ref'
+        'Failed to create worktree for PR #42: error: cannot lock ref'
       );
 
       expect(fetchCalls).toBe(4); // 1 initial + 3 retries

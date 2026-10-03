@@ -665,6 +665,19 @@ describe('dagNodeSchema — new Claude SDK options', () => {
     }
   });
 
+  test('parses trimmed plugin ids and rejects an empty one', () => {
+    const result = dagNodeSchema.safeParse({
+      id: 'n',
+      prompt: 'do it',
+      plugins: [' formatter@tools '],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) expect((result.data as AgentNode).plugins).toEqual(['formatter@tools']);
+    expect(dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', plugins: ['  '] }).success).toBe(
+      false
+    );
+  });
+
   test('parses maxBudgetUsd as positive number', () => {
     const result = dagNodeSchema.safeParse({ id: 'n', prompt: 'do it', maxBudgetUsd: 2.5 });
     expect(result.success).toBe(true);
@@ -1295,6 +1308,7 @@ describe('SCRIPT_NODE_AI_FIELDS', () => {
       'hooks',
       'mcp',
       'skills',
+      'plugins',
       'effort',
       'maxBudgetUsd',
       'systemPrompt',
@@ -1400,6 +1414,7 @@ describe('dagNodeSchema — LoopNode AI-field survival', () => {
     hooks: { PreToolUse: [{ matcher: 'Bash', response: { decision: 'block' } }] },
     mcp: '.mcp.json',
     skills: ['code-review'],
+    plugins: ['formatter@tools'],
     agents: { reviewer: { description: 'reviews', prompt: 'review it' } },
     pi: { enableExtensions: false },
     effort: 'low',
@@ -1937,7 +1952,7 @@ describe('dagNodeSchema — include', () => {
   test('parses a valid include node (only structural fields survive)', () => {
     const result = dagNodeSchema.safeParse({
       id: 'review',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       depends_on: ['finalize-pr'],
       when: 'always',
       trigger_rule: 'all_success',
@@ -1947,7 +1962,7 @@ describe('dagNodeSchema — include', () => {
       expect(isIncludeDirective(result.data)).toBe(true);
       const node = result.data as IncludeDirective;
       expect(node.kind).toBe('include');
-      expect(node.include).toBe('archon-review-block');
+      expect(node.include).toBe('acme-review-block');
       expect(node.depends_on).toEqual(['finalize-pr']);
       expect(node.when).toBe('always');
       expect(node.trigger_rule).toBe('all_success');
@@ -1955,10 +1970,10 @@ describe('dagNodeSchema — include', () => {
   });
 
   test('trims surrounding whitespace on the target name', () => {
-    const result = dagNodeSchema.safeParse({ id: 'r', include: '  archon-review-block  ' });
+    const result = dagNodeSchema.safeParse({ id: 'r', include: '  acme-review-block  ' });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect((result.data as IncludeDirective).include).toBe('archon-review-block');
+      expect((result.data as IncludeDirective).include).toBe('acme-review-block');
     }
   });
 
@@ -1966,7 +1981,7 @@ describe('dagNodeSchema — include', () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
       command: 'build',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
     });
     expect(result.success).toBe(false);
     if (!result.success) {
@@ -1983,7 +1998,7 @@ describe('dagNodeSchema — include', () => {
   test("include accepts and retains a string-valued 'with:' mapping", () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       with: { pr: '$create.output', base_branch: 'main', empty: '' },
     });
     expect(result.success).toBe(true);
@@ -2004,7 +2019,7 @@ describe('dagNodeSchema — include', () => {
   ])("include rejects 'with:' when it is %s", (_description, withValue) => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       with: withValue,
     });
     expect(result.success).toBe(false);
@@ -2018,7 +2033,7 @@ describe('dagNodeSchema — include', () => {
   test("include accepts and retains typed JSON 'with:' values", () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       with: { flag: true, count: 3, tags: ['a', 'b'], meta: { k: 'v' }, nothing: null },
     });
     expect(result.success).toBe(true);
@@ -2045,7 +2060,7 @@ describe('dagNodeSchema — include', () => {
   test('include node drops AI/exec fields (they are ignored)', () => {
     const result = dagNodeSchema.safeParse({
       id: 'r',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       model: 'opus',
       always_run: true,
       output_type: 'code',
@@ -2084,7 +2099,7 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
   test('include + fan_out parses to a deferred compose_fan_out node', () => {
     const result = dagNodeSchema.safeParse({
       id: 'review',
-      include: 'archon-review-block',
+      include: 'acme-review-block',
       depends_on: ['gather'],
       fan_out: { items: '$list.output', as: 'item', max_parallel: 3 },
     });
@@ -2092,7 +2107,7 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     if (result.success) {
       const node = result.data as ComposeFanOutNode;
       expect(node.kind).toBe('compose_fan_out');
-      expect(node.include).toBe('archon-review-block');
+      expect(node.include).toBe('acme-review-block');
       expect(node.fan_out.max_parallel).toBe(3);
       expect(node.fan_out.join).toBe('all_done');
       expect(isIncludeDirective(result.data)).toBe(false);

@@ -1,5 +1,9 @@
 import { z } from '@hono/zod-openapi';
-import { tokenUsageSchema } from '@archon/provider-contract';
+import {
+  providerFailureSchema,
+  SESSION_PREVIEW_LENGTH,
+  tokenUsageSchema,
+} from '@archon/provider-contract';
 import {
   agentNodeSchema,
   execNodeSchema,
@@ -83,7 +87,7 @@ export const executionBindingSchema = z.object({
     .optional(),
   tier: tierNameSchema.optional(),
   effort: effortLevelSchema.optional(),
-  sessionPreview: z.string().max(8).optional(),
+  sessionPreview: z.string().max(SESSION_PREVIEW_LENGTH).optional(),
   sessionOrigin: z.enum(['fresh', 'resumed', 'resume-failed-cold']).optional(),
 });
 export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
@@ -91,8 +95,9 @@ export type ExecutionBinding = z.infer<typeof executionBindingSchema>;
 /**
  * Why a node failed, recorded where the failure is known rather than re-read from
  * `error` prose later. `fatal`/`transient`/`rate_limited`/`unknown` classify a provider
- * error and decide its retry; the rest name engine-detected causes. Absent on records
- * written before this field existed.
+ * error; the rest name engine-detected causes. Every kind maps to a retry class in
+ * `executor-shared.ts`. Absent on records written before this field existed; retry
+ * treats an absent kind as `unknown`.
  */
 export const nodeFailureKindSchema = z.enum([
   'fatal',
@@ -117,6 +122,8 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
     error: z.string(),
     retryable: z.literal(false).optional(),
     failureKind: nodeFailureKindSchema.optional(),
+    /** The provider's own typed failure, unchanged, when a provider reported one. */
+    providerFailure: providerFailureSchema.optional(),
   }),
   z.object({ status: z.literal('skipped'), reason: nodeSkipReasonSchema, cause: skipCauseSchema }),
   z.object({
@@ -192,6 +199,12 @@ export type NodeExecutionMetadata = z.infer<typeof nodeExecutionMetadataSchema>;
 export const nodeExecutionRecordSchema = nodeExecutionMetadataSchema.extend({
   output: executionOutputSchema.optional(),
   diagnostics: executionDiagnosticsSchema.optional(),
+  /**
+   * The full provider session id this attempt ended in. It can resume the conversation,
+   * so only the durable row stores it; `executionMetadata` drops it, which keeps it out
+   * of the transcript and the emitter.
+   */
+  sessionId: z.string().min(1).optional(),
 });
 export type NodeExecutionRecord = z.infer<typeof nodeExecutionRecordSchema>;
 

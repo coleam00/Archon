@@ -10,7 +10,7 @@ import {
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
 import { RunDetailHeader } from '../components/RunDetailHeader';
-import { RunStream } from '../components/RunStream';
+import { RunStream, runToolCalls } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
@@ -20,6 +20,7 @@ import { ArtifactPanel } from '../components/ArtifactPanel';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useRunStreamSSE } from '../lib/sse';
+import { providerEventStore, useRunProviderEvents } from '../lib/provider-events';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -196,6 +197,7 @@ export function RunDetailPage(): ReactElement {
       if (conversationPlatformId !== null) {
         invalidate(K.messages(conversationPlatformId));
       }
+      providerEventStore.catchUp(runId);
     }, 30000);
     return (): void => {
       clearInterval(id);
@@ -217,6 +219,14 @@ export function RunDetailPage(): ReactElement {
     () => foldNodeRuns(detail?.events ?? []).map(r => ({ id: r.nodeId, name: r.nodeName })),
     [detail?.events]
   );
+
+  // Each node's provider events load once, when the node first appears; live frames
+  // are appended after that (lib/provider-events.ts).
+  const providerEvents = useRunProviderEvents(runId ?? null);
+  useEffect(() => {
+    if (runId === undefined) return;
+    for (const node of nodeOptions) providerEventStore.load(runId, node.id);
+  }, [runId, nodeOptions]);
 
   // Drop a persisted node selection that doesn't apply to this run (e.g. after
   // navigating to a different workflow). Guarded on the run being loaded so the
@@ -408,14 +418,7 @@ export function RunDetailPage(): ReactElement {
 
   const { run, events } = detail;
   const messageList = messages ?? [];
-  const inlineToolCount = messageList.reduce((acc, m) => acc + m.toolCalls.length, 0);
-  // Mirror RunStream's source-of-truth rule: when no inline tool calls exist
-  // on messages, the workflow tool_called events become the canonical count.
-  const workflowToolCount =
-    inlineToolCount === 0
-      ? events.filter(e => e.kind === 'tool_call' && e.result === null).length
-      : 0;
-  const toolCallCount = inlineToolCount + workflowToolCount;
+  const toolCallCount = runToolCalls(messageList, providerEvents).count;
 
   const toolbar = (
     <StreamToolbar
@@ -474,6 +477,7 @@ export function RunDetailPage(): ReactElement {
                       <RunStream
                         messages={messageList}
                         events={events}
+                        providerEvents={providerEvents}
                         showToolCalls={showToolCalls}
                         showSystem={showSystem}
                         selectedNodeId={selectedNodeId}

@@ -56,7 +56,7 @@ if (inheritedInstallContext) {
 // `utils/safe-console.ts` for the underlying shim, and #2400 for the full
 // rationale.
 import { installPipeSafeConsole } from './utils/safe-console';
-import { withDrainedExit } from './utils/exit-with-drain';
+import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import {
   rejectConfigOnContinue,
@@ -103,12 +103,45 @@ import { publishArchonCliCommand } from '@archon/paths/cli-command';
 publishArchonCliCommand();
 
 let providersRegistered = false;
+let providerProcessErrorHandlersInstalled = false;
 let databaseRouteLoaded = false;
+
+function installProviderProcessErrorHandlers(
+  claimPiExtensionProcessError: (reason: unknown) => boolean
+): void {
+  if (providerProcessErrorHandlersInstalled) return;
+  providerProcessErrorHandlersInstalled = true;
+
+  const exitForUnhandledError = (
+    reason: unknown,
+    event: 'unhandled_rejection' | 'uncaught_exception',
+    origin?: NodeJS.UncaughtExceptionOrigin
+  ): void => {
+    getLog().fatal({ reason, origin }, `${event}.fatal`);
+    void shutdownTelemetry()
+      .catch((error: unknown) => {
+        getLog().error({ err: error }, 'telemetry_shutdown_failed');
+      })
+      .then(() => exitWithDrain(1));
+  };
+
+  process.on('unhandledRejection', reason => {
+    if (!claimPiExtensionProcessError(reason)) {
+      exitForUnhandledError(reason, 'unhandled_rejection');
+    }
+  });
+  process.on('uncaughtException', (error, origin) => {
+    if (!claimPiExtensionProcessError(error)) {
+      exitForUnhandledError(error, 'uncaught_exception', origin);
+    }
+  });
+}
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const { registerBuiltinProviders, registerCommunityProviders } =
+  const { claimPiExtensionProcessError, registerBuiltinProviders, registerCommunityProviders } =
     await import('@archon/providers');
+  installProviderProcessErrorHandlers(claimPiExtensionProcessError);
   registerBuiltinProviders();
   registerCommunityProviders();
   providersRegistered = true;
@@ -156,11 +189,6 @@ async function fail(json: boolean | undefined, message: string): Promise<1> {
 
 function printUsageFor(command?: string, subcommand?: string): void {
   console.log(renderHelp(command, subcommand));
-}
-
-/** Print the global usage information (every entry, every flag, every example). */
-function printUsage(): void {
-  printUsageFor();
 }
 
 /**
@@ -221,7 +249,7 @@ async function main(): Promise<number> {
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-    printUsage();
+    printUsageFor();
     await shutdownTelemetry();
     return 0;
   }
@@ -260,7 +288,7 @@ async function main(): Promise<number> {
     if (json) setLogLevel('silent');
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     await fail(json, `Error parsing arguments: ${err.message}`);
-    if (!json) printUsage();
+    if (!json) printUsageFor();
     await shutdownTelemetry();
     return 1;
   }
@@ -393,26 +421,7 @@ async function main(): Promise<number> {
     // Running it on every CLI startup killed parallel workflow runs (all
     // 'running' status rows were marked failed by each new process).
 
-    // Marketplace search doesn't need a git repo — handle before git validation
-    if (command === 'workflow' && subcommand === 'search') {
-      const query = positionals[2];
-      try {
-        const { workflowSearchCommand } = await loadRoute(() => import('./commands/workflow'));
-        await workflowSearchCommand(query, jsonFlag);
-      } catch (error) {
-        const err = error as Error;
-        if (jsonFlag) {
-          await writeJsonLine({ ok: false, error: err.message });
-        } else {
-          console.error(`Error: ${err.message}`);
-        }
-        return 1;
-      }
-      return 0;
-    }
-
-    // Fixture testing reads workflow files only — handle before git validation,
-    // like marketplace search above.
+    // Fixture testing reads workflow files only — handle before git validation.
     if (command === 'workflow' && subcommand === 'test') {
       const target = positionals[2];
       try {
@@ -619,7 +628,6 @@ async function main(): Promise<number> {
           workflowCleanupCommand,
           workflowResetSessionsCommand,
           workflowEventEmitCommand,
-          workflowInstallCommand,
           isValidEventType,
         } = await loadRoute(() => import('./commands/workflow'), {
           // `resume`, `approve`, `reject`, and `respond` all reach `workflowRunCommand`,
@@ -815,12 +823,22 @@ async function main(): Promise<number> {
           case 'logs': {
             const logsRunId = positionals[2];
             if (!logsRunId || positionals[3] !== undefined) {
-              return await fail(false, 'Usage: archon workflow logs <run-id> [--follow]');
+              return await fail(
+                false,
+                'Usage: archon workflow logs <run-id> [--follow] [--format jsonl|text]'
+              );
             }
             if (jsonFlag) {
               return await fail(
                 false,
-                'Error: workflow logs already emits JSONL; --json is not supported.'
+                'Error: workflow logs already emits JSONL; --json is not supported. Use --format text to read it as text.'
+              );
+            }
+            const logsFormat = (values.format as string | undefined) ?? 'jsonl';
+            if (logsFormat !== 'jsonl' && logsFormat !== 'text') {
+              return await fail(
+                false,
+                `Error: --format must be 'jsonl' or 'text', got '${logsFormat}'.`
               );
             }
             if (values.events) {
@@ -829,7 +847,12 @@ async function main(): Promise<number> {
                 'Error: --events applies to workflow status/get, not workflow logs.'
               );
             }
-            return await workflowLogsCommand(logsRunId, Boolean(values.follow), effectiveCwd);
+            return await workflowLogsCommand(
+              logsRunId,
+              Boolean(values.follow),
+              effectiveCwd,
+              logsFormat
+            );
           }
 
           case 'wait': {
@@ -1060,16 +1083,6 @@ async function main(): Promise<number> {
             break;
           }
 
-          case 'install': {
-            const installSlug = positionals[2];
-            if (!installSlug) {
-              return await fail(jsonFlag, 'Usage: archon workflow install <slug> [--force]');
-            }
-            const forceFlag = values.force as boolean | undefined;
-            await workflowInstallCommand(installSlug, effectiveCwd, forceFlag);
-            break;
-          }
-
           default: {
             const problem =
               subcommand === undefined
@@ -1077,7 +1090,7 @@ async function main(): Promise<number> {
                 : `Unknown workflow subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: list, run, status, get, wait, runs, resume, cancel, abandon, approve, reject, cleanup, event, search, install`
+              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, cleanup, reset-sessions, event`
             );
           }
         }
@@ -1336,13 +1349,13 @@ async function main(): Promise<number> {
 
       default: {
         const problem = command === undefined ? 'Missing command' : `Unknown command: ${command}`;
-        // printUsage() writes human text to stdout, which would corrupt the
+        // Help text goes to stdout, which would corrupt the
         // machine-readable payload under --json.
         if (jsonFlag) {
           return await fail(true, problem);
         }
         console.error(problem);
-        printUsage();
+        printUsageFor();
         return 1;
       }
     }

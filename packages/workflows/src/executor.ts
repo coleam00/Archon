@@ -36,6 +36,7 @@ import {
   isScheduledWorkflowResume,
   isWaitNode,
   isIncludeDirective,
+  runMayPersistSessions,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
   RUN_METADATA_KEYS,
@@ -51,6 +52,7 @@ import {
   type ExecutionOwnerRecord,
   type RunDispatchMetadata,
   type WorkflowSourceMetadata,
+  persistScopeKey,
 } from './schemas';
 import {
   WorkflowSourceIntegrityError,
@@ -101,12 +103,7 @@ export type {
   ChildIsolationRequest,
   ChildIsolationResult,
 } from './child-isolation';
-import {
-  classifyError,
-  safeSendMessage,
-  runWithAdoptedRunDir,
-  type SendMessageContext,
-} from './executor-shared';
+import { safeSendMessage, runWithAdoptedRunDir, type SendMessageContext } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import {
   buildAiProfile,
@@ -167,14 +164,11 @@ async function sendCriticalMessage(
       return true;
     } catch (error) {
       const err = error as Error;
-      const errorType = classifyError(err);
-
       getLog().error(
         {
           err,
           conversationId,
           messageLength: message.length,
-          errorType,
           platformType: platform.getPlatformType(),
           ...context,
           attempt,
@@ -183,12 +177,7 @@ async function sendCriticalMessage(
         'platform.critical_message_send_failed'
       );
 
-      // Don't retry fatal errors
-      if (errorType === 'FATAL') {
-        break;
-      }
-
-      // Wait before retry (exponential backoff: 1s, 2s, 3s...)
+      // Wait before retry (linear backoff: 1s × attempt)
       if (attempt < maxRetries) {
         await delay(1000 * attempt);
       }
@@ -535,10 +524,9 @@ function composeRunPaths(
 
 /**
  * Resolve the stable cross-invocation artifact scope dir for a run (#1846), or
- * undefined when the feature doesn't apply. Applies only when the workflow uses
- * cross-run session persistence (workflow-level `persist_sessions` or any node
- * `persist_session: true`) AND the run has a conversation scope — the same
- * opt-in + scope key the session store uses. No persistence → no new dirs,
+ * undefined when the feature doesn't apply. Applies only when the run may use
+ * cross-run session persistence (`runMayPersistSessions`) AND the run has a scope
+ * (`persistScopeKey`) — the same opt-in + scope key the session store uses. No persistence → no new dirs,
  * default behavior unchanged.
  */
 export function resolveScopeArtifactsDir(
@@ -547,15 +535,12 @@ export function resolveScopeArtifactsDir(
     nodes: readonly (DagNode | IncludeDirective)[];
     persist_sessions?: boolean;
   },
-  conversationId: string | null | undefined,
+  scopeKey: string | null | undefined,
   artifactsRoot: string
 ): string | undefined {
-  if (!conversationId) return undefined;
-  const usesPersistence =
-    workflow.persist_sessions === true ||
-    workflow.nodes.some(n => 'persist_session' in n && n.persist_session === true);
-  if (!usesPersistence) return undefined;
-  return archonPaths.getScopeArtifactsPath(artifactsRoot, workflow.name, conversationId);
+  if (!scopeKey) return undefined;
+  if (!runMayPersistSessions(workflow)) return undefined;
+  return archonPaths.getScopeArtifactsPath(artifactsRoot, workflow.name, scopeKey);
 }
 
 /**
@@ -2658,10 +2643,10 @@ export async function executeWorkflow(
   await maybeWarnLegacyArtifactsPath(cwd, artifactsRoot, isolated);
 
   // Stable cross-invocation artifact scope (#1846): only for persist_session
-  // workflows with a conversation scope. Undefined otherwise — zero new dirs.
+  // workflows, keyed like the session store. Undefined otherwise — zero new dirs.
   const scopeArtifactsDir = resolveScopeArtifactsDir(
     workflow,
-    workflowRun.conversation_id,
+    persistScopeKey(workflowRun),
     artifactsRoot
   );
 
@@ -3094,8 +3079,7 @@ export async function executeWorkflow(
       usesBash: telemetryNodes.some(n => isExecNode(n) && n.runtime === 'sh'),
       usesOutputFormat: telemetryNodes.some(n => n.output_format !== undefined),
       usesOutputType: telemetryNodes.some(n => n.output_type !== undefined),
-      usesPersistSession:
-        workflow.persist_sessions === true || telemetryNodes.some(n => n.persist_session === true),
+      usesPersistSession: runMayPersistSessions(workflow),
       usesMcp: telemetryNodes.some(n => n.mcp !== undefined),
       usesSkills: telemetryNodes.some(n => n.skills !== undefined),
       usesFreshContext: telemetryNodes.some(n => isLoopNode(n) && n.loop.fresh_context),

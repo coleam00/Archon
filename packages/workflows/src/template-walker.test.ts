@@ -48,6 +48,7 @@ const STRING_FIELD_CLASSIFICATIONS = {
   ...HOOK_FIELD_CLASSIFICATIONS,
   mcp: { kind: 'literal', reason: 'MCP value is a configuration path' },
   'skills.*': { kind: 'literal', reason: 'Skill entries are capability identifiers' },
+  'plugins.*': { kind: 'literal', reason: 'Plugin entries are capability identifiers' },
   'agents.*.description': { kind: 'template', slots: ['agents.*.description'] },
   'agents.*.prompt': { kind: 'template', slots: ['agents.*.prompt'] },
   'agents.*.model': { kind: 'literal', reason: 'Sub-agent model is a provider identifier' },

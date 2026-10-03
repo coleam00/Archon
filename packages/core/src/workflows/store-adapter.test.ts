@@ -132,7 +132,9 @@ mock.module('../db/user-provider-key-store', () => ({
   getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
   listUserProviderKeys: mock(() => Promise.resolve([])),
   deleteUserProviderKey: mock(() => Promise.resolve()),
-  getDecryptedProviderCredential: mock(() => Promise.resolve(null)),
+  getDecryptedProviderCredential: mock(() =>
+    Promise.resolve({ state: 'not_connected', source: 'archon' })
+  ),
 }));
 
 // github-auth mocks (required by store-adapter imports)
@@ -146,7 +148,7 @@ mock.module('../db/env-vars', () => ({
   getCodebaseEnvVars: mock(() => Promise.resolve({})),
 }));
 mock.module('../db/workflow-node-sessions', () => ({
-  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  listWorkflowNodeSessions: mock(() => Promise.resolve([])),
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
   deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
 }));
@@ -195,9 +197,8 @@ describe('createWorkflowStore', () => {
       'getDagResumeSnapshot',
       'getCodebase',
       'getCodebaseEnvVars',
-      'getWorkflowNodeSession',
+      'listWorkflowNodeSessions',
       'upsertWorkflowNodeSession',
-      'deleteWorkflowNodeSessions',
       'listWorkflowRunNodeSessions',
       'upsertWorkflowRunNodeSession',
     ];

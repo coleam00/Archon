@@ -2,7 +2,7 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import * as archonPaths from '@archon/paths';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, sep } from 'node:path';
+import { join, sep } from 'node:path';
 import { makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
   createDryRunStubScaffold as createResolvedDryRunStubScaffold,
@@ -23,18 +23,15 @@ import { readBundleIndex } from './defaults/bundle-inventory';
 // These fixtures read only project files. Avoid copying the repository's bundled
 // defaults into every capture; the materialization suite covers bundled content.
 async function captureProjectSource(options: Parameters<typeof captureWorkflowSource>[0]) {
-  const bundled = join(options.sourceRoot, 'empty-bundled', 'defaults');
-  mkdirSync(bundled, { recursive: true });
+  const bundled = join(options.sourceRoot, 'empty-bundled');
   for (const pack of await readBundleIndex()) {
-    mkdirSync(join(dirname(bundled), pack), { recursive: true });
+    mkdirSync(join(bundled, pack), { recursive: true });
   }
-  const workflows = spyOn(archonPaths, 'getDefaultWorkflowsPath').mockReturnValue(bundled);
-  const commands = spyOn(archonPaths, 'getDefaultCommandsPath').mockReturnValue(bundled);
+  const workflows = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(bundled);
   try {
     return await captureWorkflowSource(options);
   } finally {
     workflows.mockRestore();
-    commands.mockRestore();
   }
 }
 
@@ -1908,8 +1905,7 @@ describe('dryRunWorkflow', () => {
     // Behaviour CHANGE, recorded deliberately (#2563). Before, this combination
     // simulated as a max-iterations failure because only `until` was evaluated. Now
     // the unevaluable `until_bash` triggers the documented assumption, because the
-    // real run's check may well have fired. The shipped `archon-adversarial-dev`
-    // default declares exactly this pair, so the old verdict was a failure the real
+    // real run's check may well have fired, so the old verdict was a failure the real
     // run would not produce. The trade: a dry run can no longer prove a prose stub
     // trips `until:` on a loop that also declares `until_bash`.
     const workflow = makeTestWorkflow({

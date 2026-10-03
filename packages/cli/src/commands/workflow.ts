@@ -2,8 +2,9 @@
  * Workflow command - list and run workflows
  */
 
+import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
-import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
@@ -24,6 +25,7 @@ import {
   sealWorkflowRunConfig,
 } from '@archon/core/config';
 import {
+  NODE_STATE_EVENT_TYPES,
   WORKFLOW_EVENT_TYPES,
   isNodeStateEventType,
   type WorkflowEventType,
@@ -104,6 +106,12 @@ import {
 import type { RequirementBearingWorkflow } from '@archon/workflows/utils/workflow-requirements';
 import { parseInputAssignments } from '@archon/workflows/workflow-inputs';
 import { formatDeprecationNotice } from '@archon/workflows/deprecation';
+import type { WorkflowEvent } from '@archon/workflows/logger';
+import {
+  providerEventLineSchema,
+  type ProviderEventLine,
+} from '@archon/workflows/schemas/provider-event';
+import { formatToolInputBrief } from '@archon/workflows/utils/tool-formatter';
 import {
   dryRunWorkflow,
   formatDryRunTrace,
@@ -129,6 +137,7 @@ import {
   workflowRunStatusSchema,
   isApprovalContext,
   isWorkflowWaitContext,
+  pendingWorkflowWaitDeadline,
   workflowWaitStepName,
   isScheduledWorkflowResume,
   readRunStopReason,
@@ -158,6 +167,7 @@ import {
   cancelWorkflow,
   CancelRefusedError,
   ChildRunRedirectError,
+  workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
   getWorkflowStatus,
@@ -1067,8 +1077,32 @@ export async function maybePrintTierNotice(
   markTierNoticeShown(version);
 }
 
+/**
+ * Tool calls started in this process and not yet closed, keyed by attempt and call id,
+ * so a completion line can name its tool and duration. One per run subscription.
+ */
+type OpenToolCalls = Map<string, { name: string; observedAt: string }>;
+
+/**
+ * The wording of a node's progress lines. A foreground run renders them from emitter
+ * events and `workflow logs --format text` from transcript rows; both call these so the
+ * lines are worded alike. The label differs: the foreground names a command node by its
+ * command, the transcript by its node id, which is all its failure and skip rows record.
+ */
+const nodeLine = {
+  started: (name: string, detail = ''): string => `[${name}] Started${detail}`,
+  completed: (name: string, durationMs?: number): string =>
+    `[${name}] Completed${durationMs === undefined ? '' : ` (${formatDuration(durationMs)})`}`,
+  failed: (name: string, error: string): string => `[${name}] Failed: ${error}`,
+  skipped: (name: string, why: string): string => `[${name}] Skipped (${why})`,
+};
+
 /** Render a workflow event to stderr as a progress line. Called only when --quiet is not set. */
-function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): void {
+function renderWorkflowEvent(
+  event: WorkflowEmitterEvent,
+  verbose: boolean,
+  openToolCalls: OpenToolCalls
+): void {
   switch (event.type) {
     case 'workflow_started':
       process.stderr.write(`[workflow] Transcript: ${event.transcriptPath}\n`);
@@ -1079,22 +1113,20 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
         const tierPart = event.tier !== undefined ? ` ← ${event.tier}` : '';
         suffix = `  (${event.provider}/${event.model}${tierPart})`;
       }
-      process.stderr.write(`[${event.nodeName}] Started${suffix}\n`);
+      process.stderr.write(`${nodeLine.started(event.nodeName, suffix)}\n`);
       break;
     }
     case 'node_completed':
-      process.stderr.write(
-        `[${event.nodeName}] Completed${event.duration === undefined ? '' : ` (${formatDuration(event.duration)})`}\n`
-      );
+      process.stderr.write(`${nodeLine.completed(event.nodeName, event.duration)}\n`);
       break;
     case 'node_failed':
-      process.stderr.write(`[${event.nodeName}] Failed: ${event.error}\n`);
+      process.stderr.write(`${nodeLine.failed(event.nodeName, event.error)}\n`);
       break;
     case 'node_skipped':
-      process.stderr.write(`[${event.nodeName}] Skipped (${formatSkipCause(event.cause)})\n`);
+      process.stderr.write(`${nodeLine.skipped(event.nodeName, formatSkipCause(event.cause))}\n`);
       break;
     case 'node_skipped_prior_success':
-      process.stderr.write(`[${event.nodeName}] Skipped (prior_success)\n`);
+      process.stderr.write(`${nodeLine.skipped(event.nodeName, 'prior_success')}\n`);
       break;
     case 'approval_pending':
       process.stderr.write(`[${event.nodeId}] Waiting for approval: ${event.message}\n`);
@@ -1104,22 +1136,35 @@ function renderWorkflowEvent(event: WorkflowEmitterEvent, verbose: boolean): voi
       process.stderr.write(`[container] ${event.phase}${idPart}\n`);
       break;
     }
-    case 'tool_started':
-      if (verbose) {
+    case 'provider_event': {
+      if (!verbose) break;
+      const providerEvent = event.event;
+      // A call id is unique within its attempt; parallel nodes can repeat one.
+      const callKey = JSON.stringify([
+        event.attemptId,
+        'toolCallId' in providerEvent ? providerEvent.toolCallId : '',
+      ]);
+      if (providerEvent.type === 'tool_call') {
+        const name = toolCallDisplayName(providerEvent);
+        openToolCalls.set(callKey, { name, observedAt: event.observedAt });
         process.stderr.write(
-          `[${event.stepName}] tool: ${event.toolName} (started, ${event.toolCallId})\n`
+          `[${event.stepName}] tool: ${name} (started, ${providerEvent.toolCallId})\n`
+        );
+      } else if (providerEvent.type === 'tool_call_update') {
+        const started = openToolCalls.get(callKey);
+        openToolCalls.delete(callKey);
+        const duration =
+          started === undefined
+            ? ''
+            : `${String(Date.parse(event.observedAt) - Date.parse(started.observedAt))}ms, `;
+        const exitCode =
+          providerEvent.exitCode !== undefined ? `, exit ${String(providerEvent.exitCode)}` : '';
+        process.stderr.write(
+          `[${event.stepName}] tool: ${started?.name ?? providerEvent.toolCallId} (${duration}${providerEvent.toolCallId}, ${providerEvent.status}${exitCode})\n`
         );
       }
       break;
-    case 'tool_completed':
-      if (verbose) {
-        const outcome = event.toolOutcome ? `, ${event.toolOutcome}` : '';
-        const exitCode = event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : '';
-        process.stderr.write(
-          `[${event.stepName}] tool: ${event.toolName} (${String(event.durationMs)}ms, ${event.toolCallId}${outcome}${exitCode})\n`
-        );
-      }
-      break;
+    }
     default:
       // Workflow-level, loop, artifact, and cancelled events are intentionally not rendered.
       break;
@@ -2485,10 +2530,10 @@ async function runWorkflowWithOwnedSource(
   }
 
   // A --folder registration failure must be fatal regardless of the workflow's
-  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow (e.g.
-  // the bundled `archon-assist`, the flagship `--folder` example), wantsIsolation
-  // is false, so the later isolation fail-fast branch never fires and the run
-  // would silently proceed against the bare cwd with no registered project.
+  // worktree policy. Otherwise, for a `worktree.enabled: false` workflow,
+  // wantsIsolation is false, so the later isolation fail-fast branch never fires
+  // and the run would silently proceed against the bare cwd with no registered
+  // project.
   if (options.folder && !codebase && codebaseRegistrationError) {
     throw buildFolderRegistrationFailureError(codebaseRegistrationError);
   }
@@ -3099,9 +3144,10 @@ async function runWorkflowWithOwnedSource(
   // subscribeForConversation is pure in-memory registration — cannot throw in practice.
   // If that changes, this should be moved inside the try block to prevent blocking executeWorkflow.
   const { quiet, verbose } = options;
+  const openToolCalls: OpenToolCalls = new Map();
   const unsubscribe = getWorkflowEventEmitter().subscribeForConversation(conversationId, event => {
     if (!quiet) {
-      renderWorkflowEvent(event, verbose ?? false);
+      renderWorkflowEvent(event, verbose ?? false, openToolCalls);
     }
   });
 
@@ -3481,9 +3527,8 @@ export interface PendingWaitContinuation {
  * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
  */
 export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
-  if (run.status !== 'paused') return undefined;
-  const wait = run.metadata.wait;
-  if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
+  const wait = pendingWorkflowWaitDeadline(run);
+  if (!wait) return undefined;
   return {
     stepName: workflowWaitStepName(wait),
     resumeAt: wait.resumeAt,
@@ -3718,6 +3763,8 @@ export interface NodeSummary {
   blockedOnChildRunId?: string;
   cause?: SkipCause;
   execution?: NodeExecutionMetadata;
+  /** Every provider session id the node's attempts and loop iterations recorded, in order. */
+  sessionIds?: string[];
 }
 
 function formatSkipCause(cause: SkipCause): string {
@@ -3745,20 +3792,43 @@ function outputPreviewOf(rawOutput: unknown): string | undefined {
 }
 
 /**
+ * The event types `buildNodeSummaries` reads: every node-state record
+ * `readNodeRecordEvent` accepts, plus loop iterations for their session ids. A caller
+ * that fetches only these gets the same summaries as one that fetches the whole log.
+ */
+export const NODE_SUMMARY_EVENT_TYPES = [
+  ...NODE_STATE_EVENT_TYPES,
+  'loop_iteration_completed',
+] as const satisfies readonly WorkflowEventType[];
+
+/**
  * Derive per-node summaries from a run's workflow events.
  * Processes node_started / node_completed / node_failed / node_skipped /
  * node_skipped_prior_success events — the last two mean opposite things and are
- * handled separately.
+ * handled separately — and loop iterations' session ids.
  */
 export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
   const summaries = new Map<string, NodeSummary>();
+  // Kept apart from `summaries`, which a retry's node_started resets: earlier attempts'
+  // sessions stay listed.
+  const sessionIds = new Map<string, string[]>();
+  const recordSession = (nodeId: string, sessionId: unknown): void => {
+    if (typeof sessionId !== 'string') return;
+    const ids = sessionIds.get(nodeId) ?? [];
+    if (!ids.includes(sessionId)) sessionIds.set(nodeId, [...ids, sessionId]);
+  };
 
   for (const event of events) {
     const nodeId = event.step_name;
     if (!nodeId) continue;
+    if (event.event_type === 'loop_iteration_completed') {
+      recordSession(nodeId, readNodeRecordData(event.data).session_id);
+      continue;
+    }
     const record = readNodeRecordEvent(event);
     if (!record) continue;
+    recordSession(nodeId, record.data.session_id);
     const execution = record.metadata;
 
     switch (record.eventType) {
@@ -3845,7 +3915,23 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
     }
   }
 
-  return [...summaries.values()];
+  return [...summaries.values()].map(summary => {
+    const ids = sessionIds.get(summary.nodeId);
+    return ids === undefined ? summary : { ...summary, sessionIds: ids };
+  });
+}
+
+/**
+ * A run's event rows. Provider events (every agent text block, tool call and output)
+ * are left out unless the caller prints raw rows: node summaries and terminal records
+ * never read them, and a long run has thousands.
+ */
+function listRunEvents(runId: string, rawEvents: boolean): Promise<WorkflowEventRow[]> {
+  return rawEvents
+    ? workflowEventsDb.listWorkflowEvents(runId)
+    : workflowEventsDb.listWorkflowEvents(runId, {
+        excludeEventTypes: workflowEventsDb.PROVIDER_EVENT_ROW_TYPES,
+      });
 }
 
 /** A node in the run's declared graph that no lifecycle event has reached yet. */
@@ -3878,12 +3964,16 @@ export function buildRunNodes(
 
 /**
  * `workflow runs --json --verbose` adds `nodes` and `attention` to each run. Node
- * events for every listed run come from one query, filtered to node lifecycle rows.
+ * events for every listed run come from one query, filtered to the types
+ * `buildNodeSummaries` reads.
  */
 async function withRunDetail<
   Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
 >(runs: Run[]): Promise<(Run & { nodes: RunNodeSummary[]; attention: RunAttention | null })[]> {
-  const eventsByRun = await workflowEventsDb.listNodeLifecycleEvents(runs.map(run => run.id));
+  const eventsByRun = await workflowEventsDb.listEventsForRuns(
+    runs.map(run => run.id),
+    NODE_SUMMARY_EVENT_TYPES
+  );
   return runs.map(run => ({
     ...run,
     nodes: buildRunNodes(run, eventsByRun.get(run.id) ?? []),
@@ -3899,10 +3989,11 @@ async function withRunDetail<
  * silenced; an empty derived/raw payload is the documented signal there.)
  */
 async function fetchVerboseEvents(
-  runId: string
+  runId: string,
+  rawEvents: boolean
 ): Promise<{ events: WorkflowEventRow[]; failed: boolean }> {
   try {
-    return { events: await workflowEventsDb.listWorkflowEvents(runId), failed: false };
+    return { events: await listRunEvents(runId, rawEvents), failed: false };
   } catch (error) {
     getLog().warn({ err: error as Error, runId }, 'cli.workflow_events_fetch_failed');
     return { events: [], failed: true };
@@ -3935,6 +4026,10 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
     }
     if (node.error !== undefined) {
       console.log(`        Error:  ${node.error}`);
+    }
+    if (node.sessionIds !== undefined) {
+      const label = node.sessionIds.length === 1 ? 'Session' : 'Sessions';
+      console.log(`        ${label}: ${node.sessionIds.join(', ')}`);
     }
     if (node.blockedOnChildRunId !== undefined) {
       const abandon = spellWorkflowCommand(
@@ -3980,7 +4075,9 @@ export async function workflowStatusCommand(
       return;
     }
 
-    const fetchedPerRun = await Promise.all(runs.map(run => fetchVerboseEvents(run.id)));
+    const fetchedPerRun = await Promise.all(
+      runs.map(run => fetchVerboseEvents(run.id, opts.rawEvents ?? false))
+    );
     const runsOutput = runs.map((run, i) => {
       const runEvents = fetchedPerRun[i]?.events ?? [];
       return opts.rawEvents
@@ -4016,7 +4113,7 @@ export async function workflowStatusCommand(
     }
 
     if (opts.verbose) {
-      const { events, failed } = await fetchVerboseEvents(run.id);
+      const { events, failed } = await fetchVerboseEvents(run.id, false);
       if (failed) {
         console.log('  (node events unavailable — see logs)');
       }
@@ -4180,10 +4277,260 @@ export async function workflowWaitCommand(
 const TRANSCRIPT_POLL_INTERVAL_MS = 500;
 const TRANSCRIPT_READ_CHUNK_BYTES = 64 * 1024;
 
+/** How `workflow logs` prints a transcript: its exact JSONL, or rendered for a human. */
+export type TranscriptFormat = 'jsonl' | 'text';
+
 interface TranscriptReadState {
   offset: number;
   decoder: TextDecoder;
-  hasContent: boolean;
+  output: TranscriptOutput;
+}
+
+/** Where decoded transcript text goes. `end` flushes anything held back at a line boundary. */
+interface TranscriptOutput {
+  write(text: string): Promise<void>;
+  end(): Promise<void>;
+}
+
+/** Longest line a tool call renders to; a Codex tool name can be a whole shell script. */
+const TRANSCRIPT_TOOL_LINE_MAX = 160;
+
+function indentLines(text: string, prefix: string): string {
+  return text
+    .replace(/\n+$/, '')
+    .split('\n')
+    .map(line => (line.length > 0 ? `${prefix}${line}` : line))
+    .join('\n');
+}
+
+function oneLine(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
+}
+
+/** Compile-time check only: a new row or provider event type must be decided where it renders. */
+function typeDecided(_type: never): void {
+  // Nothing to do at runtime.
+}
+
+/** Output lines a tool call's outcome shows: the end of its output, where errors land. */
+const TRANSCRIPT_TOOL_OUTPUT_LINES = 3;
+
+/** What rendering a row needs from the rows before it. One per rendered transcript. */
+interface TranscriptRenderState {
+  /** Tool names by attempt and call id, so a call's outcome can name its tool. */
+  toolNames: Map<string, string>;
+  /** The node of the last rendered row, so a switch to another node's activity is labelled. */
+  lastStep?: string;
+}
+
+function toolCallKey(attemptId: string, toolCallId: string): string {
+  // A call id is unique within its attempt; parallel nodes can repeat one.
+  return JSON.stringify([attemptId, toolCallId]);
+}
+
+function toolOutputTail(output: string): string | undefined {
+  const lines = output.replace(/\n+$/, '').split('\n');
+  if (lines.length === 1 && lines[0] === '') return undefined;
+  const shown = lines.slice(-TRANSCRIPT_TOOL_OUTPUT_LINES);
+  const hidden = lines.length - shown.length;
+  return [
+    ...(hidden > 0 ? [`(${String(hidden)} earlier lines)`] : []),
+    ...shown.map(line =>
+      line.length > TRANSCRIPT_TOOL_LINE_MAX
+        ? `${line.slice(0, TRANSCRIPT_TOOL_LINE_MAX - 3)}...`
+        : line
+    ),
+  ]
+    .map(line => `    ${line}`)
+    .join('\n');
+}
+
+/**
+ * One provider event, indented under its node like the node's other activity. Events that
+ * only mark progress (a running subtask, a hook that started or succeeded, a connected MCP
+ * server) render nothing, so a transcript reads as what the agent said and did.
+ */
+function formatProviderEvent(
+  line: ProviderEventLine,
+  state: TranscriptRenderState
+): string | undefined {
+  const event = line.event;
+  switch (event.type) {
+    case 'agent_message_chunk':
+      return indentLines(event.text, '  ');
+    case 'agent_thought_chunk':
+      return `  ${oneLine(`thinking: ${event.text}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    case 'tool_call': {
+      const name = toolCallDisplayName(event);
+      state.toolNames.set(toolCallKey(line.attemptId, event.toolCallId), name);
+      // A title is already what the call does, such as the command a Codex shell runs.
+      const brief =
+        !event.title && event.rawInput ? formatToolInputBrief(name, event.rawInput) : null;
+      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    }
+    case 'tool_call_update': {
+      const key = toolCallKey(line.attemptId, event.toolCallId);
+      const name = state.toolNames.get(key) ?? event.toolCallId;
+      state.toolNames.delete(key);
+      const details = [
+        ...(event.exitCode !== undefined ? [`exit ${String(event.exitCode)}`] : []),
+        ...(event.outputTruncated ? ['output truncated'] : []),
+      ];
+      const outcome = `  ${oneLine(`${event.status}: ${name}`, TRANSCRIPT_TOOL_LINE_MAX / 2)}${details.length > 0 ? ` (${details.join(', ')})` : ''}`;
+      const tail = event.output ? toolOutputTail(event.output) : undefined;
+      return tail ? `${outcome}\n${tail}` : outcome;
+    }
+    case 'warning':
+      return `  ${oneLine(`warning: ${event.message} (${event.code})`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    case 'mcp_server_status':
+      if (event.status === 'connected' || event.status === 'pending') return undefined;
+      return `  ${oneLine(`mcp ${event.server}: ${event.status}${event.error ? ` (${event.error})` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    case 'compaction': {
+      const tokens =
+        event.tokensBefore !== undefined && event.tokensAfter !== undefined
+          ? `: ${String(event.tokensBefore)} -> ${String(event.tokensAfter)} tokens`
+          : '';
+      return `  compaction ${event.phase}${event.trigger ? ` (${event.trigger})` : ''}${tokens}`;
+    }
+    case 'subtask': {
+      if (event.status === 'running') return undefined;
+      const about =
+        event.status === 'started' ? event.description : (event.summary ?? event.description);
+      return `  ${oneLine(`subtask ${event.status}: ${about ?? event.taskId}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    }
+    case 'hook':
+      if (event.status === 'started' || event.status === 'succeeded') return undefined;
+      return `  hook ${event.status}: ${event.hookName} (${event.hookEvent}${event.exitCode !== undefined ? `, exit ${String(event.exitCode)}` : ''})`;
+    case 'state_update':
+      return event.state === 'requires_action' ? '  waiting on the user' : undefined;
+    default:
+      typeDecided(event);
+      return undefined;
+  }
+}
+
+/**
+ * One transcript row as the text `workflow logs --format text` prints, or `undefined` for a
+ * row that renders nothing. Node lines share their wording with the foreground renderer.
+ * A node's agent text and tool calls are indented beneath it. A `provider_event` row names
+ * its node, so when activity switches to another node (parallel nodes interleave) a
+ * `[node]` line labels it. The historical `assistant` and `tool` rows record no node and
+ * stay unlabelled rather than attributed to a guessed one.
+ */
+function formatTranscriptRow(row: WorkflowEvent, state: TranscriptRenderState): string | undefined {
+  const step = row.step ?? '?';
+  switch (row.type) {
+    case 'workflow_start':
+      return `[workflow] Started ${row.workflow_name ?? ''}`.trimEnd();
+    case 'workflow_resume':
+      return `[workflow] Resumed ${row.workflow_name ?? ''}`.trimEnd();
+    case 'workflow_complete':
+      return '[workflow] Completed';
+    case 'workflow_error':
+      return `[workflow] Failed: ${row.error ?? ''}`;
+    case 'node_start':
+      // `content` is the command a command node runs, or a `<inline>`-style kind marker.
+      return nodeLine.started(
+        step,
+        row.content && !row.content.startsWith('<') ? ` (${row.content})` : ''
+      );
+    case 'node_complete':
+      return nodeLine.completed(step, row.duration_ms);
+    case 'node_error':
+      return nodeLine.failed(step, row.error ?? '');
+    case 'node_skipped':
+      return nodeLine.skipped(
+        step,
+        row.cause ? formatSkipCause(row.cause) : (row.content ?? 'skipped')
+      );
+    case 'node_suspended':
+      return `[${step}] Waiting (${row.content ?? 'wait'})`;
+    case 'gate_decision': {
+      // The comment is the operator's verbatim text and may span lines.
+      const decision = `[${step}] Gate: ${row.decision ?? ''}`;
+      if (!row.content) return decision;
+      return row.content.includes('\n')
+        ? `${decision}\n${indentLines(row.content, '  ')}`
+        : `${decision} (${row.content})`;
+    }
+    case 'provider_event': {
+      // Unlike the rows above, a provider event is read field by field, so a line that
+      // does not match the schema this build knows renders nothing instead of throwing.
+      const parsed = providerEventLineSchema.safeParse(row);
+      if (!parsed.success) return undefined;
+      const text = formatProviderEvent(parsed.data, state);
+      if (text === undefined) return undefined;
+      return parsed.data.step === state.lastStep ? text : `[${parsed.data.step}]\n${text}`;
+    }
+    case 'assistant':
+      return row.content ? indentLines(row.content, '  ') : undefined;
+    case 'tool': {
+      const name = row.tool_name ?? '?';
+      const brief = row.tool_input ? formatToolInputBrief(name, row.tool_input) : null;
+      return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
+    }
+    case 'exec_output': {
+      const lines = [`[${step}] Output (exit ${String(row.exit_code ?? '?')})`];
+      if (row.stdout_tail) lines.push(indentLines(row.stdout_tail, '  '));
+      if (row.stderr_tail) lines.push('  stderr:', indentLines(row.stderr_tail, '    '));
+      return lines.join('\n');
+    }
+    // Liveness bookkeeping and a historical row: nothing a reader of the run needs.
+    case 'watchdog_reset':
+    case 'validation':
+      return undefined;
+    default:
+      // At runtime a type this build does not know (an older or newer transcript)
+      // renders nothing.
+      typeDecided(row.type);
+      return undefined;
+  }
+}
+
+/**
+ * A JSONL line rendered for a human. A line that is not a JSON object, or a row type this
+ * build does not know (older transcripts hold `step_start`, newer engines may add more),
+ * renders nothing: the text view is a reading aid, and the JSONL default keeps every row.
+ */
+function renderTranscriptLine(line: string, state: TranscriptRenderState): string | undefined {
+  if (line.trim().length === 0) return undefined;
+  let row: unknown;
+  try {
+    row = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (typeof row !== 'object' || row === null || Array.isArray(row)) return undefined;
+  const event = row as WorkflowEvent;
+  const text = formatTranscriptRow(event, state);
+  if (text !== undefined && event.step !== undefined) state.lastStep = event.step;
+  return text;
+}
+
+function transcriptOutput(format: TranscriptFormat): TranscriptOutput {
+  if (format === 'jsonl') {
+    return { write: writeStdout, end: (): Promise<void> => Promise.resolve() };
+  }
+  // A read can end mid-row while the run is still appending, so only whole lines render.
+  let partial = '';
+  const state: TranscriptRenderState = { toolNames: new Map() };
+  const render = async (lines: string[]): Promise<void> => {
+    const rendered = lines.flatMap(line => renderTranscriptLine(line, state) ?? []);
+    if (rendered.length > 0) await writeStdout(`${rendered.join('\n')}\n`);
+  };
+  return {
+    async write(text: string): Promise<void> {
+      const lines = (partial + text).split('\n');
+      partial = lines.pop() ?? '';
+      await render(lines);
+    },
+    async end(): Promise<void> {
+      const last = partial;
+      partial = '';
+      await render([last]);
+    },
+  };
 }
 
 async function drainTranscript(
@@ -4212,9 +4559,8 @@ async function drainTranscript(
       const { bytesRead } = await file.read(buffer, 0, bytesToRead, state.offset);
       if (bytesRead === 0) break;
       state.offset += bytesRead;
-      state.hasContent = true;
       const text = state.decoder.decode(buffer.subarray(0, bytesRead), { stream: true });
-      if (text.length > 0) await writeStdout(text);
+      if (text.length > 0) await state.output.write(text);
     }
     return true;
   } finally {
@@ -4224,7 +4570,8 @@ async function drainTranscript(
 
 async function finishTranscriptDecode(state: TranscriptReadState): Promise<void> {
   const text = state.decoder.decode();
-  if (text.length > 0) await writeStdout(text);
+  if (text.length > 0) await state.output.write(text);
+  await state.output.end();
 }
 
 function transcriptUnavailableMessage(
@@ -4240,11 +4587,12 @@ function transcriptUnavailableMessage(
     : `Transcript is not available yet for ${run.id}. Use --follow to wait for it: ${transcriptPath}`;
 }
 
-/** Print or follow one run's append-only JSONL transcript without mutating the run. */
+/** Print or follow one run's append-only JSONL transcript, verbatim or as text, without mutating the run. */
 export async function workflowLogsCommand(
   runId: string,
   follow: boolean,
-  cwd?: string
+  cwd?: string,
+  format: TranscriptFormat = 'jsonl'
 ): Promise<number> {
   let resolvedId = runId;
   try {
@@ -4264,12 +4612,12 @@ export async function workflowLogsCommand(
     const state: TranscriptReadState = {
       offset: 0,
       decoder: new TextDecoder(),
-      hasContent: false,
+      output: transcriptOutput(format),
     };
 
     if (!follow) {
       const exists = await drainTranscript(transcriptPath, state);
-      if (!exists || !state.hasContent) {
+      if (!exists || state.offset === 0) {
         await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, false)}\n`);
         return 1;
       }
@@ -4285,7 +4633,7 @@ export async function workflowLogsCommand(
 
       if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) {
         await drainTranscript(transcriptPath, state);
-        if (!state.hasContent) {
+        if (state.offset === 0) {
           await writeStderr(`${transcriptUnavailableMessage(run, transcriptPath, true)}\n`);
           return 1;
         }
@@ -4394,7 +4742,7 @@ export async function workflowGetCommand(
   let events: WorkflowEventRow[];
   let terminalRecord;
   try {
-    events = await workflowEventsDb.listWorkflowEvents(run.id);
+    events = await listRunEvents(run.id, rawEvents ?? false);
     terminalRecord = getTerminalRecord(run.status, events);
   } catch (error) {
     getLog().warn({ err: error as Error, runId: run.id }, 'cli.workflow_get_events_failed');
@@ -4877,9 +5225,7 @@ export async function workflowRunsCommand(
  * can actually type.
  */
 function cliRefusalText(error: unknown): string {
-  return error instanceof ChildRunRedirectError
-    ? error.messageFor(CLI_WORKFLOW_SURFACE)
-    : (error as Error).message;
+  return workflowOperationErrorMessage(error, CLI_WORKFLOW_SURFACE);
 }
 
 /**
@@ -5821,338 +6167,4 @@ export async function workflowEventEmitCommand(
   // createWorkflowEvent is non-throwing (fire-and-forget) — the event may not
   // have been persisted if the DB was unavailable. Check server logs if missing.
   console.log(`Event submitted (best-effort): ${eventType} for run ${resolvedId}`);
-}
-
-// ─── Marketplace commands ────────────────────────────────────────────────────
-
-interface MarketplaceEntryJson {
-  slug: string;
-  name: string;
-  author: string;
-  description: string;
-  sourceUrl: string;
-  sha: string;
-  tags: string[];
-  archonVersionCompat: string;
-  featured?: boolean;
-}
-
-const DEFAULT_MARKETPLACE_URL = 'https://archon.diy/workflows.json';
-
-async function fetchMarketplace(): Promise<MarketplaceEntryJson[]> {
-  const url = process.env.ARCHON_MARKETPLACE_URL ?? DEFAULT_MARKETPLACE_URL;
-  let res: Response;
-  try {
-    res = await fetch(url);
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Cannot reach marketplace at ${url}: ${err.message}`);
-  }
-  if (!res.ok) {
-    throw new Error(`Marketplace fetch failed: HTTP ${String(res.status)} from ${url}`);
-  }
-  const raw: unknown = await res.json();
-  if (!Array.isArray(raw)) {
-    throw new Error('Unexpected marketplace response format (expected array)');
-  }
-  for (const item of raw) {
-    if (
-      typeof item !== 'object' ||
-      item === null ||
-      typeof (item as Record<string, unknown>).slug !== 'string' ||
-      typeof (item as Record<string, unknown>).sourceUrl !== 'string' ||
-      !Array.isArray((item as Record<string, unknown>).tags)
-    ) {
-      throw new Error('Marketplace response contains invalid entries');
-    }
-  }
-  return raw as MarketplaceEntryJson[];
-}
-
-export async function workflowSearchCommand(query?: string, json?: boolean): Promise<void> {
-  const entries = await fetchMarketplace();
-
-  const results = query
-    ? entries.filter(e => {
-        const q = query.toLowerCase();
-        return (
-          e.name.toLowerCase().includes(q) ||
-          e.author.toLowerCase().includes(q) ||
-          e.description.toLowerCase().includes(q) ||
-          e.tags.some(t => t.toLowerCase().includes(q))
-        );
-      })
-    : entries;
-
-  if (json) {
-    await writeJsonLine(results);
-    return;
-  }
-
-  if (results.length === 0) {
-    console.log(query ? `No workflows matching "${query}".` : 'Marketplace is empty.');
-    console.log('Browse at https://archon.diy/workflows/');
-    return;
-  }
-
-  console.log(
-    `\nWorkflow Marketplace${query ? ` — results for "${query}"` : ''} (${String(results.length)})\n`
-  );
-  for (const e of results) {
-    const tags = e.tags.join(', ');
-    const desc = e.description.length > 80 ? e.description.slice(0, 77) + '...' : e.description;
-    console.log(`  ${e.slug}`);
-    console.log(`    Name:   ${e.name}`);
-    console.log(`    Author: @${e.author}`);
-    console.log(`    Tags:   ${tags}`);
-    console.log(`    ${desc}`);
-    console.log('');
-  }
-  console.log('Install: archon workflow install <slug>');
-}
-
-/** Detect whether a sourceUrl points to a directory (tree URL) or a single file (blob URL). */
-function isDirectoryUrl(sourceUrl: string): boolean {
-  return sourceUrl.includes('/tree/');
-}
-
-/**
- * Validate that a path component from an external source is safe to use in a filesystem path.
- * Rejects names containing path separators, traversal sequences, or non-portable characters.
- */
-function isSafePathComponent(name: string): boolean {
-  return name !== '.' && name !== '..' && /^[a-zA-Z0-9._-]+$/.test(name);
-}
-
-/** Parse owner/repo and path from a GitHub blob or tree URL. */
-function parseGitHubUrl(sourceUrl: string): { owner: string; repo: string; path: string } {
-  // https://github.com/owner/repo/blob/ref/path or https://github.com/owner/repo/tree/ref/path
-  const match = /^https:\/\/github\.com\/([^/]+)\/([^/]+)\/(blob|tree)\/[^/]+\/(.+)$/.exec(
-    sourceUrl
-  );
-  if (!match) {
-    throw new Error(`Cannot parse GitHub URL: ${sourceUrl}`);
-  }
-  return { owner: match[1], repo: match[2], path: match[4] };
-}
-
-interface GitHubContentItem {
-  name: string;
-  type: 'file' | 'dir';
-  download_url: string | null;
-  path: string;
-}
-
-/** Fetch directory listing from GitHub Contents API at a pinned SHA. */
-async function fetchGitHubDirectory(
-  owner: string,
-  repo: string,
-  path: string,
-  sha: string
-): Promise<GitHubContentItem[]> {
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${sha}`;
-  let res: Response;
-  try {
-    res = await fetch(url, { headers: { Accept: 'application/vnd.github.v3+json' } });
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Cannot reach GitHub API: ${err.message}`);
-  }
-  if (!res.ok) {
-    throw new Error(`GitHub API error: HTTP ${String(res.status)} from ${url}`);
-  }
-  const data: unknown = await res.json();
-  if (!Array.isArray(data)) {
-    throw new Error(`Expected directory listing from ${url}, got a single file`);
-  }
-  return data as GitHubContentItem[];
-}
-
-/** Download a file from raw.githubusercontent.com at a pinned SHA. */
-async function downloadRawFile(
-  owner: string,
-  repo: string,
-  filePath: string,
-  sha: string
-): Promise<string> {
-  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${sha}/${filePath}`;
-  let res: Response;
-  try {
-    res = await fetch(rawUrl);
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Cannot fetch ${rawUrl}: ${err.message}`);
-  }
-  if (!res.ok) {
-    throw new Error(`Source fetch failed: HTTP ${String(res.status)} from ${rawUrl}`);
-  }
-  return res.text();
-}
-
-export async function workflowInstallCommand(
-  slug: string,
-  cwd: string,
-  force?: boolean
-): Promise<void> {
-  const entries = await fetchMarketplace();
-  const entry = entries.find(e => e.slug === slug);
-
-  if (!entry) {
-    console.error(`Error: Workflow '${slug}' not found in marketplace.`);
-    console.error("Run 'archon workflow search' to browse available workflows.");
-    throw new Error(`Workflow '${slug}' not found`);
-  }
-
-  if (!entry.sourceUrl.startsWith('https://github.com/')) {
-    throw new Error(
-      `Untrusted source URL for '${slug}': ${entry.sourceUrl}\nOnly github.com sources are permitted.`
-    );
-  }
-
-  if (!/^[a-z0-9-]+$/.test(slug)) {
-    throw new Error(`Invalid slug '${slug}': must be lowercase alphanumeric with hyphens only.`);
-  }
-
-  const { findRepoRoot } = await import('@archon/git');
-  const repoRoot = await findRepoRoot(cwd);
-  if (!repoRoot) {
-    throw new Error('Not in a git repository. Run archon workflow install from within a git repo.');
-  }
-
-  const { existsSync, mkdirSync, writeFileSync } = await import('node:fs');
-  const archonDir = join(repoRoot, '.archon');
-
-  if (isDirectoryUrl(entry.sourceUrl)) {
-    await installDirectory(entry, slug, archonDir, force, existsSync, mkdirSync, writeFileSync);
-  } else {
-    await installSingleFile(entry, slug, archonDir, force, existsSync, mkdirSync, writeFileSync);
-  }
-
-  console.log(`Run with: archon workflow run ${slug} "<message>"`);
-}
-
-async function installSingleFile(
-  entry: MarketplaceEntryJson,
-  slug: string,
-  archonDir: string,
-  force: boolean | undefined,
-  existsSync: (p: string) => boolean,
-  mkdirSync: (p: string, opts: { recursive: boolean }) => void,
-  writeFileSync: (p: string, data: string) => void
-): Promise<void> {
-  const { owner, repo, path } = parseGitHubUrl(entry.sourceUrl);
-  const content = await downloadRawFile(owner, repo, path, entry.sha);
-
-  if (!content.trim()) {
-    throw new Error(`Downloaded YAML is empty for '${slug}'`);
-  }
-
-  const workflowsDir = join(archonDir, 'workflows');
-  const destPath = join(workflowsDir, `${slug}.yaml`);
-
-  if (existsSync(destPath) && !force) {
-    throw new Error(`Workflow '${slug}' already exists at ${destPath}.\nUse --force to overwrite.`);
-  }
-
-  mkdirSync(workflowsDir, { recursive: true });
-  writeFileSync(destPath, content);
-  console.log(`Installed '${entry.name}' to ${destPath}`);
-}
-
-async function installDirectory(
-  entry: MarketplaceEntryJson,
-  slug: string,
-  archonDir: string,
-  force: boolean | undefined,
-  existsSync: (p: string) => boolean,
-  mkdirSync: (p: string, opts: { recursive: boolean }) => void,
-  writeFileSync: (p: string, data: string) => void
-): Promise<void> {
-  const { owner, repo, path } = parseGitHubUrl(entry.sourceUrl);
-  const items = await fetchGitHubDirectory(owner, repo, path, entry.sha);
-
-  // Identify the main workflow YAML (named <slug>.yaml or the only .yaml in root)
-  const yamlFiles = items.filter(f => f.type === 'file' && f.name.endsWith('.yaml'));
-  const mainYaml =
-    yamlFiles.find(f => f.name === `${slug}.yaml`) ??
-    (yamlFiles.length === 1 ? yamlFiles[0] : undefined);
-
-  if (!mainYaml) {
-    throw new Error(
-      `Cannot identify main workflow YAML in directory. Expected '${slug}.yaml' or a single .yaml file.`
-    );
-  }
-
-  const workflowsDir = join(archonDir, 'workflows');
-  const destWorkflow = join(workflowsDir, `${slug}.yaml`);
-
-  if (existsSync(destWorkflow) && !force) {
-    throw new Error(
-      `Workflow '${slug}' already exists at ${destWorkflow}.\nUse --force to overwrite.`
-    );
-  }
-
-  // Install the main workflow YAML
-  const mainContent = await downloadRawFile(owner, repo, mainYaml.path, entry.sha);
-  mkdirSync(workflowsDir, { recursive: true });
-  writeFileSync(destWorkflow, mainContent);
-  console.log(`  Workflow: ${destWorkflow}`);
-
-  // Install supporting files by convention
-  const subdirs = items.filter(f => f.type === 'dir');
-  let installedCount = 1;
-
-  for (const subdir of subdirs) {
-    if (!isSafePathComponent(subdir.name)) {
-      console.log(`  Skipped (unsafe directory name): ${subdir.name}`);
-      continue;
-    }
-
-    const subItems = await fetchGitHubDirectory(owner, repo, subdir.path, entry.sha);
-    const files = subItems.filter(f => f.type === 'file');
-
-    let targetDir: string;
-    if (subdir.name === 'commands') {
-      targetDir = join(archonDir, 'commands');
-    } else if (subdir.name === 'scripts') {
-      targetDir = join(archonDir, 'scripts');
-    } else {
-      // Other subdirs (e.g. skills) go under .archon/<dirname>
-      targetDir = join(archonDir, subdir.name);
-    }
-
-    mkdirSync(targetDir, { recursive: true });
-
-    for (const file of files) {
-      if (!isSafePathComponent(file.name)) {
-        console.log(`  Skipped (unsafe filename): ${file.name}`);
-        continue;
-      }
-      const destFile = join(targetDir, file.name);
-      if (existsSync(destFile) && !force) {
-        console.log(`  Skipped (exists): ${destFile}`);
-        continue;
-      }
-      const content = await downloadRawFile(owner, repo, file.path, entry.sha);
-      writeFileSync(destFile, content);
-      console.log(`  Installed: ${destFile}`);
-      installedCount++;
-    }
-  }
-
-  // Also install any other root-level non-YAML files (e.g. README)
-  const otherRootFiles = items.filter(f => f.type === 'file' && !f.name.endsWith('.yaml'));
-  for (const file of otherRootFiles) {
-    if (!isSafePathComponent(file.name)) {
-      console.log(`  Skipped (unsafe filename): ${file.name}`);
-      continue;
-    }
-    const destFile = join(workflowsDir, file.name);
-    if (existsSync(destFile) && !force) continue;
-    const content = await downloadRawFile(owner, repo, file.path, entry.sha);
-    writeFileSync(destFile, content);
-    installedCount++;
-  }
-
-  console.log(`Installed '${entry.name}' (${String(installedCount)} files)`);
 }

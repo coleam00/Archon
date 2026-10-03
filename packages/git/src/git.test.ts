@@ -2,6 +2,8 @@ import { describe, test, expect, beforeEach, afterEach, mock, spyOn, type Mock }
 import { writeFile, mkdir as realMkdir, mkdtemp, readFile, rm } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir, homedir } from 'os';
+import { createHash } from 'crypto';
+import { deflateSync } from 'zlib';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createRecordingGitFixture } from './test-utils';
 // Loaded BEFORE mock.module replaces the module in the registry, so these are
@@ -76,6 +78,38 @@ const repo = git.toRepoPath;
 const branch = git.toBranchName;
 const worktree = git.toWorktreePath;
 const trackTempRoot = trackTempRoots();
+
+/**
+ * Writes a one-commit bare repository that Git's dumb HTTP transport can clone:
+ * loose objects, a branch ref, HEAD and `info/refs`. Built in-process because the
+ * clone is the subprocess under test; building the same fixture with `git` took
+ * seven more children, the bulk of the test's Windows time (#2924).
+ */
+async function writeDumbHttpRepo(barePath: string): Promise<void> {
+  const writeObject = async (type: string, body: Buffer): Promise<Buffer> => {
+    const raw = Buffer.concat([Buffer.from(`${type} ${String(body.length)}\0`), body]);
+    const id = createHash('sha1').update(raw).digest();
+    const hex = id.toString('hex');
+    await realMkdir(join(barePath, 'objects', hex.slice(0, 2)), { recursive: true });
+    await writeFile(join(barePath, 'objects', hex.slice(0, 2), hex.slice(2)), deflateSync(raw));
+    return id;
+  };
+  const blob = await writeObject('blob', Buffer.from('fixture\n'));
+  const tree = await writeObject('tree', Buffer.concat([Buffer.from('100644 README.md\0'), blob]));
+  const signature = 'Archon Test <archon@example.test> 0 +0000';
+  const commit = await writeObject(
+    'commit',
+    Buffer.from(
+      `tree ${tree.toString('hex')}\nauthor ${signature}\ncommitter ${signature}\n\nfixture\n`
+    )
+  );
+  const head = commit.toString('hex');
+  await realMkdir(join(barePath, 'refs', 'heads'), { recursive: true });
+  await realMkdir(join(barePath, 'info'), { recursive: true });
+  await writeFile(join(barePath, 'refs', 'heads', 'main'), `${head}\n`);
+  await writeFile(join(barePath, 'HEAD'), 'ref: refs/heads/main\n');
+  await writeFile(join(barePath, 'info', 'refs'), `${head}\trefs/heads/main\n`);
+}
 
 // ============================================================================
 // Tests
@@ -2810,7 +2844,6 @@ branch refs/heads/feature/auth
     test('authenticates a real Git clone against an explicit HTTP port', async () => {
       execSpy.mockRestore();
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-clone-http-auth-')));
-      const sourcePath = join(root, 'source');
       const servedPath = join(root, 'served');
       const barePath = join(servedPath, 'repo.git');
       const targetPath = repo(join(root, 'clone'));
@@ -2818,21 +2851,7 @@ branch refs/heads/feature/auth
       const expectedAuthorization = `Basic ${Buffer.from(`oauth2:${token}`).toString('base64')}`;
       const authorizations: Array<string | null> = [];
 
-      await git.execFileAsync('git', ['init', sourcePath]);
-      await git.execFileAsync('git', ['-C', sourcePath, 'config', 'user.name', 'Archon Test']);
-      await git.execFileAsync('git', [
-        '-C',
-        sourcePath,
-        'config',
-        'user.email',
-        'archon@example.test',
-      ]);
-      await writeFile(join(sourcePath, 'README.md'), 'fixture\n');
-      await git.execFileAsync('git', ['-C', sourcePath, 'add', 'README.md']);
-      await git.execFileAsync('git', ['-C', sourcePath, 'commit', '-m', 'fixture']);
-      await realMkdir(servedPath, { recursive: true });
-      await git.execFileAsync('git', ['clone', '--bare', sourcePath, barePath]);
-      await git.execFileAsync('git', ['--git-dir', barePath, 'update-server-info']);
+      await writeDumbHttpRepo(barePath);
 
       const server = Bun.serve({
         port: 0,
@@ -2866,19 +2885,13 @@ branch refs/heads/feature/auth
 
         expect(result).toEqual({ ok: true, value: undefined });
         expect(authorizations).toContain(expectedAuthorization);
-        const { stdout: originUrl } = await git.execFileAsync('git', [
-          '-C',
-          targetPath,
-          'remote',
-          'get-url',
-          'origin',
-        ]);
-        expect(originUrl.trim()).toBe(url);
-        expect(originUrl).not.toContain(token);
+        const originConfig = await readFile(join(targetPath, '.git', 'config'), 'utf8');
+        expect(originConfig).toContain(`url = ${url}\n`);
+        expect(originConfig).not.toContain(token);
       } finally {
         server.stop(true);
       }
-    }, 15_000);
+    });
 
     test('rejects a malformed credential-bearing HTTP URL before spawning Git', async () => {
       execSpy.mockResolvedValue({ stdout: '', stderr: '' });

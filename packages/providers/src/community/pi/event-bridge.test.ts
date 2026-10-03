@@ -6,7 +6,9 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 import type { StopReason, Usage } from '@earendil-works/pi-ai';
 
-import type { MessageChunk } from '../../types';
+import type { ProviderStopReason } from '@archon/provider-contract';
+
+import type { MessageChunk, ResultChunk } from '../../types';
 import {
   AsyncQueue,
   bridgeSession,
@@ -16,6 +18,8 @@ import {
   tryParseStructuredOutput,
   usageToTokens,
 } from './event-bridge';
+import { beginPiExtensionTurn } from './extension-error-broker';
+import { createArchonUIBridge, createArchonUIContext } from './ui-context-stub';
 
 // ─── AsyncQueue ────────────────────────────────────────────────────────────
 
@@ -163,11 +167,14 @@ describe('buildResultChunk', () => {
     // agent_end with no assistant message in the transcript is anomalous —
     // must surface as an error so the orchestrator doesn't treat a broken
     // session as a clean success.
-    const expected = {
+    const evidence = 'Pi ended the turn without an assistant message';
+    const expected: ResultChunk = {
       type: 'result',
       isError: true,
       errorSubtype: 'missing_assistant_message',
-    } as const;
+      errors: [evidence],
+      failure: { class: 'unknown', evidence },
+    };
     expect(buildResultChunk([])).toEqual(expected);
     expect(buildResultChunk([{ role: 'user', content: [] }])).toEqual(expected);
   });
@@ -187,7 +194,7 @@ describe('buildResultChunk', () => {
         total: 15,
         cost: 0.01,
       });
-      expect(chunk.stopReason).toBe('stop');
+      expect(chunk.stopReason).toBe('end_turn');
       expect(chunk.isError).toBeUndefined();
       expect(chunk.cost).toBe(0.01);
     }
@@ -225,23 +232,39 @@ describe('buildResultChunk', () => {
     }
   });
 
-  test('does not populate errors when errorMessage is absent or empty', () => {
-    // undefined errorMessage
-    const chunk1 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', content: [] },
-    ]);
-    if (chunk1.type === 'result') {
-      expect(chunk1.isError).toBe(true);
-      expect(chunk1.errors).toBeUndefined();
+  test('falls back to the stop reason as evidence when errorMessage is absent or empty', () => {
+    for (const errorMessage of [undefined, '']) {
+      const chunk = buildResultChunk([
+        { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
+      ]);
+      expect(chunk.isError).toBe(true);
+      expect(chunk.failure).toEqual({ class: 'unknown', evidence: 'error' });
+      expect(chunk.errors).toEqual(['error']);
     }
-    // empty string — also falsy, also excluded from errors[]
-    const chunk2 = buildResultChunk([
-      { role: 'assistant', usage, stopReason: 'error', errorMessage: '', content: [] },
+  });
+
+  // Pi has no typed error taxonomy: a failure is `unknown` whatever its words say,
+  // and the words are kept as evidence.
+  test.each([
+    ['429 Too Many Requests: rate limit exceeded'],
+    ['401 Unauthorized: invalid x-api-key'],
+    ["400 invalid_request_error: You're out of extra usage"],
+  ])('an errored turn "%s" reports an unknown failure with the vendor text', errorMessage => {
+    const chunk = buildResultChunk([
+      { role: 'assistant', usage, stopReason: 'error', errorMessage, content: [] },
     ]);
-    if (chunk2.type === 'result') {
-      expect(chunk2.isError).toBe(true);
-      expect(chunk2.errors).toBeUndefined();
-    }
+    expect(chunk.failure).toEqual({ class: 'unknown', evidence: errorMessage });
+  });
+
+  // Pi's stop reasons in ACP's names; one ACP has no name for is left off.
+  test.each<[StopReason, ProviderStopReason | undefined]>([
+    ['stop', 'end_turn'],
+    ['length', 'max_tokens'],
+    ['aborted', 'cancelled'],
+    ['toolUse', undefined],
+  ])('stop reason %s maps to %p', (stopReason, expected) => {
+    const chunk = buildResultChunk([{ role: 'assistant', usage, stopReason, content: [] }]);
+    expect(chunk.stopReason).toBe(expected);
   });
 
   test('flags isError for stopReason=aborted', () => {
@@ -259,7 +282,7 @@ describe('buildResultChunk', () => {
       { role: 'user', content: [] },
       { role: 'assistant', usage, stopReason: 'stop', content: [] },
     ]);
-    expect(chunk).toMatchObject({ type: 'result', stopReason: 'stop', tokens: { input: 20 } });
+    expect(chunk).toMatchObject({ type: 'result', stopReason: 'end_turn', tokens: { input: 20 } });
     expect(chunk).not.toHaveProperty('isError');
   });
 });
@@ -267,7 +290,7 @@ describe('buildResultChunk', () => {
 // ─── mapPiEvent ────────────────────────────────────────────────────────────
 
 describe('mapPiEvent', () => {
-  test('text_delta → assistant chunk', () => {
+  test('text_delta → agent_message_chunk', () => {
     const chunks = mapPiEvent({
       type: 'message_update',
       message: { role: 'assistant' } as never,
@@ -278,10 +301,10 @@ describe('mapPiEvent', () => {
         partial: { role: 'assistant' } as never,
       },
     });
-    expect(chunks).toEqual([{ type: 'assistant', content: 'hi' }]);
+    expect(chunks).toEqual([{ type: 'agent_message_chunk', text: 'hi' }]);
   });
 
-  test('thinking_delta → thinking chunk', () => {
+  test('thinking_delta → agent_thought_chunk', () => {
     const chunks = mapPiEvent({
       type: 'message_update',
       message: { role: 'assistant' } as never,
@@ -292,7 +315,7 @@ describe('mapPiEvent', () => {
         partial: { role: 'assistant' } as never,
       },
     });
-    expect(chunks).toEqual([{ type: 'thinking', content: 'hmm' }]);
+    expect(chunks).toEqual([{ type: 'agent_thought_chunk', text: 'hmm' }]);
   });
 
   test('text_start/end and boundaries are skipped', () => {
@@ -308,7 +331,7 @@ describe('mapPiEvent', () => {
     expect(chunks).toEqual([]);
   });
 
-  test('tool_execution_start → tool chunk with toolCallId', () => {
+  test('tool_execution_start → tool_call with its args as rawInput', () => {
     const chunks = mapPiEvent({
       type: 'tool_execution_start',
       toolCallId: 'call-123',
@@ -316,26 +339,21 @@ describe('mapPiEvent', () => {
       args: { path: '/foo' },
     });
     expect(chunks).toEqual([
-      {
-        type: 'tool',
-        toolName: 'read',
-        toolInput: { path: '/foo' },
-        toolCallId: 'call-123',
-      },
+      { type: 'tool_call', toolCallId: 'call-123', name: 'read', rawInput: { path: '/foo' } },
     ]);
   });
 
-  test('tool_execution_start coerces non-object args to empty record', () => {
+  test('tool_execution_start omits rawInput when args are not an object', () => {
     const chunks = mapPiEvent({
       type: 'tool_execution_start',
       toolCallId: 'call-1',
       toolName: 'bash',
       args: 'just-a-string',
     });
-    expect(chunks[0]).toMatchObject({ type: 'tool', toolInput: {} });
+    expect(chunks).toEqual([{ type: 'tool_call', toolCallId: 'call-1', name: 'bash' }]);
   });
 
-  test('tool_execution_end → tool_result chunk with matching id', () => {
+  test('tool_execution_end → completed tool_call_update with matching id', () => {
     const chunks = mapPiEvent({
       type: 'tool_execution_end',
       toolCallId: 'call-123',
@@ -345,16 +363,15 @@ describe('mapPiEvent', () => {
     });
     expect(chunks).toEqual([
       {
-        type: 'tool_result',
-        toolName: 'read',
-        toolOutput: 'file contents',
+        type: 'tool_call_update',
         toolCallId: 'call-123',
-        toolOutcome: 'success',
+        status: 'completed',
+        output: 'file contents',
       },
     ]);
   });
 
-  test('tool_execution_end with isError emits system warning first', () => {
+  test('tool_execution_end with isError → failed tool_call_update', () => {
     const chunks = mapPiEvent({
       type: 'tool_execution_end',
       toolCallId: 'call-99',
@@ -362,12 +379,12 @@ describe('mapPiEvent', () => {
       result: 'exit 1',
       isError: true,
     });
-    expect(chunks).toHaveLength(2);
-    expect(chunks[0].type).toBe('system');
-    expect(chunks[1]).toMatchObject({ type: 'tool_result', toolOutcome: 'error' });
+    expect(chunks).toEqual([
+      { type: 'tool_call_update', toolCallId: 'call-99', status: 'failed', output: 'exit 1' },
+    ]);
   });
 
-  test('auto_retry_start → system chunk', () => {
+  test('auto_retry_start → pi.auto_retry warning', () => {
     const chunks = mapPiEvent({
       type: 'auto_retry_start',
       attempt: 1,
@@ -375,12 +392,9 @@ describe('mapPiEvent', () => {
       delayMs: 1000,
       errorMessage: 'rate limit',
     });
-    expect(chunks).toHaveLength(1);
-    expect(chunks[0].type).toBe('system');
-    if (chunks[0].type === 'system') {
-      expect(chunks[0].content).toContain('retry 1/3');
-      expect(chunks[0].content).toContain('rate limit');
-    }
+    expect(chunks).toEqual([
+      { type: 'warning', code: 'pi.auto_retry', message: 'retry 1/3: rate limit' },
+    ]);
   });
 
   test('skipped event types yield no chunks', () => {
@@ -400,10 +414,38 @@ describe('mapPiEvent', () => {
         followUp: [] as readonly string[],
       })
     ).toEqual([]);
+  });
+
+  test.each([
+    ['manual', 'manual'],
+    ['threshold', 'auto'],
+    ['overflow', 'auto'],
+  ] as const)('compaction_start (%s) → compaction started, trigger %s', (reason, trigger) => {
+    expect(mapPiEvent({ type: 'compaction_start', reason })).toEqual([
+      { type: 'compaction', phase: 'started', trigger },
+    ]);
+  });
+
+  test('compaction_end with a result → compaction completed with tokensBefore', () => {
     expect(
       mapPiEvent({
-        type: 'compaction_start',
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { summary: 's', firstKeptEntryId: 'e1', tokensBefore: 120_000, details: {} },
+        aborted: false,
+        willRetry: false,
+      })
+    ).toEqual([{ type: 'compaction', phase: 'completed', trigger: 'auto', tokensBefore: 120_000 }]);
+  });
+
+  test('an aborted compaction_end (no result) yields nothing', () => {
+    expect(
+      mapPiEvent({
+        type: 'compaction_end',
         reason: 'manual',
+        result: undefined,
+        aborted: true,
+        willRetry: false,
       })
     ).toEqual([]);
   });
@@ -531,6 +573,49 @@ describe('tryParseStructuredOutput', () => {
 // ─── bridgeSession cleanup ─────────────────────────────────────────────────
 
 describe('bridgeSession cleanup', () => {
+  test('throws an externally reported extension error unchanged', async () => {
+    const turn = await beginPiExtensionTurn(['/extensions/fake-extension.ts']);
+    let abortCount = 0;
+    let disposeCount = 0;
+    const session = {
+      sessionId: 'test-session-id',
+      prompt: () => new Promise<void>(() => {}),
+      dispose: () => {
+        disposeCount++;
+      },
+      subscribe: () => () => {},
+      abort: async () => {
+        abortCount++;
+      },
+    } as unknown as AgentSession;
+    const failure = new Error('extension timer failed');
+    failure.stack =
+      'Error: extension timer failed\n    at callback (/extensions/fake-extension.ts:4:2)';
+
+    queueMicrotask(() => turn.report(failure, '/extensions/fake-extension.ts'));
+    let caught: Error | undefined;
+    try {
+      for await (const _chunk of bridgeSession(
+        session,
+        'prompt',
+        undefined,
+        undefined,
+        undefined,
+        turn
+      )) {
+        // The external failure arrives before the session emits a chunk.
+      }
+    } catch (error) {
+      caught = error as Error;
+    } finally {
+      turn.close();
+    }
+
+    expect(caught).toBe(failure);
+    expect(abortCount).toBe(1);
+    expect(disposeCount).toBe(1);
+  });
+
   // Regression for #1561: when the consumer throws mid-iteration, bridgeSession's
   // finally block calls session.dispose() and used to await the prompt promise
   // for a "settle so callers see no dangling work" guarantee. That guarantee
@@ -599,7 +684,7 @@ describe('bridgeSession cleanup', () => {
     // 200ms is generous for scheduling overhead while still catching any
     // future regression that re-introduces an await on promptPromise.
     expect(elapsed).toBeLessThan(200);
-  }, 5_000);
+  });
 
   test('a late prompt() rejection does not become an unhandled rejection', async () => {
     // The .then() handlers in bridgeSession should preclude promptPromise
@@ -652,7 +737,7 @@ describe('bridgeSession cleanup', () => {
     rejectPrompt(new Error('late pi error'));
     // Yield to let the microtask queue drain so the .catch() runs.
     await new Promise(resolve => setTimeout(resolve, 10));
-  }, 5_000);
+  });
 });
 
 // ─── streaming tail completion ────────────────────────────────────────────────────────────────────
@@ -713,14 +798,14 @@ describe('streaming tail completion', () => {
     const chunks: MessageChunk[] = [];
     for await (const chunk of bridgeSession(mockSession, 'prompt')) chunks.push(chunk);
 
-    expect(chunks.filter(c => c.type === 'assistant').map(c => c.content)).toEqual([
+    expect(chunks.filter(c => c.type === 'agent_message_chunk').map(c => c.text)).toEqual([
       'first run lost its tail',
       'second run is clean',
     ]);
     expect(chunks.filter(c => c.type === 'result')).toHaveLength(1);
   });
 
-  test('emits corrective assistant chunk when streaming truncated', async () => {
+  test('emits corrective text chunk when streaming truncated', async () => {
     const streamed = 'The repo is cloned. Let me register it.\n\n/register-project';
     const full =
       'The repo is cloned. Let me register it.\n\n/register-project SaberEngine "/path/to/repo"';
@@ -749,8 +834,8 @@ describe('streaming tail completion', () => {
 
     // The recovered tail joins the streamed prefix in one block: the executor
     // joins separate assistant chunks with a blank line.
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
-    expect(assistantChunks.map(c => c.content)).toEqual([streamed + tail]);
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
+    expect(assistantChunks.map(c => c.text)).toEqual([streamed + tail]);
     expect(chunks[chunks.length - 1].type).toBe('result');
   });
 
@@ -778,9 +863,9 @@ describe('streaming tail completion', () => {
       chunks.push(chunk);
     }
 
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
     expect(assistantChunks).toHaveLength(1);
-    expect(assistantChunks[0].content).toBe(full);
+    expect(assistantChunks[0].text).toBe(full);
   });
 
   test('does not emit corrective chunk when assembled text does not start with streamed (mismatch)', async () => {
@@ -805,9 +890,9 @@ describe('streaming tail completion', () => {
       chunks.push(chunk);
     }
 
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
     expect(assistantChunks).toHaveLength(1);
-    expect(assistantChunks[0].content).toBe('different content');
+    expect(assistantChunks[0].text).toBe('different content');
   });
 
   test('resets per-turn text on turn_start so only final turn is checked', async () => {
@@ -834,10 +919,10 @@ describe('streaming tail completion', () => {
       chunks.push(chunk);
     }
 
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
     expect(assistantChunks).toHaveLength(2);
-    expect(assistantChunks[0].content).toBe('turn one text');
-    expect(assistantChunks[1].content).toBe('turn two');
+    expect(assistantChunks[0].text).toBe('turn one text');
+    expect(assistantChunks[1].text).toBe('turn two');
   });
 
   test('corrective chunk is added to assistantBuffer when wantsStructured', async () => {
@@ -945,7 +1030,7 @@ describe('assistant chunk coalescing', () => {
     return chunks;
   }
 
-  test('coalesces char-level deltas into a single assistant chunk', async () => {
+  test('coalesces char-level deltas into a single agent_message_chunk', async () => {
     // Regression for #1814: Pi streams token/char deltas. Before the fix each
     // became its own chunk and the DAG executor joined them with "\n\n",
     // yielding "Се\n\nгод\n\nня …". They must arrive as one block-level chunk.
@@ -959,9 +1044,9 @@ describe('assistant chunk coalescing', () => {
       ])
     );
 
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
     expect(assistantChunks).toHaveLength(1);
-    expect(assistantChunks[0].content).toBe(full);
+    expect(assistantChunks[0].text).toBe(full);
     expect(chunks[chunks.length - 1].type).toBe('result');
   });
 
@@ -980,10 +1065,16 @@ describe('assistant chunk coalescing', () => {
     );
 
     const types = chunks.map(c => c.type);
-    expect(types).toEqual(['assistant', 'tool', 'tool_result', 'assistant', 'result']);
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
-    expect(assistantChunks[0].content).toBe('Let me read the file.');
-    expect(assistantChunks[1].content).toBe('Done.');
+    expect(types).toEqual([
+      'agent_message_chunk',
+      'tool_call',
+      'tool_call_update',
+      'agent_message_chunk',
+      'result',
+    ]);
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
+    expect(assistantChunks[0].text).toBe('Let me read the file.');
+    expect(assistantChunks[1].text).toBe('Done.');
   });
 
   test('flushes each completed text block at text_end', async () => {
@@ -999,10 +1090,10 @@ describe('assistant chunk coalescing', () => {
       ])
     );
 
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
     expect(assistantChunks).toHaveLength(2);
-    expect(assistantChunks[0].content).toBe('block one ');
-    expect(assistantChunks[1].content).toBe('block two');
+    expect(assistantChunks[0].text).toBe('block one ');
+    expect(assistantChunks[1].text).toBe('block two');
   });
 
   test('preserves partial buffered output when the stream errors', async () => {
@@ -1020,9 +1111,76 @@ describe('assistant chunk coalescing', () => {
     }
 
     expect(thrown?.message).toBe('stream exploded');
-    const assistantChunks = chunks.filter(c => c.type === 'assistant');
+    const assistantChunks = chunks.filter(c => c.type === 'agent_message_chunk');
     expect(assistantChunks).toHaveLength(1);
-    expect(assistantChunks[0].content).toBe('partial answer before crash');
+    expect(assistantChunks[0].text).toBe('partial answer before crash');
+  });
+
+  function thinkingDelta(delta: string): AgentSessionEvent {
+    return {
+      type: 'message_update',
+      message: { role: 'assistant' },
+      assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta, partial: {} },
+    } as unknown as AgentSessionEvent;
+  }
+
+  test('coalesces thinking deltas into one agent_thought_chunk, apart from the text block', async () => {
+    const chunks = await collect(
+      makeSession([
+        { type: 'turn_start' } as AgentSessionEvent,
+        thinkingDelta('Let me '),
+        thinkingDelta('think.'),
+        textDelta('The '),
+        textDelta('answer.'),
+        agentEnd('The answer.'),
+      ])
+    );
+
+    expect(chunks.filter(c => c.type !== 'result')).toEqual([
+      { type: 'agent_thought_chunk', text: 'Let me think.' },
+      { type: 'agent_message_chunk', text: 'The answer.' },
+    ]);
+  });
+
+  test('an extension notify() reaches the consumer, after the buffered text, while the prompt still blocks', async () => {
+    // Extensions such as plannotator notify the operator of a URL and then block the
+    // turn until the operator acts, so the warning cannot wait for the prompt to end.
+    const uiBridge = createArchonUIBridge();
+    const ui = createArchonUIContext(uiBridge);
+    let unblock: () => void = () => {};
+    const blocked = new Promise<void>(resolve => {
+      unblock = resolve;
+    });
+    let listener: ((event: AgentSessionEvent) => void) | undefined;
+    const session = {
+      sessionId: 'session-notify',
+      subscribe: (fn: (event: AgentSessionEvent) => void) => {
+        listener = fn;
+        return () => {};
+      },
+      prompt: async () => {
+        listener?.({ type: 'turn_start' } as AgentSessionEvent);
+        listener?.(textDelta('Opening the review.'));
+        ui.notify('Open http://host:8080/', 'info');
+        await blocked;
+        listener?.(agentEnd('Opening the review.'));
+      },
+      abort: async () => {},
+      dispose: () => {},
+    } as unknown as AgentSession;
+
+    const chunks: MessageChunk[] = [];
+    for await (const chunk of bridgeSession(session, 'prompt', undefined, undefined, uiBridge)) {
+      chunks.push(chunk);
+      if (chunk.type === 'warning') unblock();
+    }
+
+    expect(chunks.map(c => c.type)).toEqual(['agent_message_chunk', 'warning', 'result']);
+    expect(chunks[1]).toEqual({
+      type: 'warning',
+      code: 'pi.extension_notify',
+      message: 'pi extension info: Open http://host:8080/',
+    });
   });
 });
 
@@ -1074,8 +1232,8 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
   }
 
   /**
-   * The executor treats the first result chunk as terminal and stops reading, so a
-   * prompt must yield exactly one, carrying the whole prompt's usage.
+   * A prompt yields exactly one result chunk, the turn's one report of its outcome, so it
+   * carries the whole prompt's usage.
    */
   async function lastResult(
     events: AgentSessionEvent[]
@@ -1122,7 +1280,7 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     });
     expect(result.cost).toBeCloseTo(0.034, 10);
     // Outcome fields still describe the final call.
-    expect(result.stopReason).toBe('stop');
+    expect(result.stopReason).toBe('end_turn');
     expect(result.resolvedModel).toEqual({ id: 'deepseek-v4' });
     expect(result.isError).toBeUndefined();
   });
@@ -1145,7 +1303,7 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     expect(result.tokens?.input).toBe(550);
     expect(result.tokens?.output).toBe(4040);
     expect(result.cost).toBeCloseTo(0.55, 10);
-    expect(result.stopReason).toBe('stop');
+    expect(result.stopReason).toBe('end_turn');
   });
 
   test('a retryable error that Pi retries yields one successful result, counting the failed call', async () => {
@@ -1170,7 +1328,7 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     ]);
 
     expect(result.isError).toBeUndefined();
-    expect(result.stopReason).toBe('stop');
+    expect(result.stopReason).toBe('end_turn');
     expect(result.tokens?.input).toBe(280);
     expect(result.tokens?.output).toBe(25);
   });
@@ -1189,7 +1347,7 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
 
     expect(result).not.toHaveProperty('tokens');
     expect(result).not.toHaveProperty('cost');
-    expect(result.stopReason).toBe('stop');
+    expect(result.stopReason).toBe('end_turn');
   });
 
   test('a failed call with no usage adds nothing and does not erase the rest', async () => {

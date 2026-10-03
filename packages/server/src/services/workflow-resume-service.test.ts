@@ -4,11 +4,17 @@ import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import type { resumeWorkflow } from '@archon/core/operations';
+import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 
 const mockListDueWorkflowContinuations = mock(async () => [] as WorkflowRun[]);
 const mockDeferWorkflowContinuation = mock(async () => undefined);
+type ResumeConversation = Pick<
+  NonNullable<Awaited<ReturnType<typeof getConversationById>>>,
+  'platform_type' | 'platform_conversation_id'
+>;
+const mockGetConversationById = mock(async (_id: string) => null as ResumeConversation | null);
 const mockResumeWorkflow = mock<typeof resumeWorkflow>(async (_runId: string) => {
   throw new Error('unused');
 });
@@ -69,6 +75,9 @@ mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
 }));
 mock.module('@archon/core/db/codebases', () => ({ getCodebase: mock(async () => null) }));
+mock.module('@archon/core/db/conversations', () => ({
+  getConversationById: mockGetConversationById,
+}));
 mock.module('@archon/core/db/workflows', () => ({
   listDueWorkflowContinuations: mockListDueWorkflowContinuations,
   deferWorkflowContinuation: mockDeferWorkflowContinuation,
@@ -97,6 +106,7 @@ import {
   scanDueWorkflowContinuations,
   workflowResumeConversationId,
   workflowResumeTargetForConversation,
+  workflowResumeTargetForRun,
 } from './workflow-resume-service';
 
 function run(
@@ -131,6 +141,8 @@ describe('workflow continuation scanner', () => {
     mockListDueWorkflowContinuations.mockReset();
     mockDeferWorkflowContinuation.mockReset();
     mockDeferWorkflowContinuation.mockResolvedValue(undefined);
+    mockGetConversationById.mockReset();
+    mockGetConversationById.mockResolvedValue(null);
     mockResumeWorkflow.mockReset();
     mockResumeWorkflow.mockImplementation(async () => {
       throw new Error('unused');
@@ -278,6 +290,31 @@ describe('workflow continuation scanner', () => {
     ]);
   });
 
+  test('resumes due event waits through the shared resume CAS', async () => {
+    mockListDueWorkflowContinuations.mockResolvedValue([
+      run('event-1', 'paused', {
+        wait: {
+          owner: 'node',
+          nodeId: 'await-review',
+          kind: 'event',
+          waitingSince: '2026-08-24T10:00:00.000Z',
+          resumeAt: '2026-08-24T11:00:00.000Z',
+          event: 'review.completed',
+        },
+      }),
+    ]);
+    const resume = mock(async (_run: WorkflowRun, _cursor: WorkflowResumeCursor) => true);
+
+    await expect(
+      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:01.000Z'), resume)
+    ).resolves.toBe(1);
+    expect(resume).toHaveBeenCalledWith(expect.objectContaining({ id: 'event-1' }), {
+      kind: 'wait',
+      nodeId: 'await-review',
+      resumeAt: '2026-08-24T11:00:00.000Z',
+    });
+  });
+
   test('does not schedule an action-required wait even if a malformed due query returns it', async () => {
     mockListDueWorkflowContinuations.mockResolvedValue([
       run('attention-1', 'paused', {
@@ -299,7 +336,7 @@ describe('workflow continuation scanner', () => {
     expect(mockDeferWorkflowContinuation).not.toHaveBeenCalled();
   });
 
-  test('routes background web execution through its worker and results through the parent', () => {
+  test('routes background web execution through its worker and results through the parent', async () => {
     const background = {
       ...run('wait-web', 'paused', {}),
       conversation_id: 'worker-conv',
@@ -363,6 +400,52 @@ describe('workflow continuation scanner', () => {
         new Map()
       )
     ).toEqual({ kind: 'headless' });
+
+    mockGetConversationById.mockImplementation(async id => {
+      if (id === 'worker-conv') {
+        return { platform_type: 'web', platform_conversation_id: 'web-worker-123' };
+      }
+      if (id === 'visible-conv') {
+        return { platform_type: 'web', platform_conversation_id: 'visible-web-conv' };
+      }
+      return null;
+    });
+    await expect(
+      workflowResumeTargetForRun(background, new Map([['web', webPlatform]]))
+    ).resolves.toEqual({
+      kind: 'platform',
+      destination: {
+        platform: webPlatform,
+        conversationId: 'web-worker-123',
+        resultConversationId: 'visible-web-conv',
+      },
+    });
+  });
+
+  test('resolves a persisted run to its owning platform destination', async () => {
+    const slackPlatform = {
+      sendMessage: mock(async () => undefined),
+      getStreamingMode: () => 'batch' as const,
+      getPlatformType: () => 'slack',
+    } satisfies IWorkflowPlatform;
+    mockGetConversationById.mockResolvedValue({
+      platform_type: 'slack',
+      platform_conversation_id: 'C1:111.0',
+    });
+
+    await expect(
+      workflowResumeTargetForRun(
+        run('slack-gate', 'paused', {}),
+        new Map([['slack', slackPlatform]])
+      )
+    ).resolves.toEqual({
+      kind: 'platform',
+      destination: {
+        platform: slackPlatform,
+        conversationId: 'C1:111.0',
+      },
+    });
+    expect(mockGetConversationById).toHaveBeenCalledWith('conv-1');
   });
 
   test('resumes a paused wait even when the run retains historical quota metadata', async () => {

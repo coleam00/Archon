@@ -110,6 +110,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     persistWorkflowEvent: noop,
     persistWorkflowEventIfRunning: async () => ({ persisted: true }),
     findResumableRun: async () => null,
+    listProviderEvents: async () => [],
     getDagResumeSnapshot: async () => emptySnapshot(),
     resumeWorkflowRun: async () => makeRun(),
     recoverCancelledFanOutRun: async () => makeRun(),
@@ -133,11 +134,10 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     releaseWritebackClaim: noop,
     cancelWorkflowRun: async () => ({ cancelled: false }),
     cancelFanOutRun: async () => ({ cancelled: false }),
-    getWorkflowNodeSession: async () => null,
+    listWorkflowNodeSessions: async () => [],
     listWorkflowRunNodeSessions: async () => [],
     upsertWorkflowRunNodeSession: noop,
     upsertWorkflowNodeSession: noop,
-    deleteWorkflowNodeSessions: async () => ({ deleted: 0 }),
     ...overrides,
   } as IWorkflowStore;
 }

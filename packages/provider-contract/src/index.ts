@@ -11,11 +11,45 @@ export {
   type ProviderFailureClass,
 } from './failure';
 export {
+  credentialSourceSchema,
+  credentialStatusSchema,
+  type CredentialSource,
+  type CredentialStatus,
+} from './credential-status';
+export {
   providerResultSchema,
+  providerStopReasonSchema,
   resolvedModelSchema,
+  SESSION_PREVIEW_LENGTH,
+  sessionPreview,
   tokenUsageSchema,
   type ProviderResult,
+  type ProviderStopReason,
   type ResolvedModel,
   type TokenUsage,
 } from './result';
+export {
+  agentMessageChunkSchema,
+  agentThoughtChunkSchema,
+  compactionSchema,
+  hookSchema,
+  mcpServerStatusSchema,
+  providerChunkSchema,
+  providerEventSchema,
+  providerWarningSchema,
+  stateUpdateSchema,
+  subtaskSchema,
+  subtaskTerminalStatusSchema,
+  TOOL_OUTPUT_MAX_CHARS,
+  toolCallSchema,
+  toolCallStatusSchema,
+  toolCallUpdateSchema,
+  toolCallDisplayName,
+  truncateToolOutput,
+  warningSchema,
+  type ProviderChunk,
+  type ProviderEvent,
+  type ProviderWarning,
+} from './events';
+export { providerSettledSchema, type ProviderSettled } from './settled';
 export { providerCapabilitiesSchema, type ProviderCapabilities } from './capabilities';

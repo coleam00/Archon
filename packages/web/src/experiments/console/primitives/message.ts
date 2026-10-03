@@ -10,7 +10,17 @@ export interface InlineToolCall {
   name: string;
   input: Record<string, unknown>;
   output?: string;
+  /** The provider cut `output` at the contract's cap. */
+  outputTruncated?: true;
   durationMs?: number;
+  /** How the call ended, when the provider reported it. Older messages have none. */
+  status?: 'completed' | 'failed' | 'cancelled';
+  /**
+   * The call's node finished and no outcome was recorded for it (its update row was
+   * lost), so the call is not shown as still running.
+   */
+  outcomeUnrecorded?: true;
+  exitCode?: number;
 }
 
 export interface InlineError {
@@ -74,6 +84,8 @@ interface ParsedMetadata {
     input?: Record<string, unknown>;
     output?: string;
     duration?: number;
+    status?: string;
+    exitCode?: number;
   }[];
   category?: string;
   workflowDispatch?: {
@@ -118,6 +130,11 @@ export function toMessage(raw: RawMessage): Message {
     input: tc.input ?? {},
     output: tc.output,
     durationMs: tc.duration,
+    status:
+      tc.status === 'completed' || tc.status === 'failed' || tc.status === 'cancelled'
+        ? tc.status
+        : undefined,
+    exitCode: typeof tc.exitCode === 'number' ? tc.exitCode : undefined,
   }));
   const error: InlineError | null =
     meta.error !== undefined

@@ -22,8 +22,10 @@ Each column is a registered provider id (the value you set as `provider:` in a
 workflow or `.archon/config.yaml`). A ✅ means Archon translates the corresponding
 capability for that provider; a ❌ means the capability is unsupported. Unsupported
 behavior is feature-specific: some optional fields are ignored with a warning, while
-strict contracts fail closed. In particular, `context.resume` rejects an explicitly
-unsupported provider at load time and an implicitly resolved one at runtime.
+strict contracts fail closed. In particular, a node naming `mcp:`, `skills:` or
+`plugins:` on a provider without that capability fails the run before any node
+starts, and `context.resume` rejects an explicitly unsupported provider at load
+time and an implicitly resolved one at runtime.
 
 Reporting flags describe SDK fields that Archon translates into execution results.
 Supported does not guarantee that every result reports a value or that usage includes
@@ -45,10 +47,11 @@ reporting declarations; absence means unknown, not unsupported.
 | Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` |
 | --- | --- | --- | --- | --- | --- |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Immutable session fork (`context.resume`) | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ❌ | ❌ | ✅ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
+| Plugins (`plugins:`) | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |

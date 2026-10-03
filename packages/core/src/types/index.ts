@@ -6,8 +6,9 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 
-// MessageChunk + TokenUsage are used by IPlatformAdapter below.
-import type { MessageChunk, TokenUsage } from '@archon/providers/types';
+// TokenUsage is used by IPlatformAdapter below.
+import type { TokenUsage } from '@archon/providers/types';
+import type { PlatformStructuredEvent } from '@archon/workflows/deps';
 
 // Re-export schema-derived types so existing imports from '@archon/core/types' keep working.
 export type {
@@ -154,11 +155,11 @@ export interface IPlatformAdapter {
   stop(): void;
 
   /**
-   * Optional: Send a structured event (MessageChunk) to the platform.
+   * Optional: Send a structured event (a tool call, a result, a status line or a dispatch) to the platform.
    * Only implemented by adapters that can display rich structured data (e.g., Web UI).
    * Other adapters (Telegram, Slack) continue using sendMessage() for formatted text.
    */
-  sendStructuredEvent?(conversationId: string, event: MessageChunk): Promise<void>;
+  sendStructuredEvent?(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
 
   /** Retract previously streamed text (used when workflow routing intercepts) */
   emitRetract?(conversationId: string): Promise<void>;
@@ -189,7 +190,7 @@ export interface IPlatformAdapter {
  * that are only meaningful in the web context.
  */
 export interface IWebPlatformAdapter extends IPlatformAdapter {
-  sendStructuredEvent(conversationId: string, event: MessageChunk): Promise<void>;
+  sendStructuredEvent(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
   setConversationDbId(platformConversationId: string, dbId: string): void;
   setupEventBridge(workerConversationId: string, parentConversationId: string): () => void;
   emitLockEvent(conversationId: string, locked: boolean, queuePosition?: number): Promise<void>;

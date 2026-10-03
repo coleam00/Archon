@@ -14,6 +14,7 @@ export const COPILOT_CAPABILITIES: ProviderCapabilities = {
   mcp: true,
   hooks: false,
   skills: true,
+  plugins: false,
   agents: true,
   toolRestrictions: true,
   structuredOutput: 'best-effort', // prompt-augment + repair + validate + reask×3 (no SDK grammar)

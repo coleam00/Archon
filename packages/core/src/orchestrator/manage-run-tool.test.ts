@@ -97,7 +97,7 @@ const mockCancel = mock((_id: string) =>
   Promise.resolve({
     kind: 'stopped' as const,
     pid: 4242,
-    run: { id: 'r1abcdef-1234', workflow_name: 'archon-assist' },
+    run: { id: 'r1abcdef-1234', workflow_name: 'archon-investigate' },
     cascadeFailures: 0,
     blockedParentRunId: null,
   })
@@ -133,7 +133,7 @@ const { buildManageRunTool } = await import('./manage-run-tool');
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
     id: 'r1abcdef-1234',
-    workflow_name: 'archon-assist',
+    workflow_name: 'archon-investigate',
     status: 'running',
     started_at: new Date('2026-06-01T00:00:00.000Z'),
     completed_at: null,
@@ -460,7 +460,7 @@ describe('manage_run — destructive confirmation gate', () => {
   test('abandon with confirm relays the owner facts', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun()]);
     mockAbandon.mockResolvedValue({
-      run: { id: 'r1abcdef-1234', workflow_name: 'archon-assist' },
+      run: { id: 'r1abcdef-1234', workflow_name: 'archon-investigate' },
       cascadeFailures: 0,
       blockedParentRunId: null,
       owner: noOwnerAnswered,
@@ -948,7 +948,7 @@ describe('manage_run — gate continuation', () => {
 describe('manage_run — resume (recoverable, no confirm)', () => {
   test('resume validates eligibility without confirm and does not restart the run', async () => {
     mockFindByPrefix.mockResolvedValue([makeRun({ status: 'failed' })]);
-    mockResume.mockResolvedValue({ id: 'r1abcdef-1234', workflow_name: 'archon-assist' });
+    mockResume.mockResolvedValue({ id: 'r1abcdef-1234', workflow_name: 'archon-investigate' });
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'resume', runId: 'r1abcdef' });
     expect(out).toContain('can resume');

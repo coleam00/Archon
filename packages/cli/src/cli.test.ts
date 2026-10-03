@@ -596,15 +596,27 @@ describe('workflow logs arguments', () => {
     expect(result.stdout).toBe('');
   });
 
-  it('rejects --json because stdout is already raw JSONL', () => {
+  it.each([
+    [
+      '--json, because stdout is already raw JSONL',
+      ['--json'],
+      'workflow logs already emits JSONL',
+    ],
+    [
+      '--json with --format text',
+      ['--json', '--format', 'text'],
+      'workflow logs already emits JSONL',
+    ],
+    ['an unknown --format', ['--format', 'yaml'], "--format must be 'jsonl' or 'text', got 'yaml'"],
+  ])('rejects %s', (_label, flags, message) => {
     const result = spawnSync(
       process.execPath,
-      [join(import.meta.dir, 'cli.ts'), 'workflow', 'logs', 'abc123', '--json'],
+      [join(import.meta.dir, 'cli.ts'), 'workflow', 'logs', 'abc123', ...flags],
       { encoding: 'utf8' }
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('workflow logs already emits JSONL');
+    expect(result.stderr).toContain(message);
     expect(result.stdout).toBe('');
   });
 
@@ -1233,7 +1245,7 @@ describe('workflow list arguments', () => {
     const { status, envelope } = spawnJsonError([
       'workflow',
       'list',
-      'archon-fix-github-issue-codex',
+      'archon-deliver',
       '--full',
       '--json',
       '--cwd',
@@ -1250,7 +1262,7 @@ describe('workflow list arguments', () => {
       errors: unknown[];
     };
     expect(output.workflows).toHaveLength(1);
-    expect(output.workflows[0].name).toBe('archon-fix-github-issue-codex');
+    expect(output.workflows[0].name).toBe('archon-deliver');
     expect(Array.from(output.workflows[0].description).length).toBeGreaterThan(160);
     expect(output.workflows[0].descriptionTruncated).toBe(false);
   });
@@ -1343,21 +1355,6 @@ describe('workflow list arguments', () => {
     } finally {
       await removeTempTree(scratchRepo);
     }
-  });
-});
-
-describe('workflow search --json error envelope', () => {
-  it('emits { ok: false } on stdout when the command throws under --json', () => {
-    // An unreachable marketplace URL makes fetchMarketplace throw inside the
-    // `workflow search` handler — the only deterministic error path. The
-    // envelope, not the message, is the contract.
-    const { status, envelope } = spawnJsonError(['workflow', 'search', 'anything', '--json'], {
-      ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
-    });
-
-    expect(status).toBe(1);
-    expect(envelope).not.toThrow();
-    expect(envelope()).toMatchObject({ ok: false });
   });
 });
 
