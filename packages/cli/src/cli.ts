@@ -56,7 +56,7 @@ if (inheritedInstallContext) {
 // `utils/safe-console.ts` for the underlying shim, and #2400 for the full
 // rationale.
 import { installPipeSafeConsole } from './utils/safe-console';
-import { withDrainedExit } from './utils/exit-with-drain';
+import { exitWithDrain, withDrainedExit } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import {
   rejectConfigOnContinue,
@@ -103,12 +103,45 @@ import { publishArchonCliCommand } from '@archon/paths/cli-command';
 publishArchonCliCommand();
 
 let providersRegistered = false;
+let providerProcessErrorHandlersInstalled = false;
 let databaseRouteLoaded = false;
+
+function installProviderProcessErrorHandlers(
+  claimPiExtensionProcessError: (reason: unknown) => boolean
+): void {
+  if (providerProcessErrorHandlersInstalled) return;
+  providerProcessErrorHandlersInstalled = true;
+
+  const exitForUnhandledError = (
+    reason: unknown,
+    event: 'unhandled_rejection' | 'uncaught_exception',
+    origin?: NodeJS.UncaughtExceptionOrigin
+  ): void => {
+    getLog().fatal({ reason, origin }, `${event}.fatal`);
+    void shutdownTelemetry()
+      .catch((error: unknown) => {
+        getLog().error({ err: error }, 'telemetry_shutdown_failed');
+      })
+      .then(() => exitWithDrain(1));
+  };
+
+  process.on('unhandledRejection', reason => {
+    if (!claimPiExtensionProcessError(reason)) {
+      exitForUnhandledError(reason, 'unhandled_rejection');
+    }
+  });
+  process.on('uncaughtException', (error, origin) => {
+    if (!claimPiExtensionProcessError(error)) {
+      exitForUnhandledError(error, 'uncaught_exception', origin);
+    }
+  });
+}
 
 async function registerProviders(): Promise<void> {
   if (providersRegistered) return;
-  const { registerBuiltinProviders, registerCommunityProviders } =
+  const { claimPiExtensionProcessError, registerBuiltinProviders, registerCommunityProviders } =
     await import('@archon/providers');
+  installProviderProcessErrorHandlers(claimPiExtensionProcessError);
   registerBuiltinProviders();
   registerCommunityProviders();
   providersRegistered = true;
