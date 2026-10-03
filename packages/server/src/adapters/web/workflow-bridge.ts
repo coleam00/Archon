@@ -249,10 +249,9 @@ export const DASHBOARD_SOURCE_EVENT_TYPES: readonly string[] = [
  * process (incl. out-of-process CLI runs) to `__dashboard__`.
  *
  * Only emits the event types the dashboard reacts to — `workflow_status` and
- * `dag_node` (the client `invalidate('runs')` + refetches on those). High-frequency
- * `provider_event` rows and internal markers (`node_session_resumed`, `node_always_run_reset`,
- * `workflow_artifact`, `ralph_*`) are skipped — the surrounding lifecycle events
- * already trigger the refetch. Keyed by `workflow_run_id`; since the client
+ * `dag_node` (the client `invalidate('runs')` + refetches on those). Every other
+ * event type, including high-frequency `provider_event` rows and internal markers, is
+ * skipped — the surrounding lifecycle events already trigger the refetch. Keyed by `workflow_run_id`; since the client
  * refetches rather than applying the payload, the exact field values are
  * best-effort (the REST refetch is the source of truth).
  */
