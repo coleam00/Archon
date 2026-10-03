@@ -134,11 +134,10 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     releaseWritebackClaim: noop,
     cancelWorkflowRun: async () => ({ cancelled: false }),
     cancelFanOutRun: async () => ({ cancelled: false }),
-    getWorkflowNodeSession: async () => null,
+    listWorkflowNodeSessions: async () => [],
     listWorkflowRunNodeSessions: async () => [],
     upsertWorkflowRunNodeSession: noop,
     upsertWorkflowNodeSession: noop,
-    deleteWorkflowNodeSessions: async () => ({ deleted: 0 }),
     ...overrides,
   } as IWorkflowStore;
 }

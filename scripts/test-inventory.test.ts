@@ -20,6 +20,7 @@
 import { describe, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
+import { testTimeout } from '@archon/paths/test-utils';
 import { ROOT_TEST_PLAN } from './repo-tests';
 
 interface InventoryMismatch {
@@ -412,33 +413,49 @@ describe('compiler test inventory', () => {
     }
   }
 
-  test("core's normal TypeScript project includes test files", () => {
-    return expectProgramToInclude('core', [
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-    ]);
-  }, 15_000);
+  test(
+    "core's normal TypeScript project includes test files",
+    () => {
+      return expectProgramToInclude('core', [
+        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+      ]);
+    },
+    testTimeout(15_000)
+  );
 
-  test("adapters' normal TypeScript project includes its own and imported core test files", () => {
-    return expectProgramToInclude('adapters', [
-      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-    ]);
-  }, 15_000);
+  test(
+    "adapters' normal TypeScript project includes its own and imported core test files",
+    () => {
+      return expectProgramToInclude('adapters', [
+        join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
+        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+      ]);
+    },
+    testTimeout(15_000)
+  );
 
-  test("server's normal TypeScript project includes its own, core, and adapter test files", () => {
-    return expectProgramToInclude('server', [
-      join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-    ]);
-  }, 15_000);
+  test(
+    "server's normal TypeScript project includes its own, core, and adapter test files",
+    () => {
+      return expectProgramToInclude('server', [
+        join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
+        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+        join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
+      ]);
+    },
+    testTimeout(15_000)
+  );
 
-  test("cli's normal TypeScript project includes its own, core, adapter, and server test files", () => {
-    return expectProgramToInclude('cli', [
-      join(REPO_ROOT, 'packages', 'cli', 'src', 'cli.test.ts'),
-      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-      join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
-    ]);
-  }, 15_000);
+  test(
+    "cli's normal TypeScript project includes its own, core, adapter, and server test files",
+    () => {
+      return expectProgramToInclude('cli', [
+        join(REPO_ROOT, 'packages', 'cli', 'src', 'cli.test.ts'),
+        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+        join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
+        join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
+      ]);
+    },
+    testTimeout(15_000)
+  );
 });

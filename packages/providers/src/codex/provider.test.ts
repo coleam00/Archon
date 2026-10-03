@@ -2224,5 +2224,5 @@ describe('sendQuery decomposition behaviors', () => {
     } finally {
       process.removeListener('uncaughtException', handler);
     }
-  }, 5_000);
+  });
 });

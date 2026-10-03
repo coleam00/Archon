@@ -17,7 +17,7 @@ import {
   type Mock,
 } from 'bun:test';
 import { mkdir, writeFile, rm, readFile } from 'fs/promises';
-import { removeTempTree } from '@archon/paths/test-utils';
+import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { existsSync, unlinkSync } from 'fs';
 import { isAbsolute, join } from 'path';
 import { tmpdir } from 'os';
@@ -125,6 +125,7 @@ import type {
   SkipCause,
   WorkflowRun,
   WorkflowRunNodeSession,
+  WorkflowNodeSession,
   WorkflowDefinition,
   ResolvedWorkflow,
   WorkflowRunStatus,
@@ -150,7 +151,7 @@ import {
 } from './compiled-command';
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore, PersistedNodeOutput } from './store';
+import type { IWorkflowStore, PersistedNodeOutput, WorkflowNodeSessionKey } from './store';
 import { waitCompletionEvents } from './store';
 import {
   buildInstanceSnapshots,
@@ -298,7 +299,7 @@ function createMockStore(): MockWorkflowStore {
     ),
     getCodebase: mock<IWorkflowStore['getCodebase']>(async _id => null),
     getCodebaseEnvVars: mock<IWorkflowStore['getCodebaseEnvVars']>(async _codebaseId => ({})),
-    getWorkflowNodeSession: mock<IWorkflowStore['getWorkflowNodeSession']>(async _key => null),
+    listWorkflowNodeSessions: mock<IWorkflowStore['listWorkflowNodeSessions']>(async _scope => []),
     listWorkflowRunNodeSessions: mock<IWorkflowStore['listWorkflowRunNodeSessions']>(
       async _workflowRunId => []
     ),
@@ -307,9 +308,6 @@ function createMockStore(): MockWorkflowStore {
     ),
     upsertWorkflowNodeSession: mock<IWorkflowStore['upsertWorkflowNodeSession']>(
       async _params => {}
-    ),
-    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(
-      async _filter => ({ deleted: 0 })
     ),
   };
 }
@@ -4013,7 +4011,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     expect(terminals).toHaveLength(2);
     expect(terminals[0].data?.invocation).toEqual(terminals[1].data?.invocation);
     expect(terminals[0].data?.attempt).not.toEqual(terminals[1].data?.attempt);
-  }, 5_000);
+  });
 
   it('retains the failed invocation when a durable resume starts another attempt', async () => {
     const store = createMockStore();
@@ -4101,99 +4099,107 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     // max_attempts: 2 = 2 retries → 3 total attempts (delay_ms: 1 keeps test fast)
     expect(callCount).toBe(3);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-  }, 5_000);
+  });
 
-  it('a rate-limited failure earns the widened rate-limit retry budget — #2706', async () => {
-    // Keep the test fast without weakening the policy: the rate-limit backoff is flat
-    // ~45s in production, so clamp the sleep, not the budget.
-    const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-    try {
-      let callCount = 0;
-      mockSendQueryDag.mockImplementation(async function* () {
-        callCount++;
-        throw new Error('429 too many requests: provider overloaded');
-      });
+  it(
+    'a rate-limited failure earns the widened rate-limit retry budget — #2706',
+    async () => {
+      // Keep the test fast without weakening the policy: the rate-limit backoff is flat
+      // ~45s in production, so clamp the sleep, not the budget.
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      try {
+        let callCount = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          callCount++;
+          throw new Error('429 too many requests: provider overloaded');
+        });
 
-      const mockDeps = createMockDeps();
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun('dag-retry-ratelimit-run');
+        const mockDeps = createMockDeps();
+        const platform = createMockPlatform();
+        const workflowRun = makeWorkflowRun('dag-retry-ratelimit-run');
 
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-dag-retry-ratelimit',
-          cwd: testDir,
-          workflow: {
-            name: 'dag-retry-ratelimit',
-            nodes: [
-              {
-                id: 'my-node',
-                kind: 'agent',
-                source: { kind: 'command', name: 'my-cmd' },
-                retry: { max_attempts: 1, delay_ms: 1 },
-              },
-            ],
-          },
-          workflowRun,
-        })
-      );
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform,
+            conversationId: 'conv-dag-retry-ratelimit',
+            cwd: testDir,
+            workflow: {
+              name: 'dag-retry-ratelimit',
+              nodes: [
+                {
+                  id: 'my-node',
+                  kind: 'agent',
+                  source: { kind: 'command', name: 'my-cmd' },
+                  retry: { max_attempts: 1, delay_ms: 1 },
+                },
+              ],
+            },
+            workflowRun,
+          })
+        );
 
-      // max_attempts would allow 2 attempts; a rate-limited failure widens the
-      // budget to RATE_LIMIT_MAX_RETRIES retries.
-      expect(callCount).toBe(1 + RATE_LIMIT_MAX_RETRIES);
-      expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-    } finally {
-      globalThis.setTimeout = realSetTimeout;
-    }
-  }, 10_000);
+        // max_attempts would allow 2 attempts; a rate-limited failure widens the
+        // budget to RATE_LIMIT_MAX_RETRIES retries.
+        expect(callCount).toBe(1 + RATE_LIMIT_MAX_RETRIES);
+        expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+    },
+    testTimeout(10_000)
+  );
 
-  it('a rate-limited node recovers when the provider sheds load mid-budget — #2706', async () => {
-    const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-    try {
-      let callCount = 0;
-      mockSendQueryDag.mockImplementation(async function* () {
-        callCount++;
-        if (callCount <= 3) {
-          throw new Error('rate limit exceeded, slow down');
-        }
-        yield { type: 'agent_message_chunk', text: 'Recovered after load shed' };
-        yield { type: 'result', sessionId: 'ratelimit-recover-sess' };
-      });
+  it(
+    'a rate-limited node recovers when the provider sheds load mid-budget — #2706',
+    async () => {
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      try {
+        let callCount = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          callCount++;
+          if (callCount <= 3) {
+            throw new Error('rate limit exceeded, slow down');
+          }
+          yield { type: 'agent_message_chunk', text: 'Recovered after load shed' };
+          yield { type: 'result', sessionId: 'ratelimit-recover-sess' };
+        });
 
-      const mockDeps = createMockDeps();
-      const platform = createMockPlatform();
-      const workflowRun = makeWorkflowRun('dag-ratelimit-recover-run');
+        const mockDeps = createMockDeps();
+        const platform = createMockPlatform();
+        const workflowRun = makeWorkflowRun('dag-ratelimit-recover-run');
 
-      await executeDagWorkflow(
-        dagOptions({
-          deps: mockDeps,
-          platform,
-          conversationId: 'conv-dag-ratelimit-recover',
-          cwd: testDir,
-          workflow: {
-            name: 'dag-ratelimit-recover',
-            nodes: [
-              {
-                id: 'my-node',
-                kind: 'agent',
-                source: { kind: 'command', name: 'my-cmd' },
-                retry: { max_attempts: 1, delay_ms: 1 },
-              },
-            ],
-          },
-          workflowRun,
-        })
-      );
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform,
+            conversationId: 'conv-dag-ratelimit-recover',
+            cwd: testDir,
+            workflow: {
+              name: 'dag-ratelimit-recover',
+              nodes: [
+                {
+                  id: 'my-node',
+                  kind: 'agent',
+                  source: { kind: 'command', name: 'my-cmd' },
+                  retry: { max_attempts: 1, delay_ms: 1 },
+                },
+              ],
+            },
+            workflowRun,
+          })
+        );
 
-      expect(callCount).toBe(4);
-      expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
-    } finally {
-      globalThis.setTimeout = realSetTimeout;
-    }
-  }, 10_000);
+        expect(callCount).toBe(4);
+        expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+    },
+    testTimeout(10_000)
+  );
 
   it('retries an AI node whose stream closed without yielding content — #2706', async () => {
     let callCount = 0;
@@ -4235,7 +4241,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
 
     expect(callCount).toBe(2);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
-  }, 5_000);
+  });
 
   it('node with FATAL error does not retry (call count = 1)', async () => {
     let callCount = 0;
@@ -4314,7 +4320,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
         typeof call[1] === 'string' && (call[1] as string).includes('transient error')
     );
     expect(retryMessages.length).toBeGreaterThan(0);
-  }, 5_000);
+  });
 
   // A provider that classified its own failure reports it as `failure` on the result. The
   // legacy `errors` text below reads as fatal to the prose classifier, which is exactly the
@@ -4391,23 +4397,19 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     expect(result.calls).toBe(2);
     expect(result.failedKinds).toEqual(['transient']);
     expect(result.runFailed).toBe(false);
-  }, 5_000);
+  });
 
   it.each([
     'upstream proxy returned 401 unauthorized while the backend restarted',
     'connection reset by peer (econnreset)',
     'the provider reported a problem',
-  ])(
-    'a typed class decides retry whatever the text says: %s — #3520',
-    async evidence => {
-      // Transient retries once and recovers; auth never retries; neither depends on the text.
-      expect((await attemptsForTypedFailure({ class: 'transient', evidence })).calls).toBe(2);
-      const auth = await attemptsForTypedFailure({ class: 'auth', evidence });
-      expect(auth.calls).toBe(1);
-      expect(auth.failedKinds).toEqual(['fatal']);
-    },
-    5_000
-  );
+  ])('a typed class decides retry whatever the text says: %s — #3520', async evidence => {
+    // Transient retries once and recovers; auth never retries; neither depends on the text.
+    expect((await attemptsForTypedFailure({ class: 'transient', evidence })).calls).toBe(2);
+    const auth = await attemptsForTypedFailure({ class: 'auth', evidence });
+    expect(auth.calls).toBe(1);
+    expect(auth.failedKinds).toEqual(['fatal']);
+  });
 
   it.each([undefined, 'transient', 'all'] as const)(
     'a misconfigured failure is never retried, on_error: %s — #3566',
@@ -4434,50 +4436,53 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       expect(unknown.failedErrors).not.toContainEqual(
         expect.stringContaining("the provider's configuration must be fixed")
       );
-    },
-    5_000
+    }
   );
 
-  it('a typed rate limit earns the widened budget without rate-limit wording — #3520', async () => {
-    const realSetTimeout = globalThis.setTimeout;
-    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-    try {
-      let calls = 0;
-      mockSendQueryDag.mockImplementation(async function* () {
-        calls++;
-        yield {
-          type: 'result',
-          isError: true,
-          errorSubtype: 'error_during_execution',
-          errors: ['request refused'],
-          failure: { class: 'rate_limited', evidence: 'request refused' },
-        };
-      });
-      const store = createMockStore();
-      await executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform: createMockPlatform(),
-          cwd: testDir,
-          workflow: {
-            name: 'dag-typed-rate-limit',
-            nodes: [
-              {
-                id: 'my-node',
-                kind: 'agent',
-                source: { kind: 'command', name: 'my-cmd' },
-                retry: { max_attempts: 1, delay_ms: 1 },
-              },
-            ],
-          },
-          workflowRun: makeWorkflowRun('dag-typed-rate-limit-run'),
-        })
-      );
-      expect(calls).toBe(1 + RATE_LIMIT_MAX_RETRIES);
-    } finally {
-      globalThis.setTimeout = realSetTimeout;
-    }
-  }, 10_000);
+  it(
+    'a typed rate limit earns the widened budget without rate-limit wording — #3520',
+    async () => {
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      try {
+        let calls = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          calls++;
+          yield {
+            type: 'result',
+            isError: true,
+            errorSubtype: 'error_during_execution',
+            errors: ['request refused'],
+            failure: { class: 'rate_limited', evidence: 'request refused' },
+          };
+        });
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: {
+              name: 'dag-typed-rate-limit',
+              nodes: [
+                {
+                  id: 'my-node',
+                  kind: 'agent',
+                  source: { kind: 'command', name: 'my-cmd' },
+                  retry: { max_attempts: 1, delay_ms: 1 },
+                },
+              ],
+            },
+            workflowRun: makeWorkflowRun('dag-typed-rate-limit-run'),
+          })
+        );
+        expect(calls).toBe(1 + RATE_LIMIT_MAX_RETRIES);
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+    },
+    testTimeout(10_000)
+  );
 });
 
 describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#2088)', () => {
@@ -4550,7 +4555,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     // One failing attempt then one succeeding attempt → exactly 2 runs.
     expect(content.length).toBe(2);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
-  }, 5_000);
+  });
 
   it('bash node with retry exhausts all attempts on persistent failure', async () => {
     // Forward-slashed for safe embedding in inline bash AND JS string literals
@@ -4571,7 +4576,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     // max_attempts: 2 = 2 retries → 3 total attempts. Without the fix this is 1.
     expect(content.length).toBe(3);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-  }, 5_000);
+  });
 
   it('bash node WITHOUT a retry block runs exactly once (single-attempt default preserved)', async () => {
     // Forward-slashed for safe embedding in inline bash AND JS string literals
@@ -4591,7 +4596,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     // Deterministic nodes never auto-retry — retry is opt-in via an explicit block.
     expect(content.length).toBe(1);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-  }, 5_000);
+  });
 
   it('bash node with a FATAL error is never retried even with on_error: all', async () => {
     // Forward-slashed for safe embedding in inline bash AND JS string literals
@@ -4612,28 +4617,32 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     // FATAL classification wins over on_error: all → exactly 1 attempt.
     expect(content.length).toBe(1);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-  }, 5_000);
+  });
 
-  it('script node with retry re-runs on persistent failure', async () => {
-    // Forward-slashed for safe embedding in inline bash AND JS string literals
-    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
-    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
-    const nodes: DagNode[] = [
-      {
-        id: 'flaky-script',
-        kind: 'exec',
-        script: `require('fs').appendFileSync('${attempts}', 'a'); process.exit(1)`,
-        runtime: 'bun',
-        retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
-      },
-    ];
-    const { mockDeps } = await runNodes(nodes);
+  it(
+    'script node with retry re-runs on persistent failure',
+    async () => {
+      // Forward-slashed for safe embedding in inline bash AND JS string literals
+      // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+      const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+      const nodes: DagNode[] = [
+        {
+          id: 'flaky-script',
+          kind: 'exec',
+          script: `require('fs').appendFileSync('${attempts}', 'a'); process.exit(1)`,
+          runtime: 'bun',
+          retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
+        },
+      ];
+      const { mockDeps } = await runNodes(nodes);
 
-    const content = await readFile(attempts, 'utf8');
-    // 1 initial + 2 retries = 3. Without the fix this is 1.
-    expect(content.length).toBe(3);
-    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-  }, 10_000);
+      const content = await readFile(attempts, 'utf8');
+      // 1 initial + 2 retries = 3. Without the fix this is 1.
+      expect(content.length).toBe(3);
+      expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+    },
+    testTimeout(10_000)
+  );
 
   it('bash retry sends a platform notification before each retry', async () => {
     // Forward-slashed for safe embedding in inline bash AND JS string literals
@@ -4657,7 +4666,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     );
     // 2 retries → 2 retry notifications.
     expect(retryMessages.length).toBe(2);
-  }, 5_000);
+  });
 });
 
 describe('executeDagWorkflow -- tool events reach a streaming platform', () => {
@@ -7594,112 +7603,129 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(new Set(envelopes.map(e => e.attemptId)).size).toBe(1);
     });
 
-    it('retries an iteration that dies on a 429 instead of failing the loop node — #2706', async () => {
-      const realSetTimeout = globalThis.setTimeout;
-      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-      try {
-        let callCount = 0;
-        mockSendQueryDag.mockImplementation(async function* () {
-          callCount++;
-          if (callCount === 1) {
-            throw new Error('429 too many requests: provider overloaded');
-          }
-          yield { type: 'agent_message_chunk', text: 'Did the task. <promise>COMPLETE</promise>' };
-          yield { type: 'result', sessionId: 'loop-retry-sess' };
-        });
-
-        const store = createMockStore();
-        const mockDeps = createMockDeps(store);
-        const platform = createMockPlatform();
-        const workflowRun = makeWorkflowRun('loop-iteration-retry-run');
-
-        await executeDagWorkflow(
-          dagOptions({
-            deps: mockDeps,
-            platform,
-            conversationId: 'conv-loop-retry',
-            cwd: testDir,
-            workflow: {
-              name: 'loop-iteration-retry',
-              nodes: [
-                {
-                  id: 'my-loop',
-                  kind: 'loop',
-                  loop: {
-                    fresh_context: false,
-                    prompt: 'Complete the task.',
-                    until: 'COMPLETE',
-                    max_iterations: 3,
-                  },
-                },
-              ],
-            },
-            workflowRun,
-          })
-        );
-
-        // The failed attempt is re-streamed within iteration 1 and the run completes.
-        expect(callCount).toBe(2);
-        expect(store.completeWorkflowRun).toHaveBeenCalled();
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
-      } finally {
-        globalThis.setTimeout = realSetTimeout;
-      }
-    }, 10_000);
-
-    it('retries an iteration whose typed transient failure reads as fatal — #3520', async () => {
-      const realSetTimeout = globalThis.setTimeout;
-      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-      try {
-        let callCount = 0;
-        mockSendQueryDag.mockImplementation(async function* () {
-          callCount++;
-          if (callCount === 1) {
+    it(
+      'retries an iteration that dies on a 429 instead of failing the loop node — #2706',
+      async () => {
+        const realSetTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+        try {
+          let callCount = 0;
+          mockSendQueryDag.mockImplementation(async function* () {
+            callCount++;
+            if (callCount === 1) {
+              throw new Error('429 too many requests: provider overloaded');
+            }
             yield {
-              type: 'result',
-              isError: true,
-              errorSubtype: 'error_during_execution',
-              errors: ['403 forbidden from the upstream gateway'],
-              failure: { class: 'transient', evidence: '403 forbidden from the upstream gateway' },
+              type: 'agent_message_chunk',
+              text: 'Did the task. <promise>COMPLETE</promise>',
             };
-            return;
-          }
-          yield { type: 'agent_message_chunk', text: 'Did the task. <promise>COMPLETE</promise>' };
-          yield { type: 'result', sessionId: 'loop-typed-retry-sess' };
-        });
+            yield { type: 'result', sessionId: 'loop-retry-sess' };
+          });
 
-        const store = createMockStore();
-        await executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(store),
-            platform: createMockPlatform(),
-            cwd: testDir,
-            workflow: {
-              name: 'loop-typed-retry',
-              nodes: [
-                {
-                  id: 'my-loop',
-                  kind: 'loop',
-                  loop: {
-                    fresh_context: false,
-                    prompt: 'Complete the task.',
-                    until: 'COMPLETE',
-                    max_iterations: 3,
+          const store = createMockStore();
+          const mockDeps = createMockDeps(store);
+          const platform = createMockPlatform();
+          const workflowRun = makeWorkflowRun('loop-iteration-retry-run');
+
+          await executeDagWorkflow(
+            dagOptions({
+              deps: mockDeps,
+              platform,
+              conversationId: 'conv-loop-retry',
+              cwd: testDir,
+              workflow: {
+                name: 'loop-iteration-retry',
+                nodes: [
+                  {
+                    id: 'my-loop',
+                    kind: 'loop',
+                    loop: {
+                      fresh_context: false,
+                      prompt: 'Complete the task.',
+                      until: 'COMPLETE',
+                      max_iterations: 3,
+                    },
                   },
-                },
-              ],
-            },
-            workflowRun: makeWorkflowRun('loop-typed-retry-run'),
-          })
-        );
+                ],
+              },
+              workflowRun,
+            })
+          );
 
-        expect(callCount).toBe(2);
-        expect(store.completeWorkflowRun).toHaveBeenCalled();
-        expect(store.failWorkflowRun).not.toHaveBeenCalled();
-      } finally {
-        globalThis.setTimeout = realSetTimeout;
-      }
-    }, 10_000);
+          // The failed attempt is re-streamed within iteration 1 and the run completes.
+          expect(callCount).toBe(2);
+          expect(store.completeWorkflowRun).toHaveBeenCalled();
+          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        } finally {
+          globalThis.setTimeout = realSetTimeout;
+        }
+      },
+      testTimeout(10_000)
+    );
+
+    it(
+      'retries an iteration whose typed transient failure reads as fatal — #3520',
+      async () => {
+        const realSetTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+        try {
+          let callCount = 0;
+          mockSendQueryDag.mockImplementation(async function* () {
+            callCount++;
+            if (callCount === 1) {
+              yield {
+                type: 'result',
+                isError: true,
+                errorSubtype: 'error_during_execution',
+                errors: ['403 forbidden from the upstream gateway'],
+                failure: {
+                  class: 'transient',
+                  evidence: '403 forbidden from the upstream gateway',
+                },
+              };
+              return;
+            }
+            yield {
+              type: 'agent_message_chunk',
+              text: 'Did the task. <promise>COMPLETE</promise>',
+            };
+            yield { type: 'result', sessionId: 'loop-typed-retry-sess' };
+          });
+
+          const store = createMockStore();
+          await executeDagWorkflow(
+            dagOptions({
+              deps: createMockDeps(store),
+              platform: createMockPlatform(),
+              cwd: testDir,
+              workflow: {
+                name: 'loop-typed-retry',
+                nodes: [
+                  {
+                    id: 'my-loop',
+                    kind: 'loop',
+                    loop: {
+                      fresh_context: false,
+                      prompt: 'Complete the task.',
+                      until: 'COMPLETE',
+                      max_iterations: 3,
+                    },
+                  },
+                ],
+              },
+              workflowRun: makeWorkflowRun('loop-typed-retry-run'),
+            })
+          );
+
+          expect(callCount).toBe(2);
+          expect(store.completeWorkflowRun).toHaveBeenCalled();
+          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        } finally {
+          globalThis.setTimeout = realSetTimeout;
+        }
+      },
+      testTimeout(10_000)
+    );
 
     it('records a failed iteration’s typed failure on the loop node, unchanged', async () => {
       const failure = { class: 'auth', evidence: 'Invalid API key' } as const;
@@ -18533,43 +18559,49 @@ describe('executeDagWorkflow -- script nodes', () => {
     expect(errorMsg).toContain('[eval]');
   });
 
-  it('fails by default when the subprocess times out', async () => {
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('script-timeout-run-id', {
-      workflow_name: 'script-timeout-test',
-      conversation_id: 'conv-timeout',
-      user_message: 'timeout test',
-    });
+  it(
+    'fails by default when the subprocess times out',
+    async () => {
+      const mockDeps = createMockDeps();
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun('script-timeout-run-id', {
+        workflow_name: 'script-timeout-test',
+        conversation_id: 'conv-timeout',
+        user_message: 'timeout test',
+      });
 
-    const scriptNode: ExecNode = {
-      id: 'slow-script',
-      // Bun inline script that sleeps longer than the timeout
-      kind: 'exec',
-      script: 'await new Promise(r => setTimeout(r, 30000))',
-      runtime: 'bun',
-      timeout: 500,
-    };
+      const scriptNode: ExecNode = {
+        id: 'slow-script',
+        // Bun inline script that sleeps longer than the timeout
+        kind: 'exec',
+        script: 'await new Promise(r => setTimeout(r, 30000))',
+        runtime: 'bun',
+        timeout: 500,
+      };
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-timeout',
-        cwd: testDir,
-        workflow: { name: 'script-timeout-test', nodes: [scriptNode] },
-        workflowRun,
-      })
-    );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform,
+          conversationId: 'conv-timeout',
+          cwd: testDir,
+          workflow: { name: 'script-timeout-test', nodes: [scriptNode] },
+          workflowRun,
+        })
+      );
 
-    const events = persistedEvents(mockDeps.store);
-    const timedOut = events.filter(event => event.event_type === 'node_failed');
-    expect(timedOut.map(event => event.step_name)).toEqual(['slow-script']);
-    expect(timedOut[0]?.data?.error).toBe("Script node 'slow-script' timed out after 500ms");
-    expect(
-      events.some(event => event.event_type === 'node_skipped' && event.step_name === 'slow-script')
-    ).toBe(false);
-  }, 10000);
+      const events = persistedEvents(mockDeps.store);
+      const timedOut = events.filter(event => event.event_type === 'node_failed');
+      expect(timedOut.map(event => event.step_name)).toEqual(['slow-script']);
+      expect(timedOut[0]?.data?.error).toBe("Script node 'slow-script' timed out after 500ms");
+      expect(
+        events.some(
+          event => event.event_type === 'node_skipped' && event.step_name === 'slow-script'
+        )
+      ).toBe(false);
+    },
+    testTimeout(10000)
+  );
 
   it('stderr output is sent to the user', async () => {
     const mockDeps = createMockDeps();
@@ -19038,7 +19070,7 @@ describe('executeDagWorkflow -- exec timeout outcomes', () => {
       );
       expect(store.completeWorkflowRun).toHaveBeenCalled();
     },
-    10000
+    testTimeout(10000)
   );
 
   it('fails a bash timeout without the opt-in', async () => {
@@ -20647,15 +20679,12 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    const getMock = store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>;
     const upsertMock = store.upsertWorkflowNodeSession as Mock<
       typeof store.upsertWorkflowNodeSession
     >;
-    expect(getMock).toHaveBeenCalledWith({
+    expect(store.listWorkflowNodeSessions).toHaveBeenCalledWith({
       workflow_name: 'persist-test',
-      node_id: 'planner',
       scope_key: 'conv-dag',
-      provider: 'claude',
     });
 
     const resumeSessionArg = mockSendQueryDag.mock.calls[0][2];
@@ -20673,16 +20702,18 @@ describe('executeDagWorkflow -- persist_session', () => {
 
   it('persist_session: true with prior row → resumeSessionId loaded, upsert with new id', async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-session-id',
-      last_run_id: 'prior-run',
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-session-id',
+        last_run_id: 'prior-run',
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     const mockDeps = createMockDeps(store);
 
     await executeDagWorkflow(
@@ -20720,22 +20751,84 @@ describe('executeDagWorkflow -- persist_session', () => {
     });
   });
 
+  it('picks only the row matching both node id and provider from the scope snapshot', async () => {
+    const row = (node_id: string, provider: string, provider_session_id: string) => ({
+      workflow_name: 'persist-test',
+      node_id,
+      scope_key: 'conv-dag',
+      provider,
+      provider_session_id,
+      last_run_id: 'prior-run',
+      created_at: '2026-05-01T00:00:00Z',
+      updated_at: '2026-05-01T00:00:00Z',
+    });
+    const nonMatching = [
+      row('reviewer', 'claude', 'reviewer-claude'),
+      row('planner', 'codex', 'planner-codex'),
+    ];
+    const workflow = {
+      name: 'persist-test',
+      nodes: [
+        {
+          id: 'planner',
+          kind: 'agent' as const,
+          source: { kind: 'command' as const, name: 'my-cmd' },
+          persist_session: true,
+        },
+      ],
+    };
+
+    const withMatch = createMockStore();
+    withMatch.listWorkflowNodeSessions.mockResolvedValue([
+      ...nonMatching,
+      row('planner', 'claude', 'planner-claude'),
+    ]);
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(withMatch),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('planner-claude');
+
+    mockSendQueryDag.mockClear();
+    const withoutMatch = createMockStore();
+    withoutMatch.listWorkflowNodeSessions.mockResolvedValue(nonMatching);
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(withoutMatch),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    const eventTypes = withoutMatch.createWorkflowEvent.mock.calls.map(c => c[0].event_type);
+    expect(eventTypes).not.toContain('node_session_resumed');
+  });
+
   it('runs launched from one thread share the session even when each runs in its own conversation (#3585)', async () => {
     // Web dispatch runs every workflow in a fresh hidden worker conversation and records
     // the user's chat as parent_conversation_id. The scope must follow the chat.
     const store = createMockStore();
     const rows = new Map<string, string>();
-    store.getWorkflowNodeSession.mockImplementation(async key => {
-      const id = rows.get(key.scope_key);
+    store.listWorkflowNodeSessions.mockImplementation(async scope => {
+      const id = rows.get(scope.scope_key);
       return id === undefined
-        ? null
-        : {
-            ...key,
-            provider_session_id: id,
-            last_run_id: null,
-            created_at: '2026-05-01T00:00:00Z',
-            updated_at: '2026-05-01T00:00:00Z',
-          };
+        ? []
+        : [
+            {
+              ...scope,
+              node_id: 'planner',
+              provider: 'claude',
+              provider_session_id: id,
+              last_run_id: null,
+              created_at: '2026-05-01T00:00:00Z',
+              updated_at: '2026-05-01T00:00:00Z',
+            },
+          ];
     });
     store.upsertWorkflowNodeSession.mockImplementation(async params => {
       rows.set(params.scope_key, params.provider_session_id);
@@ -20781,16 +20874,18 @@ describe('executeDagWorkflow -- persist_session', () => {
 
   it('persist_session resume returns cold (resumed:false) → surfaced to user, no re-run, fresh id persisted', async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-session-id',
-      last_run_id: 'prior-run',
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-session-id',
+        last_run_id: 'prior-run',
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
 
@@ -20841,16 +20936,18 @@ describe('executeDagWorkflow -- persist_session', () => {
   /** Arm the mocks for a cold resume: a persisted prior session that the provider
    *  reports back as not resumed (fresh fallback). */
   function armColdResume(store: ReturnType<typeof createMockStore>): void {
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-session-id',
-      last_run_id: 'prior-run',
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-session-id',
+        last_run_id: 'prior-run',
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     mockSendQueryDag.mockClear();
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'cold run' };
@@ -21091,51 +21188,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     expect(runCopy).toBe('AI response');
   });
 
-  it('persist_session: true but provider returns no sessionId → delete stale row', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'AI response' };
-      yield { type: 'result' }; // no sessionId
-    });
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        cwd: testDir,
-        workflow: {
-          name: 'persist-test',
-          nodes: [
-            {
-              id: 'planner',
-              kind: 'agent',
-              source: { kind: 'command', name: 'my-cmd' },
-              persist_session: true,
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun(),
-      })
-    );
-
-    const upsertMock = store.upsertWorkflowNodeSession as Mock<
-      typeof store.upsertWorkflowNodeSession
-    >;
-    const deleteMock = store.deleteWorkflowNodeSessions as Mock<
-      typeof store.deleteWorkflowNodeSessions
-    >;
-    expect(upsertMock).not.toHaveBeenCalled();
-    // Provider is included in the filter so a stale-row cleanup under provider B
-    // does not wipe provider A's saved row for the same node.
-    expect(deleteMock).toHaveBeenCalledWith({
-      workflow_name: 'persist-test',
-      scope_key: 'conv-dag',
-      node_id: 'planner',
-      provider: 'claude',
-    });
-  });
-
-  it('persist_session unset → no store interaction', async () => {
+  it('persist_session unset → no session is written', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
 
@@ -21151,9 +21204,7 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
-    expect(store.deleteWorkflowNodeSessions).not.toHaveBeenCalled();
   });
 
   it('workflow.persist_sessions: true + node.persist_session: false → node opts out', async () => {
@@ -21180,22 +21231,23 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
 
   it("node.context: 'fresh' bypasses persistence even when persist_session: true", async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'persist-test',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'prior-id',
-      last_run_id: null,
-      created_at: '2026-05-01T00:00:00Z',
-      updated_at: '2026-05-01T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'persist-test',
+        node_id: 'planner',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'prior-id',
+        last_run_id: null,
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      },
+    ]);
     const mockDeps = createMockDeps(store);
 
     await executeDagWorkflow(
@@ -21218,7 +21270,6 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
     expect(store.upsertWorkflowNodeSession).not.toHaveBeenCalled();
   });
@@ -21287,12 +21338,6 @@ describe('executeDagWorkflow -- persist_session', () => {
       })
     );
 
-    expect(store.getWorkflowNodeSession).toHaveBeenCalledWith({
-      workflow_name: 'wf-inherit',
-      node_id: 'planner',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-    });
     const upsertMock = store.upsertWorkflowNodeSession as Mock<
       typeof store.upsertWorkflowNodeSession
     >;
@@ -21306,11 +21351,54 @@ describe('executeDagWorkflow -- persist_session', () => {
     });
   });
 
+  it('a scoped run with no persisted node never reads the session store', async () => {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'persist-test',
+          nodes: [{ id: 'planner', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(mockSendQueryDag).toHaveBeenCalled();
+    expect(store.listWorkflowNodeSessions).not.toHaveBeenCalled();
+  });
+
+  it('a failed session read with a persisted node that never dispatches does not reject unhandled', async () => {
+    const store = createMockStore();
+    store.listWorkflowNodeSessions.mockRejectedValue(new Error('DB timeout'));
+    // Bun fails the test on an unhandled rejection; the node never awaits the read.
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        cwd: testDir,
+        workflow: {
+          name: 'persist-test',
+          nodes: [
+            {
+              id: 'planner',
+              kind: 'agent',
+              source: { kind: 'command', name: 'my-cmd' },
+              persist_session: true,
+              when: '1 == 0',
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(store.listWorkflowNodeSessions).toHaveBeenCalled();
+    expect(mockSendQueryDag).not.toHaveBeenCalled();
+  });
+
   it('persist_session lookup failure → node runs fresh and upserts (non-fatal)', async () => {
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockRejectedValue(
-      new Error('DB timeout')
-    );
+    store.listWorkflowNodeSessions.mockRejectedValue(new Error('DB timeout'));
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
 
@@ -21382,6 +21470,192 @@ describe('executeDagWorkflow -- persist_session', () => {
       .map((call: unknown[]) => call[1] as string)
       .some(m => m.includes('Could not persist') && m.includes('planner'));
     expect(warned).toBe(true);
+  });
+});
+
+// #2667: two overlapping runs of one workflow in one scope share the persisted row. Each run
+// must take its own copy of the session as it stood when the run started.
+describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => {
+  let rootDir: string;
+
+  /** Node-session store keyed exactly like the table's primary key. */
+  function sessionTableStore(initial: string): {
+    store: MockWorkflowStore;
+    row: () => WorkflowNodeSession | undefined;
+  } {
+    const rows = new Map<string, WorkflowNodeSession>();
+    const key = (k: WorkflowNodeSessionKey): string =>
+      [k.workflow_name, k.node_id, k.scope_key, k.provider].join('|');
+    const seed: WorkflowNodeSessionKey = {
+      workflow_name: 'persist-race',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+    };
+    rows.set(key(seed), {
+      ...seed,
+      provider_session_id: initial,
+      last_run_id: 'earlier-run',
+      created_at: '2026-10-01T00:00:00Z',
+      updated_at: '2026-10-01T00:00:00Z',
+    });
+    const store = createMockStore();
+    store.listWorkflowNodeSessions.mockImplementation(async scope =>
+      [...rows.values()].filter(
+        row => row.workflow_name === scope.workflow_name && row.scope_key === scope.scope_key
+      )
+    );
+    store.upsertWorkflowNodeSession.mockImplementation(async params => {
+      rows.set(key(params), {
+        ...params,
+        created_at: '2026-10-03T00:00:00Z',
+        updated_at: '2026-10-03T00:00:00Z',
+      });
+    });
+    return { store, row: () => rows.get(key(seed)) };
+  }
+
+  /**
+   * Starts run B, lets run A run to completion while B's first node is held open, then
+   * releases B. Returns what each run's `planner` handed the provider.
+   */
+  async function raceTwoRuns(opts: {
+    sessionFork: boolean;
+    plannerSessionId: (run: 'a' | 'b') => string | undefined;
+  }): Promise<{
+    store: MockWorkflowStore;
+    row: () => WorkflowNodeSession | undefined;
+    plannerResume: Map<'a' | 'b', { resume: string | undefined; fork: boolean | undefined }>;
+    platforms: Record<'a' | 'b', MockWorkflowPlatform>;
+  }> {
+    const { store, row } = sessionTableStore('S0');
+    const cwds = { a: join(rootDir, 'a'), b: join(rootDir, 'b') } as const;
+    for (const cwd of Object.values(cwds)) {
+      await mkdir(join(cwd, '.archon', 'commands'), { recursive: true });
+    }
+    const runOf = (cwd: string): 'a' | 'b' => (cwd === cwds.a ? 'a' : 'b');
+    let releaseB: () => void = () => {};
+    const bHeld = new Promise<void>(resolve => {
+      releaseB = resolve;
+    });
+    const plannerResume = new Map<
+      'a' | 'b',
+      { resume: string | undefined; fork: boolean | undefined }
+    >();
+    mockSendQueryDag.mockImplementation(async function* (prompt, cwd, resume, options) {
+      const run = runOf(cwd);
+      if (prompt.includes('warm up')) {
+        if (run === 'b') await bHeld;
+        yield { type: 'agent_message_chunk', text: 'warm' };
+        yield { type: 'result', sessionId: `${run}-warmup` };
+        return;
+      }
+      plannerResume.set(run, { resume, fork: options?.forkSession });
+      yield { type: 'agent_message_chunk', text: 'planned' };
+      const sessionId = opts.plannerSessionId(run);
+      yield sessionId === undefined ? { type: 'result' } : { type: 'result', sessionId };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: opts.sessionFork }),
+    }));
+    const deps = createMockDeps(store);
+    const platforms = { a: createMockPlatform(), b: createMockPlatform() };
+    const start = (run: 'a' | 'b'): Promise<unknown> =>
+      executeDagWorkflow(
+        dagOptions({
+          deps,
+          platform: platforms[run],
+          cwd: cwds[run],
+          workflow: {
+            name: 'persist-race',
+            nodes: [
+              { id: 'warmup', kind: 'agent', source: { kind: 'inline', prompt: 'warm up' } },
+              {
+                id: 'planner',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'plan it' },
+                depends_on: ['warmup'],
+                persist_session: true,
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(`run-${run}`, { workflow_name: 'persist-race' }),
+        })
+      );
+
+    const runB = start('b');
+    await start('a');
+    releaseB();
+    await runB;
+    return { store, row, plannerResume, platforms };
+  }
+
+  beforeEach(async () => {
+    rootDir = join(
+      tmpdir(),
+      `dag-persist-race-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await removeTempTree(rootDir);
+  });
+
+  it('each run forks the session the row held when that run started', async () => {
+    const { row, plannerResume } = await raceTwoRuns({
+      sessionFork: true,
+      plannerSessionId: run => `${run}-planner`,
+    });
+
+    expect(plannerResume.get('a')).toEqual({ resume: 'S0', fork: true });
+    // Run A finished `planner` while B was running; B still copies what existed at its start.
+    expect(plannerResume.get('b')).toEqual({ resume: 'S0', fork: true });
+    // B finished last, so the cursor advances to its session.
+    expect(row()?.provider_session_id).toBe('b-planner');
+    expect(row()?.last_run_id).toBe('run-b');
+  });
+
+  it('a provider without sessionFork never receives the persisted session', async () => {
+    const { store, row, plannerResume, platforms } = await raceTwoRuns({
+      sessionFork: false,
+      plannerSessionId: run => `${run}-planner`,
+    });
+
+    // Each run's planner continues only its own run's conversation, never the persisted S0.
+    expect(plannerResume.get('a')?.resume).toBe('a-warmup');
+    expect(plannerResume.get('b')?.resume).toBe('b-warmup');
+    const notContinued = store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .filter(event => event.event_type === 'node_session_not_continued');
+    expect(notContinued.map(event => event.workflow_run_id).sort()).toEqual(['run-a', 'run-b']);
+    for (const event of notContinued) {
+      expect(event.step_name).toBe('planner');
+      expect(event.data).toEqual({
+        provider: 'claude',
+        scope_key: 'conv-dag',
+        provider_session_id_preview: 'S0…',
+      });
+    }
+    for (const platform of Object.values(platforms)) {
+      const told = platform.sendMessage.mock.calls.some(([, message]) =>
+        message.includes('cannot fork')
+      );
+      expect(told).toBe(true);
+    }
+    expect(row()?.provider_session_id).toBe('b-planner');
+  });
+
+  it("a run that returns no session id leaves a sibling's newer cursor in place", async () => {
+    const { row } = await raceTwoRuns({
+      sessionFork: true,
+      plannerSessionId: run => (run === 'a' ? 'a-planner' : undefined),
+    });
+
+    expect(row()?.provider_session_id).toBe('a-planner');
   });
 });
 
@@ -21955,8 +22229,8 @@ describe('executeDagWorkflow -- loop_group node', () => {
     //
     // Cost recomposition (flaky-fan-out): executing this 2x2 nesting end-to-end forks a
     // structurally-fixed TWELVE real `bash -c` processes (seed x2 + included body x4 +
-    // inner gates x4 + outer gates x2), which consumed ~46% of Bun's 5000ms default test
-    // budget on Windows CI in a healthy run. What pins the #2623 regression is exactly
+    // inner gates x4 + outer gates x2), which consumed ~46% of the 5000ms budget Windows CI
+    // then had, in a healthy run. What pins the #2623 regression is exactly
     // WHICH scoped values the executor compiles into each gate/body invocation, so this
     // half observes every fork through the established `git.execFileAsync` seam, pins each
     // compiled script byte-for-byte, and runs zero shells. Real-parse behaviour of the
@@ -26367,16 +26641,18 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       };
     });
     const store = createMockStore();
-    (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
-      workflow_name: 'addressable',
-      node_id: 'consumer',
-      scope_key: 'conv-dag',
-      provider: 'claude',
-      provider_session_id: 'persisted-consumer-session',
-      last_run_id: 'old-run',
-      created_at: '2026-08-19T00:00:00Z',
-      updated_at: '2026-08-19T00:00:00Z',
-    });
+    store.listWorkflowNodeSessions.mockResolvedValue([
+      {
+        workflow_name: 'addressable',
+        node_id: 'consumer',
+        scope_key: 'conv-dag',
+        provider: 'claude',
+        provider_session_id: 'persisted-consumer-session',
+        last_run_id: 'old-run',
+        created_at: '2026-08-19T00:00:00Z',
+        updated_at: '2026-08-19T00:00:00Z',
+      },
+    ]);
 
     await runAddressableWorkflow(
       [
@@ -26393,7 +26669,6 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       store
     );
 
-    expect(store.getWorkflowNodeSession).not.toHaveBeenCalled();
     expect(mockSendQueryDag.mock.calls[1][2]).toBe('named-source');
     expect(store.upsertWorkflowNodeSession).toHaveBeenCalledWith(
       expect.objectContaining({ node_id: 'consumer', provider_session_id: 'named-branch' })
@@ -34160,6 +34435,72 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(wrapper).toBeDefined();
     expect(wrapper?.data.structured_output).toEqual(['done-a', 'done-b']);
     expect(JSON.parse(String(wrapper?.data.node_output))).toEqual(['done-a', 'done-b']);
+  });
+
+  it('a persist_session node inside a composed body continues the scope session', async () => {
+    // The parent has no persisted node of its own; only the fan-out's body persists.
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: test block',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: work',
+        "    prompt: 'work on $INPUTS.item'",
+        '    persist_session: true',
+      ].join('\n')
+    );
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    let sessionCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      sessionCount += 1;
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield { type: 'result', sessionId: `session-${sessionCount}` };
+    });
+    // Body node ids are instance-namespaced, so the second run reads back exactly the
+    // rows the first run wrote rather than a hand-built key.
+    const store = createMockStore();
+    const rows: WorkflowNodeSession[] = [];
+    store.listWorkflowNodeSessions.mockImplementation(async () => [...rows]);
+    store.upsertWorkflowNodeSession.mockImplementation(async params => {
+      rows.push({
+        ...params,
+        created_at: '2026-05-01T00:00:00Z',
+        updated_at: '2026-05-01T00:00:00Z',
+      });
+    });
+
+    for (const runId of ['run-1', 'run-2']) {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-compose',
+          cwd: testDir,
+          workflow: {
+            name: 'compose-parent',
+            nodes: [
+              { id: 'list', kind: 'exec', runtime: 'sh', script: `echo '["a"]'` },
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                depends_on: ['list'],
+                with: { item: 'unused' },
+                fan_out: { items: '$list.output', as: 'item', max_parallel: 1, join: 'all_done' },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(runId, { conversation_id: 'conv-compose' }),
+        })
+      );
+    }
+
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
   });
 
   it('schedules the quota resume when a composed instance node reports quota_exhausted', async () => {

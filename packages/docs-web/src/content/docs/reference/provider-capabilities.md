@@ -47,7 +47,7 @@ reporting declarations; absence means unknown, not unsupported.
 | Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` |
 | --- | --- | --- | --- | --- | --- |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Immutable session fork (`context.resume`) | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ❌ | ❌ | ✅ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |

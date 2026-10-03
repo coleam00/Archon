@@ -105,6 +105,7 @@ import type {
   WorkflowRunOutcome,
   NodeArtifactLoopFrame,
   WorkflowRunNodeSession,
+  WorkflowNodeSession,
   WorkflowRunStatus,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
@@ -122,7 +123,9 @@ import {
   isIncludeDirective,
   isOutputFormatEnforced,
   isWaitNode,
-  isPersistableNode,
+  nodeUsesPersistedScope,
+  persistedSessionHandling,
+  runMayPersistSessions,
   readSubrunMetadata,
   isApprovalContext,
   inputEnvKey,
@@ -4654,7 +4657,7 @@ async function executeLoopGroupBody(
       // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
       // participate in cross-run session persistence inside the loop — and therefore
       // no scope-artifact mirroring either.
-      persistScopeKey: undefined,
+      persistScope: undefined,
       workflowPersistSessions: false,
       scopeArtifactsDir: undefined,
       layers: iterBodyLayers,
@@ -8718,7 +8721,7 @@ async function executeComposeFanOutNode(
         docsDir: ctx.docsDir,
         configuredCommandFolder: ctx.configuredCommandFolder,
         issueContext: ctx.issueContext,
-        persistScopeKey: ctx.persistScopeKey,
+        persistScope: ctx.persistScope,
         workflowPersistSessions: ctx.workflowPersistSessions,
         scopeArtifactsDir: undefined,
         // Runtime cardinality changes only the deterministic instance prefix; the body
@@ -8897,17 +8900,15 @@ async function executeComposeFanOutNode(
 }
 
 /**
- * True when a node participates in cross-run session persistence: a command/prompt
- * node (see {@link isPersistableNode}) that hasn't opted out via `context: 'fresh'`,
- * with `persist_session: true` set directly or inherited from the workflow-level
- * `persist_sessions` default. Single source of truth for both the session
- * lookup/persist gates and the #1846 scope-artifact mirror.
+ * A run's cross-run session scope. Concurrent runs of one workflow share a scope, so
+ * `sessionsAtStart` is read once when the run starts and every persisted node continues
+ * from that copy, never from a row a sibling run wrote afterwards. The read is issued
+ * before any node runs; a persisted node awaits it, so a failed read surfaces at the
+ * node that needed it.
  */
-function nodeUsesPersistedScope(node: DagNode, workflowPersistSessions: boolean): boolean {
-  if (!isPersistableNode(node)) return false;
-  if (node.context === 'fresh') return false;
-  const nodePersist = 'persist_session' in node ? node.persist_session : undefined;
-  return nodePersist ?? workflowPersistSessions;
+interface PersistScope {
+  key: string;
+  sessionsAtStart: Promise<readonly WorkflowNodeSession[]>;
 }
 
 /**
@@ -9009,17 +9010,18 @@ interface RunDerived {
   /** Workflow name — used for persist_session keying + telemetry. */
   workflowName: string;
   workflowLevelOptions: WorkflowLevelOptions;
-  /** Cross-run session-persistence scope key (DB conversation UUID), or undefined to skip. */
-  persistScopeKey: string | undefined;
+  /** Cross-run session persistence for this run, or undefined to skip. */
+  persistScope: PersistScope | undefined;
   /** Workflow-level default for per-node `persist_session` (opt-in). */
   workflowPersistSessions: boolean;
   /**
    * Stable cross-invocation artifact scope dir (`scopes/<workflow>/<scope>/`), or
-   * undefined when the workflow doesn't use session persistence. When set,
+   * undefined when the run cannot use session persistence (`runMayPersistSessions`,
+   * which also counts composed fan-out bodies). When set,
    * persistence-participating nodes with `output_type` mirror their typed sidecars
    * here, and a cold session resume points the user at the prior invocation's
    * artifacts by reference (#1846). Always undefined for loop_group bodies
-   * (which also run with `persistScopeKey: undefined`).
+   * (which also run with `persistScope: undefined`).
    */
   scopeArtifactsDir: string | undefined;
 }
@@ -9951,56 +9953,67 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               // case where provider was resolved from .archon/config.yaml defaults).
               // Uses the instance's getCapabilities() rather than the static registry so
               // tests can substitute mock providers with different caps without registering.
-              const caps = ctx.deps.getAgentProvider(provider).getCapabilities();
-              if (!caps.sessionResume) {
+              const handling = persistedSessionHandling(
+                ctx.deps.getAgentProvider(provider).getCapabilities()
+              );
+              if (handling === 'unsupported') {
                 throw new Error(
                   `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
                 );
               }
-              if (ctx.persistScopeKey && !hasNamedSessionResume) {
+              const persistScope = ctx.persistScope;
+              if (persistScope && !hasNamedSessionResume) {
                 try {
-                  const persisted = await ctx.deps.store.getWorkflowNodeSession({
-                    workflow_name: ctx.workflowName,
-                    node_id: node.id,
-                    scope_key: ctx.persistScopeKey,
-                    provider,
-                  });
+                  const persisted = (await persistScope.sessionsAtStart).find(
+                    row => row.node_id === node.id && row.provider === provider
+                  );
                   if (persisted) {
-                    resumeSessionId = persisted.provider_session_id;
                     // workflow_events is broader-scoped and longer-lived than the
                     // node-session table. A session ID can resume a conversation, so we
                     // store only an 8-char prefix here — enough for observability without
                     // leaving a resumable artifact in the event log.
                     const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
+                    const continues = handling === 'fork';
+                    if (continues) resumeSessionId = persisted.provider_session_id;
                     ctx.deps.store
                       .createWorkflowEvent({
                         workflow_run_id: ctx.workflowRun.id,
-                        event_type: 'node_session_resumed',
+                        event_type: continues
+                          ? 'node_session_resumed'
+                          : 'node_session_not_continued',
                         step_name: ctx.stepNamePrefix + node.id,
                         data: {
                           provider,
-                          scope_key: ctx.persistScopeKey,
+                          scope_key: persistScope.key,
                           provider_session_id_preview: sessionIdPreview,
                         },
                       })
                       .catch((err: Error) => {
                         getLog().warn(
                           { err, nodeId: node.id },
-                          'persist_session_resumed_event_persist_failed'
+                          'persist_session_event_persist_failed'
                         );
                       });
+                    if (!continues) {
+                      await safeSendMessage(
+                        ctx.platform,
+                        ctx.conversationId,
+                        `⚠️ Node \`${node.id}\`: provider \`${provider}\` cannot fork a session, so this run started fresh instead of continuing the persisted session (concurrent runs never share one provider conversation). To carry context across runs, use a provider with sessionFork or pass state through artifacts.`,
+                        { workflowId: ctx.workflowRun.id, nodeName: node.id }
+                      );
+                    }
                   }
                 } catch (err) {
                   // Non-fatal: the node still runs (fresh, no resume), but the user opted
                   // into persistence — a DB error here silently breaks continuity, so warn
-                  // them as well as the logs. (A "no row" result is not an error: it returns
-                  // null above and this catch never fires for it.)
+                  // them as well as the logs. (A "no row" result is not an error: it finds
+                  // nothing above and this catch never fires for it.)
                   getLog().warn(
                     {
                       err: err as Error,
                       nodeId: node.id,
                       workflow: ctx.workflowName,
-                      scopeKey: ctx.persistScopeKey,
+                      scopeKey: persistScope.key,
                       provider,
                     },
                     'persist_session_lookup_failed'
@@ -10122,41 +10135,39 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               );
             }
 
-            // Persist (or drop) the node's provider session ID for the next run in this scope.
+            // Advance the scope's cursor to this node's session for the next run. Concurrent
+            // runs each write their own session, so the cursor ends at the newest finished
+            // one. A completion without a session ID leaves the row alone: deleting it could
+            // erase a newer session a sibling run just wrote. A provider that cannot fork
+            // still writes its row: the next run never continues it, but reads it to record
+            // which session it did not continue.
             // context:'fresh' nodes are excluded (the author opted out of any cross-run memory).
-            if (usesPersistedScope && ctx.persistScopeKey && output.state === 'completed') {
+            const persistScope = ctx.persistScope;
+            if (
+              usesPersistedScope &&
+              persistScope &&
+              output.state === 'completed' &&
+              output.sessionId !== undefined
+            ) {
               try {
-                if (output.sessionId !== undefined) {
-                  await ctx.deps.store.upsertWorkflowNodeSession({
-                    workflow_name: ctx.workflowName,
-                    node_id: node.id,
-                    scope_key: ctx.persistScopeKey,
-                    provider,
-                    provider_session_id: output.sessionId,
-                    last_run_id: ctx.workflowRun.id,
-                  });
-                } else {
-                  // Provider returned no session ID (e.g. Codex with no thread ID).
-                  // Drop the stale row for THIS provider only — leave other providers'
-                  // rows intact so switching providers between runs doesn't clobber
-                  // the other side's continuity.
-                  await ctx.deps.store.deleteWorkflowNodeSessions({
-                    workflow_name: ctx.workflowName,
-                    scope_key: ctx.persistScopeKey,
-                    node_id: node.id,
-                    provider,
-                  });
-                }
+                await ctx.deps.store.upsertWorkflowNodeSession({
+                  workflow_name: ctx.workflowName,
+                  node_id: node.id,
+                  scope_key: persistScope.key,
+                  provider,
+                  provider_session_id: output.sessionId,
+                  last_run_id: ctx.workflowRun.id,
+                });
               } catch (err) {
                 // Non-fatal: persistence failure does not undo a successful node execution.
-                // But the user opted into persistence — the next run will start fresh for
-                // this node, so warn them as well as the logs.
+                // But the user opted into persistence — the next run will not continue this
+                // session, so warn them as well as the logs.
                 getLog().warn(
                   {
                     err: err as Error,
                     nodeId: node.id,
                     workflow: ctx.workflowName,
-                    scopeKey: ctx.persistScopeKey,
+                    scopeKey: persistScope.key,
                     provider,
                   },
                   'persist_session_upsert_failed'
@@ -10164,7 +10175,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 await safeSendMessage(
                   ctx.platform,
                   ctx.conversationId,
-                  `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will start this node fresh.`,
+                  `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will not continue from it.`,
                   { workflowId: ctx.workflowRun.id, nodeName: node.id }
                 );
               }
@@ -11187,6 +11198,18 @@ export async function executeDagWorkflow(
   // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
+  let persistScope: PersistScope | undefined;
+  if (runPersistScopeKey !== undefined && runMayPersistSessions(workflow)) {
+    const sessionsAtStart = deps.store.listWorkflowNodeSessions({
+      workflow_name: workflow.name,
+      scope_key: runPersistScopeKey,
+    });
+    // A persisted node that never dispatches (skipped by `when:`, or after a failure)
+    // never awaits this; a failed read must not become an unhandled rejection there.
+    // Nodes that await it still see the rejection.
+    sessionsAtStart.catch(() => undefined);
+    persistScope = { key: runPersistScopeKey, sessionsAtStart };
+  }
   const namedResumeSourceIds = new Set<string>();
   for (const node of workflow.nodes) {
     if (isNodeContextResume(node.context)) namedResumeSourceIds.add(node.context.resume);
@@ -11264,11 +11287,11 @@ export async function executeDagWorkflow(
     docsDir,
     configuredCommandFolder,
     issueContext,
-    persistScopeKey: runPersistScopeKey,
+    persistScope,
     workflowPersistSessions,
     // Scope-keyed persistence surface: without a scope key there is no durable
     // scope to mirror into or recover from, so the dir is dropped alongside it.
-    scopeArtifactsDir: runPersistScopeKey !== undefined ? scopeArtifactsDir : undefined,
+    scopeArtifactsDir: persistScope !== undefined ? scopeArtifactsDir : undefined,
     layers,
     nodeOutputs,
     afterLayer: persistAuthoredOutcome,

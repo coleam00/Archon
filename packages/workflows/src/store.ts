@@ -150,6 +150,9 @@ export const WORKFLOW_EVENT_TYPES = [
   'workflow_artifact',
   'integration_operation',
   'node_session_resumed',
+  // A persisted session the node did not continue because its provider cannot fork it;
+  // continuing in place could put two runs into one provider conversation (#2667).
+  'node_session_not_continued',
   // Container isolation backend lifecycle (folder-project container runs).
   // `container_created`/`container_destroyed` bracket the run; `container_stopped`/
   // `container_resumed` bracket a suspend/resume across a pause (Phase C).
@@ -558,23 +561,16 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   // Per-node provider sessions persisted across workflow re-runs (opt-in via
   // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
   // Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript).
-  getWorkflowNodeSession(key: WorkflowNodeSessionKey): Promise<WorkflowNodeSession | null>;
+  // The executor lists a scope's rows once at run start, so a run continues the sessions
+  // that existed when it started, never one a concurrent run wrote afterwards (#2667).
+  listWorkflowNodeSessions(scope: {
+    workflow_name: string;
+    scope_key: string;
+  }): Promise<readonly WorkflowNodeSession[]>;
   upsertWorkflowNodeSession(
     params: WorkflowNodeSessionKey & {
       provider_session_id: string;
       last_run_id: string | null;
     }
   ): Promise<void>;
-  deleteWorkflowNodeSessions(filter: {
-    workflow_name: string;
-    scope_key?: string;
-    node_id?: string;
-    /**
-     * Optional provider filter. The executor's stale-row cleanup (run finished with
-     * no sessionId) sets this so switching providers between runs doesn't clobber
-     * the prior provider's saved row. Reset surfaces (CLI/chat/REST) leave it
-     * undefined so a reset wipes every provider for the given scope.
-     */
-    provider?: string;
-  }): Promise<{ deleted: number }>;
 }
