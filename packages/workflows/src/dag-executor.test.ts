@@ -9602,6 +9602,16 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(sessions[2]).toBeUndefined();
       expect(sessions[3]).toBe('thread-2');
       expect(sessions[3]).not.toBe('throwaway');
+      // The iteration's row and the node's row name attempt 0's session, never the reask's.
+      const rows = persistedEvents(mockDeps.store);
+      expect(
+        rows
+          .filter(row => row.event_type === 'loop_iteration_completed')
+          .map(row => row.data?.session_id)
+      ).toEqual(['thread-1', 'thread-2', 'thread-3']);
+      expect(
+        rows.filter(row => row.event_type === 'node_completed').map(row => row.data?.session_id)
+      ).toEqual(['thread-3']);
     });
 
     it('keeps threading when the re-ask happens on iteration 1', async () => {
@@ -10854,7 +10864,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed[0][0].data.invocation).toEqual(pausedExecution?.invocation);
       expect(completed[0][0].data.attempt).toEqual(pausedExecution?.attempt);
       expect(completed[0][0].data.timing).toEqual(pausedExecution?.timing);
-      expect(JSON.stringify(completed[0][0].data)).not.toContain('sig-struct-1');
+      // The finalized record names the loop's session in its own key and nowhere else.
+      const { session_id: sessionId, ...rest } = completed[0][0].data;
+      expect(sessionId).toBe('sig-struct-1');
+      expect(JSON.stringify(rest)).not.toContain('sig-struct-1');
     });
 
     it('finalize omits tokens when the gate persisted none (legacy pause / no usage) (#2333)', async () => {
@@ -14280,6 +14293,12 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     // 1: classify attempt 0. 2: the reask, deliberately fresh. 3: the next node.
     expect(sessions).toEqual([undefined, undefined, 'real']);
+    // The node record names attempt 0's session, never the reask's.
+    expect(
+      persistedEvents(mockDeps.store)
+        .filter(row => row.event_type === 'node_completed' && row.step_name === 'classify')
+        .map(row => row.data?.session_id)
+    ).toEqual(['real']);
   });
 
   it('flags the run total when only a middle node is silent about cache', async () => {
@@ -20388,9 +20407,8 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
       outputType: 'plan',
       runId: 'dag-test-run-id',
       path: join('nodes', 'planner.md'),
-      // sessionId is propagated from the node output into the metadata.
-      sessionId: 'new-session-id',
     });
+    expect(meta).not.toHaveProperty('sessionId');
     expect(typeof meta.producedAt).toBe('string');
   });
 
@@ -21637,7 +21655,7 @@ describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => 
       expect(event.data).toEqual({
         provider: 'claude',
         scope_key: 'conv-dag',
-        provider_session_id_preview: 'S0…',
+        provider_session_id_preview: 'S0',
       });
     }
     for (const platform of Object.values(platforms)) {
@@ -26455,7 +26473,25 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       session_source_node_id: 'writer1',
       session_forked: true,
     });
-    const serializedEvents = JSON.stringify(events);
+    // Each completed node names its own session in `session_id` and nowhere else.
+    expect(
+      events
+        .filter(event => event.event_type === 'node_completed')
+        .map(event => [event.step_name, event.data?.session_id])
+    ).toEqual([
+      ['writer1', 'session-writer-1'],
+      ['reviewer1', 'session-reviewer-1'],
+      ['writer2', 'session-writer-2'],
+      ['reviewer2', 'session-reviewer-2'],
+      ['writer3', 'session-writer-3'],
+    ]);
+    const serializedEvents = JSON.stringify(
+      events.map(event => {
+        const data = { ...event.data };
+        delete data.session_id;
+        return { ...event, data };
+      })
+    );
     for (const sessionId of Object.values(sessionsByPrompt)) {
       expect(serializedEvents).not.toContain(sessionId);
     }
@@ -37402,5 +37438,171 @@ describe('executeDagWorkflow -- node checkout starts (#3375)', () => {
     const [consumer] = terminal(deps, 'consumer');
     expect(consumer?.eventType).toBe('node_failed');
     expect(consumer?.data.error).toContain('$missing.execution.checkoutStart');
+  });
+});
+
+describe('executeDagWorkflow -- provider session ids stay on the node record', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-session-ids-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  it('records each attempt and iteration id durably and nowhere in the stream', async () => {
+    const failedAttempt = 'a1111111-0000-4000-8000-000000000001';
+    const completedAttempt = 'b2222222-0000-4000-8000-000000000002';
+    const iterations = [
+      'c3333333-0000-4000-8000-000000000003',
+      'd4444444-0000-4000-8000-000000000004',
+      'e5555555-0000-4000-8000-000000000005',
+    ];
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 1) {
+        yield {
+          type: 'result',
+          sessionId: failedAttempt,
+          isError: true,
+          errors: ['upstream overloaded'],
+          failure: { class: 'transient', evidence: 'upstream overloaded' },
+        };
+        return;
+      }
+      if (calls === 2) {
+        yield { type: 'agent_message_chunk', text: 'planned' };
+        yield { type: 'result', sessionId: completedAttempt };
+        return;
+      }
+      const iteration = calls - 2;
+      yield { type: 'agent_message_chunk', text: iteration === 3 ? 'DONE' : 'working' };
+      yield { type: 'result', sessionId: iterations[iteration - 1] };
+    });
+    const emitted: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      emitted.push(event);
+    });
+    const store = createMockStore();
+    const workflowRun = makeWorkflowRun('session-ids-run');
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'session-ids',
+            nodes: [
+              {
+                id: 'plan',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'plan it' },
+                output_type: 'plan',
+                retry: { max_attempts: 1, delay_ms: 1 },
+              },
+              {
+                id: 'work',
+                kind: 'loop',
+                depends_on: ['plan'],
+                output_type: 'work',
+                loop: { prompt: 'work', until: 'DONE', max_iterations: 5, fresh_context: true },
+              },
+            ],
+          },
+          workflowRun,
+        })
+      );
+    } finally {
+      unsubscribe();
+    }
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+
+    const rows = persistedEvents(store);
+    const sessionIdsOf = (eventType: string, step: string): unknown[] =>
+      rows
+        .filter(row => row.event_type === eventType && row.step_name === step)
+        .map(row => row.data?.session_id);
+    expect(sessionIdsOf('node_failed', 'plan')).toEqual([failedAttempt]);
+    expect(sessionIdsOf('node_completed', 'plan')).toEqual([completedAttempt]);
+    expect(sessionIdsOf('loop_iteration_completed', 'work')).toEqual(iterations);
+    expect(sessionIdsOf('node_completed', 'work')).toEqual([iterations[2]]);
+
+    const allIds = [failedAttempt, completedAttempt, ...iterations];
+    const transcript = await readFile(join(testDir, 'logs', `${workflowRun.id}.jsonl`), 'utf8');
+    const stream = JSON.stringify(emitted);
+    const { artifactsByType } = await readNodeArtifacts(join(testDir, 'artifacts'), {
+      scope: 'current-run',
+      runId: workflowRun.id,
+    });
+    expect(Object.keys(artifactsByType).sort()).toEqual(['plan', 'work']);
+    const artifactIndex = JSON.stringify(artifactsByType);
+    for (const id of allIds) {
+      expect(transcript).not.toContain(id);
+      expect(stream).not.toContain(id);
+      expect(artifactIndex).not.toContain(id);
+    }
+    // The preview still reaches the stream.
+    expect(stream).toContain(completedAttempt.slice(0, 8));
+  });
+
+  it("an iteration retried after a failed attempt records only the successful attempt's session", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 2) {
+        // Iteration 2, attempt 1: names a session, then fails transiently.
+        yield {
+          type: 'result',
+          sessionId: 'failed-attempt-session',
+          isError: true,
+          errors: ['upstream overloaded'],
+          failure: { class: 'transient', evidence: 'upstream overloaded' },
+        };
+        return;
+      }
+      yield { type: 'agent_message_chunk', text: calls === 4 ? 'DONE' : 'working' };
+      // Iteration 2's successful retry (call 3) reports no session.
+      yield calls === 3
+        ? { type: 'result' }
+        : { type: 'result', sessionId: `iteration-session-${String(calls)}` };
+    });
+    const store = createMockStore();
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'iteration-retry-session',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'loop',
+                loop: { prompt: 'work', until: 'DONE', max_iterations: 5, fresh_context: true },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('iteration-retry-session-run'),
+        })
+      );
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(
+      persistedEvents(store)
+        .filter(row => row.event_type === 'loop_iteration_completed')
+        .map(row => row.data?.session_id)
+    ).toEqual(['iteration-session-1', undefined, 'iteration-session-4']);
   });
 });

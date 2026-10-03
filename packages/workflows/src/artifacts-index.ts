@@ -152,7 +152,6 @@ export async function writeNodeArtifact(
     runId: parsedParams.runId,
     producedAt: parsedParams.producedAt,
     size: Buffer.byteLength(outputText, 'utf8'),
-    ...(parsedParams.sessionId !== undefined ? { sessionId: parsedParams.sessionId } : {}),
   };
   await writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf8');
   return meta;

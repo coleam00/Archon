@@ -386,8 +386,6 @@ export interface AgentRequestOptions {
    * provider-specific and immutability is not guaranteed.
    */
   forkSession?: boolean;
-  /** When false, skip writing session transcript to disk. */
-  persistSession?: boolean;
   /**
    * In-process tools the model may call this turn. Defined once by the caller
    * (e.g. core's manage_run) and adapted per provider — Claude wraps each via

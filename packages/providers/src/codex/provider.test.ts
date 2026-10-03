@@ -818,7 +818,7 @@ describe('CodexProvider', () => {
         })
       );
       expect(mockLogger.error).toHaveBeenCalledWith(
-        { err: resumeError, sessionId: 'bad-thread-id' },
+        { err: resumeError, sessionIdPreview: 'bad-thre' },
         'resume_thread_failed'
       );
       // Verify user is notified about session loss
@@ -1838,6 +1838,7 @@ describe('CodexProvider', () => {
           };
         }
         const violations = await runProviderConformance({
+          capabilities: client.getCapabilities(),
           turns: [
             {
               name: 'completed turn',

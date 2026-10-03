@@ -23,7 +23,11 @@ import type {
   ProviderCapabilities,
   CodexProviderDefaults,
 } from '../types';
-import { truncateToolOutput, type ProviderFailureClass } from '@archon/provider-contract';
+import {
+  sessionPreview,
+  truncateToolOutput,
+  type ProviderFailureClass,
+} from '@archon/provider-contract';
 import { failureClassOfThrown, failureResult } from '../shared/failure';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
@@ -566,14 +570,24 @@ async function* streamCodexEvents(
       const startedThreadId = (event as ThreadStartedEvent).thread_id;
       if (startedThreadId) {
         resolvedThreadId = startedThreadId;
-        getLog().info({ threadId: startedThreadId }, 'codex.thread_started');
+        getLog().info(
+          { sessionIdPreview: sessionPreview(startedThreadId) },
+          'codex.thread_started'
+        );
       } else {
         // The SDK types thread_id as a non-empty string, so this should never
         // fire. If it does, a new thread would surface sessionId: undefined and
         // the dag-executor would treat the run as session-less — silently
         // dropping any persist_session continuity. Warn rather than degrade
         // quietly (CLAUDE.md: Fail Fast + Explicit Errors).
-        getLog().warn({ snapshotThreadId: resolvedThreadId }, 'codex.thread_started_missing_id');
+        getLog().warn(
+          {
+            ...(resolvedThreadId
+              ? { snapshotSessionIdPreview: sessionPreview(resolvedThreadId) }
+              : {}),
+          },
+          'codex.thread_started_missing_id'
+        );
       }
       continue;
     }
@@ -845,11 +859,14 @@ export class CodexProvider implements IAgentProvider {
       let sessionResumeFailed = false;
       let thread;
       if (resumeSessionId) {
-        getLog().debug({ sessionId: resumeSessionId }, 'resuming_thread');
+        getLog().debug({ sessionIdPreview: sessionPreview(resumeSessionId) }, 'resuming_thread');
         try {
           thread = codex.resumeThread(resumeSessionId, threadOptions);
         } catch (error) {
-          getLog().error({ err: error, sessionId: resumeSessionId }, 'resume_thread_failed');
+          getLog().error(
+            { err: error, sessionIdPreview: sessionPreview(resumeSessionId) },
+            'resume_thread_failed'
+          );
           thread = codex.startThread(threadOptions);
           sessionResumeFailed = true;
         }
@@ -932,7 +949,7 @@ export class CodexProvider implements IAgentProvider {
               thread = codex.resumeThread(resumeSessionId, threadOptions);
             } catch (resumeError) {
               getLog().error(
-                { err: resumeError, sessionId: resumeSessionId },
+                { err: resumeError, sessionIdPreview: sessionPreview(resumeSessionId) },
                 'resume_thread_failed'
               );
               thread = codex.startThread(threadOptions);

@@ -1,4 +1,5 @@
 import { createLogger } from '@archon/paths';
+import { sessionPreview } from '@archon/provider-contract';
 
 import { mergeTokenUsage } from '../../types';
 import type { MessageChunk, SendQueryOptions, TokenUsage } from '../../types';
@@ -59,7 +60,10 @@ async function readStructuredOutput(
       return info.structured_output;
     }
   } catch (error) {
-    getLog().warn({ err: error, sessionId, messageId }, 'opencode.structured_output_lookup_failed');
+    getLog().warn(
+      { err: error, sessionIdPreview: sessionPreview(sessionId), messageId },
+      'opencode.structured_output_lookup_failed'
+    );
   }
   return undefined;
 }
@@ -145,7 +149,11 @@ export async function* streamMultiAgentOpencodeSession(
           .abort({ path: { id: state.sessionId }, query: { directory: state.cwd } })
           .catch(error => {
             getLog().debug(
-              { err: error, sessionId: state.sessionId, agent: state.agent.key },
+              {
+                err: error,
+                sessionIdPreview: sessionPreview(state.sessionId),
+                agent: state.agent.key,
+              },
               'opencode.multi_agent_abort_failed'
             );
           })
@@ -168,7 +176,10 @@ export async function* streamMultiAgentOpencodeSession(
     const states = await Promise.all(
       agents.map(async agent => {
         const { sessionId } = await resolveSessionId(client, cwd, undefined);
-        getLog().info({ agent: agent.key, sessionId, cwd }, 'opencode.multi_agent_session_created');
+        getLog().info(
+          { agent: agent.key, sessionIdPreview: sessionPreview(sessionId), cwd },
+          'opencode.multi_agent_session_created'
+        );
         const state: AgentRunState = {
           agent,
           cwd,
@@ -189,12 +200,12 @@ export async function* streamMultiAgentOpencodeSession(
         const agentRequestOptions = withAgentNodeConfig(requestOptions, state.agent);
         const promptBody = createSessionPromptBody(prompt, model, agentRequestOptions, state.agent);
         getLog().info(
-          { agent: state.agent.key, sessionId: state.sessionId },
+          { agent: state.agent.key, sessionIdPreview: sessionPreview(state.sessionId) },
           'opencode.multi_agent_prompt_sending'
         );
         await promptSession(client, cwd, state.sessionId, promptBody);
         getLog().info(
-          { agent: state.agent.key, sessionId: state.sessionId },
+          { agent: state.agent.key, sessionIdPreview: sessionPreview(state.sessionId) },
           'opencode.multi_agent_prompt_sent'
         );
       })
@@ -304,7 +315,7 @@ export async function* streamMultiAgentOpencodeSession(
           {
             nodeId,
             agent: state.agent.key,
-            sessionId,
+            sessionIdPreview: sessionPreview(state.sessionId),
             doneCount: states.filter(s => s.done).length,
             totalCount: states.length,
           },

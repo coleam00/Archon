@@ -293,7 +293,7 @@ This is an exact, immutable fork contract:
 - Claude and Pi support immutable forks. Codex explicitly does not; an omitted fork capability is also unsupported.
 - A missing source handle, unavailable prior context, missing branch handle, or provider that reuses the source session fails the node. Named resume never falls back to a fresh session.
 - Two parallel consumers may name the same source; each receives its own branch while the source remains unchanged.
-- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Session IDs remain outside workflow events and API payloads.
+- Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
 
 This is separate from `persist_session`: `{ resume: source }` selects ancestry within one governed run, while `persist_session` continues the same node across separate workflow invocations. If both apply to a consumer, the named source wins for the current invocation and the resulting branch is still saved for its next invocation.
 
@@ -956,6 +956,8 @@ The resolved provider must declare `sessionResume: true` in its capabilities. Th
 
 When a workflow-level `persist_sessions: true` is combined with any of these node types, the capability check and persistence logic both skip the non-applicable nodes — no false validation errors, no silent runtime mistakes.
 
+To continue a node's conversation outside Archon, read its session id from `archon workflow get <run-id> --verbose` and pass it to the provider's own resume command, such as `claude --resume <id>`. Claude Code finds a session by the directory it ran in, so run that command from the node's working directory: the run's worktree when the run used one.
+
 ### `context: fresh` overrides
 
 A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`.
@@ -1008,10 +1010,6 @@ Notes:
 - **Opt-in only.** Workflows without `persist_session` get no scope directory, no mirroring, and no pointer — default behavior is unchanged. Persist nodes without `output_type` keep session continuity but leave nothing behind for recovery.
 - **Last writer wins.** Concurrent runs of the same workflow in the same scope write per-node files into the shared scope directory; the most recent run's output for a given node is what a later cold resume sees.
 - **CLI caveat.** Each `archon workflow run` mints a fresh conversation UUID (a fresh scope) unless you pass `--conversation-id <id>` — the same caveat as session persistence itself.
-
-### Distinct from `AgentRequestOptions.persistSession`
-
-The Claude Agent SDK also has a `persistSession` flag controlling whether the SDK writes its session transcript to disk. That is a *different* concept — local file persistence inside the SDK. This `persist_session:` field is about Archon's database-stored cross-run session ID for workflow nodes. The two operate at different layers and don't conflict.
 
 ---
 
@@ -1176,7 +1174,7 @@ nodes:
 When a node sets `output_type`, the executor writes a typed sidecar after the node completes:
 
 - `$ARTIFACTS_DIR/nodes/<id>.md` — the node's output text
-- `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`, and `sessionId` when available)
+- `$ARTIFACTS_DIR/nodes/<id>.meta.json` — metadata (`outputType`, `runId`, `producedAt`, `size`)
 
 That exact layout remains the contract for top-level nodes. A typed node inside a `loop_group`
 writes one pair per successful body execution instead: `nodes/loop.<owner-digest>__<body>.md` and
@@ -1186,11 +1184,11 @@ cannot alias another execution. Metadata keeps the readable provenance as
 `loopGroupPath: [{ groupId, iteration }, ...]`. A body node expanded from an `include:` retains its
 load-time `<include>__<node>` ID in metadata and as the sanitized body suffix.
 
-This works on **every** node type (`bash`/`script` produce typed outputs too, just without a `sessionId`). The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
+This works on **every** node type, `bash`/`script` included. The write is **best-effort** — if it fails, the node still succeeds and a warning is logged; the typed sidecar may simply be absent. `output_type` is an open set of labels (`plan`, `findings`, `code`, `summary`, …) — pick a convention and keep casing consistent, since lookup is case-sensitive.
 
 #### Reading typed artifacts by type
 
-Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`/`sessionId`), and `path` is relative to `$ARTIFACTS_DIR`.
+Every executable invocation receives a typed-artifact listing at `$TYPED_ARTIFACTS_FILE`: a JSON file inside the run's artifact directory, recreated before the node runs. It has the shape `{ "runId", "artifactsByType": { "<outputType>": [ …metadata ] }, "errors": [ … ] }`, so a script or agent selects a type without knowing `nodes/`, sidecar names, or loop filename rules. Each entry is the same metadata the sidecar holds (`nodeId`, `outputType`, `path`, `runId`, `producedAt`, `size`, and optional `loopGroupPath`), and `path` is relative to `$ARTIFACTS_DIR`.
 
 ```ts
 // A script: read the listing the same way in host or container runs.

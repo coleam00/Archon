@@ -4,11 +4,8 @@
  * One row per (workflow_name, node_id, scope_key, provider) tuple — the
  * composite primary key. Stored when a node opts in via `persist_session: true`
  * (or workflow-level `persist_sessions: true`) and the resolved provider
- * supports session resume.
- *
- * Distinct from `AgentRequestOptions.persistSession` (the Claude SDK on-disk
- * transcript flag) — this records the provider's session ID so the executor can
- * pass it back as `resumeSessionId` on a later run with the same scope.
+ * supports session resume. It records the provider's session ID so the executor
+ * can pass it back as `resumeSessionId` on a later run with the same scope.
  */
 import { z } from '@hono/zod-openapi';
 import type { WorkflowRun } from './workflow-run';
