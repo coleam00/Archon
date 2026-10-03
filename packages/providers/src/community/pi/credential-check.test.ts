@@ -123,6 +123,33 @@ describe('Pi native credentials', () => {
       refresh.mockRestore();
     }
   });
+  test('reads the per-run auth file a turn reads', async () => {
+    const authPath = join(root, 'delivered-auth.json');
+    writeFileSync(authPath, JSON.stringify({ anthropic: { type: 'api_key', key: secret } }));
+    expect(await check(undefined, { ARCHON_PI_AUTH_PATH: authPath })).toEqual({
+      state: 'usable',
+      source: 'native',
+    });
+  });
+  test('substitutes a custom provider key from the request env the way a turn does', async () => {
+    writeFileSync(
+      join(root, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            baseUrl: 'http://localhost:1234/v1',
+            api: 'openai-completions',
+            apiKey: '${PI_CHECK_LOCAL_KEY}',
+            models: [{ id: 'model', name: 'Local' }],
+          },
+        },
+      })
+    );
+    expect(await check('local/model', { PI_CHECK_LOCAL_KEY: secret })).toEqual({
+      state: 'usable',
+      source: 'native',
+    });
+  });
   test('mapped missing auth is not_connected; a local provider is not_checked', async () => {
     expect(await check()).toEqual({ state: 'not_connected', source: 'native' });
     expect(await check('local/model')).toEqual({ state: 'not_checked', source: 'native' });

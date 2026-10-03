@@ -354,6 +354,63 @@ async function applyPiEnvOverride(
 }
 
 /**
+ * The ModelRuntime a Pi turn authenticates with. The login check builds the same one, so
+ * both read the same auth file and models config.
+ *
+ * Archon delivers per-user credentials (API keys + subscriptions) as a per-run auth.json
+ * and points at it via ARCHON_PI_AUTH_PATH, an explicit authPath (not PI_CODING_AGENT_DIR)
+ * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The path rides
+ * the per-call env (the executor's per-user injection never writes to process.env), so it
+ * is read there first, then from process.env for a shell-level override.
+ *
+ * For a provider with no Archon env mapping, `${VAR}` references in the user's models.json
+ * are substituted from the per-call env into a per-call models.json: the SDK resolves them
+ * from `process.env`, which Archon keeps free of per-call secrets (see `./request-auth.ts`).
+ * That file holds the substituted secret in cleartext. `ModelRuntime.create` reads it once
+ * (via ModelConfig.load), so it is removed as soon as create settles. Without the cleanup a
+ * long-running process accumulates one file per call until ENOSPC, after which
+ * buildCustomProviderModelsPath fails and the SDK falls back to the unsubstituted models.json.
+ */
+async function createPiModelRuntime(
+  piCodingAgent: typeof import('@earendil-works/pi-coding-agent'),
+  provider: string,
+  requestEnv: Readonly<Record<string, string>> | undefined,
+  options: {
+    protectedEnvKeys?: readonly string[];
+    signal?: AbortSignal;
+    /** False skips Pi's availability pass, which checks, and so runs the key command of, every provider. */
+    refreshOnCreate?: boolean;
+  } = {}
+): Promise<ModelRuntime> {
+  let customProviderModelsPath: string | undefined;
+  try {
+    customProviderModelsPath = PI_PROVIDER_ENV_VARS[provider]
+      ? undefined
+      : buildCustomProviderModelsPath({
+          provider,
+          requestEnv,
+          protectedEnvKeys: options.protectedEnvKeys,
+        });
+    const authPath =
+      (requestEnv?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() || undefined;
+    return await piCodingAgent.ModelRuntime.create({
+      authPath,
+      ...(customProviderModelsPath ? { modelsPath: customProviderModelsPath } : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.refreshOnCreate === false ? { refreshOnCreate: false } : {}),
+    });
+  } finally {
+    if (customProviderModelsPath) {
+      try {
+        rmSync(customProviderModelsPath, { force: true });
+      } catch {
+        // Non-fatal: the file may already be gone, and the caller surfaces the original error.
+      }
+    }
+  }
+}
+
+/**
  * Pi community provider — wraps `@earendil-works/pi-coding-agent`'s full
  * coding-agent harness. Each `sendQuery()` call creates a fresh session
  * (no reuse) so concurrent calls don't collide.
@@ -371,7 +428,10 @@ export class PiProvider implements IAgentProvider {
       ensurePiPackageDirShim();
       const piCodingAgent = await import('@earendil-works/pi-coding-agent');
       const parsed = resolvePiModel(request.model ?? piConfig.model, process.cwd(), piCodingAgent);
-      const runtime = await piCodingAgent.ModelRuntime.create({ signal, refreshOnCreate: false });
+      const runtime = await createPiModelRuntime(piCodingAgent, parsed.provider, env, {
+        signal,
+        refreshOnCreate: false,
+      });
       await applyPiEnvOverride(runtime, parsed.provider, env);
       const status = await resolvePiAuthStatus(
         runtime,
@@ -510,49 +570,17 @@ export class PiProvider implements IAgentProvider {
     const parsed = resolvePiModel(requestOptions?.model ?? piConfig.model, cwd, piCodingAgent);
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
-    let modelRuntime: Awaited<ReturnType<typeof piCodingAgent.ModelRuntime.create>>;
+    let modelRuntime: ModelRuntime;
     let modelRegistry: InstanceType<typeof piCodingAgent.ModelRegistry>;
-    // For custom (non-built-in) Pi providers, build a per-call `models.json`
-    // with `${VAR}` references substituted against the per-call env. The
-    // SDK's session-auth path resolves `${VAR}` from `process.env`, which
-    // Archon deliberately keeps empty (per-call secrets ride on
-    // `requestOptions.env`); pre-substituting into a per-call file closes
-    // the seam (see `./request-auth.ts` for the full rationale). Declared
-    // as `let` so the assignment sits INSIDE the try below — that way a
-    // `mkdirSync`/`writeFileSync`/`chmodSync` throw is framed as
-    // `'Pi auth storage init failed: …'` (matching the contract the
-    // `request-auth.ts` doc comment promises), and the cleanup `finally`
-    // can still see the value to unlink the file if `ModelRuntime.create`
-    // throws after the substitution succeeded.
-    let customProviderModelsPath: string | undefined;
     try {
-      customProviderModelsPath = !envVarName
-        ? buildCustomProviderModelsPath({
-            provider: parsed.provider,
-            requestEnv: requestOptions?.env,
-            protectedEnvKeys: requestOptions?.protectedEnvKeys,
-          })
-        : undefined;
-      // Archon delivers per-user credentials (API keys + subscriptions) as a
-      // per-run auth.json and points us at it via ARCHON_PI_AUTH_PATH — using an
-      // explicit authPath (not PI_CODING_AGENT_DIR) so the user's models.json /
-      // settings.json at ~/.pi/agent/ are untouched. The path arrives on the
-      // per-call `requestOptions.env` channel (the executor's per-user injection
-      // never writes to process.env — see the piConfig.env note above), so read it
-      // there first and fall back to process.env for a shell-level override.
-      const archonAuthPath =
-        (requestOptions?.env?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() ||
-        undefined;
-      // pi-coding-agent 0.84.0 folded AuthStorage + ModelRegistry into a single
-      // ModelRuntime; ModelRegistry is now a thin facade constructed from a
-      // runtime. authPath still feeds the file-backed CredentialStore inside
-      // ModelRuntime — the per-user auth.json path is honoured the same way.
-      // modelsPath follows the same per-call pattern for custom providers'
-      // `${VAR}` substitution.
-      modelRuntime = await piCodingAgent.ModelRuntime.create({
-        authPath: archonAuthPath,
-        ...(customProviderModelsPath ? { modelsPath: customProviderModelsPath } : {}),
-      });
+      modelRuntime = await createPiModelRuntime(
+        piCodingAgent,
+        parsed.provider,
+        requestOptions?.env,
+        {
+          protectedEnvKeys: requestOptions?.protectedEnvKeys,
+        }
+      );
       modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
     } catch (err) {
       const e = err as Error;
@@ -563,25 +591,6 @@ export class PiProvider implements IAgentProvider {
         `Pi auth storage init failed: ${e.message}. Check that ~/.pi/agent/auth.json ` +
           '(or $PI_CODING_AGENT_DIR/auth.json) is valid JSON and readable.'
       );
-    } finally {
-      // The per-call models.json holds the literal substituted secret in
-      // cleartext. ModelRuntime.create reads it once at construction (via
-      // ModelConfig.load); the runtime carries the loaded values for the
-      // rest of the session, so the file can be removed as soon as the
-      // create() promise resolves. Without this cleanup, long-running
-      // processes accumulate one file per sendQuery and eventually hit
-      // ENOSPC, after which buildCustomProviderModelsPath's mkdirSync fails
-      // and the SDK silently falls through to the unsubstituted user
-      // models.json — re-opening the round-1 R1 leak surface. Errors here
-      // are non-fatal (the file may already be gone, or the FS may be in
-      // an odd state); the original error has already been surfaced.
-      if (customProviderModelsPath) {
-        try {
-          rmSync(customProviderModelsPath, { force: true });
-        } catch {
-          // Deliberately swallowed — see comment above.
-        }
-      }
     }
 
     // 3. [LOOKUP-1] Check the static catalog first (phase 1 of 2).
