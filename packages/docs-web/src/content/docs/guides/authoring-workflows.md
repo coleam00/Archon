@@ -750,7 +750,7 @@ YAML declares the engine-visible coordination condition; computation stays in a 
 
 ## Retry Configuration
 
-**AI nodes** (`command:`, `prompt:`) automatically retry on **transient** errors (SDK subprocess crashes, rate limits, network timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
+**AI nodes** (`command:`, `prompt:`) automatically retry on **transient** errors (failures the provider reports as transient or rate-limited, and timeouts) using a default configuration: **2 retries** (3 total attempts), **3 s base delay** with exponential backoff. You will see a platform notification before each retry attempt.
 
 **Deterministic nodes** (`bash:`, `script:`) do **not** auto-retry — they run exactly once unless you add an explicit `retry:` block. This keeps side-effectful scripts (deploys, `gh` mutations, external CLIs) from being silently re-run on a transient-looking failure; opt in per node when re-running is safe. `loop:` and `loop_group:` manage their own iteration and don't accept `retry:`.
 
@@ -787,11 +787,11 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:` — omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 1000–60000 | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = SDK crashes, rate limits, network timeouts only. `'all'` = any error including unknown errors (FATAL errors such as auth failures are never retried regardless) |
+| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = transient and rate-limited failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
-Archon sorts a failed AI attempt into one of three buckets before deciding whether to retry. The provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
+Archon sorts a failed attempt into one of three buckets before deciding whether to retry. The bucket comes from the kind of failure Archon recorded, never from the error message. For a provider error, the provider picks the bucket through the typed failure class it reports on its result, taken from its SDK's structured signals (error codes, HTTP status fields, typed exceptions), never from the error text:
 
 | Bucket | Provider failure classes | Retried by default? |
 |--------|--------------------------|---------------------|
@@ -809,7 +809,24 @@ Every built-in provider reports a typed class:
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
 
-Set `on_error: all` on a node that should retry `unknown` failures. Only failures the engine detects itself, such as an idle timeout or an empty response, are classified from their text.
+Set `on_error: all` on a node that should retry `unknown` failures.
+
+#### Failures the engine detects
+
+Archon puts a failure it detects itself in a bucket by its kind:
+
+| Failure | Bucket | Retried by default? |
+|---------|--------|---------------------|
+| A timeout: an AI node's `idle_timeout`, or a `bash:`/`script:` node's `timeout` | TRANSIENT | Yes. Each retry of a hung AI node can wait another full `idle_timeout` |
+| An AI provider stream that ends without any output | TRANSIENT | Yes |
+| A `bash:`/`script:` node that exits non-zero or cannot start | UNKNOWN | No (unless `on_error: all`). What the script printed does not matter |
+| An AI node's structured output that fails its `output_format` after reasks | UNKNOWN | No (unless `on_error: all`) |
+| A `bash:`/`script:` node's stdout that fails its `output_format` | — | Never |
+| A config error: a missing command file, a bad input reference, an `output_format` that cannot compile | FATAL | Never |
+| A cancelled node | FATAL | Never |
+| A provider error without a typed class | UNKNOWN | No (unless `on_error: all`) |
+
+A failure recorded before Archon stored failure kinds counts as UNKNOWN.
 
 #### Pi retries inside its own runtime
 

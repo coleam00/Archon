@@ -3951,6 +3951,10 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
           isError: true,
           errorSubtype: 'error_during_execution',
           errors: ['Claude Code crash: process exited with code 1'],
+          failure: {
+            class: 'transient',
+            evidence: 'Claude Code crash: process exited with code 1',
+          },
           sessionId: 'failed-retry-sess',
           cost: 0.01,
           tokens: { input: 10, output: 1, cacheRead: 5, cacheWrite: 0 },
@@ -4068,7 +4072,13 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
-      throw new Error('Claude Code crash: process exited with code 1');
+      yield {
+        type: 'result',
+        isError: true,
+        errorSubtype: 'error_during_execution',
+        errors: ['Claude Code crash: process exited with code 1'],
+        failure: { class: 'transient', evidence: 'Claude Code crash: process exited with code 1' },
+      };
     });
 
     const mockDeps = createMockDeps();
@@ -4099,106 +4109,6 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     expect(callCount).toBe(3);
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
   });
-
-  it(
-    'a rate-limited failure earns the widened rate-limit retry budget — #2706',
-    async () => {
-      // Keep the test fast without weakening the policy: the rate-limit backoff is flat
-      // ~45s in production, so clamp the sleep, not the budget.
-      const realSetTimeout = globalThis.setTimeout;
-      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-      try {
-        let callCount = 0;
-        mockSendQueryDag.mockImplementation(async function* () {
-          callCount++;
-          throw new Error('429 too many requests: provider overloaded');
-        });
-
-        const mockDeps = createMockDeps();
-        const platform = createMockPlatform();
-        const workflowRun = makeWorkflowRun('dag-retry-ratelimit-run');
-
-        await executeDagWorkflow(
-          dagOptions({
-            deps: mockDeps,
-            platform,
-            conversationId: 'conv-dag-retry-ratelimit',
-            cwd: testDir,
-            workflow: {
-              name: 'dag-retry-ratelimit',
-              nodes: [
-                {
-                  id: 'my-node',
-                  kind: 'agent',
-                  source: { kind: 'command', name: 'my-cmd' },
-                  retry: { max_attempts: 1, delay_ms: 1 },
-                },
-              ],
-            },
-            workflowRun,
-          })
-        );
-
-        // max_attempts would allow 2 attempts; a rate-limited failure widens the
-        // budget to RATE_LIMIT_MAX_RETRIES retries.
-        expect(callCount).toBe(1 + RATE_LIMIT_MAX_RETRIES);
-        expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-      } finally {
-        globalThis.setTimeout = realSetTimeout;
-      }
-    },
-    testTimeout(10_000)
-  );
-
-  it(
-    'a rate-limited node recovers when the provider sheds load mid-budget — #2706',
-    async () => {
-      const realSetTimeout = globalThis.setTimeout;
-      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-      try {
-        let callCount = 0;
-        mockSendQueryDag.mockImplementation(async function* () {
-          callCount++;
-          if (callCount <= 3) {
-            throw new Error('rate limit exceeded, slow down');
-          }
-          yield { type: 'agent_message_chunk', text: 'Recovered after load shed' };
-          yield { type: 'result', sessionId: 'ratelimit-recover-sess' };
-        });
-
-        const mockDeps = createMockDeps();
-        const platform = createMockPlatform();
-        const workflowRun = makeWorkflowRun('dag-ratelimit-recover-run');
-
-        await executeDagWorkflow(
-          dagOptions({
-            deps: mockDeps,
-            platform,
-            conversationId: 'conv-dag-ratelimit-recover',
-            cwd: testDir,
-            workflow: {
-              name: 'dag-ratelimit-recover',
-              nodes: [
-                {
-                  id: 'my-node',
-                  kind: 'agent',
-                  source: { kind: 'command', name: 'my-cmd' },
-                  retry: { max_attempts: 1, delay_ms: 1 },
-                },
-              ],
-            },
-            workflowRun,
-          })
-        );
-
-        expect(callCount).toBe(4);
-        expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
-      } finally {
-        globalThis.setTimeout = realSetTimeout;
-      }
-    },
-    testTimeout(10_000)
-  );
 
   it('retries an AI node whose stream closed without yielding content — #2706', async () => {
     let callCount = 0;
@@ -4242,48 +4152,22 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).not.toHaveBeenCalled();
   });
 
-  it('node with FATAL error does not retry (call count = 1)', async () => {
-    let callCount = 0;
-    mockSendQueryDag.mockImplementation(async function* () {
-      callCount++;
-      throw new Error('Claude Code auth error: unauthorized');
-    });
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('dag-retry-fatal-run');
-
-    const nodes: DagNode[] = [
-      {
-        id: 'my-node',
-        kind: 'agent',
-        source: { kind: 'command', name: 'my-cmd' },
-        retry: { max_attempts: 2, delay_ms: 1 },
-      },
-    ];
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-dag-retry-fatal',
-        cwd: testDir,
-        workflow: { name: 'dag-retry-fatal', nodes },
-        workflowRun,
-      })
-    );
-
-    // FATAL error must not be retried — exactly 1 attempt
-    expect(callCount).toBe(1);
-    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
-  });
-
   it('sends retry notification to platform before each delay', async () => {
     let callCount = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       callCount++;
       if (callCount === 1) {
-        throw new Error('Claude Code crash: process exited with code 1');
+        yield {
+          type: 'result',
+          isError: true,
+          errorSubtype: 'error_during_execution',
+          errors: ['Claude Code crash: process exited with code 1'],
+          failure: {
+            class: 'transient',
+            evidence: 'Claude Code crash: process exited with code 1',
+          },
+        };
+        return;
       }
       yield { type: 'agent_message_chunk', text: 'OK' };
       yield { type: 'result', sessionId: 'ok-sess' };
@@ -4321,9 +4205,8 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     expect(retryMessages.length).toBeGreaterThan(0);
   });
 
-  // A provider that classified its own failure reports it as `failure` on the result. The
-  // legacy `errors` text below reads as fatal to the prose classifier, which is exactly the
-  // decision the typed class must override (#3520).
+  // A provider that classified its own failure reports it as `failure` on the result. Its
+  // class alone decides retry; the `errors` text is never read for it (#3520).
   async function attemptsForTypedFailure(
     failure: ProviderFailure,
     errors: string[] = [failure.evidence],
@@ -4597,25 +4480,55 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
   });
 
-  it('bash node with a FATAL error is never retried even with on_error: all', async () => {
-    // Forward-slashed for safe embedding in inline bash AND JS string literals
-    // (Windows join() yields backslashes; '\a' is an escape in JS strings).
+  it('bash node whose stderr says "timeout" is not retried under the default on_error', async () => {
     const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
     const nodes: DagNode[] = [
       {
-        id: 'fatal',
+        id: 'curl',
         kind: 'exec',
         runtime: 'sh',
-        script: `printf 'a' >> '${attempts}'; echo 'unauthorized' >&2; exit 1`,
-        retry: { max_attempts: 3, delay_ms: 1, on_error: 'all' },
+        script: `printf 'a' >> '${attempts}'; echo 'curl: (28) connection timeout' >&2; exit 1`,
+        retry: { max_attempts: 2, delay_ms: 1 },
       },
     ];
-    const { mockDeps } = await runNodes(nodes);
+    await runNodes(nodes);
 
-    const content = await readFile(attempts, 'utf8');
-    // FATAL classification wins over on_error: all → exactly 1 attempt.
-    expect(content.length).toBe(1);
-    expect(mockDeps.store.failWorkflowRun as ReturnType<typeof mock>).toHaveBeenCalled();
+    // A non-zero exit is exec_failed, retried only under on_error: all. The script's
+    // own output is not evidence, whatever it says.
+    expect((await readFile(attempts, 'utf8')).length).toBe(1);
+  });
+
+  it('bash node is retried under on_error: all whatever its stderr says', async () => {
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const nodes: DagNode[] = [
+      {
+        id: 'unauthorized',
+        kind: 'exec',
+        runtime: 'sh',
+        script: `printf 'a' >> '${attempts}'; echo '401 unauthorized' >&2; exit 1`,
+        retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
+      },
+    ];
+    await runNodes(nodes);
+
+    expect((await readFile(attempts, 'utf8')).length).toBe(3);
+  });
+
+  it('bash node that times out is retried as transient', async () => {
+    const attempts = join(testDir, 'attempts.log').replace(/\\/g, '/');
+    const nodes: DagNode[] = [
+      {
+        id: 'slow',
+        kind: 'exec',
+        runtime: 'sh',
+        script: `printf 'a' >> '${attempts}'; sleep 5`,
+        timeout: 100,
+        retry: { max_attempts: 1, delay_ms: 1 },
+      },
+    ];
+    await runNodes(nodes);
+
+    expect((await readFile(attempts, 'utf8')).length).toBe(2);
   });
 
   it(
@@ -7601,66 +7514,6 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(envelopes.map(e => e.seq)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(new Set(envelopes.map(e => e.attemptId)).size).toBe(1);
     });
-
-    it(
-      'retries an iteration that dies on a 429 instead of failing the loop node — #2706',
-      async () => {
-        const realSetTimeout = globalThis.setTimeout;
-        globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
-        try {
-          let callCount = 0;
-          mockSendQueryDag.mockImplementation(async function* () {
-            callCount++;
-            if (callCount === 1) {
-              throw new Error('429 too many requests: provider overloaded');
-            }
-            yield {
-              type: 'agent_message_chunk',
-              text: 'Did the task. <promise>COMPLETE</promise>',
-            };
-            yield { type: 'result', sessionId: 'loop-retry-sess' };
-          });
-
-          const store = createMockStore();
-          const mockDeps = createMockDeps(store);
-          const platform = createMockPlatform();
-          const workflowRun = makeWorkflowRun('loop-iteration-retry-run');
-
-          await executeDagWorkflow(
-            dagOptions({
-              deps: mockDeps,
-              platform,
-              conversationId: 'conv-loop-retry',
-              cwd: testDir,
-              workflow: {
-                name: 'loop-iteration-retry',
-                nodes: [
-                  {
-                    id: 'my-loop',
-                    kind: 'loop',
-                    loop: {
-                      fresh_context: false,
-                      prompt: 'Complete the task.',
-                      until: 'COMPLETE',
-                      max_iterations: 3,
-                    },
-                  },
-                ],
-              },
-              workflowRun,
-            })
-          );
-
-          // The failed attempt is re-streamed within iteration 1 and the run completes.
-          expect(callCount).toBe(2);
-          expect(store.completeWorkflowRun).toHaveBeenCalled();
-          expect(store.failWorkflowRun).not.toHaveBeenCalled();
-        } finally {
-          globalThis.setTimeout = realSetTimeout;
-        }
-      },
-      testTimeout(10_000)
-    );
 
     it(
       'retries an iteration whose typed transient failure reads as fatal — #3520',
@@ -12697,10 +12550,9 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
         // converts this to { state: 'failed', output: '', error: '...' } and the
         // layer aggregation writes that into nodeOutputs['producer']. After this,
         // any prior-cached consumer that depends on producer must be invalidated,
-        // not silently skipped. The error string is intentionally FATAL-class
-        // (matches `classifyError`'s 'auth error' fallback) so the default retry
-        // loop yields immediately — one attempt, no retries — keeping queryCount
-        // deterministic against the assertion.
+        // not silently skipped. An untyped thrown error is `unknown`, which the
+        // default `on_error: transient` never retries — one attempt, keeping
+        // queryCount deterministic against the assertion.
         throw new Error('producer crashed: provider auth error');
       }
       yield { type: 'agent_message_chunk', text: 'fresh consumer output' };
@@ -12804,8 +12656,8 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
     mockSendQueryDag.mockImplementation(async function* () {
       queryCount++;
       if (queryCount === 1) {
-        // Producer's only attempt fails this resume. FATAL-class error message so
-        // the retry loop yields immediately — one attempt, deterministic queryCount.
+        // Producer's only attempt fails this resume. An untyped error is `unknown`,
+        // not retried by default — one attempt, deterministic queryCount.
         throw new Error('producer crashed: provider auth error');
       }
       yield { type: 'agent_message_chunk', text: 'fresh consumer output' };
@@ -21844,7 +21696,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     expect(failureKinds).toEqual({ classify: 'output_contract' });
   });
 
-  it('a provider auth error thrown mid-stream is fatal', async () => {
+  it('an untyped provider error is unknown, whatever its message says', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'partial' };
       throw new Error('401 unauthorized: invalid api key');
@@ -21857,7 +21709,76 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
         retry: { max_attempts: 1, delay_ms: 1 },
       },
     ]);
-    expect(failureKinds).toEqual({ step: 'fatal' });
+    expect(failureKinds).toEqual({ step: 'unknown' });
+    // unknown is retried only under on_error: all.
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+  });
+
+  it('an AI node that idles out after output is retried as a transient timeout', async () => {
+    mockSendQueryDag.mockImplementation(async function* (
+      _prompt: string,
+      _cwd: string,
+      _resumeSessionId?: string,
+      options?: { abortSignal?: AbortSignal }
+    ) {
+      yield { type: 'agent_message_chunk', text: 'Here is the analysis result.' };
+      await new Promise<void>(resolve => {
+        options?.abortSignal?.addEventListener('abort', () => resolve());
+      });
+    });
+    const { failureKinds } = await runDag([
+      {
+        id: 'step',
+        kind: 'agent',
+        source: { kind: 'inline', prompt: 'Do thing.' },
+        idle_timeout: 50,
+        retry: { max_attempts: 1, delay_ms: 1 },
+      },
+    ]);
+    expect(failureKinds).toEqual({ step: 'timeout' });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(2);
+  });
+
+  it('a config failure is never retried, even under on_error: all', async () => {
+    const { store, failureKinds } = await runDag([
+      {
+        id: 'step',
+        kind: 'agent',
+        source: { kind: 'command', name: 'does-not-exist' },
+        retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
+      },
+    ]);
+    expect(failureKinds).toEqual({ step: 'config' });
+    const failedRows = store.createWorkflowEvent.mock.calls.filter(
+      ([event]) => event.event_type === 'node_failed' && event.step_name === 'step'
+    );
+    expect(failedRows).toHaveLength(1);
+  });
+
+  it('a cancelled node is never retried, even under on_error: all', async () => {
+    let streamStarted = false;
+    mockSendQueryDag.mockImplementation(async function* () {
+      streamStarted = true;
+      yield { type: 'agent_message_chunk', text: 'partial' };
+      yield { type: 'agent_message_chunk', text: 'MUST NOT BE REACHED' };
+    });
+    const { failureKinds } = await runDag(
+      [
+        {
+          id: 'step',
+          kind: 'agent',
+          source: { kind: 'inline', prompt: 'Do thing.' },
+          retry: { max_attempts: 2, delay_ms: 1, on_error: 'all' },
+        },
+      ],
+      store => {
+        store.getWorkflowRunStatus.mockImplementation(() =>
+          Promise.resolve(streamStarted ? 'cancelled' : 'running')
+        );
+      }
+    );
+    expect(failureKinds).toEqual({ step: 'cancelled' });
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
   });
 
   it('a loop that exhausts max_iterations is max_iterations', async () => {

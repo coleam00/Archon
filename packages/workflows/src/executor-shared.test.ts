@@ -32,11 +32,9 @@ import {
   retainStreamTail,
   classifyError,
   getRetryDelayMs,
-  isRateLimitError,
   RATE_LIMIT_PATTERNS,
   RATE_LIMIT_RETRY_DELAY_MS,
   TRANSIENT_PATTERNS,
-  providerFailureKind,
   nodeFailureKindOf,
   retryClassOf,
   safeSendMessage,
@@ -1054,15 +1052,6 @@ describe('classifyError', () => {
     expect(classifyError(new Error('MiniMax overloaded/high load (2064)'))).toBe('TRANSIENT');
   });
 
-  it('detects rate-limit pressure messages — #2706', () => {
-    expect(isRateLimitError('rate limit: 429 too many requests')).toBe(true);
-    expect(isRateLimitError('MiniMax overloaded/high load (2064)')).toBe(true);
-    expect(isRateLimitError('Selected model is at capacity.')).toBe(true);
-    // Quota/session exhaustion stays out: it is FATAL and never reaches the backoff.
-    expect(isRateLimitError('Claude session limit reached')).toBe(false);
-    expect(isRateLimitError('econnreset')).toBe(false);
-  });
-
   it('backs off flat + jitter on rate limits, exponential otherwise — #2706', () => {
     for (let i = 0; i < 20; i++) {
       const delay = getRetryDelayMs('rate_limited', i, 3000);
@@ -1094,15 +1083,6 @@ describe('classifyError', () => {
   });
 });
 
-describe('providerFailureKind', () => {
-  it('maps the retry classification onto the provider failure kinds', () => {
-    expect(providerFailureKind(new Error('401 unauthorized'))).toBe('fatal');
-    expect(providerFailureKind(new Error('rate limit: 429'))).toBe('rate_limited');
-    expect(providerFailureKind(new Error('socket hang up'))).toBe('transient');
-    expect(providerFailureKind(new Error('mystery'))).toBe('unknown');
-  });
-});
-
 describe('typed provider failures decide retry — #3520', () => {
   it('maps every failure class onto a retry kind', () => {
     const kinds = providerFailureClassSchema.options.map(cls =>
@@ -1119,19 +1099,11 @@ describe('typed provider failures decide retry — #3520', () => {
     ]);
   });
 
-  it('a recorded provider kind wins over text that reads the other way', () => {
-    expect(retryClassOf({ failureKind: 'transient', error: '401 unauthorized' })).toBe('transient');
-    expect(retryClassOf({ failureKind: 'fatal', error: 'socket hang up' })).toBe('fatal');
-    expect(retryClassOf({ failureKind: 'rate_limited', error: 'mystery' })).toBe('rate_limited');
-    expect(retryClassOf({ failureKind: 'unknown', error: '503' })).toBe('unknown');
-  });
-
-  it('engine kinds and unkinded records keep the text classification', () => {
-    expect(retryClassOf({ failureKind: 'exec_failed', error: 'curl: econnrefused' })).toBe(
-      'transient'
-    );
-    expect(retryClassOf({ error: '429 too many requests' })).toBe('rate_limited');
-    expect(retryClassOf({ failureKind: 'config', error: 'bad input' })).toBe('unknown');
+  it('a provider kind is its own retry class; a record without a kind is unknown', () => {
+    for (const kind of ['fatal', 'transient', 'rate_limited', 'unknown'] as const) {
+      expect(retryClassOf(kind)).toBe(kind);
+    }
+    expect(retryClassOf(undefined)).toBe('unknown');
   });
 });
 
