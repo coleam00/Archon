@@ -823,6 +823,59 @@ When you already hold a run id, prefer that exact-id form. `workflow run <name> 
 
 Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so it takes the inline path and does re-execute the run — just outside your shell. The ack carries `continues: true` to say so. See [Detached control verbs](#detached-control-verbs).
 
+### `workflow wake`
+
+Wake due durable time waits, event deadlines, signaled events, and scheduled quota resumes without running a server:
+
+```bash
+archon workflow wake --json
+archon workflow wake --watch --json
+```
+
+A pass scans up to 25 due continuations across the configured install database, regardless of the current directory. It awaits each admitted execution segment. A segment can complete, fail, or pause at another wait or gate; later occurrences belong to another pass. Concurrent CLI and server hosts use the engine's existing occurrence claim, so only one executes a continuation.
+
+`--watch` repeats serial passes, sleeping five seconds between completed passes. Its JSON output is JSONL: one document per pass with `ok`, `action`, `accepted`, and per-run `outcomes`. Outcomes distinguish admission from settlement (`completed`, `paused`, or `failed`). Without `--json`, the command prints a summary and run-specific outcomes.
+
+Exit status is 0 for an empty batch, a concurrent claim loser, a completed segment, or a legitimate pause. Refusals, execution failures, and deferral failures return 1. Watch continues after failures and returns 1 on shutdown if any pass failed. Prerequisite failures defer the exact occurrence for 60 seconds.
+
+The CLI preserves the run's recorded source, inputs, configuration, user, conversation, and working path. It accepts local CLI/API conversations. Container execution, missing paths or captured source, and external platform origins are refused with the run ID and reason. Use manual `workflow resume` for a container, or the server hosting the external conversation. A run stays parked if no waker runs; age never marks it failed.
+
+SIGINT/SIGTERM stops scheduling new passes and drains admitted segments and owner cleanup. Shutdown can wait for a long executing segment. An abrupt kill retains the existing ambiguous-owner behavior; it does not provide automatic recovery of a running segment.
+
+#### Wake timers
+
+On macOS, install a per-install LaunchAgent:
+
+```bash
+archon workflow wake schedule install --interval 5 --json
+archon workflow wake schedule remove --json
+```
+
+The interval is a positive integer in seconds, defaulting to 5. The job invokes `workflow wake --json`, runs at load, and records an absolute executable, working directory, and `ARCHON_HOME`. Reinstalling identical configuration is safe. Remove then install to change its interval or executable. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
+
+On Linux, run a one-pass command from cron (this example checks each minute):
+
+```text
+* * * * * ARCHON_HOME=/home/alice/.archon /home/alice/.local/bin/archon workflow wake --json >> /home/alice/.archon/logs/workflow-wake.log 2>&1
+```
+
+Create the log directory first. For a systemd timer, use `ExecStart=/absolute/path/to/archon workflow wake --json` in a oneshot service, set `Environment=ARCHON_HOME=/absolute/path/to/.archon`, and schedule the service with `OnBootSec=5s` and `OnUnitInactiveSec=5s` in its timer. Enable it with `systemctl --user enable --now <name>.timer`.
+
+On Windows Task Scheduler, select the absolute Archon executable, set arguments to `workflow wake --json`, and configure a repeating trigger. Set `ARCHON_HOME` in the task's environment or invoke a wrapper that sets it, and use that home as the working directory. The OS timer owns cadence and overlap; one pass may outlast its interval.
+
+### `workflow signal`
+
+Signal an exact event wait occurrence and attempt its execution immediately:
+
+```bash
+archon workflow signal <full-run-id> --event checks.complete \
+  --resume-at '2026-10-04T12:00:00.000Z' --data '{"conclusion":"success"}' --json
+```
+
+Use the event name and `metadata.wait.resumeAt` from the run's current state. The full persistent run ID is required; this command does not resolve a short prefix against the invocation directory. `--data` accepts any JSON value and is validated before mutation. Stale, duplicate, expired, mismatched, and non-event occurrences are rejected without resuming.
+
+The result reports `signaled` separately from admission and settlement. If the signal succeeds but execution is refused or fails, it remains durable, the command returns 1, and a later `workflow wake` can retry after the problem is resolved. A concurrent resume winner after a successful signal is a normal outcome.
+
 ### `workflow cancel`
 
 Stop a running workflow. Every cancel surface (this command, `/workflow cancel` in

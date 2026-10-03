@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
@@ -169,5 +169,39 @@ describe('native schedule installation', () => {
     await expect(installMacosNativeSchedule(config(), { platform: 'linux' })).rejects.toThrow(
       'supported only on macOS'
     );
+  });
+});
+
+describe('workflow wake native schedule', () => {
+  it('installs the generated wake argv, preserves configuration and removes only that job', async () => {
+    const { workflowWakeScheduleConfig } = await import('../commands/workflow-continuations');
+    const generated = workflowWakeScheduleConfig(5);
+    const originalId = generated.id;
+    expect(workflowWakeScheduleConfig(10).id).toBe(originalId);
+    expect(generated.programArguments.slice(-3)).toEqual(['workflow', 'wake', '--json']);
+    expect(generated.programArguments[0]).toBe(process.execPath);
+    expect(generated.programArguments[1]).toBe(resolve(process.argv[1]));
+    expect(generated.workingDirectory).toBe(generated.archonHome);
+    const directory = await mkdtemp(join(tmpdir(), 'archon-wake-schedule-'));
+    tempRoots.push(directory);
+    const commands: string[][] = [];
+    const runtime = {
+      platform: 'darwin' as const,
+      uid: 501,
+      launchAgentsDirectory: directory,
+      runCommand: async (executable: string, args: readonly string[]) => {
+        commands.push([executable, ...args]);
+      },
+    };
+    const installed = await installMacosNativeSchedule(generated, runtime);
+    expect(await readFile(installed, 'utf8')).toContain('<string>wake</string>');
+    expect(await installMacosNativeSchedule(generated, runtime)).toBe(installed);
+    expect(commands).toHaveLength(1);
+    await expect(
+      installMacosNativeSchedule(workflowWakeScheduleConfig(10), runtime)
+    ).rejects.toThrow('different configuration');
+    expect(await removeMacosNativeSchedule(originalId, runtime)).toBe(true);
+    expect(commands[1]).toEqual(['/bin/launchctl', 'bootout', 'gui/501', installed]);
+    expect(await removeMacosNativeSchedule(originalId, runtime)).toBe(false);
   });
 });
