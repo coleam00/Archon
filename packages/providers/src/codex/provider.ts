@@ -40,6 +40,7 @@ import {
   type Spawner,
 } from './app-server';
 import { classifyTurnError, describeErrorInfo } from './turn-error';
+import { applyNodeScope, checkThreadMcpScope, declaredServers, readCodexInventory } from './scope';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
@@ -422,6 +423,15 @@ function idAt(value: unknown, key: 'thread' | 'turn'): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
+/** The Codex home the app-server reports in its `initialize` response, for error messages. */
+function codexHomeOf(initializeResponse: unknown): string {
+  const home =
+    typeof initializeResponse === 'object' && initializeResponse !== null
+      ? (initializeResponse as { codexHome?: unknown }).codexHome
+      : undefined;
+  return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
+}
+
 interface TurnRequest {
   connection: AppServerConnection;
   apiKey: string | undefined;
@@ -429,6 +439,11 @@ interface TurnRequest {
   resumeSessionId: string | undefined;
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
+  /**
+   * The plugins a workflow node names, which scopes its thread to them and its declared
+   * MCP servers (`./scope`). Undefined for direct chat, which keeps the user's setup.
+   */
+  nodePlugins: readonly string[] | undefined;
   hasOutputFormat: boolean;
   model: string | undefined;
   /** Receives the thread id as soon as it exists, so a failure can still carry it. */
@@ -442,8 +457,8 @@ interface TurnRequest {
  * process ending before `turn/completed` is thrown for `sendQuery` to classify.
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
-  const { connection } = request;
-  await connection.request('initialize', {
+  const { connection, nodePlugins } = request;
+  const initialized = await connection.request('initialize', {
     clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
     capabilities: null,
   });
@@ -454,17 +469,37 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     await connection.request('account/login/start', { type: 'apiKey', apiKey: request.apiKey });
   }
 
+  let { threadParams } = request;
+  if (nodePlugins) {
+    const inventory = await readCodexInventory(connection, {
+      cwd: request.cwd,
+      plugins: nodePlugins,
+      codexHome: codexHomeOf(initialized),
+    });
+    threadParams = {
+      ...threadParams,
+      config: applyNodeScope(threadParams.config ?? {}, inventory, nodePlugins),
+    };
+  }
+  // A resumed thread needs the same config: Codex does not store it with the thread.
   const threadResponse = request.resumeSessionId
     ? await connection.request('thread/resume', {
         threadId: request.resumeSessionId,
         cwd: request.cwd,
-        ...request.threadParams,
+        ...threadParams,
         excludeTurns: true,
       })
-    : await connection.request('thread/start', { cwd: request.cwd, ...request.threadParams });
+    : await connection.request('thread/start', { cwd: request.cwd, ...threadParams });
   const threadId = idAt(threadResponse, 'thread');
   if (!threadId) throw new Error('Codex app-server returned a thread without an id');
   request.onThread(threadId);
+  if (nodePlugins) {
+    await checkThreadMcpScope(
+      connection,
+      threadId,
+      Object.keys(declaredServers(request.threadParams.config ?? {}))
+    );
+  }
   getLog().debug(
     { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
     'codex.thread_ready'
@@ -798,6 +833,7 @@ export class CodexProvider implements IAgentProvider {
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
 
+      const workflowNode = isWorkflowNode(requestOptions);
       const stream = streamTurn({
         connection,
         apiKey,
@@ -807,7 +843,7 @@ export class CodexProvider implements IAgentProvider {
           sandbox: 'danger-full-access',
           approvalPolicy: 'never',
           ...(model ? { model } : {}),
-          config: buildThreadConfig(codexConfig, mcpServers, isWorkflowNode(requestOptions)),
+          config: buildThreadConfig(codexConfig, mcpServers, workflowNode),
         },
         turnParams: {
           input: [
@@ -816,6 +852,7 @@ export class CodexProvider implements IAgentProvider {
           ...(effort ? { effort } : {}),
           ...(outputSchema !== undefined ? { outputSchema } : {}),
         },
+        nodePlugins: workflowNode ? (requestOptions?.nodeConfig?.plugins ?? []) : undefined,
         hasOutputFormat,
         model,
         onThread: id => {

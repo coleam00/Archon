@@ -37,6 +37,11 @@ const ROOTS = [
   'v2/TurnStartResponse',
   'v2/TurnInterruptResponse',
   'v2/LoginAccountResponse',
+  // Workflow-node capability scoping reads these.
+  'v2/ConfigReadResponse',
+  'v2/PluginInstalledResponse',
+  'v2/PluginReadResponse',
+  'v2/ListMcpServerStatusResponse',
 ];
 
 async function generate(): Promise<Map<string, string>> {

@@ -252,6 +252,9 @@ skill. Direct Codex chat and other non-workflow calls keep their normal Codex be
 - **SKILL.md format** — Codex parses the same `name`/`description` frontmatter
   as Claude Code. Any Claude-specific `!bash` execution lines in a skill body
   are treated as literal text by Codex (no error, no execution).
+- **Plugin skills** — a Codex plugin's skills are available only when the node
+  names the plugin with `plugins:`. Invoke one as `$<plugin>:<skill>`. Skills of
+  plugins the node does not name are unavailable, even on explicit request.
 - **Behavioral boundary, not filesystem security** — an explicit request for an
   ambient `$skill-name` can still activate that installed skill. Archon prevents
   automatic advertisement; it does not hide or move files.
