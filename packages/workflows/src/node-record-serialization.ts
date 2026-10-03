@@ -128,6 +128,21 @@ function outputFields(
   };
 }
 
+/**
+ * Whether this record's spend is its own, or a restatement of spend rows the same run
+ * already carries. `accounting` is the seam: a `loop_group` roll-up sums its body rows, a
+ * composed fan-out wrapper sums its instances, an instance terminal sums its own leaves,
+ * and an amendment re-states the attempt it amends. `serializeNodeStateRecord` marks every
+ * record this rejects `aggregate: true` and the resume fold skips marked rows, so the
+ * durable row, the transcript and the emitter all report spend on the same terms — a
+ * reader summing `node_complete` costs lands on the run total (#3508).
+ * `serializeNodeOutput` is deliberately not gated: the run total is fed by exactly one
+ * aggregation point, and the scope totals it reads are already this record's own.
+ */
+function reportsOwnSpend(record: NodeExecutionRecord): boolean {
+  return record.accounting === 'node';
+}
+
 export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {
   const identity = { workflow_run_id: record.runId, step_name: record.path };
   if ('cache' in record) {
@@ -213,7 +228,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
             },
           }
         : {}),
-      ...(accounting !== 'node' ? { aggregate: true } : {}),
+      ...(!reportsOwnSpend(record) ? { aggregate: true } : {}),
       ...(lifecycle.status === 'failed'
         ? {
             error: lifecycle.error,
@@ -263,21 +278,6 @@ export type NodeExecutionResult = NodeOutput & {
   tokens?: TokenUsage;
   loopIterations?: number;
 };
-
-/**
- * Whether this record's spend is its own, or a restatement of spend rows the same run
- * already carries. `accounting` is the seam: a `loop_group` roll-up sums its body rows, a
- * composed fan-out wrapper sums its instances, an instance terminal sums its own leaves,
- * and an amendment re-states the attempt it amends. `serializeNodeStateRecord` marks all
- * of them `aggregate: true` and the resume fold skips marked rows, so the transcript and
- * the emitter print the number on the same terms — a reader summing `node_complete`
- * costs lands on the run total. `serializeNodeOutput` is deliberately not gated: the run
- * total is fed by exactly one aggregation point, and the scope totals it reads are
- * already this record's own.
- */
-export function reportsOwnSpend(record: NodeExecutionRecord): boolean {
-  return record.accounting === 'node';
-}
 
 export function serializeNodeOutput(
   record: NodeExecutionRecord,

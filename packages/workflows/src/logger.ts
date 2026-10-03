@@ -98,8 +98,10 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
  * a `loop_group` roll-up over its `<groupId>.<nodeId>` body rows, a composed fan-out
  * wrapper over its instances, an instance terminal over its own leaves, an amendment over
  * the attempt it amends — so those rows omit both axes, matching the `aggregate: true`
- * marker the durable row carries and the resume fold already honours. Summing a run's
- * `node_complete` costs therefore equals its `workflow_complete.cost_usd` (#3508).
+ * marker the durable row carries and the resume fold already honours. No row restates
+ * another's spend, so summing the rows that carry a `cost_usd` lands on
+ * `workflow_complete.cost_usd` (#3508); count `node_error` rows in that sum, because a
+ * retried attempt that already spent reports on its own.
  *
  * Coverage is not yet complete, so do not read an absent `cost_usd` on a run's transcript
  * as "the whole run was free"; read it per row, where it means the provider reported no
