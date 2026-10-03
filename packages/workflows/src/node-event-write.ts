@@ -73,6 +73,10 @@ export function deriveTranscriptEvent(
   if (!record) return undefined;
   if (record.metadata) return serializeNodeTranscript(record.metadata);
   const content = transcriptContent(node, record);
+  // The canonical rule again (#3508), on the only signal a record without an execution
+  // identity carries. An old approval cursor's finalize row reports a `loop:` node's own
+  // spend and is unmarked, so this leaves it alone.
+  const ownSpend = record.data.aggregate !== true;
   switch (record.eventType) {
     case 'node_started':
       return { type: 'node_start', step: node.id, content };
@@ -82,16 +86,20 @@ export function deriveTranscriptEvent(
         step: node.id,
         content,
         ...(record.data.duration_ms !== undefined ? { duration_ms: record.data.duration_ms } : {}),
-        ...(record.data.cost_usd !== undefined ? { cost_usd: record.data.cost_usd } : {}),
-        ...(record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
+        ...(ownSpend && record.data.cost_usd !== undefined
+          ? { cost_usd: record.data.cost_usd }
+          : {}),
+        ...(ownSpend && record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
       };
     case 'node_failed':
       return {
         type: 'node_error',
         step: node.id,
         error: record.data.error ?? '',
-        ...(record.data.cost_usd !== undefined ? { cost_usd: record.data.cost_usd } : {}),
-        ...(record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
+        ...(ownSpend && record.data.cost_usd !== undefined
+          ? { cost_usd: record.data.cost_usd }
+          : {}),
+        ...(ownSpend && record.data.tokens !== undefined ? { tokens: record.data.tokens } : {}),
       };
     case 'node_skipped':
       return {
@@ -126,6 +134,8 @@ export function deriveEmitterEvent(
   if (!record) return undefined;
   if (record.metadata) return serializeNodeEmitter(record.metadata);
   const nodeName = nodeDisplayName(node);
+  // Same rule as the transcript derivation: a restatement never reports spend as its own.
+  const ownSpend = record.data.aggregate !== true;
   switch (record.eventType) {
     case 'node_started':
       return {
@@ -141,7 +151,9 @@ export function deriveEmitterEvent(
         nodeId: node.id,
         nodeName,
         ...(record.data.duration_ms !== undefined ? { duration: record.data.duration_ms } : {}),
-        ...(record.data.cost_usd !== undefined ? { costUsd: record.data.cost_usd } : {}),
+        ...(ownSpend && record.data.cost_usd !== undefined
+          ? { costUsd: record.data.cost_usd }
+          : {}),
         ...(record.data.stop_reason !== undefined ? { stopReason: record.data.stop_reason } : {}),
         ...(record.data.num_turns !== undefined ? { numTurns: record.data.num_turns } : {}),
       };

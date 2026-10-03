@@ -1890,8 +1890,14 @@ before this contract cannot be recovered.
 
 Read cost from `cost_usd`, not from the token counts. Because `input` is gross, pricing a
 node by hand means getting four axes and the cache rates right; `cost_usd` is the number the
-provider itself reported. JSONL `node_complete.cost_usd` and persisted
-`node_completed.data.cost_usd` carry it for a node. JSONL `workflow_complete` carries the
+provider itself reported. A row reports it as its own only when the row's `accounting` is
+`node`, so summing JSONL `node_complete.cost_usd` over a run reproduces the run's own cost.
+A row that restates spend its scope already reports elsewhere in the same run — a
+`loop_group` roll-up over its body rows, a composed fan-out wrapper over its instances, an
+instance terminal over its own leaves — omits the field and names itself in
+`execution.accounting` instead. The persisted `node_completed.data.cost_usd` still carries
+the number on every row and marks a restatement with `data.aggregate: true`, the marker a
+resume folds (#3508). JSONL `workflow_complete` carries the
 successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal `workflow_error`
 carries the same aggregate when work reported usage before failure. These match run metadata
 `total_cost_usd` and `total_tokens_*`. An absent `cost_usd` means the provider reported no

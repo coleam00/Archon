@@ -264,6 +264,21 @@ export type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
+/**
+ * Whether this record's spend is its own, or a restatement of spend rows the same run
+ * already carries. `accounting` is the seam: a `loop_group` roll-up sums its body rows, a
+ * composed fan-out wrapper sums its instances, an instance terminal sums its own leaves,
+ * and an amendment re-states the attempt it amends. `serializeNodeStateRecord` marks all
+ * of them `aggregate: true` and the resume fold skips marked rows, so the transcript and
+ * the emitter print the number on the same terms — a reader summing `node_complete`
+ * costs lands on the run total. `serializeNodeOutput` is deliberately not gated: the run
+ * total is fed by exactly one aggregation point, and the scope totals it reads are
+ * already this record's own.
+ */
+export function reportsOwnSpend(record: NodeExecutionRecord): boolean {
+  return record.accounting === 'node';
+}
+
 export function serializeNodeOutput(
   record: NodeExecutionRecord,
   continuation: { resumed?: boolean } = {}
@@ -327,10 +342,14 @@ export function serializeNodeTranscript(
   const lifecycle = record.lifecycle;
   const execution = executionMetadata(record);
   const base = { step: record.node.id, execution };
-  const usage = {
-    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-    ...(record.spend.costUsd.source === 'provider' ? { cost_usd: record.spend.costUsd.value } : {}),
-  };
+  const usage = reportsOwnSpend(record)
+    ? {
+        ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
+        ...(record.spend.costUsd.source === 'provider'
+          ? { cost_usd: record.spend.costUsd.value }
+          : {}),
+      }
+    : {};
   const content =
     record.node.kind === 'agent'
       ? record.node.source.kind === 'command'
@@ -396,7 +415,7 @@ export function serializeNodeEmitter(
         execution,
         type: 'node_completed',
         ...(record.timing.durationMs !== undefined ? { duration: record.timing.durationMs } : {}),
-        ...(record.spend.costUsd.source === 'provider'
+        ...(reportsOwnSpend(record) && record.spend.costUsd.source === 'provider'
           ? { costUsd: record.spend.costUsd.value }
           : {}),
         ...(record.spend.stopReason.source === 'provider'

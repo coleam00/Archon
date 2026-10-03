@@ -25187,11 +25187,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
       ] as DagNode[],
     };
 
-    mockSendQueryDag.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '{"type":"BUG"}' };
-      yield { type: 'result', sessionId: 'lg-declared-fields-sess' };
-    });
-
     await executeDagWorkflow(
       dagOptions({
         deps: mockDeps,
@@ -25437,6 +25432,26 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const bodyRows = completedEvents.filter(e => e.step_name?.startsWith('paid.'));
     expect(bodyRows.length).toBeGreaterThan(0);
     for (const row of bodyRows) expect(row.data?.aggregate).toBeUndefined();
+
+    // The transcript half of the same rule (#3508): the roll-up row restates its body's
+    // spend, which those same leaves already report, so it reports none of its own and a
+    // sum of the transcript's node_complete costs equals the run total.
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const rollUpRow = rows.find(r => r.type === 'node_complete' && r.step === 'paid');
+    const bodyCompleted = rows.filter(
+      r =>
+        r.type === 'node_complete' &&
+        String((r.execution as { path?: string })?.path ?? '').startsWith('paid.')
+    );
+    expect(rollUpRow).toBeDefined();
+    expect(rollUpRow).not.toHaveProperty('cost_usd');
+    expect(bodyCompleted.length).toBeGreaterThan(0);
+    for (const row of bodyCompleted) expect(row).toHaveProperty('cost_usd');
+    expect(
+      rows
+        .filter(r => r.type === 'node_complete')
+        .reduce((total, r) => total + (typeof r.cost_usd === 'number' ? r.cost_usd : 0), 0)
+    ).toBeCloseTo(0.03, 5);
   });
 
   it('COST: accumulates token usage across loop_group iterations', async () => {
@@ -36576,6 +36591,108 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(instanceCompletions.every(e => e.data.node_output === 'DONE-a')).toBe(true);
     expect(events.some(e => e.event_type === 'node_completed' && e.step_name === 'grp')).toBe(true);
     expect(events.some(e => String(e.data.error ?? '').length > 0)).toBe(false);
+  });
+
+  it('charges each model call once: leaf node_complete costs sum to the run total (#3508)', async () => {
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: test block',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: work',
+        "    prompt: 'work on $INPUTS.item'",
+      ].join('\n')
+    );
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls += 1;
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield {
+        type: 'result',
+        sessionId: `session-${calls}`,
+        cost: 0.02,
+        tokens: { input: 10, output: 5 },
+      };
+    });
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('compose-cost-run');
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        conversationId: 'conv-compose-cost',
+        cwd: testDir,
+        workflow: {
+          name: 'compose-parent',
+          nodes: [
+            {
+              id: 'list',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `echo '${JSON.stringify(['a', 'b'])}'`,
+            },
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              depends_on: ['list'],
+              with: { item: 'unused' },
+              fan_out: { items: '$list.output', as: 'item', max_parallel: 2, join: 'all_done' },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(calls).toBe(2);
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const completed = rows.filter(row => row.type === 'node_complete');
+    const leaves = completed.filter(
+      row => (row.execution as { path?: string } | undefined)?.path?.endsWith('__work') === true
+    );
+
+    // The two instance leaves are the only rows that report spend, so summing the
+    // transcript's per-node costs reproduces the run total. The wrapper and the two
+    // instance terminals restate that same spend and report none of their own.
+    const wrapperRow = completed.find(row => row.step === 'fan');
+    expect(leaves.map(row => row.cost_usd)).toEqual([0.02, 0.02]);
+    expect(wrapperRow).toBeDefined();
+    expect(wrapperRow).not.toHaveProperty('cost_usd');
+    const instanceTerminals = completed.filter(
+      row => (row.execution as { accounting?: string } | undefined)?.accounting === 'instance'
+    );
+    expect(instanceTerminals).toHaveLength(2);
+    for (const row of instanceTerminals) expect(row).not.toHaveProperty('cost_usd');
+    const reported = completed.reduce(
+      (total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0),
+      0
+    );
+    const runTotal = rows.find(row => row.type === 'workflow_complete')?.cost_usd;
+    expect(runTotal).toBe(0.04);
+    expect(reported).toBe(runTotal as number);
+    expect(runUsageWrites(store).map(write => write.total_cost_usd)).toEqual([0.04]);
+
+    // The durable rows are untouched: they still carry every number beside the
+    // `aggregate` marker the resume fold reads, so a resumed run keeps folding the
+    // wrapper and each instance terminal. This change is reporting-only.
+    const durable = eventsOf(store).filter(e => e.event_type === 'node_completed');
+    const wrapperEvent = durable.find(e => e.step_name === 'fan');
+    expect(wrapperEvent?.data.cost_usd).toBe(0.04);
+    expect(wrapperEvent?.data.aggregate).toBe(true);
+    const instanceEvents = durable.filter(e => e.data.type === 'compose_fan_out_instance');
+    expect(instanceEvents).toHaveLength(2);
+    for (const event of instanceEvents) {
+      expect(event.data.cost_usd).toBe(0.02);
+      expect(event.data.aggregate).toBe(true);
+    }
   });
 });
 // ---------------------------------------------------------------------------
