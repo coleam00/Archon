@@ -9,7 +9,7 @@ import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
-import { serializeWorkflowPreservingText } from './workflow-yaml';
+import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
 import { existsSync, readFileSync } from 'fs';
 import { normalize, join, basename, dirname, resolve } from 'path';
@@ -4584,11 +4584,20 @@ export function registerApiRoutes(
       const filePath = existing?.absolutePath ?? join(dirPath, `${name}.yaml`);
       const filename = existing?.filename ?? `${name}.yaml`;
 
-      // Serialize over the file on disk so unchanged parts keep their text and comments
+      // Serialize over the file on disk so the file keeps its comments and anchors
       let yamlContent: string;
       try {
         yamlContent = serializeWorkflowPreservingText(definition, existing?.content);
       } catch (error) {
+        if (error instanceof WorkflowReadBackError) {
+          // A serializer defect, not bad input: writing would store a different workflow.
+          getLog().error({ err: error, name }, 'workflow.save_readback_mismatch');
+          return apiError(
+            c,
+            500,
+            'Workflow was not saved: the serialized file would not match the submitted definition'
+          );
+        }
         const err = error instanceof Error ? error : new Error(String(error));
         getLog().error({ err, name }, 'workflow.serialize_failed');
         return apiError(c, 400, 'Failed to serialize workflow definition');

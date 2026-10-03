@@ -5,10 +5,9 @@
  * every comment and reflows the file, so instead the new definition is merged into the parsed
  * document of the file already on disk, which keeps comments and scalar styles.
  *
- * The library still re-renders whitespace (`{ a }` becomes `{a}`), so the merged document is
- * not written as is: the old and the merged document are both rendered, their line diff is
- * exactly the edit, and that edit is laid over the original text. Lines the edit does not
- * touch come from the file on disk byte for byte.
+ * The library re-renders whitespace (`{ a }` becomes `{a}`); that is the accepted cost of keeping
+ * this small. Before the text is returned it is parsed back and compared with the definition, so
+ * a merge that produced a different document fails the save instead of being written.
  */
 import { Document, isAlias, isMap, isNode, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import type { Node } from 'yaml';
@@ -124,122 +123,54 @@ function settleAliases(doc: Document): void {
   });
 }
 
-/**
- * Longest-common-subsequence match of two line lists: for each line of `a`, the index of the
- * line of `b` it is matched to, or -1. Matched indices increase with the index into `a`.
- */
-function matchLines(a: string[], b: string[]): number[] {
-  // ceiling: O(n*m) table, fine for workflow files of hundreds of lines; Myers diff if they grow
-  const lcs = Array.from({ length: a.length + 1 }, () => new Uint32Array(b.length + 1));
-  for (let i = a.length - 1; i >= 0; i--) {
-    for (let j = b.length - 1; j >= 0; j--) {
-      lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
-    }
+/** The text a save was about to write does not parse back to the definition that was sent. */
+export class WorkflowReadBackError extends Error {
+  constructor() {
+    super('Serialized workflow does not read back as the submitted definition');
+    this.name = 'WorkflowReadBackError';
   }
-  const match = new Array<number>(a.length).fill(-1);
-  for (let i = 0, j = 0; i < a.length && j < b.length; ) {
-    if (a[i] === b[j]) match[i++] = j++;
-    else if (lcs[i + 1][j] >= lcs[i][j + 1]) i++;
-    else j++;
-  }
-  return match;
 }
 
 /**
- * Lay the edit `rendered` → `edited` over `original`, where `rendered` is `original` re-rendered
- * by the library. `rendered` is cut into segments by its lines that appear verbatim in
- * `original`: such a line is a segment of its own, and each run of re-rendered lines between two
- * of them is one segment paired with the original lines it replaced. A segment the edit leaves
- * alone is written as the original lines; a segment it touches is written as the edited lines.
+ * Throw unless `text` parses to `definition`. Parsed with the parser the workflow loader uses,
+ * so the comparison is against what a later read of the file will see.
  */
-function overlayEdit(original: string[], rendered: string[], edited: string[]): string[] {
-  const toOriginal = matchLines(rendered, original);
-  const toEdited = matchLines(rendered, edited);
-
-  interface Segment {
-    originalLines: string[];
-    editedLines: string[];
-    touched: boolean;
-    /** Lines the edit inserts right after this segment, between it and the next one. */
-    inserted: string[];
+export function assertReadsBackAs(text: string, definition: Record<string, unknown>): void {
+  let readBack: unknown;
+  try {
+    readBack = Bun.YAML.parse(text);
+  } catch {
+    throw new WorkflowReadBackError();
   }
-  const segment = (originalLines: string[]): Segment => ({
-    originalLines,
-    editedLines: [],
-    touched: false,
-    inserted: [],
-  });
-  const leading = segment([]);
-  const segments: Segment[] = [leading];
-  const segmentOf: Segment[] = [];
-  let originalAt = 0;
-  for (let i = 0; i < rendered.length; i++) {
-    const inOriginal = toOriginal[i];
-    if (inOriginal >= 0) {
-      // Original lines the re-render dropped (between two verbatim lines) stay as they were.
-      const dropped = original.slice(originalAt, inOriginal);
-      if (dropped.length > 0) segments.push(segment(dropped));
-      segments.push(segment([original[inOriginal]]));
-      originalAt = inOriginal + 1;
-    } else if (i === 0 || toOriginal[i - 1] >= 0) {
-      let end = i;
-      while (end < rendered.length && toOriginal[end] < 0) end++;
-      const nextOriginal = end < rendered.length ? toOriginal[end] : original.length;
-      segments.push(segment(original.slice(originalAt, nextOriginal)));
-      originalAt = nextOriginal;
-    }
-    segmentOf.push(segments[segments.length - 1]);
-  }
-  if (originalAt < original.length) segments.push(segment(original.slice(originalAt)));
-
-  // Walk the rendered → edited diff. A line inserted between two segments stands on its own;
-  // one inserted inside a multi-line segment makes that segment touched.
-  let editedAt = 0;
-  for (let i = 0; i <= rendered.length; i++) {
-    const inEdited = i < rendered.length ? toEdited[i] : edited.length;
-    if (inEdited < 0) {
-      segmentOf[i].touched = true;
-      continue;
-    }
-    if (inEdited > editedAt) {
-      const lines = edited.slice(editedAt, inEdited);
-      const before = i === 0 ? leading : segmentOf[i - 1];
-      if (i === rendered.length || segmentOf[i] !== before) {
-        before.inserted.push(...lines);
-      } else {
-        before.editedLines.push(...lines);
-        before.touched = true;
-      }
-    }
-    if (i < rendered.length) segmentOf[i].editedLines.push(edited[inEdited]);
-    editedAt = inEdited + 1;
-  }
-
-  return segments.flatMap(s => [...(s.touched ? s.editedLines : s.originalLines), ...s.inserted]);
+  if (!Bun.deepEquals(readBack, definition)) throw new WorkflowReadBackError();
 }
 
 /**
  * Return the YAML text to write for `definition`.
  * `existingText` is the current file content, or undefined when the workflow is new.
+ * Throws WorkflowReadBackError when the text would not read back as `definition`.
  */
 export function serializeWorkflowPreservingText(
   definition: Record<string, unknown>,
   existingText: string | undefined
 ): string {
+  const text = render(definition, existingText);
+  assertReadsBackAs(text, definition);
+  return text;
+}
+
+function render(definition: Record<string, unknown>, existingText: string | undefined): string {
   if (existingText !== undefined) {
-    // Work in LF: the library keeps a CR inside comments of a CRLF file, which would make those
-    // rendered lines differ from the original ones. The file's line ending is restored at the end.
+    // Work in LF: the library keeps a CR inside comments of a CRLF file and ends lines with LF,
+    // which would mix the two. The file's line ending is restored at the end.
     const eol = existingText.includes('\r\n') ? '\r\n' : '\n';
-    const text = existingText.replace(/\r\n/g, '\n');
     // Widened from Document.Parsed: merged-in nodes are created, not parsed.
-    const doc: Document = parseDocument(text);
+    const doc: Document = parseDocument(existingText.replace(/\r\n/g, '\n'));
     if (doc.errors.length === 0 && isMap(doc.contents)) {
       if (Bun.deepEquals(doc.toJS(), definition)) return existingText;
-      const rendered = doc.toString(TO_STRING);
       doc.contents = merge(doc, doc.contents, definition);
       settleAliases(doc);
-      const edited = doc.toString(TO_STRING);
-      return overlayEdit(text.split('\n'), rendered.split('\n'), edited.split('\n')).join(eol);
+      return doc.toString(TO_STRING).replace(/\n/g, eol);
     }
     // An unparseable file on disk has no text worth keeping; the save replaces it.
   }

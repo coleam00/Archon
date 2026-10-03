@@ -1,5 +1,9 @@
 import { describe, test, expect } from 'bun:test';
-import { serializeWorkflowPreservingText } from './workflow-yaml';
+import {
+  assertReadsBackAs,
+  serializeWorkflowPreservingText,
+  WorkflowReadBackError,
+} from './workflow-yaml';
 
 const authored = [
   '# flow header',
@@ -65,40 +69,27 @@ describe('serializeWorkflowPreservingText', () => {
     );
   });
 
-  test('lines the edit does not touch keep their exact spacing', () => {
+  test('flow collections stay flow collections, re-spaced by the library', () => {
     const spaced = [
       'name: spaced',
       'nodes:',
       '  - id: a',
       '    model: opus',
-      '    output_format: { type: object, required: [ x ] }',
-      '    allowed_tools: [Read,  Grep]',
+      '    output_format: { type: object, required: [ x ] } # shape',
       '',
     ].join('\n');
     const text = serializeWorkflowPreservingText(
       {
         name: 'spaced',
-        nodes: [
-          {
-            id: 'a',
-            model: 'sonnet',
-            output_format: { type: 'object', required: ['x'] },
-            allowed_tools: ['Read', 'Grep'],
-          },
-        ],
+        nodes: [{ id: 'a', model: 'sonnet', output_format: { type: 'object', required: ['x'] } }],
       },
       spaced
     );
-    expect(text).toBe(spaced.replace('model: opus', 'model: sonnet'));
-  });
-
-  test('a key appended after a reformatted line leaves that line alone', () => {
-    const spaced = ['name: spaced', 'nodes:', '  - id: a', '    with: { x: 1 }', ''].join('\n');
-    const text = serializeWorkflowPreservingText(
-      { name: 'spaced', nodes: [{ id: 'a', with: { x: 1 }, model: 'opus' }] },
+    expect(text).toBe(
       spaced
+        .replace('model: opus', 'model: sonnet')
+        .replace('{ type: object, required: [ x ] }', '{type: object, required: [x]}')
     );
-    expect(text).toBe(spaced.replace('{ x: 1 }\n', '{ x: 1 }\n    model: opus\n'));
   });
 
   test('an edit elsewhere keeps anchors and aliases whose value did not change', () => {
@@ -205,5 +196,25 @@ describe('serializeWorkflowPreservingText', () => {
   test('an unparseable file on disk is replaced by the definition', () => {
     const text = serializeWorkflowPreservingText({ name: 'x', nodes: [] }, 'name: [unclosed');
     expect(text).toBe('name: x\nnodes: []\n');
+  });
+});
+
+describe('assertReadsBackAs', () => {
+  test('passes when the text parses to the definition', () => {
+    expect(() => {
+      assertReadsBackAs('name: x\nnodes: []\n', { nodes: [], name: 'x' });
+    }).not.toThrow();
+  });
+
+  test('throws when the text parses to a different document', () => {
+    expect(() => {
+      assertReadsBackAs('name: x\nnodes:\n  - id: a\n', { name: 'x', nodes: [{ id: 'b' }] });
+    }).toThrow(WorkflowReadBackError);
+  });
+
+  test('throws when the text is not valid YAML', () => {
+    expect(() => {
+      assertReadsBackAs('name: [unclosed', { name: 'x' });
+    }).toThrow(WorkflowReadBackError);
   });
 });
