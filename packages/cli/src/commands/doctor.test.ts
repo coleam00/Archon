@@ -460,7 +460,8 @@ describe('checkAssistantLogin', () => {
   ): AssistantLoginDeps => ({
     assistant: 'pi',
     model: 'anthropic/claude-sonnet-4-6',
-    credentialConnected: false,
+    vendor: 'anthropic',
+    connectedVendors: [],
     provider: { checkCredential: mock(async () => state) },
   });
 
@@ -501,7 +502,7 @@ describe('checkAssistantLogin', () => {
     try {
       const result = await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' }, async () => ({
         assistant: 'claude',
-        credentialConnected: false,
+        connectedVendors: [],
         provider: new ClaudeProvider(),
       }));
       expect(result).toMatchObject({ status: 'skip', message: 'claude: not checked' });
@@ -608,6 +609,30 @@ describe('checkAssistantLogin', () => {
         message: 'pi: uses the credential connected in Archon',
       });
       expect(native).toHaveBeenCalledTimes(1);
+      // A pre-#1955 agent-keyed row is delivered as its vendor, so it counts as one.
+      rows.mockResolvedValue([{ provider: 'claude', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'pass',
+        message: 'pi: uses the credential connected in Archon',
+      });
+      expect(native).toHaveBeenCalledTimes(1);
+      // With no model in Archon config, doctor cannot tell which connected vendor the run
+      // uses, so a missing native login is a warning that names the connected one.
+      load.mockResolvedValue({
+        ...config,
+        assistant: 'pi',
+        assistants: { ...config.assistants, pi: {} },
+      });
+      rows.mockResolvedValue([{ provider: 'anthropic', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'warn',
+        message: expect.stringContaining('anthropic'),
+      });
+      expect(native).toHaveBeenCalledTimes(2);
+      rows.mockResolvedValue([]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+      });
     } finally {
       native.mockRestore();
       rows.mockRestore();
@@ -619,7 +644,7 @@ describe('checkAssistantLogin', () => {
   it('uses the connected credential without checking native login', async () => {
     const fixture = {
       ...deps({ state: 'unusable', source: 'native', evidence: 'dead native login' }),
-      credentialConnected: true,
+      connectedVendors: ['anthropic'],
     };
     const result = await checkAssistantLogin({}, async () => fixture);
     expect(result).toMatchObject({
@@ -627,6 +652,22 @@ describe('checkAssistantLogin', () => {
       message: 'pi: uses the credential connected in Archon',
     });
     expect(fixture.provider.checkCredential).not.toHaveBeenCalled();
+  });
+
+  it('warns on a dead native login when an unconfigured model may use a connected credential', async () => {
+    const fixture = {
+      ...deps({ state: 'unusable', source: 'native', evidence: 'dead native login' }),
+      model: undefined,
+      vendor: undefined,
+      connectedVendors: ['anthropic', 'openai'],
+    };
+    expect(await checkAssistantLogin({}, async () => fixture)).toMatchObject({
+      status: 'warn',
+      message: expect.stringContaining('dead native login'),
+    });
+    expect((await checkAssistantLogin({}, async () => fixture)).message).toContain(
+      'anthropic, openai'
+    );
   });
 
   it('warns if the configured login could not be checked', async () => {

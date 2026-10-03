@@ -389,7 +389,10 @@ export interface AssistantLoginDeps {
   assistant: string;
   assistantConfig?: Parameters<IAgentProvider['checkCredential']>[0]['assistantConfig'];
   model?: string;
-  credentialConnected: boolean;
+  /** The credential vendor the configured model uses; undefined when Archon config names none. */
+  vendor?: string;
+  /** Vendors of the user's connected credentials that this assistant can use, as delivery names them. */
+  connectedVendors: readonly string[];
   provider: Pick<IAgentProvider, 'checkCredential'>;
 }
 
@@ -400,7 +403,7 @@ export async function checkAssistantLogin(
   const label = 'Assistant login';
   try {
     const deps = await loadDeps(env);
-    if (deps.credentialConnected) {
+    if (deps.vendor !== undefined && deps.connectedVendors.includes(deps.vendor)) {
       return {
         label,
         status: 'pass',
@@ -415,6 +418,13 @@ export async function checkAssistantLogin(
       ),
       signal: AbortSignal.timeout(20_000),
     });
+    // A run receives every connected credential, and the model picks the one it uses. With
+    // no model in Archon config (Pi falls back to its own default), doctor cannot tell
+    // whether a connected credential covers a missing native login, so it warns instead.
+    const connectedHint =
+      deps.vendor === undefined && deps.connectedVendors.length > 0
+        ? ` A run also receives your connected ${deps.connectedVendors.join(', ')} credential and uses it if its model is from that vendor; set a model in assistants.${deps.assistant} so doctor can tell.`
+        : undefined;
     switch (status.state) {
       case 'usable':
         return { label, status: 'pass', message: `${deps.assistant}: usable` };
@@ -428,17 +438,29 @@ export async function checkAssistantLogin(
           message: `${deps.assistant}: could not be verified. ${status.evidence}`,
         };
       case 'unusable':
-        return {
-          label,
-          status: 'fail',
-          message: `${deps.assistant}: cannot be used. ${status.evidence} Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
-        };
+        return connectedHint
+          ? {
+              label,
+              status: 'warn',
+              message: `${deps.assistant}: native login cannot be used. ${status.evidence}${connectedHint}`,
+            }
+          : {
+              label,
+              status: 'fail',
+              message: `${deps.assistant}: cannot be used. ${status.evidence} Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
+            };
       case 'not_connected':
-        return {
-          label,
-          status: 'fail',
-          message: `${deps.assistant}: no native credential. Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
-        };
+        return connectedHint
+          ? {
+              label,
+              status: 'warn',
+              message: `${deps.assistant}: no native credential.${connectedHint}`,
+            }
+          : {
+              label,
+              status: 'fail',
+              message: `${deps.assistant}: no native credential. Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
+            };
     }
   } catch (error) {
     return {
@@ -451,23 +473,30 @@ export async function checkAssistantLogin(
 
 async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<AssistantLoginDeps> {
   const config = await defaultLoadMergedConfig(process.cwd());
-  const { getRegistration, getAgentProvider } = await import('@archon/providers');
+  const { getRegistration, getAgentProvider, normalizeCredentialVendor } =
+    await import('@archon/providers');
   const configuredModel = config.assistants[config.assistant]?.model;
   const model = typeof configuredModel === 'string' ? configuredModel : undefined;
-  const vendor = getRegistration(config.assistant).credentials.vendorFor(model);
+  const { credentials } = getRegistration(config.assistant);
+  const usableVendors =
+    credentials.kind === 'static' ? credentials.specs.map(spec => spec.vendor) : [];
   const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
-  let credentialConnected = false;
-  if (vendor && cliId) {
+  let connectedVendors: string[] = [];
+  if (usableVendors.length > 0 && cliId) {
     const deps = await defaultLoadProviderDeps();
     const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
     const rows = await deps.listUserProviderKeys(user.id);
-    credentialConnected = rows.some(row => row.provider === vendor);
+    // Delivery normalizes legacy agent-keyed rows to their vendor; so does this lookup.
+    connectedVendors = [
+      ...new Set(rows.map(row => normalizeCredentialVendor(row.provider))),
+    ].filter(vendor => usableVendors.includes(vendor));
   }
   return {
     assistant: config.assistant,
     assistantConfig: { ...(config.assistants[config.assistant] ?? {}) },
     model,
-    credentialConnected,
+    vendor: credentials.vendorFor(model),
+    connectedVendors,
     provider: getAgentProvider(config.assistant),
   };
 }
