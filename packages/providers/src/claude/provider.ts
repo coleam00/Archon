@@ -1,4 +1,3 @@
-import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * Claude Agent SDK wrapper
  * Provides async generator interface for streaming Claude responses
@@ -29,6 +28,7 @@ import type { CredentialStatus } from '@archon/provider-contract';
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import type { CredentialStatus } from '@archon/provider-contract';
 import {
   query,
   type Options,

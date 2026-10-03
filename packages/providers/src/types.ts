@@ -1,8 +1,8 @@
-import type { CredentialStatus } from '@archon/provider-contract';
 // CONTRACT LAYER — no SDK imports, no runtime deps beyond SDK-free foundations.
 // @archon/workflows and @archon/core import from this subpath (@archon/providers/types).
 // HARD RULE: This file must never import SDK packages.
 
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { EffortRung } from '@archon/paths/effort';
 import type {
   ProviderCapabilities,

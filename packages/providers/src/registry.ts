@@ -1,4 +1,3 @@
-import { singleVendorCatalog } from './credential-catalog';
 /**
  * Provider Registry
  *
@@ -8,6 +7,7 @@ import { singleVendorCatalog } from './credential-catalog';
  * Bootstrap: callers must call registerBuiltinProviders() at process entrypoints
  * (server startup, CLI init) before any provider lookups.
  */
+import { singleVendorCatalog } from './credential-catalog';
 import type {
   IAgentProvider,
   ProviderCapabilities,

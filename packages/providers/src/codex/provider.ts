@@ -1,3 +1,7 @@
+/**
+ * Codex provider: one Codex turn per `sendQuery`, driven over the `codex app-server`
+ * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
+ */
 import { z } from 'zod';
 import type { Account } from './protocol/v2/Account';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
@@ -6,10 +10,6 @@ import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
-/**
- * Codex provider: one Codex turn per `sendQuery`, driven over the `codex app-server`
- * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
- */
 import type {
   IAgentProvider,
   SendQueryOptions,

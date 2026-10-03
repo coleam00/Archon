@@ -1,4 +1,3 @@
-import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 /**
  * A JSON-RPC connection to one `codex app-server` process over stdio.
  *
@@ -9,6 +8,7 @@ import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
  * (`scripts/generate-codex-protocol.ts`). Users run their own Codex version, so the
  * provider reads only the fields it needs from what arrives.
  */
+import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '@archon/paths';

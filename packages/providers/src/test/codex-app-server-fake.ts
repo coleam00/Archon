@@ -1,4 +1,3 @@
-import type { GetAccountResponse } from '../codex/protocol/v2/GetAccountResponse';
 /**
  * A scripted stand-in for `codex app-server`, driven through the provider's injectable
  * spawner. It speaks the real JSONL framing over PassThrough streams, so the JSON-RPC
@@ -7,6 +6,7 @@ import type { GetAccountResponse } from '../codex/protocol/v2/GetAccountResponse
  * Every frame it sends is typed with the protocol generated from the pinned Codex, so a
  * regeneration that renames or adds a field fails type-check here.
  */
+import type { GetAccountResponse } from '../codex/protocol/v2/GetAccountResponse';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';

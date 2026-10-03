@@ -1,4 +1,3 @@
-import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * GitHub Copilot provider (community tier).
  *
@@ -14,6 +13,7 @@ import type { CredentialStatus } from '@archon/provider-contract';
  * so a future SDK update that reads the filesystem at module load can't
  * break compiled-binary bootstrap.
  */
+import type { CredentialStatus } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { sessionPreview } from '@archon/provider-contract';
 import type {
