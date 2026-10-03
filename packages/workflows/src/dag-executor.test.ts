@@ -20717,6 +20717,64 @@ describe('executeDagWorkflow -- persist_session', () => {
     });
   });
 
+  it('picks only the row matching both node id and provider from the scope snapshot', async () => {
+    const row = (node_id: string, provider: string, provider_session_id: string) => ({
+      workflow_name: 'persist-test',
+      node_id,
+      scope_key: 'conv-dag',
+      provider,
+      provider_session_id,
+      last_run_id: 'prior-run',
+      created_at: '2026-05-01T00:00:00Z',
+      updated_at: '2026-05-01T00:00:00Z',
+    });
+    const nonMatching = [
+      row('reviewer', 'claude', 'reviewer-claude'),
+      row('planner', 'codex', 'planner-codex'),
+    ];
+    const workflow = {
+      name: 'persist-test',
+      nodes: [
+        {
+          id: 'planner',
+          kind: 'agent' as const,
+          source: { kind: 'command' as const, name: 'my-cmd' },
+          persist_session: true,
+        },
+      ],
+    };
+
+    const withMatch = createMockStore();
+    withMatch.listWorkflowNodeSessions.mockResolvedValue([
+      ...nonMatching,
+      row('planner', 'claude', 'planner-claude'),
+    ]);
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(withMatch),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('planner-claude');
+
+    mockSendQueryDag.mockClear();
+    const withoutMatch = createMockStore();
+    withoutMatch.listWorkflowNodeSessions.mockResolvedValue(nonMatching);
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(withoutMatch),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    const eventTypes = withoutMatch.createWorkflowEvent.mock.calls.map(c => c[0].event_type);
+    expect(eventTypes).not.toContain('node_session_resumed');
+  });
+
   it('runs launched from one thread share the session even when each runs in its own conversation (#3585)', async () => {
     // Web dispatch runs every workflow in a fresh hidden worker conversation and records
     // the user's chat as parent_conversation_id. The scope must follow the chat.
