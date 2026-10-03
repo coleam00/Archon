@@ -1,8 +1,8 @@
 /**
- * Capability scoping for Codex workflow nodes.
+ * Capability scoping for Codex workflow nodes and title requests.
  *
- * A workflow node loads only the plugins and MCP servers it names. Codex already has
- * the switches, per thread: `features.plugins`, `plugins."<id>".enabled`, a plugin's
+ * Title requests reuse the empty node scope. A workflow node loads only the plugins
+ * and MCP servers it names. Codex already has the switches, per thread: `features.plugins`, `plugins."<id>".enabled`, a plugin's
  * `mcp_servers.<name>.enabled`, `features.apps`, and `mcp_servers.<name>.enabled` for a
  * user or project server. They ride in the thread's `config`, which Codex merges over
  * the user's own config.toml without replacing it, so the user's AGENTS.md, hooks and

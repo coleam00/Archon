@@ -1,5 +1,5 @@
 /**
- * The workflow-node scope, proved on the real bundled Codex binary at zero spend.
+ * Capability scope, proved on the real bundled Codex binary at zero spend.
  *
  * A temp CODEX_HOME holds a local marketplace with plugins `alpha` and `beta`. Each ships
  * an MCP server with one marker tool, a skill with a marker body, and a trusted
@@ -141,6 +141,11 @@ beforeAll(async () => {
   await writeFile(stubPath, MCP_STUB);
   await writeFile(join(root, 'hook.js'), HOOK_SCRIPT);
   await writeFile(join(home, 'AGENTS.md'), 'USER-GUIDANCE-MARKER\n');
+  await mkdir(join(home, 'skills', 'ambient-fixture'), { recursive: true });
+  await writeFile(
+    join(home, 'skills', 'ambient-fixture', 'SKILL.md'),
+    '---\nname: ambient-fixture\ndescription: AMBIENT-CATALOGUE-MARKER\n---\nAMBIENT-BODY-MARKER\n'
+  );
   // The user's own hook, which every node keeps.
   await writeFile(join(home, 'hooks.json'), JSON.stringify({ hooks: promptHook('user') }));
   await writeFile(join(repo, 'AGENTS.md'), 'PROJECT-GUIDANCE-MARKER\n');
@@ -225,11 +230,18 @@ async function runNode(
   nodeConfig: SendQueryOptions['nodeConfig'],
   resumeSessionId?: string
 ): Promise<MessageChunk[]> {
+  return await runRequest({ nodeConfig: { nodeId: 'scoped', ...nodeConfig } }, resumeSessionId);
+}
+
+async function runRequest(
+  options: SendQueryOptions,
+  resumeSessionId?: string
+): Promise<MessageChunk[]> {
   const chunks: MessageChunk[] = [];
   for await (const chunk of new CodexProvider().sendQuery(PROMPT, repo, resumeSessionId, {
     // An empty CODEX_API_KEY keeps an operator's key from logging the stub provider in.
     env: { CODEX_HOME: home, CODEX_API_KEY: '' },
-    nodeConfig: { nodeId: 'scoped', ...nodeConfig },
+    ...options,
   })) {
     chunks.push(chunk);
   }
@@ -281,7 +293,44 @@ async function writeMcp(file: string, servers: Record<string, string>): Promise<
 /** What a node naming only `alpha@fixture` sees: alpha's skill and hook, the user's hook. */
 const ALPHA_ONLY: Seen = { tools: [], skills: ['alpha'], hooks: ['alpha', 'user'], guidance: true };
 
-describe('Codex workflow-node scope on the real binary', () => {
+describe('Codex capability scope on the real binary', () => {
+  test(
+    'a title keeps native guidance and hooks but has no ambient capabilities and a read-only rollout',
+    async () => {
+      await runRequest({});
+      expect(modelRequests[0]).toContain('AMBIENT-CATALOGUE-MARKER');
+      modelRequests = [];
+      await rm(hookLog, { force: true });
+      const result = resultOf(await runRequest({ purpose: 'title-generation' }));
+      expect(result.failure?.evidence).toContain('stub model');
+      expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
+      expect(modelRequests[0]).not.toContain('AMBIENT-CATALOGUE-MARKER');
+      expect(modelRequests[0]).not.toContain('AMBIENT-BODY-MARKER');
+      expect(modelRequests[0]).not.toContain('## Skills');
+      expect(modelRequests[0]).not.toContain('# Apps');
+      expect(modelRequests[0]).not.toContain('# Plugins');
+      expect(result.sessionId).toBeDefined();
+      const rollouts: string[] = [];
+      for await (const path of new Bun.Glob('sessions/**/*.jsonl').scan(home)) rollouts.push(path);
+      const file = rollouts.find(path => path.endsWith(`${result.sessionId}.jsonl`));
+      if (!file) throw new Error('title rollout missing');
+      const entries: unknown[] = (await readFile(join(home, file), 'utf8'))
+        .trim()
+        .split('\n')
+        .map(line => JSON.parse(line) as unknown);
+      expect(entries).toContainEqual(
+        expect.objectContaining({
+          type: 'turn_context',
+          payload: expect.objectContaining({
+            sandbox_policy: { type: 'read-only' },
+            approval_policy: 'never',
+          }),
+        })
+      );
+    },
+    testTimeout(20_000)
+  );
+
   test(
     'a node that names nothing sees no plugin tool, skill or hook, and keeps the user’s hook and both AGENTS.md',
     async () => {

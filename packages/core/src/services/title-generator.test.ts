@@ -187,14 +187,13 @@ describe('title-generator', () => {
     expect(optionsArg.model).toBeUndefined();
   });
 
-  test('passes nodeConfig with allowed_tools: [] to disable tool access', async () => {
+  test('marks title requests without inventing a workflow node', async () => {
     await generateAndSetTitle('conv-11', 'Some message', 'claude', '/tmp');
 
-    const optionsArg = mockSendQuery.mock.calls[0][3] as {
-      model?: string;
-      nodeConfig?: { allowed_tools?: string[] };
-    };
-    expect(optionsArg.nodeConfig?.allowed_tools).toEqual([]);
+    const optionsArg = mockSendQuery.mock.calls[0][3];
+    expect(optionsArg).toMatchObject({ purpose: 'title-generation' });
+    expect(optionsArg?.nodeConfig?.nodeId).toBeUndefined();
+    expect(optionsArg?.nodeConfig?.allowed_tools).toEqual([]);
   });
 
   test('passes assistantConfig through to the provider', async () => {
@@ -215,14 +214,19 @@ describe('title-generator', () => {
     expect(optionsArg.assistantConfig).toEqual(assistantConfig);
   });
 
-  test('merges resolved requestOptions while disabling tools', async () => {
+  test('preserves resolved request options while marking title intent', async () => {
     await generateAndSetTitle('conv-13', 'Some message', 'claude', '/tmp', undefined, undefined, {
       model: 'haiku',
       assistantConfig: { settingSources: ['project'] },
       nodeConfig: { effort: 'high' },
+      env: { CODEX_API_KEY: 'fixture-key' },
+      protectedEnvKeys: ['CODEX_API_KEY'],
     });
 
     const optionsArg = mockSendQuery.mock.calls[0][3] as SendQueryOptions;
+    expect(optionsArg).toMatchObject({ purpose: 'title-generation' });
+    expect(optionsArg.env).toEqual({ CODEX_API_KEY: 'fixture-key' });
+    expect(optionsArg.protectedEnvKeys).toEqual(['CODEX_API_KEY']);
     expect(optionsArg.model).toBe('haiku');
     expect(optionsArg.assistantConfig).toEqual({ settingSources: ['project'] });
     expect(optionsArg.nodeConfig).toEqual({
