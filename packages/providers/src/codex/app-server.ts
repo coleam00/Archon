@@ -11,6 +11,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '@archon/paths';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import type { ClientRequest } from './protocol/ClientRequest';
 import type { ServerNotification } from './protocol/ServerNotification';
 import type { CodexBinary } from './binary-resolver';
@@ -48,8 +52,21 @@ export type ConnectionEnd =
   | { kind: 'exited'; code: number | null; signal: NodeJS.Signals | null }
   | { kind: 'spawn_failed'; error: NodeJS.ErrnoException };
 
-/** How much of Codex's stderr a connection keeps for a failure's evidence. */
-const STDERR_TAIL_CHARS = 4000;
+/** How much raw stderr a connection buffers, and how much of it becomes evidence. */
+const STDERR_BUFFER_CHARS = 8000;
+const STDERR_EVIDENCE_LINES = 10;
+const STDERR_EVIDENCE_CHARS = 1000;
+
+/**
+ * The evidence form of a stderr buffer: credentials redacted, then cut to its last lines.
+ * Redacting before cutting keeps a credential that straddles the cut from leaking its
+ * tail; the buffer is far larger than the evidence, so a credential cut at the buffer's
+ * own start never reaches it.
+ */
+function stderrEvidence(buffer: string, credentialValues: readonly string[]): string {
+  const lines = redactCredentialValues(buffer, credentialValues).trim().split('\n');
+  return lines.slice(-STDERR_EVIDENCE_LINES).join('\n').slice(-STDERR_EVIDENCE_CHARS);
+}
 
 /** A request that could not complete because the process ended first. */
 export class ConnectionClosedError extends Error {
@@ -57,7 +74,7 @@ export class ConnectionClosedError extends Error {
 
   /**
    * @param beforeFirstResponse the process ended without answering any request.
-   * @param stderr the tail of Codex's stderr.
+   * @param stderr the tail of Codex's stderr, already redacted.
    * @param errors the turn's `error` notifications, kept as evidence.
    */
   constructor(
@@ -68,7 +85,7 @@ export class ConnectionClosedError extends Error {
   ) {
     super([`Codex app-server ${describeEnd(end)} before the turn completed`, ...errors].join('\n'));
     this.name = 'ConnectionClosedError';
-    this.#stderr = stderr.trim();
+    this.#stderr = stderr;
   }
 
   /**
@@ -119,11 +136,17 @@ export class AppServerConnection {
   private endedWith: ConnectionEnd | undefined;
   private responded = false;
   private stderrTail = '';
+  /** Credential values from the process env, redacted from its stderr. */
+  private readonly credentialValues: readonly string[];
   private readonly endSignal = Promise.withResolvers<ConnectionEnd>();
   /** Resolves once the process is gone, however it ended. */
   readonly ended = this.endSignal.promise;
 
-  private constructor(private readonly child: ChildProcessWithoutNullStreams) {
+  private constructor(
+    private readonly child: ChildProcessWithoutNullStreams,
+    env: Record<string, string>
+  ) {
+    this.credentialValues = collectCredentialValues(env);
     let buffered = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -140,7 +163,7 @@ export class AppServerConnection {
     // and its tail is the only account of why a process exited early.
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
-      this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_TAIL_CHARS);
+      this.stderrTail = (this.stderrTail + chunk).slice(-STDERR_BUFFER_CHARS);
     });
     // A write after the process died fails here; the exit handler reports the end.
     child.stdin.on('error', error => {
@@ -171,7 +194,7 @@ export class AppServerConnection {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return new AppServerConnection(child);
+    return new AppServerConnection(child, childEnv);
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
@@ -271,7 +294,12 @@ export class AppServerConnection {
 
   /** The error for work cut short by `end`, with the turn's `error` notifications. */
   closedError(end: ConnectionEnd, errors: readonly string[] = []): ConnectionClosedError {
-    return new ConnectionClosedError(end, !this.responded, this.stderrTail, errors);
+    return new ConnectionClosedError(
+      end,
+      !this.responded,
+      stderrEvidence(this.stderrTail, this.credentialValues),
+      errors
+    );
   }
 
   private wakeReader(): void {

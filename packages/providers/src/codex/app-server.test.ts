@@ -154,6 +154,7 @@ describe('AppServerConnection', () => {
       capabilities: null,
     });
     fake.stderr.write('x'.repeat(10_000));
+    for (let line = 1; line <= 20; line++) fake.stderr.write(`log line ${String(line)}\n`);
     fake.stderr.write('Error: stdin is not a terminal\n');
     await tick();
     fake.child.emit('close', 1, null);
@@ -163,7 +164,10 @@ describe('AppServerConnection', () => {
     expect(error.message).not.toContain('stdin is not a terminal');
     expect(error.evidence).toContain('exited (code 1)');
     expect(error.evidence).toContain('Error: stdin is not a terminal');
-    expect(error.evidence.length).toBeLessThan(5_000);
+    // The last ten lines only.
+    expect(error.evidence).toContain('log line 20');
+    expect(error.evidence).not.toContain('log line 10\n');
+    expect(error.evidence).not.toContain('xxx');
   });
 
   test('shutdown closes stdin and sends SIGTERM only when the process does not exit', async () => {

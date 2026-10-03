@@ -695,6 +695,22 @@ describe('CodexProvider', () => {
       ]);
     });
 
+    test('a credential Codex echoes to stderr never reaches the failure evidence', async () => {
+      const result = resultOf(
+        await streamOf(
+          {
+            startupFailure: {
+              code: 1,
+              stderr: 'error: login failed for key sk-echoed-secret-1234\n',
+            },
+          },
+          { env: { CODEX_API_KEY: 'sk-echoed-secret-1234' } }
+        )
+      );
+      expect(result.failure?.evidence).toContain('login failed for key [REDACTED]');
+      expect(JSON.stringify(result)).not.toContain('sk-echoed-secret-1234');
+    });
+
     test('a turn interrupted by someone other than Archon is unknown', async () => {
       const result = resultOf(await streamOf({ completion: { status: 'interrupted' } }));
       expect(result.failure?.class).toBe('unknown');

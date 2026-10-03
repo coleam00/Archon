@@ -10,6 +10,7 @@
     "./cli-command": "./src/cli-command.ts",
     "./archon-paths": "./src/archon-paths.ts",
     "./effort": "./src/effort.ts",
+    "./credential-redaction": "./src/credential-redaction.ts",
     "./logger": "./src/logger.ts",
     "./strip-cwd-env": "./src/strip-cwd-env.ts",
     "./strip-cwd-env-boot": "./src/strip-cwd-env-boot.ts",
