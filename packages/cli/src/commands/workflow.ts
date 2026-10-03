@@ -6,6 +6,7 @@ import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import type { NodeState } from '@archon/workflows/schemas/node-state';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -3750,7 +3751,7 @@ function formatDuration(ms: number): string {
 
 export interface NodeSummary {
   nodeId: string;
-  state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  state: NodeState;
   startedAt?: string;
   durationMs?: number;
   outputPreview?: string;
