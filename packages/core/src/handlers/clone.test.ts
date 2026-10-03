@@ -282,6 +282,24 @@ describe('findCodebaseForCheckoutPath', () => {
     await expect(findCodebaseForCheckoutPath(cwd, deps)).resolves.toBe(registered);
   });
 
+  test('looks up a linked worktree primary under its canonical spelling', async () => {
+    // `git worktree list` prints `C:/...` on Windows; `default_cwd` is stored canonically.
+    const gitSpelling = resolve('/git-spelling/primary');
+    const canonical = resolve('/canonical/primary');
+    const registered = makeCodebase({ default_cwd: canonical }) as Codebase;
+    const realpathSpy = spyOn(fsPromises, 'realpath').mockImplementation(((p: string) =>
+      Promise.resolve(p === gitSpelling ? canonical : p)) as unknown as never);
+    try {
+      const deps = makeResolverDeps({
+        getCanonicalRepoPath: async () => gitSpelling,
+        findCodebaseByDefaultCwd: async path => (path === canonical ? registered : null),
+      });
+      await expect(findCodebaseForCheckoutPath(cwd, deps)).resolves.toBe(registered);
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
+
   test('does not conflate a separate clone with the registered repository', async () => {
     const registered = makeCodebase({ default_cwd: '/workspace/primary' }) as Codebase;
     const deps = makeResolverDeps({
@@ -1135,7 +1153,10 @@ describe('registerRepository', () => {
     const result = await registerRepository('/home/user/sibling-worktree');
 
     expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(1, '/home/user/sibling-worktree');
-    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(2, '/home/user/primary-checkout');
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(
+      2,
+      resolve('/home/user/primary-checkout')
+    );
     expect(result).toMatchObject({
       alreadyExisted: true,
       codebaseId: 'primary-codebase-id',
