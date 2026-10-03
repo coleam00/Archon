@@ -1498,6 +1498,38 @@ describe('substituteNodeOutputRefs', () => {
     expect(substituteNodeOutputRefs('Fix $a.output.type issue', outputs)).toBe('Fix BUG issue');
   });
 
+  it('rejects a nested output path instead of partially substituting it', () => {
+    const outputs = new Map([
+      [
+        'review',
+        makeOutput(
+          'completed',
+          JSON.stringify({ proposal: { action: 'add', text: 'rule' } }),
+          { proposal: { action: 'add', text: 'rule' } },
+          ['proposal']
+        ),
+      ],
+    ]);
+
+    expect(() =>
+      substituteNodeOutputRefs('Proposed: $review.output.proposal.action', outputs)
+    ).toThrow("Reference '$review.output.proposal.action'");
+  });
+
+  it('retains the owning loop context when required substitution rejects a nested path', () => {
+    expect(() =>
+      substituteNodeOutputRefs(
+        'test $review.output.proposal.action = add',
+        new Map(),
+        true,
+        undefined,
+        { consumerId: 'review-loop', field: 'loop_group.until_bash' }
+      )
+    ).toThrow(
+      "Node 'review-loop' field 'loop_group.until_bash' cannot resolve '$review.output.proposal.action'"
+    );
+  });
+
   it('dot notation on invalid JSON throws (no-silent-drop)', () => {
     // Schemaless node, output is not a JSON object → a `.field` ref is a drop the
     // author must see. Throws (propagates to fail the consuming node) instead of ''.
@@ -23421,6 +23453,16 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(substituteLoopPrevRefs('count=$LOOP_PREV.work.output.count', prev)).toBe('count=7');
     // Whole-output form still works (returns the raw output string, here '').
     expect(substituteLoopPrevRefs('all=[$LOOP_PREV.work.output]', prev)).toBe('all=[]');
+  });
+
+  it('EDGE F: rejects a nested prior-iteration path instead of partially substituting it', () => {
+    const prev = new Map<string, NodeOutput>([
+      ['work', makeOutput('completed', '', { result: { status: { value: 'green' } } }, ['result'])],
+    ]);
+
+    expect(() =>
+      substituteLoopPrevRefs('$LOOP_PREV.work.output.result.status.value', prev)
+    ).toThrow("Reference '$LOOP_PREV.work.output.result.status.value'");
   });
 
   it('EDGE F: $LOOP_PREV.<id>.output.<field> on a missing prior node resolves to empty', () => {
