@@ -867,10 +867,11 @@ export class PiProvider implements IAgentProvider {
     const piCustomTools =
       nativeToolDefs.length > 0 ? [...(baseTools ?? []), ...nativeToolDefs] : filteredTools;
 
-    // A detached process error carries no session id. Keep turns that actually
-    // loaded extension code single-filed so a matching stack has one owner.
+    // A caller that aborted (the idle watchdog, a cancel) has stopped reading, so a
+    // session started now would run unobserved.
+    if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
     const extensionTurn =
-      extensionPaths.length > 0 ? await beginPiExtensionTurn(extensionPaths) : undefined;
+      extensionPaths.length > 0 ? beginPiExtensionTurn(extensionPaths) : undefined;
     try {
       const { session, modelFallbackMessage } = await createAgentSession({
         cwd,
@@ -1012,7 +1013,12 @@ export class PiProvider implements IAgentProvider {
       const sem = piSemaphore;
       if (sem !== undefined) {
         getLog().debug('pi.semaphore_acquiring');
-        await sem.acquire();
+        try {
+          await sem.acquire(requestOptions?.abortSignal);
+        } catch (err) {
+          session.dispose();
+          throw err;
+        }
         getLog().debug('pi.semaphore_acquired');
       }
       try {

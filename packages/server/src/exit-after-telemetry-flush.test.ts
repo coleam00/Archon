@@ -56,7 +56,7 @@ describe('exitAfterTelemetryFlush', () => {
       (() => undefined as never) as typeof process.exit
     );
     const extensionPath = '/extensions/fake-extension.ts';
-    const turn = await beginPiExtensionTurn([extensionPath]);
+    const turn = beginPiExtensionTurn([extensionPath]);
     const received: Error[] = [];
     turn.onError(error => received.push(error));
     const rejection = new Error('extension rejection');
