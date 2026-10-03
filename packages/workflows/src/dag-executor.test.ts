@@ -14190,6 +14190,72 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     });
   });
 
+  it('best-effort provider: the node after a re-ask continues the real session, not the re-ask (#3584)', async () => {
+    // A reask runs in a throwaway session so the invalid turn is not carried forward.
+    // That session holds one repaired turn and none of the node's work, so the node's
+    // session (and what the next node resumes) stays attempt 0's.
+    const sessions: Array<string | undefined> = [];
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* (
+      _p: unknown,
+      _cwd: unknown,
+      resumeId: string | undefined
+    ) {
+      calls++;
+      sessions.push(resumeId);
+      if (calls === 1) {
+        yield { type: 'result', sessionId: 'real', structuredOutput: { other: 'x' } };
+      } else if (calls === 2) {
+        yield { type: 'result', sessionId: 'throwaway', structuredOutput: { verdict: 'ok' } };
+      } else {
+        yield { type: 'agent_message_chunk', text: 'downstream ran' };
+        yield { type: 'result', sessionId: 'after-session' };
+      }
+    });
+
+    const mockDeps = createMockDeps();
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'reask-session-threading',
+          nodes: [
+            {
+              id: 'classify',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'decide' },
+              provider: 'pi',
+              output_format: {
+                type: 'object',
+                properties: { verdict: { type: 'string' } },
+                required: ['verdict'],
+              },
+              retry: { max_attempts: 0 },
+            },
+            {
+              id: 'after',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'continue' },
+              provider: 'pi',
+              depends_on: ['classify'],
+            },
+          ],
+        },
+        workflowRun,
+        workflowProvider: 'pi',
+        config: { ...minimalConfig, assistant: 'pi' },
+      })
+    );
+
+    // 1: classify attempt 0. 2: the reask, deliberately fresh. 3: the next node.
+    expect(sessions).toEqual([undefined, undefined, 'real']);
+  });
+
   it('flags the run total when only a middle node is silent about cache', async () => {
     // The run total is accumulated pairwise, so the middle contribution's silence has to
     // survive two more folds. A 2-round test cannot see this: rounds 1 and 3 both agree on
