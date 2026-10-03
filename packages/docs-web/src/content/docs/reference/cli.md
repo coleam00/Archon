@@ -1235,7 +1235,7 @@ The CLI determines where to run based on:
 1. `--cwd` flag (if provided)
 2. Current directory (default)
 
-Running from a subdirectory (e.g., `/repo/packages/cli`) automatically resolves to the git repository root (e.g., `/repo`).
+Running from a subdirectory (e.g., `/repo/packages/cli`) automatically resolves to the nearest git repository root (e.g., `/repo`). A nested repository resolves as its own codebase and registers on first workflow use. Linked worktrees resolve to their registered source codebase. Subdirectories of non-git folder projects continue to resolve to the registered folder. Listing commands do not register projects.
 
 When using `--branch`, workflows run inside the worktree directory.
 

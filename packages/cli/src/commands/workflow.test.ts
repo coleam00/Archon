@@ -9646,64 +9646,44 @@ describe('workflowResumeCommand', () => {
     expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
   });
 
-  it('resolves the covering codebase by path prefix instead of re-registering the worktree working_path (#2127)', async () => {
-    // Regression for #2127: resuming from a worktree working_path whose run has
-    // no codebase_id must resolve the covering registered codebase via prefix
-    // lookup (like `workflow run` does) — NOT fall through to auto-registration,
-    // which trips the source-symlink guard for an already-covered path.
+  it('resolves a resumed worktree through its Git-proven source checkout (#2127)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
+    const git = await import('@archon/git');
     const { registerRepository } = await import('@archon/core');
-
+    const worktree = '/registered/root/worktrees/feat';
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'run-2127',
       workflow_name: 'implement',
       status: 'failed',
       user_message: 'go',
-      working_path: '/registered/root/worktrees/feat',
+      working_path: worktree,
       codebase_id: null,
     });
-
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
       errors: [],
     });
-
-    // Exact default_cwd match misses (worktree path != registered root); the
-    // path-prefix lookup resolves the covering repo codebase.
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce(null);
-    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-registered',
-      name: 'coleam00/Archon',
-      default_cwd: '/registered/root',
-      kind: 'repo',
-    });
-
-    // If resolution regressed to auto-registration, this is what would run — and
-    // fail with the source-symlink-mismatch guard the issue reported. Clear the
-    // module-level mock's history first so the not-called assertion is scoped to
-    // this test (other tests in the file exercise auto-registration).
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValueOnce(worktree);
+    (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockResolvedValueOnce('/registered/root');
+    const exact = codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>;
+    exact.mockImplementation(async (path: string) =>
+      path === '/registered/root'
+        ? { id: 'cb-registered', name: 'coleam00/Archon', default_cwd: path, kind: 'repo' }
+        : null
+    );
+    (codebaseDb.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockClear();
     (registerRepository as ReturnType<typeof mock>).mockClear();
-    (registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
-      new Error('Source symlink at ~/.archon/workspaces/coleam00/Archon/source already points to')
-    );
-
-    // With the codebase resolved, resume proceeds past the registration step and fails
-    // later, on the working path this fixture never creates. The point is that it does NOT
-    // surface the registration-failure error. (It used to stop one step earlier, on a
-    // re-lookup by name; an id-form resume now continues the run it was handed, so it
-    // reaches the working-path probe instead.)
-    await expect(workflowResumeCommand('run-2127')).rejects.toThrow(
-      'the working path from the run no longer exists'
-    );
-
-    expect(codebaseDb.findCodebaseByPathPrefix).toHaveBeenCalledWith(
-      '/registered/root/worktrees/feat'
-    );
-    expect(registerRepository).not.toHaveBeenCalled();
+    try {
+      await expect(workflowResumeCommand('run-2127')).rejects.toThrow(
+        'the working path from the run no longer exists'
+      );
+      expect(exact).toHaveBeenCalledWith('/registered/root');
+      expect(codebaseDb.findCodebaseByPathPrefix).not.toHaveBeenCalled();
+      expect(registerRepository).not.toHaveBeenCalled();
+    } finally {
+      exact.mockReset().mockResolvedValue(null);
+    }
   });
 });
 
@@ -13700,5 +13680,163 @@ describe('workflowRunCommand — continuation conversation lookup', () => {
       "Failed to load conversation 'conv-prior' for workflow run 'run-prior': database busy"
     );
     expect(conversationDb.getOrCreateConversation).not.toHaveBeenCalled();
+  });
+});
+
+const git = await import('@archon/git');
+const codebases = await import('@archon/core/db/codebases');
+const core = await import('@archon/core');
+const executor = await import('@archon/workflows/executor');
+
+describe('run codebase resolution', () => {
+  const childRoot = '/parent/projects/child';
+  const child = { id: 'cb-child', name: 'owner/child', default_cwd: childRoot, kind: 'repo' };
+  const parent = { id: 'cb-parent', name: 'owner/parent', default_cwd: '/parent', kind: 'repo' };
+  let consoleSpy: ReturnType<typeof spyOn>;
+
+  function resetLookups(): void {
+    (git.findRepoRoot as ReturnType<typeof mock>).mockReset().mockResolvedValue(null);
+    (git.getCanonicalRepoPath as ReturnType<typeof mock>)
+      .mockReset()
+      .mockImplementation(async (path: string) => path);
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>)
+      .mockReset()
+      .mockResolvedValue(null);
+    (codebases.findCodebaseByPathPrefix as ReturnType<typeof mock>)
+      .mockReset()
+      .mockResolvedValue(null);
+    (codebases.getCodebase as ReturnType<typeof mock>).mockReset().mockResolvedValue(null);
+    (core.registerRepository as ReturnType<typeof mock>).mockReset().mockResolvedValue({
+      codebaseId: 'cb-auto',
+      name: 'test/repo',
+      defaultCwd: '/test/path',
+      alreadyExisted: false,
+    });
+  }
+
+  beforeEach(() => {
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    resetLookups();
+    mockCreateWorkflowRun.mockClear();
+    (executor.executeWorkflow as ReturnType<typeof mock>).mockClear();
+    mockDiscoverWorkflowsWithConfig.mockReset().mockResolvedValue({
+      workflows: [makeTestWorkflowWithSource({ name: 'probe' })],
+      errors: [],
+    });
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(childRoot);
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockImplementation(
+      async (path: string) => (path === '/parent' ? parent : null)
+    );
+    (codebases.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValue(parent);
+    (core.registerRepository as ReturnType<typeof mock>).mockResolvedValue({
+      codebaseId: child.id,
+      name: child.name,
+      defaultCwd: childRoot,
+      alreadyExisted: false,
+    });
+    (codebases.getCodebase as ReturnType<typeof mock>).mockImplementation(async (id: string) =>
+      id === child.id ? child : null
+    );
+  });
+
+  afterEach(() => {
+    consoleSpy.mockRestore();
+    resetLookups();
+  });
+
+  function expectChildExecution(): void {
+    expect(
+      (executor.executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1)?.[7]
+    ).toMatchObject({ codebaseId: child.id });
+    expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
+  }
+
+  it('registers an unregistered child from its nearest Git root', async () => {
+    await workflowRunCommand(`${childRoot}/tools`, 'probe', 'go', { noWorktree: true });
+    expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+    expectChildExecution();
+  });
+
+  it('registers the child even when the workflow disables worktrees', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [makeTestWorkflowWithSource({ name: 'probe', worktree: { enabled: false } })],
+      errors: [],
+    });
+    await workflowRunCommand(childRoot, 'probe', 'go');
+    expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+    expectChildExecution();
+  });
+
+  it('registers the child during detached preflight and attributes the pending run', async () => {
+    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(createDetachedChildFixture().child);
+    jest.useFakeTimers();
+    try {
+      const command = workflowRunCommand(`${childRoot}/tools`, 'probe', 'go', {
+        detach: true,
+        noWorktree: true,
+      });
+      await finishStartupWindow(command, spawnSpy);
+      expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ codebase_id: child.id })
+      );
+      expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+      expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+      spawnSpy.mockRestore();
+    }
+  });
+
+  for (const cwd of [childRoot, `${childRoot}/tools`]) {
+    it(`reuses the registered repository from ${cwd}`, async () => {
+      (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockImplementation(
+        async (path: string) => (path === childRoot ? child : path === '/parent' ? parent : null)
+      );
+      await workflowRunCommand(cwd, 'probe', 'go', { noWorktree: true });
+      expect(core.registerRepository).not.toHaveBeenCalled();
+      expectChildExecution();
+    });
+  }
+
+  it('maps a linked worktree subdirectory to the registered primary checkout', async () => {
+    const worktree = '/parent/worktrees/child-probe';
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(worktree);
+    (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockImplementation(
+      async (path: string) => (path === worktree ? childRoot : path)
+    );
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockImplementation(
+      async (path: string) => (path === childRoot ? child : path === '/parent' ? parent : null)
+    );
+    await workflowRunCommand(`${worktree}/tools`, 'probe', 'go', { noWorktree: true });
+    expect(core.registerRepository).not.toHaveBeenCalled();
+    expectChildExecution();
+  });
+
+  it('retains prefix resolution for a non-Git folder subdirectory', async () => {
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(null);
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(null);
+    (codebases.findCodebaseByPathPrefix as ReturnType<typeof mock>).mockResolvedValue({
+      id: 'cb-folder',
+      name: 'folder',
+      default_cwd: '/folder',
+      kind: 'folder',
+    });
+    await workflowRunCommand('/folder/tools', 'probe', 'go');
+    expect(codebases.findCodebaseByPathPrefix).toHaveBeenCalledWith('/folder/tools');
+    expect(core.registerRepository).not.toHaveBeenCalled();
+    expect(
+      (executor.executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1)?.[7]
+    ).toMatchObject({ codebaseId: 'cb-folder' });
+  });
+
+  it('surfaces checkout identity errors without parent fallback or registration', async () => {
+    (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('checkout identity unavailable')
+    );
+    await expect(workflowRunCommand(childRoot, 'probe', 'go')).rejects.toThrow(
+      'checkout identity unavailable'
+    );
+    expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
+    expect(core.registerRepository).not.toHaveBeenCalled();
   });
 });
