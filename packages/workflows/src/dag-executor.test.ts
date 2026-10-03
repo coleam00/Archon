@@ -20356,9 +20356,8 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
       outputType: 'plan',
       runId: 'dag-test-run-id',
       path: join('nodes', 'planner.md'),
-      // sessionId is propagated from the node output into the metadata.
-      sessionId: 'new-session-id',
     });
+    expect(meta).not.toHaveProperty('sessionId');
     expect(typeof meta.producedAt).toBe('string');
   });
 
@@ -37061,5 +37060,118 @@ describe('executeDagWorkflow -- node checkout starts (#3375)', () => {
     const [consumer] = terminal(deps, 'consumer');
     expect(consumer?.eventType).toBe('node_failed');
     expect(consumer?.data.error).toContain('$missing.execution.checkoutStart');
+  });
+});
+
+describe('executeDagWorkflow -- provider session ids stay on the node record', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-session-ids-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await rm(testDir, { recursive: true, force: true });
+  });
+
+  it('records each attempt and iteration id durably and nowhere in the stream', async () => {
+    const failedAttempt = 'a1111111-0000-4000-8000-000000000001';
+    const completedAttempt = 'b2222222-0000-4000-8000-000000000002';
+    const iterations = [
+      'c3333333-0000-4000-8000-000000000003',
+      'd4444444-0000-4000-8000-000000000004',
+      'e5555555-0000-4000-8000-000000000005',
+    ];
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 1) {
+        yield {
+          type: 'result',
+          sessionId: failedAttempt,
+          isError: true,
+          errors: ['upstream overloaded'],
+          failure: { class: 'transient', evidence: 'upstream overloaded' },
+        };
+        return;
+      }
+      if (calls === 2) {
+        yield { type: 'agent_message_chunk', text: 'planned' };
+        yield { type: 'result', sessionId: completedAttempt };
+        return;
+      }
+      const iteration = calls - 2;
+      yield { type: 'agent_message_chunk', text: iteration === 3 ? 'DONE' : 'working' };
+      yield { type: 'result', sessionId: iterations[iteration - 1] };
+    });
+    const emitted: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      emitted.push(event);
+    });
+    const store = createMockStore();
+    const workflowRun = makeWorkflowRun('session-ids-run');
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'session-ids',
+            nodes: [
+              {
+                id: 'plan',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'plan it' },
+                output_type: 'plan',
+                retry: { max_attempts: 1, delay_ms: 1 },
+              },
+              {
+                id: 'work',
+                kind: 'loop',
+                depends_on: ['plan'],
+                output_type: 'work',
+                loop: { prompt: 'work', until: 'DONE', max_iterations: 5, fresh_context: true },
+              },
+            ],
+          },
+          workflowRun,
+        })
+      );
+    } finally {
+      unsubscribe();
+    }
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+
+    const rows = persistedEvents(store);
+    const sessionIdsOf = (eventType: string, step: string): unknown[] =>
+      rows
+        .filter(row => row.event_type === eventType && row.step_name === step)
+        .map(row => row.data?.session_id);
+    expect(sessionIdsOf('node_failed', 'plan')).toEqual([failedAttempt]);
+    expect(sessionIdsOf('node_completed', 'plan')).toEqual([completedAttempt]);
+    expect(sessionIdsOf('loop_iteration_completed', 'work')).toEqual(iterations);
+    expect(sessionIdsOf('node_completed', 'work')).toEqual([iterations[2]]);
+
+    const allIds = [failedAttempt, completedAttempt, ...iterations];
+    const transcript = await readFile(join(testDir, 'logs', `${workflowRun.id}.jsonl`), 'utf8');
+    const stream = JSON.stringify(emitted);
+    const { artifactsByType } = await readNodeArtifacts(join(testDir, 'artifacts'), {
+      scope: 'current-run',
+      runId: workflowRun.id,
+    });
+    expect(Object.keys(artifactsByType).sort()).toEqual(['plan', 'work']);
+    const artifactIndex = JSON.stringify(artifactsByType);
+    for (const id of allIds) {
+      expect(transcript).not.toContain(id);
+      expect(stream).not.toContain(id);
+      expect(artifactIndex).not.toContain(id);
+    }
+    // The preview still reaches the stream.
+    expect(stream).toContain(completedAttempt.slice(0, 8));
   });
 });

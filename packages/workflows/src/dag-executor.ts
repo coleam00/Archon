@@ -68,7 +68,7 @@ import type {
   OverlayChangeSummary,
 } from '@archon/providers/types';
 import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
-import type { ProviderFailure } from '@archon/provider-contract';
+import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -2077,6 +2077,8 @@ async function executeNodeInternal(
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeResolvedModel: ResolvedModel | undefined;
+  // Declared before `failAgentNode`, which records it and can run before the stream starts.
+  let newSessionId: string | undefined;
   const nodeKey = `${workflowRun.id}:${node.id}`;
 
   const failAgentNode = async (
@@ -2103,6 +2105,7 @@ async function executeNodeInternal(
           stopReason: nodeStopReason,
           numTurns: nodeNumTurns,
           resolvedModel: nodeResolvedModel?.id,
+          sessionId: newSessionId,
         }
       )
     );
@@ -2199,7 +2202,6 @@ async function executeNodeInternal(
 
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
-  let newSessionId: string | undefined;
   let nodeResumed: boolean | undefined;
   const batchMessages: string[] = [];
 
@@ -2411,7 +2413,7 @@ async function executeNodeInternal(
               nodeId: node.id,
               errorSubtype: subtype,
               errors: msg.errors,
-              sessionId: msg.sessionId,
+              ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
               stopReason: msg.stopReason,
               durationMs: Date.now() - nodeStartTime,
             },
@@ -2774,7 +2776,7 @@ async function executeNodeInternal(
         },
       }
     ),
-    { sessionId: result.sessionId, resumed: result.resumed }
+    { resumed: result.resumed }
   );
 
   // Clean up throttle entries on completion
@@ -4044,8 +4046,7 @@ async function finalizeLoopFromSignal(
           // Approval does no execution work. Keep the duration observed before pause.
           durationMs: execution.timing.durationMs,
         }
-      ),
-      { sessionId }
+      )
     );
   }
   // Old approval cursors have no execution identity or observed start time.
@@ -5316,6 +5317,7 @@ async function executeLoopNode(
           stopReason: loopFinalStopReason,
           numTurns: loopTotalNumTurns,
           resolvedModel: loopResolvedModel?.id,
+          sessionId: currentSessionId,
           diagnostics: { ...extras.data, loopIterations: extras.loopIterations },
         }
       )
@@ -5582,6 +5584,8 @@ async function executeLoopNode(
     let iterationSettled = false;
     let lastWatchdogReset: WatchdogReset | undefined;
     let iterationPayload: unknown;
+    // The session this iteration reported, for its own `loop_iteration_completed` row.
+    let iterationSessionId: string | undefined;
 
     // Per-attempt transient retry for AI-loop iterations (#2706): a plain AI node's
     // failure goes through runNodeRetryLoop; an iteration used to die on its first
@@ -5841,6 +5845,7 @@ async function executeLoopNode(
               if (msg.sessionId) {
                 if (pass.threadsSession) {
                   currentSessionId = msg.sessionId;
+                  iterationSessionId = msg.sessionId;
                 } else if (currentSessionId !== msg.sessionId) {
                   getLog().debug(
                     {
@@ -5908,7 +5913,7 @@ async function executeLoopNode(
                     iteration: i,
                     errorSubtype: subtype,
                     errors: msg.errors,
-                    sessionId: msg.sessionId,
+                    ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
                     stopReason: msg.stopReason,
                   },
                   'loop_node.iteration_sdk_error'
@@ -6447,7 +6452,15 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
         step_name: stepName,
-        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+        data: {
+          iteration: i,
+          duration,
+          completionDetected,
+          nodeId: node.id,
+          // The durable row is the only home for the full id; the emitter event above
+          // and the transcript line below stay without it.
+          ...(iterationSessionId !== undefined ? { session_id: iterationSessionId } : {}),
+        },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -6501,8 +6514,7 @@ async function executeLoopNode(
                 : {}),
             },
           }
-        ),
-        { sessionId: currentSessionId }
+        )
       );
     }
 
@@ -9967,11 +9979,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   });
                   if (persisted) {
                     resumeSessionId = persisted.provider_session_id;
-                    // workflow_events is broader-scoped and longer-lived than the
-                    // node-session table. A session ID can resume a conversation, so we
-                    // store only an 8-char prefix here — enough for observability without
-                    // leaving a resumable artifact in the event log.
-                    const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
+                    // This event is not a node record, so it carries only the preview.
+                    const sessionIdPreview = sessionPreview(persisted.provider_session_id);
                     ctx.deps.store
                       .createWorkflowEvent({
                         workflow_run_id: ctx.workflowRun.id,
@@ -10102,14 +10111,12 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     node.id
                   )
                 : '';
-              // Mask the session id: it's a resumable artifact, so log only an
-              // 8-char preview (same policy as the node_session_resumed event above).
               getLog().warn(
                 {
                   nodeId: node.id,
                   provider,
                   workflowRunId: ctx.workflowRun.id,
-                  resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+                  resumeSessionIdPreview: sessionPreview(resumeSessionId),
                   priorArtifactsFound: recoveryPointer !== '',
                 },
                 'dag.session_resume_failed'
@@ -10270,9 +10277,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             runId: ctx.workflowRun.id,
             producedAt: new Date().toISOString(),
             ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
-            // `sessionId` may be undefined (e.g. bash/script nodes have no
-            // session); writeNodeArtifact omits it from the metadata when so.
-            sessionId: output.sessionId,
           };
           try {
             await writeNodeArtifact(ctx.artifactsDir, meta, output.output);

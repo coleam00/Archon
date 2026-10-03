@@ -4,7 +4,7 @@ import type { DagNode } from './schemas/dag-node';
 import type { EffortLevel } from './schemas/effort';
 import type { TierName } from './schemas/model-binding';
 import type { CheckoutObservation } from './schemas/checkout-observation';
-import { tokenUsageSchema } from '@archon/provider-contract';
+import { sessionPreview, tokenUsageSchema } from '@archon/provider-contract';
 import {
   nodeExecutionMetadataSchema,
   type ExecutionBinding,
@@ -112,7 +112,7 @@ export function startNodeExecution(input: {
       ...(input.effort !== undefined ? { effort: input.effort } : {}),
       ...(input.sessionId !== undefined
         ? {
-            sessionPreview: input.sessionId.slice(0, 8),
+            sessionPreview: sessionPreview(input.sessionId),
             sessionOrigin: 'resumed' as const,
           }
         : hasProvider
@@ -177,7 +177,7 @@ export function finishNodeExecution(
           },
         }
       : {}),
-    ...(result.sessionId !== undefined ? { sessionPreview: result.sessionId.slice(0, 8) } : {}),
+    ...(result.sessionId ? { sessionPreview: sessionPreview(result.sessionId) } : {}),
     ...(result.resumed !== undefined
       ? {
           sessionOrigin: result.resumed ? ('resumed' as const) : ('resume-failed-cold' as const),
@@ -204,6 +204,7 @@ export function finishNodeExecution(
     },
     ...(result.output !== undefined ? { output: result.output } : {}),
     ...(result.diagnostics !== undefined ? { diagnostics: result.diagnostics } : {}),
+    ...(result.sessionId ? { sessionId: result.sessionId } : {}),
   };
 }
 
