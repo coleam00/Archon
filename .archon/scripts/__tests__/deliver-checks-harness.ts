@@ -10,7 +10,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { ChecksObservation } from '../../../packages/forge/src/operations';
@@ -253,6 +253,7 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   const resolveArtifacts = (value: string): string =>
     value.split('{ARTIFACTS}').join(artifactPath);
   for (const [name, content] of Object.entries(options.artifacts ?? {})) {
+    mkdirSync(dirname(join(artifacts, name)), { recursive: true });
     writeFileSync(join(artifacts, name), resolveArtifacts(content));
   }
   const preload = join(root, 'preload.ts');

@@ -600,8 +600,8 @@ describe('bundled-defaults', () => {
 
     // The lenses judge defects in what changed; only synthesis runs on every round, so it
     // owns holding the change to the contract's acceptance, invariants, and steering. Scope
-    // must carry those items for it to judge, and an unmet one must block like any
-    // Important finding and stay attributable in findings.json.
+    // must carry those items for it to judge, and an unmet one must block as a blocking
+    // finding and stay attributable in findings.json.
     it('review holds the change to the accepted contract on every round', () => {
       // Triage is where the delivery chain first restates the contract; a count or summary
       // of acceptance there is where the items were lost.

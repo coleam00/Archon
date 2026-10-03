@@ -19,8 +19,9 @@ description: |
 # truthfully with the PR still draft and the canonical report carrying the open
 # findings. Commits made after the pre-PR structure pass (review corrections, the
 # structure correction, a CI fix) get one more structure pass over just those
-# commits before they ship. The polish and CI-fix passes after convergence get no
-# review round: CI on their pushed head is their proof.
+# commits before they ship. The passes that adopt those findings, polish and the
+# CI fix's structure correction, ship on CI alone, as does the CI fix itself: no
+# review round follows them.
 
 requires: [github]
 
