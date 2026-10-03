@@ -18526,6 +18526,134 @@ describe('executeDagWorkflow -- script nodes', () => {
     ).toEqual(['fail-script']);
   });
 
+  it('preserves a bun script failure whose stderr contains ENOENT', async () => {
+    const mockDeps = createMockDeps();
+    const missingPath = join(testDir, 'missing-input.txt');
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        cwd: testDir,
+        workflow: {
+          name: 'script-enoent-diagnostic',
+          nodes: [
+            {
+              id: 'read-missing-input',
+              kind: 'exec',
+              runtime: 'bun',
+              script: `import { readFileSync } from 'node:fs'; readFileSync(${JSON.stringify(missingPath)});`,
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('script-enoent-diagnostic-run'),
+      })
+    );
+
+    const failed = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'read-missing-input'
+    );
+    expect(failed?.data?.error).toContain('[exit 1]');
+    expect(failed?.data?.error).toContain('ENOENT');
+    expect(failed?.data?.error).toContain('missing-input.txt');
+    expect(failed?.data?.error).not.toContain("'bun' executable not found in PATH");
+  });
+
+  it('preserves a script failure whose stderr contains EACCES', async () => {
+    const mockDeps = createMockDeps();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        cwd: testDir,
+        workflow: {
+          name: 'script-eacces-diagnostic',
+          nodes: [
+            {
+              id: 'report-denied-operation',
+              kind: 'exec',
+              runtime: 'bun',
+              script: 'process.stderr.write("EACCES: script operation denied\\n"); process.exit(7)',
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('script-eacces-diagnostic-run'),
+      })
+    );
+
+    const failed = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_failed' && event.step_name === 'report-denied-operation'
+    );
+    expect(failed?.data?.error).toBe(
+      "Script node 'report-denied-operation' failed [exit 7]: EACCES: script operation denied"
+    );
+  });
+
+  it.each([
+    ['bun', 'console.log("not reached")'],
+    ['uv', 'print("not reached")'],
+  ] as const)('reports a genuinely missing %s runtime executable', async (runtime, script) => {
+    const mockDeps = createMockDeps();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        cwd: testDir,
+        workflow: {
+          name: `missing-${runtime}-runtime`,
+          nodes: [{ id: `missing-${runtime}`, kind: 'exec', runtime, script }],
+        },
+        workflowRun: makeWorkflowRun(`missing-${runtime}-runtime-run`),
+        config: { ...minimalConfig, envVars: { PATH: '' } },
+      })
+    );
+
+    const failed = persistedEvents(mockDeps.store).find(
+      event => event.event_type === 'node_failed' && event.step_name === `missing-${runtime}`
+    );
+    expect(failed?.data?.error).toBe(
+      `Script node 'missing-${runtime}' failed: '${runtime}' executable not found in PATH`
+    );
+  });
+
+  it.each([
+    ['ENOENT', 'bun', 'console.log("not reached")'],
+    ['ENOENT', 'uv', 'print("not reached")'],
+    ['EACCES', 'bun', 'console.log("not reached")'],
+  ] as const)(
+    'preserves Docker %s spawn attribution for a container %s script',
+    async (code, runtime, script) => {
+      const mockDeps = createMockDeps();
+      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_command, args) => {
+        if (args.at(-1) === CONTAINER_MARKER_PROBE) return { stdout: 'none\n', stderr: '' };
+        throw Object.assign(new Error(`spawn docker ${code}`), { code });
+      });
+
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            cwd: testDir,
+            workflow: {
+              name: `container-${runtime}-${code.toLowerCase()}`,
+              nodes: [{ id: `run-${runtime}`, kind: 'exec', runtime, script }],
+            },
+            workflowRun: makeWorkflowRun(`container-${runtime}-${code.toLowerCase()}-run`),
+            execContext: { kind: 'container', containerId: 'script-container' },
+          })
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+
+      const failed = persistedEvents(mockDeps.store).find(
+        event => event.event_type === 'node_failed' && event.step_name === `run-${runtime}`
+      );
+      expect(failed?.data?.error).toContain(`spawn docker ${code}`);
+      expect(failed?.data?.error).not.toContain(`'${runtime}' executable not found in PATH`);
+      expect(failed?.data?.error).not.toContain('permission denied (check cwd permissions)');
+    }
+  );
+
   it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();
