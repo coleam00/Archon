@@ -100,3 +100,5 @@ export const providerEventLineSchema = providerEventEnvelopeSchema.extend({
   ts: z.iso.datetime(),
   step: z.string(),
 });
+
+export type ProviderEventLine = z.infer<typeof providerEventLineSchema>;

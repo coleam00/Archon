@@ -1,4 +1,4 @@
-import { describe, test, expect, mock } from 'bun:test';
+import { describe, test, expect, mock, jest, afterEach } from 'bun:test';
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from './idle-timeout';
 
 /** Helper: create an async generator from an array of values with optional delays */
@@ -251,5 +251,77 @@ describe('withIdleTimeout', () => {
     expect(resets[0]?.type).toBe('assistant');
     expect(resets[0]?.resetAt).toBeGreaterThanOrEqual(before);
     expect(resets[0]?.resetAt).toBeLessThanOrEqual(after);
+  });
+
+  describe('on a fake clock', () => {
+    const TIMEOUT_MS = 10_000;
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    /** Let the wrapper react to a fired timer and arm its next one. */
+    async function settle(): Promise<void> {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    }
+
+    /** Advance the clock while awake: every timer due in the span fires in order. */
+    async function stayAwake(ms: number): Promise<void> {
+      for (let step = 0; step < ms; step += 100) {
+        jest.advanceTimersByTime(Math.min(100, ms - step));
+        await settle();
+      }
+    }
+
+    /** Start consuming a generator that yields once and then goes silent. */
+    async function consumeSilentAfterOneValue(onTimeout: () => void): Promise<{ done: boolean }> {
+      const state = { done: false };
+      void (async (): Promise<void> => {
+        for await (const _ of withIdleTimeout(hangAfter(['a']), TIMEOUT_MS, onTimeout)) {
+          // consume
+        }
+        state.done = true;
+      })();
+      await settle();
+      return state;
+    }
+
+    test('a steady silence fails at the timeout', async () => {
+      jest.useFakeTimers();
+      const onTimeout = mock(() => {});
+      const state = await consumeSilentAfterOneValue(onTimeout);
+
+      await stayAwake(TIMEOUT_MS - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      await stayAwake(1);
+      await settle();
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(state.done).toBe(true);
+    });
+
+    test('time suspended does not count, and a later silence while awake still fails', async () => {
+      jest.useFakeTimers();
+      const onTimeout = mock(() => {});
+      const state = await consumeSilentAfterOneValue(onTimeout);
+
+      await stayAwake(2_000);
+      // Suspension: the wall clock jumps far past the timeout without any timer running,
+      // then the pending timer fires once on wake.
+      jest.setSystemTime(Date.now() + 2 * 60 * 60 * 1000);
+      jest.advanceTimersToNextTimer();
+      await settle();
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      // At most one tick of the suspension is charged, so the window still closes
+      // within a tick of the awake silence reaching the timeout.
+      await stayAwake(TIMEOUT_MS - 2_000 - 1_000 - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      await stayAwake(1_000);
+      await settle();
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(state.done).toBe(true);
+    });
   });
 });

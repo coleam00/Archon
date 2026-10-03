@@ -5,6 +5,7 @@ import {
   clearRegistry,
   getRegistration,
   registerProvider,
+  registerOpencodeProvider,
 } from '@archon/providers';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
@@ -78,8 +79,7 @@ mock.module('@archon/paths', () => ({
   }),
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   isDocker: mock(() => false),
 }));
@@ -336,6 +336,25 @@ describe('PATCH /api/config/tiers', () => {
     const res = await patch({ large: { provider: 'claude', model: 'opus', effort: 'extreme' } });
     expect(res.status).toBe(400);
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+  });
+
+  test('effort for a provider without reasoning control → 400, no write', async () => {
+    registerOpencodeProvider();
+    try {
+      const res = await patch({
+        large: {
+          provider: 'opencode',
+          model: 'anthropic/claude-sonnet-4-6',
+          effort: 'high',
+        },
+      });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("Provider 'opencode' does not support effort");
+      expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
+    } finally {
+      clearRegistry();
+      registerBuiltinProviders();
+    }
   });
 
   test('null tier value unsets (passes null through)', async () => {

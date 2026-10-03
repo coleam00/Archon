@@ -565,8 +565,7 @@ describe('approveWorkflow', () => {
 
   test('bare gate with captureResponse but no decisionsAuthored keeps plain-text output (R2 fix — #2707)', async () => {
     // captureResponse with no `decisionsAuthored` (the shape every gate using
-    // capture_response before #2707 step 1 has — e.g. the bundled
-    // archon-interactive-prd workflow) must keep functioning exactly as
+    // capture_response before #2707 step 1 has) must keep functioning exactly as
     // before this PR: it is NOT a new-mode gate just because on_reject is
     // also absent. Reviewed regression (R2): this used to wrongly emit JSON.
     const run = makePausedRun({

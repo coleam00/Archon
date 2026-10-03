@@ -12,12 +12,8 @@
  * The positive scenarios (all-tracked, staged-but-uncommitted, packaged
  * embed) assert against one shared generator run because their expectations
  * are mutually compatible and none depends on a per-run process boundary.
- * The three negative scenarios stay in separate runs: they trip different
- * guards (workflows-defaults guard vs commands-defaults guard vs packaged
- * tracked-set check) whose failure messages land on stderr
- * nondeterministically if raced in parallel, so merging them would force
- * weaker assertions. All original assertions from the six-case suite are
- * preserved verbatim.
+ * Each negative scenario stays in its own run so its failure message is the
+ * only one on stderr.
  */
 import { describe, it, expect, afterAll } from 'bun:test';
 import {
@@ -47,18 +43,17 @@ function runGit(repoRoot: string, args: string[]): void {
   }
 }
 
-/** Create a temp git repo with one tracked command + workflow default, committed. */
+const BASE_PACK = 'base-pack';
+
+/** Create a temp git repo with one tracked packaged workflow and its command, committed. */
 function createTemplateRepo(): string {
   const repoRoot = mkdtempSync(join(tmpdir(), 'bundled-defaults-template-'));
-  mkdirSync(join(repoRoot, '.archon/commands/defaults'), { recursive: true });
-  mkdirSync(join(repoRoot, '.archon/workflows/defaults'), { recursive: true });
+  const flow = join(repoRoot, '.archon/workflows', BASE_PACK, 'tracked-flow');
+  mkdirSync(join(flow, 'commands'), { recursive: true });
   mkdirSync(join(repoRoot, 'packages/workflows/src/defaults'), { recursive: true });
-  writeFileSync(join(repoRoot, '.archon/commands/defaults/tracked-command.md'), '# Tracked\n');
-  writeFileSync(
-    join(repoRoot, '.archon/workflows/defaults/tracked-workflow.yaml'),
-    'name: tracked-workflow\n'
-  );
-  writeFileSync(join(repoRoot, INDEX_REL), JSON.stringify({ packs: ['defaults'] }));
+  writeFileSync(join(flow, 'commands/tracked-command.md'), '# Tracked\n');
+  writeFileSync(join(flow, 'tracked-workflow.yaml'), 'name: tracked-workflow\n');
+  writeFileSync(join(repoRoot, INDEX_REL), JSON.stringify({ packs: [BASE_PACK] }));
   // Sentinel output file lets tests assert the bundle is untouched on failure.
   writeFileSync(join(repoRoot, OUTPUT_REL), SENTINEL);
   runGit(repoRoot, ['init']);
@@ -93,10 +88,10 @@ afterAll(async () => {
 });
 
 /** Cheap in-process clone of the committed template repo (no git spawns). */
-function createRepo(packs: string[] = ['defaults']): string {
+function createRepo(packs: string[] = [BASE_PACK]): string {
   const repoRoot = mkdtempSync(join(tmpdir(), 'bundled-defaults-test-'));
   cpSync(getTemplateRepo(), repoRoot, { recursive: true });
-  if (packs.length !== 1 || packs[0] !== 'defaults')
+  if (packs.length !== 1 || packs[0] !== BASE_PACK)
     writeFileSync(join(repoRoot, INDEX_REL), JSON.stringify({ packs }));
   return repoRoot;
 }
@@ -125,7 +120,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       expect(output).not.toContain('private-client-workflow');
       writeFileSync(
         join(repoRoot, INDEX_REL),
-        JSON.stringify({ packs: ['defaults', 'missing-pack'] })
+        JSON.stringify({ packs: [BASE_PACK, 'missing-pack'] })
       );
       const missing = runScript(repoRoot);
       expect(missing.exitCode).toBe(1);
@@ -137,17 +132,16 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
   });
   it('exits 0 for tracked defaults, staged-but-uncommitted defaults, and embedded packaged workflows (single amortized run)', async () => {
     // One scenario covers what used to be three separate generator runs:
-    //   - all tracked legacy defaults (positive path)
-    //   - staged-but-uncommitted default (staged is not untracked)
+    //   - all tracked packaged files (positive path)
+    //   - staged-but-uncommitted workflow (staged is not untracked)
     //   - packaged workflow with commands + scripts + owner metadata
     // Each set of assertions below is preserved verbatim from its origin case.
-    const repoRoot = createRepo(['defaults', 'author-pack']);
+    const repoRoot = createRepo([BASE_PACK, 'author-pack']);
     try {
-      // Staged-but-uncommitted default (previously its own case).
-      writeFileSync(
-        join(repoRoot, '.archon/workflows/defaults/staged-draft.yaml'),
-        'name: staged-draft\n'
-      );
+      // Staged-but-uncommitted workflow (previously its own case).
+      const stagedDir = join(repoRoot, '.archon/workflows', BASE_PACK, 'staged-draft');
+      mkdirSync(stagedDir, { recursive: true });
+      writeFileSync(join(stagedDir, 'staged-draft.yaml'), 'name: staged-draft\n');
       // Packaged workflow tree (previously its own case).
       const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
       mkdirSync(join(packageDir, 'commands'), { recursive: true });
@@ -162,7 +156,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
       // One git spawn stages both trees; nothing is committed after init.
       runGit(repoRoot, [
         'add',
-        '.archon/workflows/defaults/staged-draft.yaml',
+        `.archon/workflows/${BASE_PACK}/staged-draft`,
         '.archon/workflows/author-pack',
       ]);
 
@@ -210,69 +204,8 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
     }
   });
 
-  it('exits 1 and leaves the bundle untouched for an untracked workflow default', async () => {
-    const repoRoot = createRepo();
-    try {
-      writeFileSync(
-        join(repoRoot, '.archon/workflows/defaults/untracked-draft.yaml'),
-        'name: untracked-draft\n'
-      );
-      const { exitCode, stderr } = runScript(repoRoot);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain('untracked files');
-      expect(stderr).toContain('.archon/workflows/defaults/untracked-draft.yaml');
-      // Remediation names the workflow-scoped destinations.
-      expect(stderr).toContain('.archon/workflows/');
-      expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
-    } finally {
-      await removeTempTree(repoRoot);
-    }
-  });
-
-  it('exits 1 and leaves the bundle untouched for an untracked command default', async () => {
-    const repoRoot = createRepo();
-    try {
-      writeFileSync(join(repoRoot, '.archon/commands/defaults/untracked-draft.md'), '# Draft\n');
-      const { exitCode, stderr } = runScript(repoRoot);
-      expect(exitCode).toBe(1);
-      expect(stderr).toContain('untracked files');
-      expect(stderr).toContain('.archon/commands/defaults/untracked-draft.md');
-      // Remediation names the command-scoped destinations, not workflows.
-      expect(stderr).toContain('.archon/commands/ (project-scope)');
-      expect(readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8')).toBe(SENTINEL);
-    } finally {
-      await removeTempTree(repoRoot);
-    }
-  });
-
-  it('embeds a tracked defaults/legacy/ workflow into the flat bundle (#2781)', async () => {
-    const repoRoot = createRepo();
-    try {
-      const legacyDir = join(repoRoot, '.archon/workflows/defaults/legacy');
-      mkdirSync(legacyDir, { recursive: true });
-      writeFileSync(
-        join(legacyDir, 'tracked-legacy-workflow.yml'),
-        'name: tracked-legacy-workflow\ndeprecated:\n  message: Switch instead.\n'
-      );
-      runGit(repoRoot, ['add', '.archon/workflows/defaults/legacy']);
-
-      // `defaults/legacy` must NOT be misread as a packaged pack directory —
-      // that failure mode exits 1 with "must contain exactly one .yaml".
-      const { exitCode, stderr } = runScript(repoRoot);
-      expect(stderr).toBe('');
-      expect(exitCode).toBe(0);
-      const output = readFileSync(join(repoRoot, OUTPUT_REL), 'utf-8');
-      expect(output).toContain('"tracked-legacy-workflow"');
-      expect(output).toContain(
-        '"tracked-legacy-workflow": "workflows/defaults/legacy/tracked-legacy-workflow.yml"'
-      );
-    } finally {
-      await removeTempTree(repoRoot);
-    }
-  });
-
   it('rejects an untracked file inside a packaged workflow', async () => {
-    const repoRoot = createRepo(['defaults', 'author-pack']);
+    const repoRoot = createRepo([BASE_PACK, 'author-pack']);
     try {
       const packageDir = join(repoRoot, '.archon/workflows/author-pack/release-flow');
       mkdirSync(packageDir, { recursive: true });
@@ -292,7 +225,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
   });
 
   it('includes tracked shared modules, excludes nonmodules and runnable keys, and checks helper-only drift', async () => {
-    const repoRoot = createRepo(['defaults', 'author-pack']);
+    const repoRoot = createRepo([BASE_PACK, 'author-pack']);
     try {
       const pack = join(repoRoot, '.archon/workflows/author-pack');
       mkdirSync(join(pack, '.shared/nested'), { recursive: true });
@@ -332,7 +265,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
   });
 
   it('rejects an untracked shared module before writing the bundle', async () => {
-    const repoRoot = createRepo(['defaults', 'author-pack']);
+    const repoRoot = createRepo([BASE_PACK, 'author-pack']);
     try {
       const shared = join(repoRoot, '.archon/workflows/author-pack/.shared/nested');
       mkdirSync(shared, { recursive: true });
@@ -350,7 +283,7 @@ describe('generate-bundled-defaults: untracked-file guard (#1578)', () => {
   it.skipIf(process.platform === 'win32').each(['file', 'dir'] as const)(
     'rejects a shared %s symlink instead of silently omitting it',
     async kind => {
-      const repoRoot = createRepo(['defaults', 'author-pack']);
+      const repoRoot = createRepo([BASE_PACK, 'author-pack']);
       try {
         const shared = join(repoRoot, '.archon/workflows/author-pack/.shared');
         mkdirSync(shared, { recursive: true });

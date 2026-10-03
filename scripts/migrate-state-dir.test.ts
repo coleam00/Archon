@@ -22,8 +22,11 @@
  * the C5 group below shares one read-only registry built in `beforeAll`, and
  * keeps the property by giving each case its own paths, derived from its name.
  *
- * BUDGET: deliberately left at Bun's 5000 ms default, even though these tests
- * time out on windows-latest at ~5015 ms (#2306). Raising it was considered and
+ * BUDGET: these tests set no explicit budget. Since #3311 that means Bun's 5000 ms
+ * default off Windows and the 20 s runner floor on Windows, so the 5000 ms alarm this
+ * history describes is no longer armed on windows-latest. The history: these tests
+ * timed out there at ~5015 ms when Windows still ran the 5000 ms default (#2306).
+ * Raising the budget was considered and
  * rejected: every spawn that got as far as resolving a destination used to create
  * a 704 KB SQLite database — including a `PRAGMA busy_timeout = 5000` carrier, the
  * exact bound that turned out to be #2473's real cause — and that creation is now

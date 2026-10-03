@@ -119,11 +119,12 @@ describe('CLI help output', () => {
     expect(scoped).toContain('--workflow-source');
   });
 
-  it('scopes workflow logs --help to --follow and excludes run-only flags', () => {
+  it('scopes workflow logs --help to its own flags and excludes run-only flags', () => {
     // Proves the partition is not a one-off for workflow run: another
-    // subcommand gets only its own flag, while a run-only flag drops out.
+    // subcommand gets only its own flags, while a run-only flag drops out.
     const scoped = renderHelp('workflow', 'logs');
     expect(scoped).toContain('--follow');
+    expect(scoped).toContain('--format <jsonl|text>');
     expect(scoped).not.toContain('--dry-run');
   });
 
@@ -265,6 +266,8 @@ Options:
   --limit <n>                For 'workflow runs': max rows (default 20)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)
   --follow                   For 'workflow logs': stream appended rows until the run ends
+  --format <jsonl|text>      For 'workflow logs': jsonl (default) prints the exact transcript;
+                             text renders it as progress lines for a human
   --conversation-id <id>     Reuse a stable conversation scope across runs (enables
                              persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
@@ -278,17 +281,18 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
-  archon workflow run assist --folder "List every repo under this multi-repo root"
-  archon workflow run archon-assist --detach "Investigate the flaky test"
-  archon workflow run assist --dry-run --stubs ./stubs.yaml --json
+  archon workflow run investigate --folder "Explain how the repos under this root fit together"
+  archon workflow run archon-investigate --detach "Investigate the flaky test"
+  archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow logs <run-id> --follow
+  archon workflow logs <run-id> --follow --format text
   archon workflow wait <run-id> --json
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
   archon workflow runs --open
-  archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"
+  archon workflow run archon-review --adopt <run-id> "Review the changes"
   archon skill install
   archon skill install /path/to/project
   archon plugin install coleam00/Archon/plugins/forge-github

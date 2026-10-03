@@ -54,7 +54,11 @@ if (shouldDefaultClaudeGlobalAuth(process.env)) {
   process.env.CLAUDE_USE_GLOBAL_AUTH = 'true';
 }
 
-import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
+import {
+  claimPiExtensionProcessError,
+  registerBuiltinProviders,
+  registerCommunityProviders,
+} from '@archon/providers';
 import { getVendorCatalog } from '@archon/core';
 
 // Bootstrap provider registry before any provider lookups
@@ -209,11 +213,12 @@ function createMessageErrorHandler(
  * Exported for testability. Filters specifically for SDK cleanup races
  * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
  * a DAG node abort). Those are logged at error level but do not exit the process.
- * All other unhandled rejections are unexpected bugs — they are logged at fatal
- * level and the process exits as soon as queued telemetry flushes (bounded, so
- * still Fail Fast).
+ * A stack-attested error from the one active Pi extension turn is handed back to
+ * that node. Every other rejection is logged at fatal level and exits after
+ * queued telemetry flushes (bounded, so still Fail Fast).
  */
 export function handleUnhandledRejection(reason: unknown): void {
+  if (claimPiExtensionProcessError(reason)) return;
   const message = (reason instanceof Error ? reason.message : String(reason)).toLowerCase();
   // SDK cleanup race: PostToolUse hook writes to a closed pipe after a DAG node
   // abort. Safe to absorb — these are transient artifacts, not application bugs.
@@ -224,6 +229,19 @@ export function handleUnhandledRejection(reason: unknown): void {
   // All other unhandled rejections are unexpected — crash loudly so they are
   // not silently swallowed (CLAUDE.md: "Fail Fast + Explicit Errors").
   getLog().fatal({ reason }, 'unhandled_rejection.fatal');
+  void exitAfterTelemetryFlush(1);
+}
+
+/**
+ * Handles exceptions that escape detached Pi extension callbacks. Errors whose
+ * stacks do not identify an active extension retain the fatal process fallback.
+ */
+export function handleUncaughtException(
+  error: Error,
+  origin?: NodeJS.UncaughtExceptionOrigin
+): void {
+  if (claimPiExtensionProcessError(error)) return;
+  getLog().fatal({ err: error, origin }, 'uncaught_exception.fatal');
   void exitAfterTelemetryFlush(1);
 }
 
@@ -1089,7 +1107,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);
 
-  // Guard against SDK cleanup races: when a DAG node is aborted mid-execution,
+  // Guard against SDK cleanup races and hand stack-attested Pi extension
+  // failures back to their serialized node turn. When a DAG node is aborted,
   // the Claude Agent SDK's PostToolUse hook may be in-flight. After the hook
   // returns { continue: true }, handleControlRequest() tries to write() back to
   // the subprocess pipe — but the pipe is already closed (abort fired). The
@@ -1097,6 +1116,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // because it occurs AFTER the for-await generator loop exits (and thus outside
   // the try/catch in claude.ts). These are SDK cleanup races, not fatal app errors.
   process.on('unhandledRejection', handleUnhandledRejection);
+  process.on('uncaughtException', handleUncaughtException);
 
   getLog().info({ activePlatforms, port }, 'server_ready');
 

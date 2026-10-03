@@ -7,11 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- The legacy bundled workflows are removed. A fresh install ships only the `sdlc` pack, so `run pr` and `run review` each resolve to one workflow again. The legacy `archon-*` workflows deprecated since v0.10.0 and `archon-assist` no longer ship, and neither do the commands under `.archon/commands/defaults/` or the `archon-review-block` include block. A run paused before the upgrade still resumes from the source it captured. To keep one, copy its YAML from [`.archon/workflows/defaults/legacy/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults/legacy) into your project or global `.archon/workflows/`, and copy every command it names from [`.archon/commands/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) into the matching `.archon/commands/`. `archon-idea-to-pr`, `archon-plan-to-pr` and `archon-issue-review-full` also need `archon-review-block.yaml` from the same folder, which they include. A copied workflow whose commands are missing fails with a command-not-found error. (#3526)
+
+  | Removed workflow | Use instead |
+  | --- | --- |
+  | `archon-adversarial-dev` | None |
+  | `archon-architect` | None |
+  | `archon-assist` | None. Ask in chat: the router answers questions directly. At v0.11.1 its YAML is [`.archon/workflows/defaults/archon-assist.yaml`](https://github.com/coleam00/Archon/blob/v0.11.1/.archon/workflows/defaults/archon-assist.yaml). |
+  | `archon-comprehensive-pr-review` | `archon-review` |
+  | `archon-create-issue` | None |
+  | `archon-feature-development` | `archon-deliver`, with the plan as its input |
+  | `archon-fix-github-issue` | `archon-ship` |
+  | `archon-idea-to-pr` | `archon-ship` |
+  | `archon-interactive-prd` | None |
+  | `archon-issue-review-full` | `archon-ship` |
+  | `archon-piv-loop` | None with human checkpoints. `archon-plan` then `archon-deliver` covers the same phases without them. |
+  | `archon-plan-to-pr` | `archon-deliver`, with the plan as its input |
+  | `archon-ralph-dag` | `archon-implement` |
+  | `archon-refactor-safely` | None |
+  | `archon-remotion-generate` | None |
+  | `archon-resolve-conflicts` | None |
+  | `archon-smart-pr-review` | `archon-review` |
+  | `archon-test-loop-dag` | None |
+  | `archon-validate-pr` | `archon-validate` runs the project's checks. Nothing replaces the base-versus-branch end-to-end comparison. |
+  | `archon-workflow-builder` | None |
+
 ### Changed
 
+- The chat router no longer uses `archon-assist` as its example or describes it as the fallback: its examples now name `archon-ship`, `archon-plan` and `archon-investigate`, and questions still get a direct answer. (#3525)
 - Claude workflow nodes no longer load the Claude Code plugins installed on the machine. A node that needs a plugin names it with `plugins: [name@marketplace]` and gets that plugin's agents, hooks, LSP servers and commands; its skills and MCP servers still come through the node's own `skills:` and `mcp:` lists. A node fails before its first model turn when a named plugin is not installed, or when Claude Code loads a plugin the node did not name. Your own settings, hooks, permissions and CLAUDE.md keep loading. Naming plugins on a provider that cannot scope them (every provider except Claude for now) fails the run before any node starts.
 - Provider SDKs updated to latest: Claude Agent SDK 0.3.287, Codex SDK 0.160.0, Pi 1.0.0. When Claude Code refuses to start, its stated reason now decides the failure class: a sign-in the organization rejects is an auth failure and is not retried, and a configuration problem such as an invalid proxy URL is no longer retried as a crashed process.
 - A provider setup error is now reported as a `misconfigured` failure and is never retried, even with `on_error: all`; chat and the run's failure message say to fix the configuration. Claude reports it for a configuration reason it refuses to start with, a missing or unlaunchable executable, and an unknown model. Claude, Codex and Copilot report it for an unreadable MCP config file, Claude and Codex for a binary that cannot be found, and Pi for a missing or malformed model. Claude's `provider_not_allowed` refusal moves from an auth failure to `misconfigured`, and Pi with no credentials for its provider is now an auth failure. (#3566)
+- `persist_session` nodes on Codex, OpenCode and Copilot no longer continue the session an earlier run saved, because those providers cannot fork a session and two runs would write into one conversation. Each such run starts fresh, says so in chat, and records a `node_session_not_continued` event; `archon validate workflows` warns when the provider is written in the workflow file. Claude and Pi still continue it. (#2667)
+
+### Fixed
+
+- Two overlapping runs of one workflow in one conversation no longer share a persisted session. Each run's `persist_session` nodes continue from the session saved when that run started, never from one a sibling run saved later, and a node that finishes without a session id no longer erases the saved one. (#2667)
 
 ## [0.11.1] - 2026-09-25
 

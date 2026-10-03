@@ -168,6 +168,10 @@ Invalid values for optional workflow-level fields (`interactive`, `effort`, `san
 
 A `persist_session` node whose provider couldn't restore the prior session runs FRESH with a warning (it does not fail). The warning includes pointers to prior typed artifacts (`output_type` sidecars in the cross-run scope dir) so the prompt/agent can re-read lost context. If sessions are repeatedly cold, check server logs; clear broken state with `archon workflow reset-sessions <workflow>`.
 
+### `cannot fork a session` warning
+
+The node's provider cannot fork a session (no `sessionFork` in the [provider capabilities](https://archon.diy/reference/provider-capabilities/)), so a `persist_session` node on it never continues an earlier run's session: every run starts fresh. `archon validate workflows` reports this when the provider is written in the workflow file. Once an earlier run has saved a session for this node and provider, each later run also posts this warning in chat and records a `node_session_not_continued` event naming the session it skipped. This is expected, not broken state, and `reset-sessions` does not change it. To carry context across runs, move the node to a provider that forks sessions, or have it write what the next run needs as an artifact and read that instead. If neither applies, remove `persist_session` from the node.
+
 ## Useful Diagnostic Commands
 
 ```bash

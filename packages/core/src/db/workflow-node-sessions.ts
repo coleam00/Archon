@@ -1,11 +1,11 @@
 /**
  * Database operations for per-node provider sessions persisted across workflow re-runs.
  *
- * Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript flag).
  * This table stores the provider's session ID returned in the result `MessageChunk`
  * (see `@archon/providers/types`) so the DAG executor can pass it back as
- * `resumeSessionId` on a subsequent workflow run with the same scope (typically
- * `conversation_id`).
+ * `resumeSessionId` on a subsequent workflow run with the same scope (the launching
+ * conversation; see `persistScopeKey` in `@archon/workflows/schemas`). The executor lists a
+ * scope's rows once when a run starts; see `IWorkflowStore.listWorkflowNodeSessions`.
  *
  * No cascade is wired into conversation deletion: conversation deletion is a soft
  * delete and `scope_key` is the conversation UUID (never reused), so any rows left
@@ -24,15 +24,16 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export async function getWorkflowNodeSession(
-  key: WorkflowNodeSessionKey
-): Promise<WorkflowNodeSession | null> {
+export async function listWorkflowNodeSessions(scope: {
+  workflow_name: string;
+  scope_key: string;
+}): Promise<readonly WorkflowNodeSession[]> {
   const result = await pool.query<WorkflowNodeSession>(
     `SELECT * FROM remote_agent_workflow_node_sessions
-     WHERE workflow_name = $1 AND node_id = $2 AND scope_key = $3 AND provider = $4`,
-    [key.workflow_name, key.node_id, key.scope_key, key.provider]
+     WHERE workflow_name = $1 AND scope_key = $2`,
+    [scope.workflow_name, scope.scope_key]
   );
-  return result.rows[0] ?? null;
+  return result.rows;
 }
 
 export async function upsertWorkflowNodeSession(
@@ -89,7 +90,6 @@ export async function deleteWorkflowNodeSessions(filter: {
   workflow_name: string;
   scope_key?: string;
   node_id?: string;
-  provider?: string;
 }): Promise<{ deleted: number }> {
   const params: unknown[] = [filter.workflow_name];
   let sql = 'DELETE FROM remote_agent_workflow_node_sessions WHERE workflow_name = $1';
@@ -101,10 +101,6 @@ export async function deleteWorkflowNodeSessions(filter: {
     params.push(filter.node_id);
     sql += ` AND node_id = $${params.length}`;
   }
-  if (filter.provider !== undefined) {
-    params.push(filter.provider);
-    sql += ` AND provider = $${params.length}`;
-  }
   const result = await pool.query(sql, params);
   const deleted = result.rowCount ?? 0;
   getLog().info(
@@ -112,7 +108,6 @@ export async function deleteWorkflowNodeSessions(filter: {
       workflowName: filter.workflow_name,
       scopeKey: filter.scope_key,
       nodeId: filter.node_id,
-      provider: filter.provider,
       deleted,
     },
     'db.workflow_node_sessions_delete_completed'

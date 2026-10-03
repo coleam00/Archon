@@ -326,7 +326,7 @@ describePosix('CLI human-readable console.log over a real pipe (#2400)', () => {
     const codeOnly = codeLines.join('\n');
     // Must import the helper from the module that owns the chain shape.
     expect(codeOnly).toMatch(
-      /import\s*\{\s*withDrainedExit\s*\}\s*from\s*['"]\.\/utils\/exit-with-drain['"]/
+      /import\s*\{[^}]*\bwithDrainedExit\b[^}]*\}\s*from\s*['"]\.\/utils\/exit-with-drain['"]/
     );
     // Must invoke it at the top level, with main as the argument. Anchor
     // on `withDrainedExit(` so a future alias import or wrap-in-helper

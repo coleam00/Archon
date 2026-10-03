@@ -64,7 +64,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'running',
       startedAt: iso(4 * 60 + 12),
       activeNodes: ['plan/draft'],
-      currentNode: 'plan/draft',
       lastTool: 'read_file',
     },
     {
@@ -75,17 +74,15 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'running',
       startedAt: iso(9 * 60 + 38),
       activeNodes: ['implement/loop'],
-      currentNode: 'implement/loop',
       lastTool: 'edit_file',
     },
     {
       ...base,
       id: 'demo-paused-1',
-      workflow: 'archon-interactive-prd',
+      workflow: 'prd-intake',
       origin: 'web',
       status: 'paused',
       startedAt: iso(14 * 60 + 22),
-      currentNode: 'foundation-gate',
       lastTool: null,
       approval: {
         nodeId: 'foundation-gate',
@@ -104,7 +101,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'paused',
       outcome: 'succeeded',
       startedAt: iso(4 * 60 + 2),
-      currentNode: 'review/approve',
       lastTool: null,
       approval: {
         nodeId: 'review/approve',
@@ -122,7 +118,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       status: 'failed',
       startedAt: iso(2 * 60 + 41),
       finishedAt: iso(0),
-      currentNode: 'implement/verify',
       lastTool: null,
     },
     {
@@ -134,7 +129,6 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
       outcome: 'failed',
       startedAt: iso(8 * 60 + 14),
       finishedAt: iso(0),
-      currentNode: null,
       lastTool: null,
     },
   ] satisfies Run[];

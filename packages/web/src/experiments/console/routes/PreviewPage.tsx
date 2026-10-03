@@ -36,7 +36,6 @@ const SAMPLE_RUNS: Run[] = [
     workflow: 'plan',
     status: 'running',
     activeNodes: ['plan/draft'],
-    currentNode: 'plan/draft',
     lastTool: 'read_file',
   },
   {
@@ -63,7 +62,6 @@ const SAMPLE_RUNS: Run[] = [
     status: 'failed',
     startedAt: new Date(Date.now() - 2 * 60 * 1000 - 41 * 1000).toISOString(),
     finishedAt: new Date().toISOString(),
-    currentNode: 'implement/verify',
   },
   {
     ...baseRun,

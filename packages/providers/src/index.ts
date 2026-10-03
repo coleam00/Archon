@@ -94,6 +94,7 @@ export {
   PiProvider,
   parsePiConfig,
   registerPiProvider,
+  claimPiExtensionProcessError,
   listPiModels,
   type PiProviderDefaults,
   type PiModelInfo,

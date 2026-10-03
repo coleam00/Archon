@@ -350,7 +350,6 @@ defaults:
 |-------|-------------|-----|
 | `Workflow "X" not found` | YAML file not discovered | Check file is in `.archon/workflows/` and `archon workflow list` shows it |
 | `Command "X" not found` | Command file missing | For a packaged workflow, check its own `commands/X.md` and run `archon validate workflows <name>`; otherwise check the shared command path and run `archon validate commands X` |
-| `Routing unclear — falling back to archon-assist` | No workflow matched the input | Use an explicit workflow name: `archon workflow run my-workflow "..."` |
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
@@ -381,9 +380,17 @@ archon --verbose workflow run my-workflow "..."
 archon workflow run my-workflow --no-worktree "..."
 ```
 
-**Test a command directly** before embedding it in a workflow:
+**Test a command on its own** before embedding it in a larger workflow: wrap it in a one-node workflow at `.archon/workflows/try-my-command.yaml`:
+```yaml
+name: try-my-command
+description: Run my-command on its own.
+nodes:
+  - id: run
+    command: my-command
+```
+Then run it:
 ```bash
-archon workflow run archon-assist "/command-invoke my-command some-arg"
+archon workflow run try-my-command --no-worktree "some-arg"
 ```
 
 ### Getting Help

@@ -985,7 +985,7 @@ describe('GiteaAdapter', () => {
     // calls fetchCommentHistory() — a bare `fetch` against the adapter's
     // baseUrl. Left unstubbed that is a real DNS + TCP attempt to
     // gitea.example.com on every run, making the test's outcome depend on an
-    // external host inside Bun's 5000 ms per-test budget (#2186). Stub it.
+    // external host inside the per-test budget (#2186). Stub it.
     let fetchSpy: ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>;
 
     beforeEach(() => {

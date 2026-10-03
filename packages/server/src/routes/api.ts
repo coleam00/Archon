@@ -72,8 +72,7 @@ import {
   createLogger,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
-  getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
@@ -238,7 +237,7 @@ async function findWorkflowAt(
 }
 
 function isBundledWorkflowsRoot(workflowsRoot: string): boolean {
-  return resolve(workflowsRoot) === resolve(dirname(getDefaultWorkflowsPath()));
+  return resolve(workflowsRoot) === resolve(getBundledWorkflowsPath());
 }
 
 function findBundledWorkflow(
@@ -353,7 +352,6 @@ import {
 import {
   TIER_NAMES,
   isTierName,
-  isEffortValidForProvider,
   validEffortsForProvider,
 } from '@archon/workflows/model-validation';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
@@ -2139,11 +2137,17 @@ export function registerApiRoutes(
         .map(p => p.id)
         .join(', ')}`;
     }
-    if (entry.effort !== undefined && !isEffortValidForProvider(entry.provider, entry.effort)) {
-      return (
-        `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
-        `Valid: ${validEffortsForProvider(entry.provider)?.join(', ') ?? '(none)'}`
-      );
+    if (entry.effort !== undefined) {
+      const validEfforts = validEffortsForProvider(entry.provider);
+      if (validEfforts === null) {
+        return `Provider '${entry.provider}' does not support effort (${label}).`;
+      }
+      if (!validEfforts.includes(entry.effort)) {
+        return (
+          `Invalid effort '${entry.effort}' for provider '${entry.provider}' (${label}). ` +
+          `Valid: ${validEfforts.join(', ')}`
+        );
+      }
     }
     return null;
   }
@@ -4504,9 +4508,7 @@ export function registerApiRoutes(
 
       if (!isBinaryBuild()) {
         try {
-          const hit =
-            (await tryReadWorkflowAt(getDefaultWorkflowsPath(), name)) ??
-            (await findPackagedWorkflowAt(dirname(getDefaultWorkflowsPath()), name));
+          const hit = await findPackagedWorkflowAt(getBundledWorkflowsPath(), name);
           if (hit) {
             const result = hit.parsed;
             if (result.error) {
@@ -4702,23 +4704,7 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
-      // 2. If not binary build, also check filesystem defaults
-      if (!isBinaryBuild()) {
-        try {
-          const defaultsPath = getDefaultCommandsPath();
-          const files = await findCommandFiles(defaultsPath);
-          for (const { commandName } of files) {
-            commandMap.set(commandName, 'bundled');
-          }
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            getLog().error({ err }, 'commands.list_defaults_failed');
-          }
-          // ENOENT: defaults path missing — not an error
-        }
-      }
-
-      // 3. Home-scoped commands (~/.archon/commands/) override bundled
+      // 2. Home-scoped commands (~/.archon/commands/) override bundled
       try {
         const homeCommandsPath = getHomeCommandsPath();
         const files = await findCommandFiles(homeCommandsPath);
@@ -4732,7 +4718,7 @@ export function registerApiRoutes(
         // ENOENT: home commands dir not created yet — not an error
       }
 
-      // 4. Project-defined commands override bundled AND global
+      // 3. Project-defined commands override bundled AND global
       if (workingDir) {
         const searchPaths = getCommandFolderSearchPaths();
         for (const folder of searchPaths) {
