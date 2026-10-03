@@ -9,6 +9,7 @@ import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import * as git from '@archon/git';
+import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -464,8 +465,16 @@ describe('workflow status project scope', () => {
         const insertCodebase = database.prepare(
           'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)'
         );
-        insertCodebase.run('codebase-a', 'fixture/a', projectARoot.stdout.trim());
-        insertCodebase.run('codebase-b', 'fixture/b', projectBRoot.stdout.trim());
+        insertCodebase.run(
+          'codebase-a',
+          'fixture/a',
+          await canonicalizeProjectPath(projectARoot.stdout.trim())
+        );
+        insertCodebase.run(
+          'codebase-b',
+          'fixture/b',
+          await canonicalizeProjectPath(projectBRoot.stdout.trim())
+        );
 
         const insertConversation = database.prepare(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)'
@@ -669,7 +678,7 @@ describe('CLI workflow event dispatch', () => {
       try {
         database.run(
           'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)',
-          ['codebase-1', 'fixture', repoRoot.stdout.trim()]
+          ['codebase-1', 'fixture', await canonicalizeProjectPath(repoRoot.stdout.trim())]
         );
         database.run(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',

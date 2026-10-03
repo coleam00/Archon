@@ -253,7 +253,7 @@ function getGitCloneCall(): Parameters<typeof gitUtils.cloneRepository> | undefi
 }
 
 describe('findCodebaseForCheckoutPath', () => {
-  const cwd = '/workspace/external-linked';
+  const cwd = resolve('/workspace/external-linked');
   const commonGitDir = '/metadata/repository';
 
   function externalLinkedError(): gitUtils.CanonicalRepoPathUnavailableError {
@@ -859,7 +859,7 @@ describe('cloneRepository', () => {
       const revParseCall = (spyExecFileAsync.mock.calls as string[][]).find(args =>
         args[1]?.includes('rev-parse')
       );
-      expect(revParseCall?.[1]).toContain('/home/test/myrepo');
+      expect(revParseCall?.[1]).toContain(resolve('/home/test/myrepo'));
     });
 
     test('delegates relative path (./) to registerRepository', async () => {
@@ -1200,7 +1200,10 @@ describe('registerRepository', () => {
 
     const result = await registerRepository('/home/user/sibling-worktree');
 
-    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(1, '/home/user/sibling-worktree');
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(
+      1,
+      resolve('/home/user/sibling-worktree')
+    );
     expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(
       2,
       resolve('/home/user/primary-checkout')
@@ -1545,7 +1548,7 @@ describe('name-based deduplication', () => {
 
     expect(error?.message).toContain('/home/test/.archon/workspaces/owner/repo/source');
     expect(error?.message).toContain(
-      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg('/home/user/repo')}`
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(resolve('/home/user/repo'))}`
     );
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
     expect(mockCreateCodebase).not.toHaveBeenCalled();
@@ -1575,7 +1578,7 @@ describe('name-based deduplication', () => {
     );
 
     expect(error?.message).toContain(
-      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(lookalike)}`
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(resolve(lookalike))}`
     );
   });
 
@@ -1598,7 +1601,9 @@ describe('name-based deduplication', () => {
       (err: unknown) => err as Error
     );
 
-    expect(error?.message).toContain('/update-project "we\\"ird" "/home/user/we\\"ird"');
+    expect(error?.message).toContain(
+      `/update-project ${JSON.stringify('we"ird')} ${JSON.stringify(resolve('/home/user/we"ird'))}`
+    );
   });
 
   test('fills missing default_branch on existing local codebase', async () => {
