@@ -36,6 +36,7 @@ import {
   type PersistedNodeOutput,
   type WorkflowEventInput,
   type ObservabilityEventInput,
+  type WorkflowEventType,
 } from '@archon/workflows/store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -610,6 +611,40 @@ export async function listActiveWorkflowNodeIds(
   }
 
   return new Map([...activeByRun].map(([runId, activeNodeIds]) => [runId, [...activeNodeIds]]));
+}
+
+/**
+ * Rows of the given event types, data included, for several runs in one query: each
+ * run's rows in event order, and an entry (possibly empty) for every requested run. A
+ * run list uses it to report per-node state without one query per run, fetching only the
+ * types its fold reads so high-volume rows such as provider events never leave the
+ * database.
+ */
+export async function listEventsForRuns(
+  workflowRunIds: readonly string[],
+  eventTypes: readonly WorkflowEventType[]
+): Promise<Map<string, WorkflowEventRow[]>> {
+  const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
+  if (workflowRunIds.length === 0) return byRun;
+
+  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
+  const eventPlaceholders = eventTypes.map(
+    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
+  );
+  try {
+    const result = await pool.query<WorkflowEventRow>(
+      `SELECT * FROM remote_agent_workflow_events
+       WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
+         AND event_type IN (${eventPlaceholders.join(', ')})
+       ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+      [...workflowRunIds, ...eventTypes]
+    );
+    for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
+    return byRun;
+  } catch (error) {
+    getLog().error({ err: error as Error }, 'db.events_for_runs_list_failed');
+    throw new Error(`Failed to list events for runs: ${(error as Error).message}`);
+  }
 }
 
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
