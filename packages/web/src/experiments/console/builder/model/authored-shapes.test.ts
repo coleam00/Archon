@@ -7,8 +7,6 @@
  * `decisions`, and AI nodes carrying `settingSources` / node-local `with`.
  */
 import { describe, test, expect } from 'bun:test';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { fromWorkflowDefinition } from './from-workflow';
 import { toWorkflowDefinition } from './to-workflow';
 import { runValidation } from '../validation';
@@ -93,12 +91,15 @@ describe('authored shapes', () => {
     expect(variantOf('gate')).toBe('approval');
   });
 
-  test('the bundled archon-assist opens clean and round-trips (AC-2)', () => {
-    const file = join(
-      import.meta.dir,
-      '../../../../../../../.archon/workflows/defaults/archon-assist.yaml'
-    );
-    const def = Bun.YAML.parse(readFileSync(file, 'utf-8')) as WireWorkflowDefinition;
+  test('a one-command workflow with workflow-level config opens clean and round-trips (AC-2)', () => {
+    // The shape of the bundled assist workflow, inlined so the test does not follow a
+    // repository file as it moves.
+    const def: WireWorkflowDefinition = {
+      name: 'assist',
+      description: 'One agent session in the live checkout.',
+      worktree: { enabled: false },
+      nodes: [{ id: 'assist', command: 'archon-assist' }],
+    };
     const { workflow, issues } = fromWorkflowDefinition(def);
     expect(issues.filter(i => i.severity === 'error')).toEqual([]);
     expect(runValidation(workflow).filter(i => i.severity === 'error')).toEqual([]);
