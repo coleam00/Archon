@@ -288,7 +288,9 @@ export {
   deleteUserProviderKey,
   getDecryptedProviderCredential,
   listDecryptedUserProviderCredentials,
+  getStoredCredentialStatus,
   type SaveUserProviderKeyParams,
+  type StoredCredential,
 } from './db/user-provider-key-store';
 export {
   getUserAiPrefs,

@@ -11,6 +11,12 @@ export {
   type ProviderFailureClass,
 } from './failure';
 export {
+  credentialSourceSchema,
+  credentialStatusSchema,
+  type CredentialSource,
+  type CredentialStatus,
+} from './credential-status';
+export {
   providerResultSchema,
   providerStopReasonSchema,
   resolvedModelSchema,

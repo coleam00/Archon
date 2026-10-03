@@ -6,6 +6,7 @@ import {
   exchangeOpenAiAuthorizationCode,
   refreshOpenAiOAuthCredentials,
   mintOpenAiOAuthApiKey,
+  OpenAiTokenError,
 } from './openai-oauth';
 
 /** Build an unsigned JWT-shaped token with the given payload. */
@@ -218,6 +219,20 @@ describe('refreshOpenAiOAuthCredentials', () => {
     await expect(refreshOpenAiOAuthCredentials(stored)).rejects.toThrow(
       /refresh failed \(401\): invalid_grant/
     );
+  });
+
+  test('a token endpoint answer carries its HTTP status; a network failure carries none', async () => {
+    stubTokenEndpoint(401, { error: 'invalid_grant' });
+    const rejected = await refreshOpenAiOAuthCredentials(stored).catch((e: unknown) => e);
+    expect(rejected).toBeInstanceOf(OpenAiTokenError);
+    expect((rejected as OpenAiTokenError).status).toBe(401);
+
+    installFetch(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const unreachable = await refreshOpenAiOAuthCredentials(stored).catch((e: unknown) => e);
+    expect(unreachable).toBeInstanceOf(OpenAiTokenError);
+    expect((unreachable as OpenAiTokenError).status).toBeUndefined();
   });
 });
 

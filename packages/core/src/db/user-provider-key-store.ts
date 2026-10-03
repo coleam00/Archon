@@ -29,7 +29,12 @@ import {
   type ResolvedCredential,
 } from '../credentials/delivery';
 import { piOAuthProviderFor, OPENAI_SUBSCRIPTION_VENDOR } from '../credentials/oauth-providers';
-import { mintOpenAiOAuthApiKey, type OpenAiOAuthCredentials } from '../credentials/openai-oauth';
+import {
+  mintOpenAiOAuthApiKey,
+  OpenAiTokenError,
+  type OpenAiOAuthCredentials,
+} from '../credentials/openai-oauth';
+import type { CredentialStatus } from '@archon/provider-contract';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -126,50 +131,77 @@ export async function deleteUserProviderKey(userId: string, provider: string): P
 }
 
 /**
+ * A stored credential as a run would meet it. The decrypted credential exists only in the
+ * `usable` member; every other member is a {@link CredentialStatus} and safe to surface.
+ */
+export type StoredCredential =
+  | { state: 'usable'; source: 'archon'; credential: ResolvedCredential }
+  | Exclude<CredentialStatus, { state: 'usable' | 'not_checked' }>;
+
+type StoredCredentialFailure = Exclude<StoredCredential, { state: 'usable' }>;
+
+const NOT_CONNECTED: StoredCredentialFailure = { state: 'not_connected', source: 'archon' };
+
+const UNREADABLE: StoredCredentialFailure = {
+  state: 'unusable',
+  source: 'archon',
+  evidence: 'The stored credential cannot be read. Reconnect it.',
+};
+
+/** HTTP statuses from a token endpoint that say nothing about the credential itself. */
+function isVendorUnavailableStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
  * Serializes concurrent OAuth reads per `(userId, provider)` so a burst of
  * inject calls in one run never triggers (or races) more than one token
  * refresh. Mirrors `getDecryptedAccessToken`'s inflight Map in the github store.
  */
-const inflightOAuthReads = new Map<string, Promise<ResolvedCredential | null>>();
+const inflightOAuthReads = new Map<string, Promise<StoredCredential>>();
 
 /**
  * Decrypt the user's credential for a provider into a {@link ResolvedCredential}
- * ready for the delivery map. Returns `null` when the user has no row, the row
- * can't be decrypted, or (for OAuth) Pi can't mint/refresh an API key. The null
- * contract lets the inject path treat "no usable credential" and "not connected"
- * identically — the run continues with whatever env inheritance was in place.
+ * ready for the delivery map, or say why it cannot be used: `not_connected` when
+ * the user has no row, `unusable` when the row cannot be read or the vendor
+ * rejected the refresh, and `check_failed` when the refresh failed for a cause
+ * Archon cannot tell (network, vendor outage, an unclassified SDK error).
  *
- * For `oauth` rows: decrypt the stored Pi blob → `getOAuthApiKey` (auto-refresh)
- * → re-save rotated creds → return a usable bearer. The native Claude/Codex
- * providers (and Pi) then receive it via the delivery map.
+ * For `oauth` rows: decrypt the stored blob → mint/refresh a bearer → re-save
+ * rotated creds → return it. Throws only when the encryption key itself cannot
+ * be loaded: that is install misconfiguration, not a credential state.
  */
 export async function getDecryptedProviderCredential(
   userId: string,
   provider: string
-): Promise<ResolvedCredential | null> {
+): Promise<StoredCredential> {
   const row = await getUserProviderKeyRecord(userId, provider);
   if (!row) {
     getLog().debug({ userId, provider }, 'user_provider_key.not_connected');
-    return null;
+    return NOT_CONNECTED;
   }
   const key = getEncryptionKey();
   if (row.kind === 'api_key') {
     if (!row.api_key_encrypted) {
       getLog().warn({ userId, provider }, 'user_provider_key.missing_api_key_ciphertext');
-      return null;
+      return UNREADABLE;
     }
     try {
-      return { kind: 'api_key', apiKey: decryptToken(row.api_key_encrypted, key) };
+      return {
+        state: 'usable',
+        source: 'archon',
+        credential: { kind: 'api_key', apiKey: decryptToken(row.api_key_encrypted, key) },
+      };
     } catch (err) {
       getLog().error({ err: err as Error, userId, provider }, 'user_provider_key.decrypt_failed');
-      return null;
+      return UNREADABLE;
     }
   }
 
   // OAuth: coalesce concurrent reads so we refresh at most once per (user, provider).
   if (!row.oauth_creds_encrypted) {
     getLog().warn({ userId, provider }, 'user_provider_key.missing_oauth_ciphertext');
-    return null;
+    return UNREADABLE;
   }
   const ciphertext = row.oauth_creds_encrypted;
   const flightKey = `${userId}:${provider}`;
@@ -180,6 +212,19 @@ export async function getDecryptedProviderCredential(
   );
   inflightOAuthReads.set(flightKey, promise);
   return promise;
+}
+
+/**
+ * The status of the user's stored credential for a vendor, without the secret.
+ * Runs the same decrypt and refresh a run would, so the answer is the one the
+ * run would meet (a needed refresh happens here and its rotation is saved).
+ */
+export async function getStoredCredentialStatus(
+  userId: string,
+  vendor: string
+): Promise<CredentialStatus> {
+  const stored = await getDecryptedProviderCredential(userId, vendor);
+  return stored.state === 'usable' ? { state: 'usable', source: 'archon' } : stored;
 }
 
 /**
@@ -195,13 +240,13 @@ async function resolveOAuthCredential(
   provider: string,
   ciphertext: string,
   key: Buffer
-): Promise<ResolvedCredential | null> {
+): Promise<StoredCredential> {
   const vendor = normalizeCredentialVendor(provider);
   const piProvider = vendor === OPENAI_SUBSCRIPTION_VENDOR ? undefined : piOAuthProviderFor(vendor);
   if (vendor !== OPENAI_SUBSCRIPTION_VENDOR && !piProvider) {
     // An oauth row for a provider with no OAuth flow (shouldn't happen — connect guards it).
     getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_pi_provider');
-    return null;
+    return UNREADABLE;
   }
   let parsed: unknown;
   try {
@@ -211,7 +256,7 @@ async function resolveOAuthCredential(
       { err: err as Error, userId, provider },
       'user_provider_key.oauth_decrypt_failed'
     );
-    return null;
+    return UNREADABLE;
   }
   const creds = typeof parsed === 'object' && parsed !== null ? (parsed as OAuthCredentials) : null;
   // Both mint paths decide refresh from `creds.expires`. A missing or
@@ -223,7 +268,7 @@ async function resolveOAuthCredential(
       { userId, provider, expiresType: typeof creds?.expires },
       'user_provider_key.oauth_malformed_expires'
     );
-    return null;
+    return UNREADABLE;
   }
   let result: { newCredentials: PiOAuthCredentials | OAuthCredentials; apiKey: string } | null;
   try {
@@ -240,11 +285,22 @@ async function resolveOAuthCredential(
       { err: err as Error, userId, provider },
       'user_provider_key.oauth_refresh_failed'
     );
-    return null;
+    const evidence = (err as Error).message || 'The token refresh failed without a message.';
+    // Only Archon's own OpenAI flow reports an HTTP status. A token endpoint that
+    // answers 4xx rejected the grant; anything else (network, timeout, outage, Pi's
+    // untyped refresh errors) leaves the credential's health unknown.
+    if (err instanceof OpenAiTokenError && err.status && !isVendorUnavailableStatus(err.status)) {
+      return { state: 'unusable', source: 'archon', evidence };
+    }
+    return { state: 'check_failed', source: 'archon', evidence };
   }
   if (!result) {
     getLog().warn({ userId, provider }, 'user_provider_key.oauth_no_api_key');
-    return null;
+    return {
+      state: 'unusable',
+      source: 'archon',
+      evidence: 'The stored credential produced no access token. Reconnect it.',
+    };
   }
   const rawCreds = result.newCredentials as OAuthCredentials;
   // Compare the meaningful fields (not JSON, which is key-order-sensitive → needless
@@ -256,9 +312,9 @@ async function resolveOAuthCredential(
   if (rotated) {
     // IMPORTANT: Anthropic/Codex INVALIDATE the old refresh token on rotation. If
     // this resave fails the DB keeps a now-dead token → every future refresh fails
-    // and the user silently falls back to the shared key (or the run fails). So
-    // retry once, and log at ERROR (the credential may need reconnecting) — NOT a
-    // benign "next read re-refreshes" case.
+    // and the credential must be reconnected. So retry once, and log at ERROR —
+    // NOT a benign "next read re-refreshes" case. The live credential is still
+    // returned: it works for this run.
     let resaved = false;
     for (let attempt = 1; attempt <= 2 && !resaved; attempt++) {
       try {
@@ -275,13 +331,17 @@ async function resolveOAuthCredential(
       }
     }
   }
-  return { kind: 'oauth', oauthApiKey: result.apiKey, rawCreds };
+  return {
+    state: 'usable',
+    source: 'archon',
+    credential: { kind: 'oauth', oauthApiKey: result.apiKey, rawCreds },
+  };
 }
 
 /**
- * Resolve every connected credential for a user, dropping rows that can't be
- * decrypted (OAuth rows currently, decrypt failures, etc.). Used by the
- * workflow inject path to build the per-run env bag.
+ * Resolve every usable connected credential for a user, dropping rows whose
+ * status is anything else (each drop is logged where it is decided). Used by
+ * the workflow inject path to build the per-run env bag.
  *
  * Never throws — returns [] on any failure so the workflow continues.
  *
@@ -302,8 +362,8 @@ export async function listDecryptedUserProviderCredentials(
   const out: { provider: string; cred: ResolvedCredential }[] = [];
   for (const r of rows) {
     try {
-      const cred = await getDecryptedProviderCredential(userId, r.provider);
-      if (cred) out.push({ provider: r.provider, cred });
+      const stored = await getDecryptedProviderCredential(userId, r.provider);
+      if (stored.state === 'usable') out.push({ provider: r.provider, cred: stored.credential });
     } catch (err) {
       getLog().warn(
         { err: err as Error, userId, provider: r.provider },

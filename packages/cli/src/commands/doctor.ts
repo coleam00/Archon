@@ -29,6 +29,7 @@ import {
   type PiAuthValidity,
 } from '@archon/providers/community/pi/auth-status';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
+import type { CredentialStatus } from '@archon/provider-contract';
 
 // Vendor-canonical credential id for Codex (since #1955 credentials are keyed
 // by vendor, not agent). A connected `openai` key signals Codex intent even
@@ -641,6 +642,7 @@ export interface ProviderDeps {
   listUserProviderKeys: (
     userId: string
   ) => Promise<{ provider: string; kind: string; label: string | null }[]>;
+  getStoredCredentialStatus: (userId: string, vendor: string) => Promise<CredentialStatus>;
   // `platform` is the literal 'cli' — this check resolves the CLI identity only,
   // and narrowing it keeps the real (platform-union-typed) db fn assignable here.
   findOrCreateUserByPlatformIdentity: (
@@ -650,11 +652,38 @@ export interface ProviderDeps {
   ) => Promise<{ id: string }>;
 }
 
+function withoutFinalPeriod(text: string): string {
+  return text.endsWith('.') ? text.slice(0, -1) : text;
+}
+
+/** One line for a connected credential: its state, and what to do when it fails. */
+function describeStoredCredential(
+  row: { provider: string; kind: string },
+  status: CredentialStatus
+): string {
+  const name = `${row.provider} (${row.kind})`;
+  const reconnect =
+    row.kind === 'oauth' ? `archon ai login ${row.provider}` : `archon ai key set ${row.provider}`;
+  switch (status.state) {
+    case 'usable':
+      return `${name}: usable`;
+    case 'not_connected':
+      return `${name}: no longer connected`;
+    case 'not_checked':
+      return `${name}: not checked`;
+    case 'unusable':
+      return `${name}: cannot be used (${withoutFinalPeriod(status.evidence)}). Reconnect: ${reconnect}`;
+    case 'check_failed':
+      return `${name}: could not be verified (${withoutFinalPeriod(status.evidence)}). If it persists, reconnect: ${reconnect}`;
+  }
+}
+
 /**
- * Report how many AI-provider credentials the current CLI user has connected,
- * plus how to connect when none are. Skip (never fail) on any error — credential
- * status is informational, and a missing CLI identity or DB hiccup shouldn't make
- * `archon doctor` exit non-zero.
+ * Check every AI-provider credential the current CLI user connected, the way a run
+ * would use it: decrypt, and refresh an expired OAuth grant (saving any rotation).
+ * Fails when a credential cannot be used and warns when one could not be verified.
+ * Skips when there is no CLI identity, nothing is connected, or the database cannot
+ * be read, so a DB hiccup does not make `archon doctor` exit non-zero.
  */
 export async function checkConnectedProviders(
   env: NodeJS.ProcessEnv = process.env,
@@ -676,6 +705,7 @@ export async function checkConnectedProviders(
       message: `could not load credential module: ${(err as Error).message}`,
     };
   }
+  let checked: { row: { provider: string; kind: string }; status: CredentialStatus }[];
   try {
     const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
     const rows = await deps.listUserProviderKeys(user.id);
@@ -686,14 +716,12 @@ export async function checkConnectedProviders(
         message: 'none connected — run: archon ai login <vendor>  or  archon ai key set <vendor>',
       };
     }
-    const summary = rows.map(r => `${r.provider}(${r.kind})`).join(', ');
-    // A row here means a credential is stored, not that it authenticates —
-    // say what was checked, not that it works. See #3274.
-    return {
-      label,
-      status: 'pass',
-      message: `${rows.length} connected (not validated): ${summary}`,
-    };
+    checked = await Promise.all(
+      rows.map(async row => ({
+        row,
+        status: await deps.getStoredCredentialStatus(user.id, row.provider),
+      }))
+    );
   } catch (err) {
     return {
       label,
@@ -701,14 +729,23 @@ export async function checkConnectedProviders(
       message: `could not read credentials: ${(err as Error).message}`,
     };
   }
+  const states = checked.map(c => c.status.state);
+  const status = states.includes('unusable')
+    ? 'fail'
+    : states.includes('check_failed')
+      ? 'warn'
+      : 'pass';
+  const lines = checked.map(c => `\n    ${describeStoredCredential(c.row, c.status)}`);
+  return { label, status, message: `${checked.length} connected${lines.join('')}` };
 }
 
 async function defaultLoadProviderDeps(): Promise<ProviderDeps> {
   // Lazy imports for the same reason as defaultLoadDatabaseDeps.
-  const { listUserProviderKeys } = await import('@archon/core');
+  const { listUserProviderKeys, getStoredCredentialStatus } = await import('@archon/core');
   const userDb = await import('@archon/core/db/users');
   return {
     listUserProviderKeys,
+    getStoredCredentialStatus,
     findOrCreateUserByPlatformIdentity: userDb.findOrCreateUserByPlatformIdentity,
   };
 }

@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  checkCredentialStatuses,
   checkEventVocabulary,
   checkFailureClasses,
   checkSettled,
   runProviderConformance,
+  type CredentialStatusCase,
   type ProviderFailureCase,
   type ProviderTurnCase,
 } from './conformance';
+import { credentialStatusSchema } from './credential-status';
 
 function turn(...chunks: unknown[]): () => AsyncIterable<unknown> {
   return async function* () {
@@ -374,5 +377,72 @@ describe('event vocabulary conformance', () => {
       expect.stringContaining('plain turn: rule 1, chunk 0 (type "assistant")'),
       expect.stringContaining('expired key: rule 1, chunk 0 (type "assistant")'),
     ]);
+  });
+});
+
+describe('credential status conformance', () => {
+  const secret = 'sk-planted-secret-value';
+  const dead: CredentialStatusCase = {
+    name: 'dead refresh token',
+    expected: 'unusable',
+    secret,
+    check: async () => ({ state: 'unusable', source: 'archon', evidence: 'HTTP 401' }),
+  };
+
+  test('a status with the expected state and no secret conforms', async () => {
+    expect(await checkCredentialStatuses([dead])).toEqual([]);
+  });
+
+  test.each<[string, CredentialStatusCase, string]>([
+    [
+      'the secret in evidence',
+      {
+        ...dead,
+        check: async () => ({ state: 'unusable', source: 'archon', evidence: `bad key ${secret}` }),
+      },
+      'dead refresh token: status contains the credential value',
+    ],
+    [
+      'the secret in a key the schema strips',
+      {
+        ...dead,
+        check: async () => ({ state: 'unusable', source: 'archon', evidence: 'x', key: secret }),
+      },
+      'dead refresh token: status contains the credential value',
+    ],
+    [
+      'the wrong state',
+      { ...dead, check: async () => ({ state: 'usable', source: 'archon' }) },
+      'dead refresh token: reported usable, expected unusable',
+    ],
+  ])('reports %s', async (_label, statusCase, violation) => {
+    expect(await checkCredentialStatuses([statusCase])).toEqual([violation]);
+  });
+
+  test('reports a malformed status and a throw', async () => {
+    const violations = await checkCredentialStatuses([
+      { ...dead, check: async () => ({ state: 'unusable', source: 'archon' }) },
+      {
+        ...dead,
+        check: async () => {
+          throw new Error('boom');
+        },
+      },
+    ]);
+    expect(violations[0]).toStartWith('dead refresh token: status is malformed');
+    expect(violations[1]).toBe('dead refresh token: threw instead of reporting a status (boom)');
+  });
+});
+
+describe('credential status schema', () => {
+  test.each(['unusable', 'check_failed'])('%s requires evidence', state => {
+    expect(credentialStatusSchema.safeParse({ state, source: 'native' }).success).toBe(false);
+    expect(
+      credentialStatusSchema.safeParse({ state, source: 'native', evidence: 'why' }).success
+    ).toBe(true);
+  });
+
+  test.each(['usable', 'not_connected', 'not_checked'])('%s needs no evidence', state => {
+    expect(credentialStatusSchema.safeParse({ state, source: 'archon' }).success).toBe(true);
   });
 });
