@@ -88,7 +88,6 @@ describe('parseWholeOutputRef', () => {
 describe('findUnsupportedNestedOutputRef', () => {
   it('returns the complete nested current-output reference', () => {
     expect(findUnsupportedNestedOutputRef('Use $review.output.proposal.action now')).toEqual({
-      kind: 'current',
       reference: '$review.output.proposal.action',
       supportedForms: ['$review.output', '$review.output.field'],
     });
@@ -96,7 +95,6 @@ describe('findUnsupportedNestedOutputRef', () => {
 
   it('returns the complete nested prior-iteration reference', () => {
     expect(findUnsupportedNestedOutputRef('$LOOP_PREV.work.output.result.status.value')).toEqual({
-      kind: 'loop_prev',
       reference: '$LOOP_PREV.work.output.result.status.value',
       supportedForms: ['$LOOP_PREV.work.output', '$LOOP_PREV.work.output.field'],
     });

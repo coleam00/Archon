@@ -143,7 +143,6 @@ export const SUPPORTED_OUTPUT_REF_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_
 export const SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_FIELD_SOURCE}))?`;
 
 export interface UnsupportedNestedOutputReference {
-  kind: 'current' | 'loop_prev' | 'shorthand';
   reference: string;
   supportedForms: readonly string[];
 }
@@ -158,7 +157,6 @@ function firstCurrentNestedOutputRef(
     const nodeId = match[1];
     if (nodeId === undefined || nodeId === 'INPUTS') continue;
     return {
-      kind: 'current',
       reference: match[0],
       supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`],
       index: match.index,
@@ -174,7 +172,6 @@ function firstLoopPrevNestedOutputRef(
   const nodeId = match?.[1];
   if (!match || nodeId === undefined) return undefined;
   return {
-    kind: 'loop_prev',
     reference: match[0],
     supportedForms: [`$LOOP_PREV.${nodeId}.output`, `$LOOP_PREV.${nodeId}.output.field`],
     index: match.index,
@@ -197,7 +194,6 @@ export function findUnsupportedNestedOutputRef(
         : loopPrev;
   if (!first) return undefined;
   return {
-    kind: first.kind,
     reference: first.reference,
     supportedForms: first.supportedForms,
   };

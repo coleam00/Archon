@@ -170,7 +170,6 @@ export function findUnsupportedNestedWhenRef(
     const loopPrev = NESTED_LOOP_PREV_WHEN_REF_PATTERN.exec(atom);
     if (loopPrev?.[1] !== undefined && loopPrev[2] !== undefined) {
       return {
-        kind: 'loop_prev',
         reference: loopPrev[1],
         supportedForms: [
           `$LOOP_PREV.${loopPrev[2]}.output`,
@@ -184,7 +183,6 @@ export function findUnsupportedNestedWhenRef(
       const nodeId = canonical[2];
       if (nodeId === WHEN_INPUTS_SCOPE) continue;
       return {
-        kind: 'current',
         reference: canonical[1],
         supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`, `$${nodeId}.field`],
       };
@@ -197,7 +195,6 @@ export function findUnsupportedNestedWhenRef(
       if (nodeId === WHEN_INPUTS_SCOPE || nodeId === 'LOOP_PREV' || firstSegment === 'output')
         continue;
       return {
-        kind: 'shorthand',
         reference: shorthand[1],
         supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`, `$${nodeId}.field`],
       };
