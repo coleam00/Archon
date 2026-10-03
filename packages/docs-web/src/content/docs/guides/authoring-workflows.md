@@ -894,7 +894,7 @@ On resume, `fetch-data` re-runs regardless of prior success, so `process-data` r
 
 ## Persistent Sessions Across Re-Runs
 
-Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role.
+Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role. Only a provider that can fork a session continues it; with any other provider the node starts fresh on every run (see [Concurrent runs](#concurrent-runs)).
 
 ```yaml
 name: feature-dev
@@ -930,7 +930,7 @@ Two runs of the same workflow in the same scope can run at the same time. Neithe
 
 - When a run starts, it reads the scope's persisted sessions once. Each `persist_session` node continues from that copy, not from a session another run saved after this run started.
 - The node continues the saved session only when its provider can **fork** it (declares `sessionFork: true`). The fork is a new session with the saved history, so the saved one stays unchanged. Claude and Pi fork.
-- A provider that cannot fork would resume the saved session in place, so two runs could append to one conversation. Instead, the node does not continue it. The run records a `node_session_not_continued` workflow event naming the session it skipped (an 8-character preview) and posts a notice in the conversation. Codex, OpenCode and Copilot are in this group today, so their `persist_session` nodes do not carry context between runs.
+- A provider that cannot fork would resume the saved session in place, so two runs could append to one conversation. Instead, the node does not continue it. The run records a `node_session_not_continued` workflow event naming the session it skipped (an 8-character preview) and posts a notice in the conversation. When the provider is set in the workflow file, `archon validate workflows` also warns before any run. Codex, OpenCode and Copilot are in this group today, so their `persist_session` nodes do not carry context between runs; pass state between runs through artifacts instead.
 - When a node finishes with a session, that session becomes the saved one. With overlapping runs, the run whose node finished last wins. A node that finishes without a session id leaves the saved session as it was.
 
 ### Workflow-level default
