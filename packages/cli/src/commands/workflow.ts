@@ -136,6 +136,7 @@ import {
   workflowRunStatusSchema,
   isApprovalContext,
   isWorkflowWaitContext,
+  pendingWorkflowWaitDeadline,
   workflowWaitStepName,
   isScheduledWorkflowResume,
   readRunStopReason,
@@ -3521,9 +3522,8 @@ export interface PendingWaitContinuation {
  * run, a gate, or an `attention` wait, none of which has a deadline to enforce.
  */
 export function pendingDurableWait(run: WorkflowRun): DurableWaitCursor | undefined {
-  if (run.status !== 'paused') return undefined;
-  const wait = run.metadata.wait;
-  if (!isWorkflowWaitContext(wait) || wait.kind === 'attention') return undefined;
+  const wait = pendingWorkflowWaitDeadline(run);
+  if (!wait) return undefined;
   return {
     stepName: workflowWaitStepName(wait),
     resumeAt: wait.resumeAt,
