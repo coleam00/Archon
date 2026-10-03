@@ -39,7 +39,7 @@ import {
   type ParamsOf,
   type Spawner,
 } from './app-server';
-import { classifyTurnError } from './turn-error';
+import { classifyTurnError, describeErrorInfo } from './turn-error';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
@@ -483,6 +483,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   let lastAgentMessage = '';
   let usage: TokenUsage | undefined;
   let rateLimits: RateLimitSnapshot | undefined;
+  let retries = 0;
 
   for await (const notification of connection.notifications()) {
     switch (notification.method) {
@@ -497,19 +498,29 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         }
         break;
 
-      case 'error':
+      case 'error': {
         // `willRetry` errors are Codex reconnecting on its own; the turn's outcome is
         // decided by `turn/completed`. They are kept as evidence for a turn that never
         // completes.
+        const { error, willRetry } = notification.params;
         getLog().debug(
-          {
-            willRetry: notification.params.willRetry,
-            codexErrorInfo: notification.params.error.codexErrorInfo,
-          },
+          { willRetry, codexErrorInfo: error.codexErrorInfo },
           'codex.turn_error_notification'
         );
-        errors.push(notification.params.error.message);
+        errors.push(error.message);
+        if (willRetry) {
+          // Reported so a turn that waits out a reconnect does not look stuck. The count
+          // is Archon's: the notification carries no attempt number outside its prose.
+          retries += 1;
+          const cause = describeErrorInfo(error.codexErrorInfo);
+          yield {
+            type: 'warning',
+            code: 'codex.will_retry',
+            message: `Codex is retrying the model call (retry ${String(retries)} this turn${cause ? `, ${cause}` : ''})`,
+          };
+        }
         break;
+      }
 
       case 'item/started': {
         const { item } = notification.params;

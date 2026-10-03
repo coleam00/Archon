@@ -14,6 +14,7 @@
     "./codex/provider": "./src/codex/provider.ts",
     "./codex/config": "./src/codex/config.ts",
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",
+    "./codex/setup-env": "./src/codex/setup-env.ts",
     "./mcp/config": "./src/mcp/config.ts",
     "./oauth": "./src/oauth.ts",
     "./community/pi": "./src/community/pi/index.ts",
@@ -56,7 +57,8 @@
       "src/codex/provider.test.ts"
     ],
     [
-      "src/codex/turn-error.test.ts"
+      "src/codex/turn-error.test.ts",
+      "src/codex/setup-env.test.ts"
     ],
     [
       "src/codex/app-server.test.ts"

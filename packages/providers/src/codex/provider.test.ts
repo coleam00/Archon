@@ -260,6 +260,21 @@ describe('CodexProvider', () => {
       expect(env.HOME).toBe(process.env.HOME as string);
       expect(env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
     });
+
+    // #3562 renamed Archon's setup variables instead of stripping Codex's own names
+    // here. This fails if the provider starts filtering CODEX_ACCESS_TOKEN out.
+    test('the Codex env is not stripped of a user’s own CODEX_ACCESS_TOKEN (#3562)', async () => {
+      const original = process.env.CODEX_ACCESS_TOKEN;
+      process.env.CODEX_ACCESS_TOKEN = 'user-codex-token';
+      try {
+        const { provider, server } = providerWith();
+        await run(provider, { env: { ARCHON_CODEX_ACCESS_TOKEN: 'archon-setup-token' } });
+        expect(server.processes[0].env.CODEX_ACCESS_TOKEN).toBe('user-codex-token');
+      } finally {
+        if (original === undefined) delete process.env.CODEX_ACCESS_TOKEN;
+        else process.env.CODEX_ACCESS_TOKEN = original;
+      }
+    });
   });
 
   describe('API key opt-in', () => {
@@ -695,6 +710,33 @@ describe('CodexProvider', () => {
       expect(resultOf(chunks)).toEqual({ type: 'result', sessionId: THREAD_ID });
     });
 
+    test('each retry Codex announces is a warning with its cause and no vendor text', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          errorNotification('Reconnecting... 1/5 (secret vendor body)', true, {
+            responseStreamDisconnected: { httpStatusCode: 503 },
+          }),
+          errorNotification('Reconnecting... 2/5', true, 'serverOverloaded'),
+          errorNotification('stream ended', false, 'other'),
+          agentMessage('done'),
+        ],
+      });
+      const warnings = chunks.filter(chunk => chunk.type === 'warning');
+      expect(warnings).toEqual([
+        {
+          type: 'warning',
+          code: 'codex.will_retry',
+          message:
+            'Codex is retrying the model call (retry 1 this turn, responseStreamDisconnected, HTTP 503)',
+        },
+        {
+          type: 'warning',
+          code: 'codex.will_retry',
+          message: 'Codex is retrying the model call (retry 2 this turn, serverOverloaded)',
+        },
+      ]);
+    });
+
     test('a replayed completion of an earlier turn does not end this one', async () => {
       const chunks = await streamOf({
         notifications: [
@@ -756,7 +798,18 @@ describe('CodexProvider', () => {
       });
       const violations = await runProviderConformance({
         capabilities: new CodexProvider().getCapabilities(),
-        turns: [{ name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) }],
+        turns: [
+          { name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) },
+          {
+            name: 'turn Codex retried',
+            run: turn({
+              notifications: [
+                errorNotification('Reconnecting... 1/5', true, 'serverOverloaded'),
+                agentMessage('hi'),
+              ],
+            }),
+          },
+        ],
         failureCases: [
           {
             name: 'missing credentials',

@@ -85,10 +85,10 @@ describe('setup command', () => {
         `
 CLAUDE_USE_GLOBAL_AUTH=true
 TELEGRAM_BOT_TOKEN=123:ABC
-CODEX_ID_TOKEN=token1
-CODEX_ACCESS_TOKEN=token2
-CODEX_REFRESH_TOKEN=token3
-CODEX_ACCOUNT_ID=account1
+ARCHON_CODEX_ID_TOKEN=token1
+ARCHON_CODEX_ACCESS_TOKEN=token2
+ARCHON_CODEX_REFRESH_TOKEN=token3
+ARCHON_CODEX_ACCOUNT_ID=account1
 `.trim()
       );
 
@@ -109,6 +109,21 @@ CODEX_ACCOUNT_ID=account1
       } else {
         process.env.ARCHON_HOME = originalHome;
       }
+    });
+
+    it('counts an old Archon Codex setup, but not a lone CODEX_ACCESS_TOKEN (#3562)', () => {
+      const envDir = join(TEST_DIR, '.archon-codex-legacy');
+      mkdirSync(envDir, { recursive: true });
+      const envPath = join(envDir, '.env');
+
+      writeFileSync(
+        envPath,
+        'CODEX_ID_TOKEN=id\nCODEX_ACCESS_TOKEN=access\nCODEX_REFRESH_TOKEN=rt\nCODEX_ACCOUNT_ID=acct\n'
+      );
+      expect(checkExistingConfig(envPath)?.hasCodex).toBe(true);
+
+      writeFileSync(envPath, 'CODEX_ACCESS_TOKEN=users-own\n');
+      expect(checkExistingConfig(envPath)?.hasCodex).toBe(false);
     });
 
     it('detects existing Pi configuration from a Pi API key env var', () => {
@@ -250,10 +265,15 @@ CODEX_ACCOUNT_ID=account1
         botDisplayName: 'Archon',
       });
 
-      expect(content).toContain('CODEX_ID_TOKEN=id-token');
-      expect(content).toContain('CODEX_ACCESS_TOKEN=access-token');
-      expect(content).toContain('CODEX_REFRESH_TOKEN=refresh-token');
-      expect(content).toContain('CODEX_ACCOUNT_ID=account-id');
+      // Codex reads CODEX_* itself, so Archon's copies must not use its names (#3562).
+      const env = parseDotenv(content);
+      expect(env).toMatchObject({
+        ARCHON_CODEX_ID_TOKEN: 'id-token',
+        ARCHON_CODEX_ACCESS_TOKEN: 'access-token',
+        ARCHON_CODEX_REFRESH_TOKEN: 'refresh-token',
+        ARCHON_CODEX_ACCOUNT_ID: 'account-id',
+      });
+      expect(Object.keys(env).filter(key => key.startsWith('CODEX_'))).toEqual([]);
       expect(content).toContain('DEFAULT_AI_ASSISTANT=codex');
     });
 
@@ -598,6 +618,42 @@ describe('writeScopedEnv (#1303)', () => {
     expect(merged.MY_CUSTOM_SECRET).toBe('preserve-me');
     expect(merged.PORT).toBe('3090');
     expect(result.backupPath).not.toBeNull();
+  });
+
+  it('a re-run moves an old Archon Codex setup to the new names and drops the old lines (#3562)', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(
+      envPath,
+      'CODEX_ID_TOKEN=old-id\nCODEX_ACCESS_TOKEN=old-access\nCODEX_REFRESH_TOKEN=old-rt\nCODEX_ACCOUNT_ID=old-acct\n'
+    );
+    // A re-run that does not touch Codex still migrates it; one that enters new
+    // tokens leaves no stale CODEX_ACCESS_TOKEN behind for Codex to read.
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged).toMatchObject({
+      ARCHON_CODEX_ID_TOKEN: 'old-id',
+      ARCHON_CODEX_ACCESS_TOKEN: 'old-access',
+      ARCHON_CODEX_REFRESH_TOKEN: 'old-rt',
+      ARCHON_CODEX_ACCOUNT_ID: 'old-acct',
+    });
+    expect(Object.keys(merged).filter(key => key.startsWith('CODEX_'))).toEqual([]);
+  });
+
+  it('a re-run leaves a lone CODEX_ACCESS_TOKEN alone: it is the user’s Codex auth (#3562)', () => {
+    const envPath = join(HOME_DIR, '.env');
+    writeFileSync(envPath, 'CODEX_ACCESS_TOKEN=users-own\n');
+    const result = writeScopedEnv('DATABASE_URL=sqlite:local\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+    });
+    const merged = parseDotenv(readFileSync(result.targetPath, 'utf-8'));
+    expect(merged.CODEX_ACCESS_TOKEN).toBe('users-own');
+    expect(merged.ARCHON_CODEX_ACCESS_TOKEN).toBeUndefined();
   });
 
   it('merge preserves existing PostgreSQL DATABASE_URL when proposed is SQLite', () => {
