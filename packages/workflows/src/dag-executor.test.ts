@@ -5331,7 +5331,7 @@ describe('executeDagWorkflow -- skills options', () => {
           platform: createMockPlatform(),
           cwd: testDir,
           workflow: {
-            name: 'dag-plugins-codex',
+            name: 'dag-plugins-pi',
             nodes: [
               { id: 'first', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } },
               {
@@ -5339,7 +5339,7 @@ describe('executeDagWorkflow -- skills options', () => {
                 kind: 'agent',
                 source: { kind: 'command', name: 'my-cmd' },
                 depends_on: ['first'],
-                provider: 'codex',
+                provider: 'pi',
                 plugins: ['formatter@tools'],
               },
             ],
@@ -5347,7 +5347,7 @@ describe('executeDagWorkflow -- skills options', () => {
           workflowRun: makeWorkflowRun(),
         })
       )
-    ).rejects.toThrow("Node 'second' (provider 'codex') names plugins");
+    ).rejects.toThrow("Node 'second' (provider 'pi') names plugins");
     expect(mockSendQueryDag).not.toHaveBeenCalled();
   });
 

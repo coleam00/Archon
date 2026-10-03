@@ -40,6 +40,7 @@ import {
   type Spawner,
 } from './app-server';
 import { classifyTurnError, describeErrorInfo } from './turn-error';
+import { applyNodeScope, checkThreadMcpScope, readCodexInventory } from './scope';
 import type { JsonValue } from './protocol/serde_json/JsonValue';
 import type { ThreadItem } from './protocol/v2/ThreadItem';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
@@ -431,6 +432,15 @@ function idAt(value: unknown, key: 'thread' | 'turn'): string | undefined {
   return typeof id === 'string' && id.length > 0 ? id : undefined;
 }
 
+/** The Codex home the app-server reports in its `initialize` response, for error messages. */
+function codexHomeOf(initializeResponse: unknown): string {
+  const home =
+    typeof initializeResponse === 'object' && initializeResponse !== null
+      ? (initializeResponse as { codexHome?: unknown }).codexHome
+      : undefined;
+  return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
+}
+
 interface TurnRequest {
   connection: AppServerConnection;
   apiKey: string | undefined;
@@ -438,6 +448,11 @@ interface TurnRequest {
   resumeSessionId: string | undefined;
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
+  /**
+   * The plugins a workflow node names, which scopes its thread to them and its declared
+   * MCP servers (`./scope`). Undefined for direct chat, which keeps the user's setup.
+   */
+  nodePlugins: readonly string[] | undefined;
   hasOutputFormat: boolean;
   model: string | undefined;
   /** Receives the thread id as soon as it exists, so a failure can still carry it. */
@@ -451,8 +466,8 @@ interface TurnRequest {
  * process ending before `turn/completed` is thrown for `sendQuery` to classify.
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
-  const { connection } = request;
-  await connection.request('initialize', {
+  const { connection, nodePlugins } = request;
+  const initialized = await connection.request('initialize', {
     clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
     capabilities: null,
   });
@@ -463,17 +478,32 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     await connection.request('account/login/start', { type: 'apiKey', apiKey: request.apiKey });
   }
 
+  let { threadParams } = request;
+  // Set only for a workflow node: the MCP server names its thread may run.
+  let declared: string[] | undefined;
+  if (nodePlugins) {
+    const inventory = await readCodexInventory(connection, {
+      cwd: request.cwd,
+      plugins: nodePlugins,
+      codexHome: codexHomeOf(initialized),
+    });
+    const scope = applyNodeScope(threadParams.config ?? {}, inventory, nodePlugins);
+    threadParams = { ...threadParams, config: scope.config };
+    declared = scope.declared;
+  }
+  // A resumed thread needs the same config: Codex does not store it with the thread.
   const threadResponse = request.resumeSessionId
     ? await connection.request('thread/resume', {
         threadId: request.resumeSessionId,
         cwd: request.cwd,
-        ...request.threadParams,
+        ...threadParams,
         excludeTurns: true,
       })
-    : await connection.request('thread/start', { cwd: request.cwd, ...request.threadParams });
+    : await connection.request('thread/start', { cwd: request.cwd, ...threadParams });
   const threadId = idAt(threadResponse, 'thread');
   if (!threadId) throw new Error('Codex app-server returned a thread without an id');
   request.onThread(threadId);
+  if (declared) await checkThreadMcpScope(connection, threadId, declared);
   getLog().debug(
     { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
     'codex.thread_ready'
@@ -805,9 +835,17 @@ export class CodexProvider implements IAgentProvider {
         codexConfig.modelReasoningEffort
       );
 
+      const workflowNode = isWorkflowNode(requestOptions);
+      const nodePlugins = workflowNode ? (requestOptions?.nodeConfig?.plugins ?? []) : undefined;
       connection = AppServerConnection.start(
         binary,
-        apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : [],
+        [
+          ...(apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : []),
+          // A user who turned plugins off globally gets an empty `plugin/installed`, so a
+          // node that names plugins could not find them. This process serves only this
+          // node's thread, and the thread config switches off every plugin it does not name.
+          ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
+        ],
         env,
         this.spawner
       );
@@ -823,7 +861,7 @@ export class CodexProvider implements IAgentProvider {
           sandbox: 'danger-full-access',
           approvalPolicy: 'never',
           ...(model ? { model } : {}),
-          config: buildThreadConfig(codexConfig, mcpServers, isWorkflowNode(requestOptions)),
+          config: buildThreadConfig(codexConfig, mcpServers, workflowNode),
         },
         turnParams: {
           input: [
@@ -832,6 +870,7 @@ export class CodexProvider implements IAgentProvider {
           ...(effort ? { effort } : {}),
           ...(outputSchema !== undefined ? { outputSchema } : {}),
         },
+        nodePlugins,
         hasOutputFormat,
         model,
         onThread: id => {

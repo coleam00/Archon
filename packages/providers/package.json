@@ -64,6 +64,10 @@
       "src/codex/app-server.test.ts"
     ],
     [
+      "src/codex/scope.test.ts",
+      "src/codex/scope.boundary.test.ts"
+    ],
+    [
       "src/registry.test.ts"
     ],
     [

@@ -1451,13 +1451,13 @@ describe('validateWorkflowResources — skills search roots', () => {
           plugins: ['formatter@tools'],
         } as unknown as DagNode,
       ],
-      'codex'
+      'pi'
     );
 
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const error = issues.find(issue => issue.field === 'plugins');
     expect(error?.level).toBe('error');
-    expect(error?.message).toContain("Provider 'codex' cannot load named plugins");
+    expect(error?.message).toContain("Provider 'pi' cannot load named plugins");
   });
 
   test('uses a node model alias provider for Claude skill validation', async () => {

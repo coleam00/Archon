@@ -14,6 +14,12 @@ import type { ClientRequest } from '../codex/protocol/ClientRequest';
 import type { InitializeResponse } from '../codex/protocol/InitializeResponse';
 import type { ServerNotification } from '../codex/protocol/ServerNotification';
 import type { CodexErrorInfo } from '../codex/protocol/v2/CodexErrorInfo';
+import type { ConfigReadResponse } from '../codex/protocol/v2/ConfigReadResponse';
+import type { ListMcpServerStatusResponse } from '../codex/protocol/v2/ListMcpServerStatusResponse';
+import type { McpServerStatus } from '../codex/protocol/v2/McpServerStatus';
+import type { PluginInstalledResponse } from '../codex/protocol/v2/PluginInstalledResponse';
+import type { PluginReadResponse } from '../codex/protocol/v2/PluginReadResponse';
+import type { PluginSummary } from '../codex/protocol/v2/PluginSummary';
 import type { FileUpdateChange } from '../codex/protocol/v2/FileUpdateChange';
 import type { LoginAccountResponse } from '../codex/protocol/v2/LoginAccountResponse';
 import type { McpToolCallStatus } from '../codex/protocol/v2/McpToolCallStatus';
@@ -55,7 +61,16 @@ export interface FakeTurnScript {
   ignoreInterrupt?: boolean;
   /** Keep running when stdin closes; only a signal ends the process. */
   ignoreStdinClose?: boolean;
+  /** MCP server names the user's config defines, as `config/read` reports them. */
+  configuredServers?: string[];
+  /** Installed plugins in one local marketplace: id (`name@fixture`) to its MCP server names. */
+  installedPlugins?: Record<string, string[]>;
+  /** `mcpServerStatus/list` pages for the thread, in order (default: one empty page). */
+  mcpStatusPages?: ServerStatus[][];
 }
+
+/** The `mcpServerStatus/list` fields a test sets; the rest are filled in. */
+export type ServerStatus = Pick<McpServerStatus, 'name' | 'pluginId' | 'runtimeStatus'>;
 
 export interface FakeRequest {
   method: string;
@@ -219,6 +234,25 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
           case 'account/login/start':
             send({ id, result: { type: 'apiKey' } satisfies LoginAccountResponse });
             break;
+          case 'config/read':
+            send({ id, result: configReadResponse(turn.configuredServers ?? []) });
+            break;
+          case 'plugin/installed':
+            send({ id, result: pluginInstalledResponse(turn.installedPlugins ?? {}) });
+            break;
+          case 'plugin/read': {
+            const { pluginName } = message.params as { pluginName: string };
+            const servers = turn.installedPlugins?.[`${pluginName}@fixture`] ?? [];
+            send({ id, result: pluginReadResponse(pluginName, servers) });
+            break;
+          }
+          case 'mcpServerStatus/list': {
+            const pages = turn.mcpStatusPages ?? [[]];
+            const { cursor } = message.params as { cursor?: string | null };
+            const index = cursor ? Number(cursor) : 0;
+            send({ id, result: mcpStatusResponse(pages, index) });
+            break;
+          }
           default:
             // What Codex answers for a method it does not serve. The fake serves only what
             // the provider sends, so a new request fails the test until it is scripted here.
@@ -305,6 +339,117 @@ function threadResumeResponse(id: string): ThreadResumeResponse {
     collaborationMode: null,
     turnsBackwardsCursor: null,
     itemsBackwardsCursor: null,
+  };
+}
+
+function configReadResponse(servers: string[]): ConfigReadResponse {
+  return {
+    config: {
+      model: null,
+      review_model: null,
+      model_context_window: null,
+      model_auto_compact_token_limit: null,
+      model_auto_compact_token_limit_scope: null,
+      model_provider: null,
+      approval_policy: null,
+      approvals_reviewer: null,
+      sandbox_mode: null,
+      sandbox_workspace_write: null,
+      forced_chatgpt_workspace_id: null,
+      forced_login_method: null,
+      web_search: null,
+      tools: null,
+      instructions: null,
+      developer_instructions: null,
+      compact_prompt: null,
+      model_reasoning_effort: null,
+      model_reasoning_summary: null,
+      model_verbosity: null,
+      service_tier: null,
+      analytics: null,
+      browser_use: null,
+      computer_use: null,
+      desktop: null,
+      mcp_servers: Object.fromEntries(servers.map(name => [name, { command: name }])),
+    },
+    origins: {},
+    layers: null,
+  };
+}
+
+const FAKE_MARKETPLACE_PATH = '/home/user/.codex/marketplaces/fixture/marketplace.json';
+
+function pluginSummary(id: string): PluginSummary {
+  return {
+    id,
+    remotePluginId: null,
+    version: null,
+    localVersion: null,
+    name: id.split('@')[0],
+    shareContext: null,
+    source: { type: 'local', path: '/home/user/.codex/plugins/fixture' },
+    installed: true,
+    installedAt: null,
+    enabled: true,
+    installPolicy: 'AVAILABLE',
+    installPolicySource: null,
+    mustShowInstallationInterstitial: null,
+    authPolicy: 'ON_INSTALL',
+    availability: 'AVAILABLE',
+    disabledReason: null,
+    eligiblePlanTypes: null,
+    interface: null,
+    keywords: [],
+  };
+}
+
+function pluginInstalledResponse(plugins: Record<string, string[]>): PluginInstalledResponse {
+  return {
+    marketplaces: [
+      {
+        name: 'fixture',
+        path: FAKE_MARKETPLACE_PATH,
+        interface: null,
+        plugins: Object.keys(plugins).map(pluginSummary),
+      },
+    ],
+    marketplaceLoadErrors: [],
+  };
+}
+
+function pluginReadResponse(name: string, mcpServers: string[]): PluginReadResponse {
+  return {
+    plugin: {
+      marketplaceName: 'fixture',
+      marketplacePath: FAKE_MARKETPLACE_PATH,
+      summary: pluginSummary(`${name}@fixture`),
+      shareUrl: null,
+      description: null,
+      skills: [],
+      onboardingSkill: null,
+      hooks: [],
+      apps: [],
+      appTemplates: [],
+      mcpServers,
+      scheduledTasks: null,
+    },
+  };
+}
+
+function mcpStatusResponse(pages: ServerStatus[][], index: number): ListMcpServerStatusResponse {
+  return {
+    data: (pages[index] ?? []).map(server => ({
+      ...server,
+      httpOrigin: null,
+      serverInfo: null,
+      serverCapabilities: null,
+      tools: {},
+      toolsError: null,
+      resources: [],
+      resourceTemplates: [],
+      authStatus: 'unsupported',
+    })),
+    nextCursor: index + 1 < pages.length ? String(index + 1) : null,
   };
 }
 

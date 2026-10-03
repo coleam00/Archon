@@ -112,7 +112,7 @@ describe('CodexProvider', () => {
       mcp: true,
       hooks: false,
       skills: false,
-      plugins: false,
+      plugins: true,
       agents: false,
       toolRestrictions: false,
       structuredOutput: 'enforced',
@@ -675,6 +675,130 @@ describe('CodexProvider', () => {
         message:
           'MCP config references undefined env vars: ARCHON_CODEX_MISSING. These will be empty strings - MCP servers may fail to authenticate.',
       });
+    });
+  });
+
+  describe('workflow node scope', () => {
+    const node = { nodeConfig: { nodeId: 'implement' } } satisfies SendQueryOptions;
+
+    test('a fresh or resumed thread loads no ambient plugin, app or server, and is checked before its turn', async () => {
+      const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+      for (const resumeId of [undefined, 'existing-thread']) {
+        const result = resultOf(await run(provider, node, resumeId));
+        expect(result.failure).toBeUndefined();
+        const threadMethod = resumeId ? 'thread/resume' : 'thread/start';
+        expect(server.processes.at(-1)?.methods).toEqual([
+          'initialize',
+          'config/read',
+          threadMethod,
+          'mcpServerStatus/list',
+          'turn/start',
+        ]);
+        expect(paramsOf(server, threadMethod)?.config).toMatchObject({
+          features: { apps: false, plugins: false },
+          mcp_servers: { posthog: { enabled: false } },
+        });
+      }
+    });
+
+    test('a named plugin stays on without its MCP servers; other installed plugins are off', async () => {
+      const { provider, server } = providerWith({
+        installedPlugins: { 'alpha@fixture': ['alpha_srv'], 'beta@fixture': ['beta_srv'] },
+      });
+      await run(provider, { nodeConfig: { nodeId: 'implement', plugins: ['alpha@fixture'] } });
+      expect(paramsOf(server, 'plugin/read')).toMatchObject({ pluginName: 'alpha' });
+      // Plugins on for the process, so a user's global plugins-off still lists them.
+      expect(server.processes[0].args).toEqual(['app-server', '-c', 'features.plugins=true']);
+      expect(paramsOf(server, 'thread/start')?.config).toMatchObject({
+        features: { apps: false, plugins: true },
+        plugins: {
+          'alpha@fixture': { enabled: true, mcp_servers: { alpha_srv: { enabled: false } } },
+          'beta@fixture': { enabled: false },
+        },
+      });
+    });
+
+    test('a live server the node did not declare fails misconfigured before the turn, across pages', async () => {
+      const { provider, server } = providerWith({
+        mcpStatusPages: [
+          [{ name: 'posthog', pluginId: null, runtimeStatus: 'disabled' }],
+          [
+            {
+              name: 'cua_repl',
+              pluginId: 'computer-use@openai-bundled',
+              runtimeStatus: 'starting',
+            },
+          ],
+        ],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain(
+        'Codex loaded MCP servers this node does not declare: cua_repl (plugin computer-use@openai-bundled)'
+      );
+      expect(result.sessionId).toBe(THREAD_ID);
+      expect(server.processes[0].methods).not.toContain('turn/start');
+    });
+
+    test('a configured server Codex still reports live fails, though the thread config named it', async () => {
+      const { provider } = providerWith({
+        configuredServers: ['posthog'],
+        mcpStatusPages: [[{ name: 'posthog', pluginId: null, runtimeStatus: 'connected' }]],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
+    test('a status this Codex version does not list counts as live', async () => {
+      const { provider } = providerWith({
+        mcpStatusPages: [
+          // A status a newer Codex might add; the generated union does not have it.
+          [{ name: 'posthog', pluginId: null, runtimeStatus: 'suspended' as 'disabled' }],
+        ],
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('does not declare: posthog.');
+    });
+
+    test('a declared live server passes the check', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-scope-')));
+      await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));
+      const { provider, server } = providerWith({
+        mcpStatusPages: [[{ name: 'local', pluginId: null, runtimeStatus: 'connected' }]],
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', dir, undefined, {
+        nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
+      })) {
+        chunks.push(chunk);
+      }
+      expect(resultOf(chunks).failure).toBeUndefined();
+      expect(server.processes[0].methods).toContain('turn/start');
+    });
+
+    test('a named plugin that is not installed fails misconfigured before any thread', async () => {
+      const { provider, server } = providerWith({ installedPlugins: { 'alpha@fixture': [] } });
+      const result = resultOf(
+        await run(provider, { nodeConfig: { nodeId: 'implement', plugins: ['ghost@fixture'] } })
+      );
+      expect(result.failure).toEqual({
+        class: 'misconfigured',
+        evidence:
+          'Codex plugin not installed in /home/user/.codex: ghost@fixture. Installed: alpha@fixture. ' +
+          'Name plugins by their exact `name@marketplace` id from `codex plugin list`.',
+      });
+      expect(server.processes[0].methods).not.toContain('thread/start');
+    });
+
+    test('an inventory request Codex rejects fails misconfigured before any thread', async () => {
+      const { provider, server } = providerWith({
+        errors: { 'config/read': { code: -32600, message: 'Invalid request: unknown variant' } },
+      });
+      const result = resultOf(await run(provider, node));
+      expect(result.failure?.class).toBe('misconfigured');
+      expect(result.failure?.evidence).toContain('config/read failed');
+      expect(server.processes[0].methods).not.toContain('thread/start');
     });
   });
 
