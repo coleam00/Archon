@@ -171,18 +171,6 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
-    subcommand: 'search',
-    spec: 'workflow search [query]',
-    description: 'Search the workflow marketplace',
-  },
-  {
-    command: 'workflow',
-    subcommand: 'install',
-    spec: 'workflow install <slug>',
-    description: 'Install a workflow from the marketplace',
-  },
-  {
-    command: 'workflow',
     subcommand: 'test',
     spec: 'workflow test [<name>|<folder>|<path>]',
     description:
@@ -759,8 +747,9 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--force',
-    description: 'Overwrite existing file (for workflow install)',
-    owners: [{ command: 'workflow', subcommand: 'install' }],
+    description:
+      "For 'setup': overwrite existing values instead of merging\nFor 'complete': remove even when safety checks block it",
+    owners: [{ command: 'setup' }, { command: 'complete' }],
   },
 ];
 
@@ -831,14 +820,6 @@ const orderedExamples: ExampleHelp[] = [
   {
     text: 'archon plugin install coleam00/Archon/plugins/forge-github',
     owner: { command: 'plugin', subcommand: 'install' },
-  },
-  {
-    text: 'archon workflow search "pr review"',
-    owner: { command: 'workflow', subcommand: 'search' },
-  },
-  {
-    text: 'archon workflow install archon-piv-loop',
-    owner: { command: 'workflow', subcommand: 'install' },
   },
 ];
 

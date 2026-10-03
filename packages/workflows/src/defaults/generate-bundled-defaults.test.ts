@@ -3,8 +3,7 @@
  * scripts/generate-bundled-defaults.ts (#1578).
  *
  * Drives the real script via spawnSync inside an isolated mkdtempSync git
- * repo (same pattern as .archon/scripts/__tests__/marketplace-fetch-source.test.ts),
- * pointed at the throwaway repo via the BUNDLED_DEFAULTS_REPO_ROOT test seam.
+ * repo, pointed at the throwaway repo via the BUNDLED_DEFAULTS_REPO_ROOT test seam.
  *
  * Fork-cost amortization: the expensive git init/add/commit template repo is
  * built ONCE per file; every scenario gets its own working copy via an

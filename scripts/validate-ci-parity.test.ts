@@ -1,7 +1,7 @@
 /**
  * `bun run validate` is the documented pre-pull-request command, so a green run has to mean
  * the pull-request gates will pass. It stops meaning that the moment a workflow runs a check
- * of its own — which is how the workflow fixtures, the docs build and the marketplace lint
+ * of its own — which is how the workflow fixtures and the docs build
  * ended up gating pull requests while `validate` knew nothing about them (#3290).
  *
  * So: every Bun command a `pull_request`-triggered workflow runs is either `bun run validate`,
@@ -86,12 +86,6 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
     reason:
       "Astro's CLI runs under Node, not Bun, so a checkout with only Bun cannot build the docs " +
       'site; docs-build.yml runs it with a Node setup, path-filtered to the docs site.',
-  },
-  {
-    command: 'bun packages/docs-web/scripts/lint-marketplace.ts',
-    reason:
-      'Spends 9 unauthenticated github.com API calls per run against a 60/hour per-IP quota, so ' +
-      'seven validate runs an hour turn the gate red with HTTP 403s that say nothing about the change.',
   },
 ];
 
