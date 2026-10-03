@@ -8,7 +8,7 @@ This file is **committed and shared by all maintainers**. Edit deliberately — 
 
 ## What Archon IS
 
-- **A governed agentic automation engine.** Runs multi-step workflows that mix deterministic steps (bash/scripts) with AI agents (Claude Code SDK, Codex SDK, and community providers), with human approval gates and audit trails — driven remotely from Slack, Telegram, GitHub, Discord, CLI, and Web UI. Its most mature surface today is agentic **coding**; the same engine is being extended to drive general **business-operations** automation.
+- **A governed agentic automation engine.** Runs multi-step workflows that mix deterministic steps (bash/scripts) with AI agents (Claude Code SDK, Codex, and community providers), with human approval gates and audit trails — driven remotely from Slack, Telegram, GitHub, Discord, CLI, and Web UI. Its most mature surface today is agentic **coding**; the same engine is being extended to drive general **business-operations** automation.
 - **Single-tenant per install.** One isolated instance per operator or client (the deployment model is one install/VPS per client, not one install serving many tenants). Data model and runtime stay single-tenant — client isolation is at the deployment layer, not in code. Multi-**user** within an install (several humans sharing one instance, each with their own identity/credentials) is supported and is distinct from multi-**tenant**.
 - **Heading toward always-on automation.** Native scheduling and event/webhook triggers are a planned primitive (tracked in the workflow-triggers PRD), enabling scheduled, event-driven, and unattended runs — including operational, non-coding work. PRs toward this direction align.
 - **Platform-agnostic at the conversation layer.** Unified interface across adapters via `IPlatformAdapter`. Stream/batch AI responses in real time.
@@ -74,6 +74,7 @@ Providers and platform integrations change faster than Archon's core. Community 
 
 - **Built-in does not mean bundled.** Archon maintains the Claude, Codex, and Pi providers in this repository and does not install their SDKs by default. An install selects the providers it needs — one, several, or all — and community plugins arrive through the same selection mechanism. Maintenance ownership and distribution are separate decisions: being maintained here earns a provider correctness and parity work, not a place in every install's dependency tree.
 - **Maintained providers hold parity with each other.** A user who selects Codex should not get worse diagnostics, resolution, or configuration handling than one who selects Claude. A fix that lands on one maintained provider and not its siblings is drift on the path, not a scoping choice.
+- **A provider's runtime owns retrying its model calls.** Retry counts and backoff live in the user's provider configuration, and Archon adds no second layer for a failure the provider could not classify: after a provider failure the engine retries the node attempt only on its typed failure class or when the workflow opts in with `on_error: all`, never from the failure's text.
 
 Archon maintains the provider and platform integrations it explicitly designates as built-ins. Listing a community plugin is curation and discovery, not a transfer of maintenance responsibility.
 

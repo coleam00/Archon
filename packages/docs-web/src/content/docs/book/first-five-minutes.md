@@ -53,14 +53,14 @@ Navigate to any git repository on your machine, then run:
 ```bash
 cd /path/to/your/project
 
-archon workflow run archon-assist "What's the entry point for this application?"
+archon workflow run archon-investigate "How does a request reach the database in this application?"
 ```
 
-Archon will analyze your codebase and answer the question with full context. You'll see it thinking through your files in real time, streamed to your terminal.
+Archon will explore your codebase and trace the answer through the actual code. You'll see it working through your files in real time, streamed to your terminal. When it finishes, it writes an evidence-backed report and leaves your repository exactly as it found it.
 
-**You just ran your first Archon workflow.** It's a single-step workflow — one command, one AI call, one answer. Simple, but useful.
+**You just ran your first Archon workflow.** `archon-investigate` is built for bugs and open questions: it keeps going until it can prove the answer instead of stopping at the first plausible one.
 
-> **Tip:** `archon-assist` works for any question. "How does auth work?", "Where is the database configured?", "What does this function do?" — it's your always-available codebase expert.
+> **Tip:** For a quick question, you don't need a workflow at all. Ask it in the Web UI chat or another chat platform and Archon answers directly.
 
 ---
 
@@ -69,19 +69,20 @@ Archon will analyze your codebase and answer the question with full context. You
 If your repository has a GitHub issue open, try this:
 
 ```bash
-archon workflow run archon-fix-github-issue --branch fix/my-first-run "Fix #<issue-number>"
+archon workflow run archon-ship --branch fix/my-first-run "Fix #<issue-number>"
 ```
 
 Replace `<issue-number>` with a real issue number from your repo. Then watch what happens:
 
-1. **Investigate** — Archon reads the issue, explores relevant code, and documents its findings
-2. **Implement** — It makes the fix based on the investigation
-3. **Validate** — It runs your tests to confirm nothing broke
-4. **Create PR** — It opens a pull request with a full description
+1. **Triage** — Archon reads the issue and checks it against the current code
+2. **Investigate or plan** — It proves the root cause of a bug, or plans the shape of a feature
+3. **Implement** — It makes the change and runs your project's checks
+4. **Create PR and review** — It opens a draft pull request, reviews it, and fixes what the review finds
+5. **Ready** — Once checks pass, it marks the PR ready for your review
 
-**You just ran a four-step automated workflow.** Each step ran a separate command, passing artifacts to the next step. The PR is ready for your review.
+**You just ran a multi-stage automated workflow.** Each stage wrote its findings to files called artifacts, and the next stage read them. The PR is waiting for your review; Archon never merges.
 
-> **No GitHub issues handy?** Try `archon workflow run archon-feature-development --branch feat/test "Add a simple hello world endpoint"` on any web project — it'll implement and create a PR.
+> **No GitHub issues handy?** Describe the change instead: `archon workflow run archon-ship --branch feat/test "Add a simple hello world endpoint"`. The run still needs a GitHub remote to open the PR.
 
 ---
 

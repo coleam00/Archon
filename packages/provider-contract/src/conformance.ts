@@ -1,4 +1,5 @@
 import { providerChunkSchema, subtaskTerminalStatusSchema, type ProviderChunk } from './events';
+import type { ProviderCapabilities } from './capabilities';
 import { providerFailureSchema, type ProviderFailureClass } from './failure';
 
 /**
@@ -212,6 +213,39 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
 }
 
 /**
+ * Every result of a non-failing turn names the session the turn ran in. The engine records
+ * it on the node record, which is how a user finds the session to resume it outside Archon.
+ * Only a provider that declares `sessionResume` is held to this: one that cannot resume has
+ * no session to name.
+ */
+export async function checkSessionIdReported(
+  cases: readonly ProviderTurnCase[]
+): Promise<string[]> {
+  const violations: string[] = [];
+  for (const turnCase of cases) {
+    let results = 0;
+    let unnamed = 0;
+    try {
+      for await (const chunk of turnCase.run()) {
+        if (!isResultChunk(chunk)) continue;
+        results++;
+        const { sessionId } = chunk as { sessionId?: unknown };
+        if (typeof sessionId !== 'string' || sessionId === '') unnamed++;
+      }
+    } catch {
+      // checkSettled reports the throw.
+      continue;
+    }
+    if (unnamed > 0) {
+      violations.push(
+        `${turnCase.name}: ${String(unnamed)} of ${String(results)} results carry no sessionId`
+      );
+    }
+  }
+  return violations;
+}
+
+/**
  * The `toolTurn` fixture must exercise what rule 2 is about: at least two tool calls, one of
  * them interrupted and closed as `cancelled`. A smaller fixture would pass rule 2 vacuously.
  */
@@ -240,6 +274,8 @@ async function checkToolTurnShape(toolTurn: ProviderTurnCase): Promise<string[]>
 
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
+  /** The provider's declared capabilities; pass `getCapabilities()`. */
+  capabilities: Pick<ProviderCapabilities, 'sessionResume'>;
   failureCases: readonly ProviderFailureCase[];
   /** Turns that succeed, including one whose result arrives before its work drains. */
   turns: readonly ProviderTurnCase[];
@@ -258,5 +294,8 @@ export async function runProviderConformance(suite: ProviderConformanceSuite): P
     // Every fixture streams the vocabulary, a failed turn included.
     ...(await checkEventVocabulary([...suite.turns, ...toolTurns, ...suite.failureCases])),
     ...(suite.toolTurn ? await checkToolTurnShape(suite.toolTurn) : []),
+    ...(suite.capabilities.sessionResume
+      ? await checkSessionIdReported([...suite.turns, ...toolTurns])
+      : []),
   ];
 }

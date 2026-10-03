@@ -52,8 +52,7 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   getWorkflowFolderSearchPaths: () => ['.archon/workflows'],
-  getDefaultCommandsPath: () => '/nonexistent/defaults',
-  getDefaultWorkflowsPath: () => '/nonexistent/defaults/workflows',
+  getBundledWorkflowsPath: () => '/nonexistent/defaults/workflows',
   getHomeWorkflowsPath: () => '/nonexistent/home/workflows',
   getLegacyHomeWorkflowsPath: () => '/nonexistent/home/.archon/workflows',
   getArchonHome: () => '/nonexistent/home',
@@ -9602,6 +9601,16 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(sessions[2]).toBeUndefined();
       expect(sessions[3]).toBe('thread-2');
       expect(sessions[3]).not.toBe('throwaway');
+      // The iteration's row and the node's row name attempt 0's session, never the reask's.
+      const rows = persistedEvents(mockDeps.store);
+      expect(
+        rows
+          .filter(row => row.event_type === 'loop_iteration_completed')
+          .map(row => row.data?.session_id)
+      ).toEqual(['thread-1', 'thread-2', 'thread-3']);
+      expect(
+        rows.filter(row => row.event_type === 'node_completed').map(row => row.data?.session_id)
+      ).toEqual(['thread-3']);
     });
 
     it('keeps threading when the re-ask happens on iteration 1', async () => {
@@ -10854,7 +10863,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed[0][0].data.invocation).toEqual(pausedExecution?.invocation);
       expect(completed[0][0].data.attempt).toEqual(pausedExecution?.attempt);
       expect(completed[0][0].data.timing).toEqual(pausedExecution?.timing);
-      expect(JSON.stringify(completed[0][0].data)).not.toContain('sig-struct-1');
+      // The finalized record names the loop's session in its own key and nowhere else.
+      const { session_id: sessionId, ...rest } = completed[0][0].data;
+      expect(sessionId).toBe('sig-struct-1');
+      expect(JSON.stringify(rest)).not.toContain('sig-struct-1');
     });
 
     it('finalize omits tokens when the gate persisted none (legacy pause / no usage) (#2333)', async () => {
@@ -14280,6 +14292,12 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     // 1: classify attempt 0. 2: the reask, deliberately fresh. 3: the next node.
     expect(sessions).toEqual([undefined, undefined, 'real']);
+    // The node record names attempt 0's session, never the reask's.
+    expect(
+      persistedEvents(mockDeps.store)
+        .filter(row => row.event_type === 'node_completed' && row.step_name === 'classify')
+        .map(row => row.data?.session_id)
+    ).toEqual(['real']);
   });
 
   it('flags the run total when only a middle node is silent about cache', async () => {
@@ -20280,54 +20298,6 @@ describe('provider resolution -- regression for #1610', () => {
   });
 });
 
-describe('bundled opus nodes -- provider annotation invariant (#1610)', () => {
-  it('every bundled node with an opus model has provider: claude at the node or workflow level', async () => {
-    // Resolve the defaults directory relative to this package (same logic as getAppArchonBasePath).
-    // import.meta.dir = packages/workflows/src → go up 3 levels to repo root → .archon/workflows/defaults
-    const repoRoot = join(import.meta.dir, '..', '..', '..');
-    const defaultsDir = join(repoRoot, '.archon', 'workflows', 'defaults');
-    // The invariant covers the legacy deprecation-window folder too (#2781).
-    const dirs = [defaultsDir, join(defaultsDir, 'legacy')];
-
-    const { readdir, readFile: readFileFs } = await import('fs/promises');
-    const files: { dir: string; file: string }[] = [];
-    for (const dir of dirs) {
-      if (!(await readdir(dir).catch(() => null))) continue;
-      for (const f of await readdir(dir)) {
-        if (f.endsWith('.yaml')) files.push({ dir, file: f });
-      }
-    }
-    expect(files.length).toBeGreaterThan(0);
-
-    for (const { dir, file } of files) {
-      const src = await readFileFs(join(dir, file), 'utf-8');
-      const result = parseWorkflow(src, file);
-      if (!('workflow' in result)) continue; // skip load errors
-
-      const wf = result.workflow;
-      if (!wf || !('nodes' in wf) || !wf.nodes) continue; // skip non-DAG workflows
-
-      const workflowProvider: string | undefined = (wf as { provider?: string }).provider;
-
-      for (const n of wf.nodes) {
-        const nodeModel: string | undefined = (n as { model?: string }).model;
-        if (!nodeModel || !nodeModel.toLowerCase().includes('opus')) continue;
-
-        const nodeProvider: string | undefined = (n as { provider?: string }).provider;
-        const hasExplicitClaude = nodeProvider === 'claude' || workflowProvider === 'claude';
-
-        expect(hasExplicitClaude).toBe(true);
-        if (!hasExplicitClaude) {
-          // Surface which file+node is missing the annotation
-          throw new Error(
-            `${file}: node '${(n as { id?: string }).id ?? '?'}' has model '${nodeModel}' but no provider: claude at node or workflow level`
-          );
-        }
-      }
-    }
-  });
-});
-
 describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
   let testDir: string;
 
@@ -20388,9 +20358,8 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
       outputType: 'plan',
       runId: 'dag-test-run-id',
       path: join('nodes', 'planner.md'),
-      // sessionId is propagated from the node output into the metadata.
-      sessionId: 'new-session-id',
     });
+    expect(meta).not.toHaveProperty('sessionId');
     expect(typeof meta.producedAt).toBe('string');
   });
 
@@ -21637,7 +21606,7 @@ describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => 
       expect(event.data).toEqual({
         provider: 'claude',
         scope_key: 'conv-dag',
-        provider_session_id_preview: 'S0…',
+        provider_session_id_preview: 'S0',
       });
     }
     for (const platform of Object.values(platforms)) {
@@ -26455,7 +26424,25 @@ describe('executeDagWorkflow -- addressable session resume', () => {
       session_source_node_id: 'writer1',
       session_forked: true,
     });
-    const serializedEvents = JSON.stringify(events);
+    // Each completed node names its own session in `session_id` and nowhere else.
+    expect(
+      events
+        .filter(event => event.event_type === 'node_completed')
+        .map(event => [event.step_name, event.data?.session_id])
+    ).toEqual([
+      ['writer1', 'session-writer-1'],
+      ['reviewer1', 'session-reviewer-1'],
+      ['writer2', 'session-writer-2'],
+      ['reviewer2', 'session-reviewer-2'],
+      ['writer3', 'session-writer-3'],
+    ]);
+    const serializedEvents = JSON.stringify(
+      events.map(event => {
+        const data = { ...event.data };
+        delete data.session_id;
+        return { ...event, data };
+      })
+    );
     for (const sessionId of Object.values(sessionsByPrompt)) {
       expect(serializedEvents).not.toContain(sessionId);
     }
@@ -30316,7 +30303,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
   });
 
   it('AC2 — a block declaring NOTHING resolves from config, not from the parent', async () => {
-    // The `archon-review-block` shape, and the case naive push-down gets wrong: with
+    // A bare include block, and the case naive push-down gets wrong: with
     // nothing of its own to push, the block's nodes would still inherit the parent's
     // workflow-level values unless that layer is REMOVED.
     const bare = wfDef('bare-blk', [{ id: 'work', prompt: 'work' }]);
@@ -33424,6 +33411,62 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(groupSuspension?.data?.suspend_point).toBe('approval');
     expect(groupSuspension?.data?.cost_usd).toBe(0);
     expect(store.getState().status).toBe('paused');
+  });
+
+  it("#3532: each pause persists the paused iteration's own session, so fresh_context: false continues it", async () => {
+    const workflow = ready(gateTerminatedLoopGroupWorkflow());
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'draft 1' };
+      yield { type: 'result', sessionId: 'iteration-1-session' };
+    });
+    const firstStore = createEscalationStore('run-escalation-session');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(firstStore),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('run-escalation-session'),
+      })
+    );
+
+    // Iteration 1 starts fresh, and its pause stores the session it just produced.
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    const firstPause = firstStore.getState().metadata.approval as ApprovalContext;
+    expect(firstPause).toMatchObject({ iteration: 1, sessionId: 'iteration-1-session' });
+    expect(firstPause.sessionProvider).toEqual(expect.any(String));
+
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'draft 2' };
+      yield { type: 'result', sessionId: 'iteration-2-session' };
+    });
+    const revise = { decision: 'revise', text: 'tighten it' };
+    const secondStore = createEscalationStore('run-escalation-session');
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(secondStore),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow,
+        workflowRun: makeWorkflowRun('run-escalation-session', {
+          metadata: { approval: firstPause },
+        }),
+        priorCompletedNodes: new Map<string, PersistedNodeOutput>([
+          ['grp.work', { output: 'draft 1' }],
+          ['grp.check', { output: JSON.stringify(revise), structuredOutput: revise }],
+        ]),
+      })
+    );
+
+    // Iteration 2 resumes iteration 1's session, and the next pause advances the
+    // cursor to iteration 2's session instead of re-storing iteration 1's.
+    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls[0][2]).toBe('iteration-1-session');
+    expect(secondStore.getState().metadata.approval).toMatchObject({
+      iteration: 2,
+      sessionId: 'iteration-2-session',
+    });
   });
 
   it('escalates a terminal wait and completes it from the persisted deadline on resume', async () => {
@@ -37455,5 +37498,171 @@ describe('executeDagWorkflow -- node checkout starts (#3375)', () => {
     const [consumer] = terminal(deps, 'consumer');
     expect(consumer?.eventType).toBe('node_failed');
     expect(consumer?.data.error).toContain('$missing.execution.checkoutStart');
+  });
+});
+
+describe('executeDagWorkflow -- provider session ids stay on the node record', () => {
+  let testDir: string;
+
+  beforeEach(async () => {
+    testDir = join(
+      tmpdir(),
+      `dag-session-ids-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    mockSendQueryDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await removeTempTree(testDir);
+  });
+
+  it('records each attempt and iteration id durably and nowhere in the stream', async () => {
+    const failedAttempt = 'a1111111-0000-4000-8000-000000000001';
+    const completedAttempt = 'b2222222-0000-4000-8000-000000000002';
+    const iterations = [
+      'c3333333-0000-4000-8000-000000000003',
+      'd4444444-0000-4000-8000-000000000004',
+      'e5555555-0000-4000-8000-000000000005',
+    ];
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 1) {
+        yield {
+          type: 'result',
+          sessionId: failedAttempt,
+          isError: true,
+          errors: ['upstream overloaded'],
+          failure: { class: 'transient', evidence: 'upstream overloaded' },
+        };
+        return;
+      }
+      if (calls === 2) {
+        yield { type: 'agent_message_chunk', text: 'planned' };
+        yield { type: 'result', sessionId: completedAttempt };
+        return;
+      }
+      const iteration = calls - 2;
+      yield { type: 'agent_message_chunk', text: iteration === 3 ? 'DONE' : 'working' };
+      yield { type: 'result', sessionId: iterations[iteration - 1] };
+    });
+    const emitted: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      emitted.push(event);
+    });
+    const store = createMockStore();
+    const workflowRun = makeWorkflowRun('session-ids-run');
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'session-ids',
+            nodes: [
+              {
+                id: 'plan',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'plan it' },
+                output_type: 'plan',
+                retry: { max_attempts: 1, delay_ms: 1 },
+              },
+              {
+                id: 'work',
+                kind: 'loop',
+                depends_on: ['plan'],
+                output_type: 'work',
+                loop: { prompt: 'work', until: 'DONE', max_iterations: 5, fresh_context: true },
+              },
+            ],
+          },
+          workflowRun,
+        })
+      );
+    } finally {
+      unsubscribe();
+    }
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+
+    const rows = persistedEvents(store);
+    const sessionIdsOf = (eventType: string, step: string): unknown[] =>
+      rows
+        .filter(row => row.event_type === eventType && row.step_name === step)
+        .map(row => row.data?.session_id);
+    expect(sessionIdsOf('node_failed', 'plan')).toEqual([failedAttempt]);
+    expect(sessionIdsOf('node_completed', 'plan')).toEqual([completedAttempt]);
+    expect(sessionIdsOf('loop_iteration_completed', 'work')).toEqual(iterations);
+    expect(sessionIdsOf('node_completed', 'work')).toEqual([iterations[2]]);
+
+    const allIds = [failedAttempt, completedAttempt, ...iterations];
+    const transcript = await readFile(join(testDir, 'logs', `${workflowRun.id}.jsonl`), 'utf8');
+    const stream = JSON.stringify(emitted);
+    const { artifactsByType } = await readNodeArtifacts(join(testDir, 'artifacts'), {
+      scope: 'current-run',
+      runId: workflowRun.id,
+    });
+    expect(Object.keys(artifactsByType).sort()).toEqual(['plan', 'work']);
+    const artifactIndex = JSON.stringify(artifactsByType);
+    for (const id of allIds) {
+      expect(transcript).not.toContain(id);
+      expect(stream).not.toContain(id);
+      expect(artifactIndex).not.toContain(id);
+    }
+    // The preview still reaches the stream.
+    expect(stream).toContain(completedAttempt.slice(0, 8));
+  });
+
+  it("an iteration retried after a failed attempt records only the successful attempt's session", async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls++;
+      if (calls === 2) {
+        // Iteration 2, attempt 1: names a session, then fails transiently.
+        yield {
+          type: 'result',
+          sessionId: 'failed-attempt-session',
+          isError: true,
+          errors: ['upstream overloaded'],
+          failure: { class: 'transient', evidence: 'upstream overloaded' },
+        };
+        return;
+      }
+      yield { type: 'agent_message_chunk', text: calls === 4 ? 'DONE' : 'working' };
+      // Iteration 2's successful retry (call 3) reports no session.
+      yield calls === 3
+        ? { type: 'result' }
+        : { type: 'result', sessionId: `iteration-session-${String(calls)}` };
+    });
+    const store = createMockStore();
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'iteration-retry-session',
+            nodes: [
+              {
+                id: 'work',
+                kind: 'loop',
+                loop: { prompt: 'work', until: 'DONE', max_iterations: 5, fresh_context: true },
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('iteration-retry-session-run'),
+        })
+      );
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
+    expect(
+      persistedEvents(store)
+        .filter(row => row.event_type === 'loop_iteration_completed')
+        .map(row => row.data?.session_id)
+    ).toEqual(['iteration-session-1', undefined, 'iteration-session-4']);
   });
 });

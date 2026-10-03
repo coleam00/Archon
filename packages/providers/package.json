@@ -36,7 +36,7 @@
     "@earendil-works/pi-ai": "^1.0.0",
     "@earendil-works/pi-coding-agent": "^1.0.0",
     "@opencode-ai/sdk": "^1.17.3",
-    "@openai/codex-sdk": "^0.160.0",
+    "@openai/codex": "0.160.0",
     "@sinclair/typebox": "^0.34.41",
     "ajv": "^8.20.0",
     "jsonrepair": "^3.14.0",
@@ -54,6 +54,12 @@
     ],
     [
       "src/codex/provider.test.ts"
+    ],
+    [
+      "src/codex/turn-error.test.ts"
+    ],
+    [
+      "src/codex/app-server.test.ts"
     ],
     [
       "src/registry.test.ts"

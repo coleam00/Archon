@@ -914,7 +914,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
           commandRefs: 1,
           promptCharsBucket: '1k_5k',
         },
-        ancestry: { derivedFrom: 'archon-create-issue', derivedSimilarity: 'modified' },
+        ancestry: { derivedFrom: 'archon-implement', derivedSimilarity: 'modified' },
       });
       await shutdownTelemetry();
     } finally {
@@ -938,7 +938,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
       max_fan_out: 2,
       command_refs: 1,
       prompt_chars_bucket: '1k_5k',
-      derived_from: 'archon-create-issue',
+      derived_from: 'archon-implement',
       derived_similarity: 'modified',
     });
     // A node type with no nodes is left out rather than sent as zero.

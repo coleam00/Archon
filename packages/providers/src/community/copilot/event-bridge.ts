@@ -25,7 +25,7 @@ import type {
   ToolExecutionCompleteData,
 } from '@github/copilot-sdk';
 
-import { truncateToolOutput } from '@archon/provider-contract';
+import { sessionPreview, truncateToolOutput } from '@archon/provider-contract';
 
 import type { MessageChunk, TokenUsage } from '../../types';
 import { tryParseStructuredOutput } from '../../shared/structured-output';
@@ -317,7 +317,10 @@ export async function* bridgeSession(
 
   const onAbort = (): void => {
     void session.abort().catch(err => {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_failed');
+      log.debug(
+        { err, sessionIdPreview: sessionPreview(session.sessionId) },
+        'copilot.abort_failed'
+      );
     });
   };
   // `addEventListener('abort', ...)` is a no-op on an already-aborted signal,
@@ -336,7 +339,10 @@ export async function* bridgeSession(
     try {
       await session.disconnect();
     } catch (err) {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
+      log.debug(
+        { err, sessionIdPreview: sessionPreview(session.sessionId) },
+        'copilot.disconnect_failed'
+      );
     }
     throw new DOMException('Copilot sendQuery aborted before start', 'AbortError');
   }
@@ -402,7 +408,10 @@ export async function* bridgeSession(
         result.structuredOutput = parsed;
       } else {
         log.warn(
-          { bufferLength: assistantBuffer.length, sessionId: session.sessionId },
+          {
+            bufferLength: assistantBuffer.length,
+            sessionIdPreview: sessionPreview(session.sessionId),
+          },
           'copilot.structured_output_parse_failed'
         );
       }
@@ -426,12 +435,18 @@ export async function* bridgeSession(
     try {
       await session.abort();
     } catch (err) {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.abort_cleanup_failed');
+      log.debug(
+        { err, sessionIdPreview: sessionPreview(session.sessionId) },
+        'copilot.abort_cleanup_failed'
+      );
     }
     try {
       await session.disconnect();
     } catch (err) {
-      log.debug({ err, sessionId: session.sessionId }, 'copilot.disconnect_failed');
+      log.debug(
+        { err, sessionIdPreview: sessionPreview(session.sessionId) },
+        'copilot.disconnect_failed'
+      );
     }
     // Let the SDK's sendPromise settle so we don't leave a dangling promise.
     // Any error was already pushed to the queue.

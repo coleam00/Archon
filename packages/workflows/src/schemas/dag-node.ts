@@ -267,8 +267,7 @@ export const dagNodeBaseSchema = z.object({
   // scope (typically the conversation). The next run in that scope forks the session
   // that existed when it started; a provider without sessionFork starts fresh
   // instead (see `persistedSessionHandling`). Requires a provider with sessionResume
-  // capability. Distinct from the Claude SDK's AgentRequestOptions.persistSession
-  // (on-disk transcript persistence).
+  // capability.
   persist_session: z.boolean().optional(),
   // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
   // 'code', 'summary' — an open set). When set, the executor writes a typed

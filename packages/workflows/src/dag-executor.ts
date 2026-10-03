@@ -39,6 +39,10 @@ import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -68,7 +72,7 @@ import type {
   OverlayChangeSummary,
 } from '@archon/providers/types';
 import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
-import type { ProviderFailure } from '@archon/provider-contract';
+import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -2092,6 +2096,8 @@ async function executeNodeInternal(
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeResolvedModel: ResolvedModel | undefined;
+  // Declared before `failAgentNode`, which records it and can run before the stream starts.
+  let newSessionId: string | undefined;
   const nodeKey = `${workflowRun.id}:${node.id}`;
 
   const failAgentNode = async (
@@ -2118,6 +2124,7 @@ async function executeNodeInternal(
           stopReason: nodeStopReason,
           numTurns: nodeNumTurns,
           resolvedModel: nodeResolvedModel?.id,
+          sessionId: newSessionId,
         }
       )
     );
@@ -2214,7 +2221,6 @@ async function executeNodeInternal(
 
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
-  let newSessionId: string | undefined;
   let nodeResumed: boolean | undefined;
   const batchMessages: string[] = [];
 
@@ -2426,7 +2432,7 @@ async function executeNodeInternal(
               nodeId: node.id,
               errorSubtype: subtype,
               errors: msg.errors,
-              sessionId: msg.sessionId,
+              ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
               stopReason: msg.stopReason,
               durationMs: Date.now() - nodeStartTime,
             },
@@ -2789,7 +2795,7 @@ async function executeNodeInternal(
         },
       }
     ),
-    { sessionId: result.sessionId, resumed: result.resumed }
+    { resumed: result.resumed }
   );
 
   // Clean up throttle entries on completion
@@ -2871,36 +2877,6 @@ function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
   return error.killed === true && error.code === null;
 }
 
-const CREDENTIAL_ENV_KEY_SUFFIX = /(?:TOKEN|KEY|SECRET|PASSWORD)$/i;
-const CREDENTIAL_ENV_KEYS = new Set(['DATABASE_URL']);
-
-function collectSubprocessCredentialValues(
-  env: NodeJS.ProcessEnv,
-  protectedEnvKeys: readonly string[] | undefined,
-  protectedCredentialValues: readonly string[] | undefined
-): string[] {
-  const explicitlyProtected = new Set(protectedEnvKeys);
-  const values = Object.entries(env).flatMap(([key, value]) =>
-    value &&
-    (explicitlyProtected.has(key) ||
-      CREDENTIAL_ENV_KEYS.has(key) ||
-      CREDENTIAL_ENV_KEY_SUFFIX.test(key))
-      ? [value]
-      : []
-  );
-  return [...new Set([...values, ...(protectedCredentialValues ?? [])])]
-    .filter(value => value.length > 0)
-    .sort((a, b) => b.length - a.length);
-}
-
-function redactCredentialValues(input: string, credentialValues: readonly string[]): string {
-  let result = input;
-  for (const value of credentialValues) {
-    result = result.replaceAll(value, '[REDACTED]');
-  }
-  return result;
-}
-
 /**
  * Scrub credentials from every subprocess rejection field that can carry
  * subprocess text. The exact values come from the engine's injected-credential
@@ -2980,7 +2956,7 @@ async function runSubprocess(
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
-  const credentialValues = collectSubprocessCredentialValues(
+  const credentialValues = collectCredentialValues(
     subprocessEnv,
     options.protectedEnvKeys,
     options.protectedCredentialValues
@@ -4059,8 +4035,7 @@ async function finalizeLoopFromSignal(
           // Approval does no execution work. Keep the duration observed before pause.
           durationMs: execution.timing.durationMs,
         }
-      ),
-      { sessionId }
+      )
     );
   }
   // Old approval cursors have no execution identity or observed start time.
@@ -4729,6 +4704,13 @@ async function executeLoopGroupBody(
       );
     }
 
+    // Carry the body's final sequential session into the next iteration (unless
+    // fresh_context forces a reset, handled above by seeding undefined). Taken
+    // before the escalation below, which returns early: its pause persists this
+    // cursor, and a cursor from before the paused iteration would resume without
+    // that iteration's turns (#3532).
+    loopLastSequentialSession = iterCtx.lastSequentialSession;
+
     // #2707 step 3: pause escalation. A gate node that is the body's sole terminal
     // sink pauses generically via executeApprovalNode (called through runLayers,
     // like any other body node) — that pause alone does NOT stop this loop: the
@@ -4836,10 +4818,6 @@ async function executeLoopGroupBody(
         loopIterations: i,
       };
     }
-
-    // Carry the body's final sequential session into the next iteration (unless
-    // fresh_context forces a reset, handled above by seeding undefined).
-    loopLastSequentialSession = iterCtx.lastSequentialSession;
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
@@ -5331,6 +5309,7 @@ async function executeLoopNode(
           stopReason: loopFinalStopReason,
           numTurns: loopTotalNumTurns,
           resolvedModel: loopResolvedModel?.id,
+          sessionId: currentSessionId,
           diagnostics: { ...extras.data, loopIterations: extras.loopIterations },
         }
       )
@@ -5597,6 +5576,8 @@ async function executeLoopNode(
     let iterationSettled = false;
     let lastWatchdogReset: WatchdogReset | undefined;
     let iterationPayload: unknown;
+    // The session this iteration reported, for its own `loop_iteration_completed` row.
+    let iterationSessionId: string | undefined;
 
     // Per-attempt transient retry for AI-loop iterations (#2706): a plain AI node's
     // failure goes through runNodeRetryLoop; an iteration used to die on its first
@@ -5638,6 +5619,8 @@ async function executeLoopNode(
     };
 
     iterationAttempt: for (let iterRetry = 0; ; iterRetry++) {
+      // A failed attempt's session is not the one the iteration completed in.
+      iterationSessionId = undefined;
       let iterationAbortController = new AbortController();
       // Mid-stream cancel-check throttle (see the check inside the stream loop).
       // The between-iteration status check just ran, so start the clock at the
@@ -5856,13 +5839,16 @@ async function executeLoopNode(
               if (msg.sessionId) {
                 if (pass.threadsSession) {
                   currentSessionId = msg.sessionId;
+                  iterationSessionId = msg.sessionId;
                 } else if (currentSessionId !== msg.sessionId) {
                   getLog().debug(
                     {
                       nodeId: node.id,
                       iteration: i,
                       attempt: reaskAttempt,
-                      keptSessionId: currentSessionId,
+                      ...(currentSessionId !== undefined
+                        ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
+                        : {}),
                     },
                     'loop_node.reask_session_not_threaded'
                   );
@@ -5923,7 +5909,7 @@ async function executeLoopNode(
                     iteration: i,
                     errorSubtype: subtype,
                     errors: msg.errors,
-                    sessionId: msg.sessionId,
+                    ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
                     stopReason: msg.stopReason,
                   },
                   'loop_node.iteration_sdk_error'
@@ -6462,7 +6448,15 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
         step_name: stepName,
-        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+        data: {
+          iteration: i,
+          duration,
+          completionDetected,
+          nodeId: node.id,
+          // The durable row is the only home for the full id; the emitter event above
+          // and the transcript line below stay without it.
+          ...(iterationSessionId !== undefined ? { session_id: iterationSessionId } : {}),
+        },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -6516,8 +6510,7 @@ async function executeLoopNode(
                 : {}),
             },
           }
-        ),
-        { sessionId: currentSessionId }
+        )
       );
     }
 
@@ -9997,11 +9990,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     row => row.node_id === node.id && row.provider === provider
                   );
                   if (persisted) {
-                    // workflow_events is broader-scoped and longer-lived than the
-                    // node-session table. A session ID can resume a conversation, so we
-                    // store only an 8-char prefix here — enough for observability without
-                    // leaving a resumable artifact in the event log.
-                    const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
+                    // This event is not a node record, so it carries only the preview.
+                    const sessionIdPreview = sessionPreview(persisted.provider_session_id);
                     const continues = handling === 'fork';
                     if (continues) resumeSessionId = persisted.provider_session_id;
                     ctx.deps.store
@@ -10145,14 +10135,12 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     node.id
                   )
                 : '';
-              // Mask the session id: it's a resumable artifact, so log only an
-              // 8-char preview (same policy as the node_session_resumed event above).
               getLog().warn(
                 {
                   nodeId: node.id,
                   provider,
                   workflowRunId: ctx.workflowRun.id,
-                  resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+                  resumeSessionIdPreview: sessionPreview(resumeSessionId),
                   priorArtifactsFound: recoveryPointer !== '',
                 },
                 'dag.session_resume_failed'
@@ -10311,9 +10299,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             runId: ctx.workflowRun.id,
             producedAt: new Date().toISOString(),
             ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
-            // `sessionId` may be undefined (e.g. bash/script nodes have no
-            // session); writeNodeArtifact omits it from the metadata when so.
-            sessionId: output.sessionId,
           };
           try {
             await writeNodeArtifact(ctx.artifactsDir, meta, output.output);
@@ -11225,7 +11210,6 @@ export async function executeDagWorkflow(
   // launched the run (see `persistScopeKey`). The `|| undefined` guard keeps an empty
   // key from scoping every invocation to the same blank scope — persistence is simply
   // skipped in that case.
-  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
   let persistScope: PersistScope | undefined;

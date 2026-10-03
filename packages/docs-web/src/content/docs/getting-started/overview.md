@@ -271,14 +271,14 @@ cd /path/to/your/repository
 # See available workflows
 archon workflow list
 
-# Ask a question about the codebase
-archon workflow run archon-assist "How does the auth module work?"
+# Investigate a question about the codebase
+archon workflow run archon-investigate "How does the auth module validate sessions?"
 
-# Plan a feature on an isolated branch
-archon workflow run archon-feature-development --branch feat/dark-mode "Add dark mode"
+# Plan a feature
+archon workflow run archon-plan "Add dark mode"
 
-# Fix a GitHub issue
-archon workflow run archon-fix-github-issue --branch fix/issue-42 "Fix issue #42"
+# Fix a GitHub issue and open a reviewed PR
+archon workflow run archon-ship --branch fix/issue-42 "Fix issue #42"
 ```
 
 That's it. The CLI auto-detects the git repo, uses SQLite for state tracking (`~/.archon/archon.db`), and streams output to stdout.
@@ -352,29 +352,20 @@ archon complete <branch> --force   # skip uncommitted-changes check
 
 | Workflow | What It Does |
 |----------|-------------|
-| `archon-assist` | General Q&A, debugging, exploration, CI failures (deprecated) |
-| `archon-fix-github-issue` | Investigate, root cause analysis, implement fix, validate, PR |
-| `archon-create-issue` | Classify problem, gather context, investigate, create GitHub issue |
-| `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |
-| `archon-piv-loop` | Guided Plan-Implement-Validate development with human-in-the-loop |
-| `archon-idea-to-pr` | Feature idea, plan, implement, validate, PR, parallel reviews, self-fix |
-| `archon-plan-to-pr` | Execute existing plan, implement, validate, PR, review |
-| `archon-feature-development` | Implement feature from plan, validate, create PR |
-| `archon-adversarial-dev` | Build a complete application from scratch using adversarial development |
-| `archon-smart-pr-review` | Complexity-adaptive PR review — routes to relevant agents only |
-| `archon-comprehensive-pr-review` | Multi-agent PR review (5 parallel reviewers) with automatic fixes |
-| `archon-validate-pr` | Thorough PR validation testing both main and feature branches |
-| `archon-architect` | Architectural sweep, complexity reduction, codebase health |
-| `archon-refactor-safely` | Safe refactoring with type-check hooks and behavior verification |
-| `archon-interactive-prd` | Create a PRD through guided conversation |
-| `archon-ralph-dag` | PRD implementation loop (iterate through stories until done) |
-| `archon-workflow-builder` | Generate a new Archon workflow YAML for your project |
-| `archon-remotion-generate` | Generate or modify Remotion video compositions with AI |
-| `archon-resolve-conflicts` | Detect, analyze, and resolve merge conflicts in PRs |
+| `archon-ship` | Triage an issue or request, investigate or plan as needed, then deliver a reviewed PR |
+| `archon-triage` | Check an issue against the current code and decide what it needs next |
+| `archon-investigate` | Prove the root cause of a bug or open question and write a report |
+| `archon-plan` | Turn decided intent into an implementable plan |
+| `archon-implement` | Build decided work until the project's checks pass (commits, no PR) |
+| `archon-pr` | Open a pull request for committed work on the current branch |
+| `archon-deliver` | Implement, open a draft PR, review, fix findings, validate, and flip it ready |
+| `archon-review` | Review a PR or the working diff through parallel specialist lenses |
+| `archon-validate` | Run the project's own checks and report a structured verdict |
+| `archon-upkeep` | Update one dependency through the reviewed delivery tail |
 
-These bundled workflows work for most projects. To customize, copy one from `.archon/workflows/defaults/` into `.archon/workflows/` and modify it — same-named files override the defaults.
+These are the `sdlc` pack, bundled with Archon. To customize them, copy the whole `.archon/workflows/sdlc/` folder from the Archon repository into your project's `.archon/workflows/` and modify it — same-named workflows override the bundled ones. The older `archon-*` workflows such as `archon-fix-github-issue` no longer ship; see [Workflows that no longer ship](/book/essential-workflows/#workflows-that-no-longer-ship).
 
-> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-fix-github-issue`, while "review this PR" routes to `archon-smart-pr-review`. A question, or a request where it is unclear whether you want a workflow, gets a direct answer instead of a run.
+> **Auto-selection:** You don't need to remember workflow names. Just describe what you want — the router reads all workflow descriptions and picks the best match. For example, "fix issue #42" routes to `archon-ship`, while "review this PR" routes to `archon-review`. A question, or a request where it is unclear whether you want a workflow, gets a direct answer instead of a run.
 
 ---
 
