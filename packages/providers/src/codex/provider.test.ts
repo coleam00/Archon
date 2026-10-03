@@ -695,6 +695,33 @@ describe('CodexProvider', () => {
       expect(resultOf(chunks)).toEqual({ type: 'result', sessionId: THREAD_ID });
     });
 
+    test('each retry Codex announces is a warning with its cause and no vendor text', async () => {
+      const chunks = await streamOf({
+        notifications: [
+          errorNotification('Reconnecting... 1/5 (secret vendor body)', true, {
+            responseStreamDisconnected: { httpStatusCode: 503 },
+          }),
+          errorNotification('Reconnecting... 2/5', true, 'serverOverloaded'),
+          errorNotification('stream ended', false, 'other'),
+          agentMessage('done'),
+        ],
+      });
+      const warnings = chunks.filter(chunk => chunk.type === 'warning');
+      expect(warnings).toEqual([
+        {
+          type: 'warning',
+          code: 'codex.will_retry',
+          message:
+            'Codex is retrying the model call (retry 1 this turn, responseStreamDisconnected, HTTP 503)',
+        },
+        {
+          type: 'warning',
+          code: 'codex.will_retry',
+          message: 'Codex is retrying the model call (retry 2 this turn, serverOverloaded)',
+        },
+      ]);
+    });
+
     test('a replayed completion of an earlier turn does not end this one', async () => {
       const chunks = await streamOf({
         notifications: [
@@ -756,7 +783,18 @@ describe('CodexProvider', () => {
       });
       const violations = await runProviderConformance({
         capabilities: new CodexProvider().getCapabilities(),
-        turns: [{ name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) }],
+        turns: [
+          { name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) },
+          {
+            name: 'turn Codex retried',
+            run: turn({
+              notifications: [
+                errorNotification('Reconnecting... 1/5', true, 'serverOverloaded'),
+                agentMessage('hi'),
+              ],
+            }),
+          },
+        ],
         failureCases: [
           {
             name: 'missing credentials',

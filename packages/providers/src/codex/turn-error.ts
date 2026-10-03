@@ -85,15 +85,30 @@ export function classifyTurnError(
   if (typeof info === 'object' && info !== null) {
     const [variant] = Object.keys(info);
     if (variant && HTTP_VARIANTS.has(variant)) {
-      const payload = (info as Record<string, unknown>)[variant];
-      const status =
-        typeof payload === 'object' && payload !== null
-          ? (payload as { httpStatusCode?: unknown }).httpStatusCode
-          : undefined;
-      return { failureClass: classOfHttpStatus(status) };
+      return { failureClass: classOfHttpStatus(httpStatusOf(info, variant)) };
     }
   }
   return { failureClass: 'unknown' };
+}
+
+function httpStatusOf(info: object, variant: string): unknown {
+  const payload = (info as Record<string, unknown>)[variant];
+  return typeof payload === 'object' && payload !== null
+    ? (payload as { httpStatusCode?: unknown }).httpStatusCode
+    : undefined;
+}
+
+/**
+ * `codexErrorInfo` as an operator-facing cause: the variant token and, when it carries one,
+ * the HTTP status. Never Codex's message text, which can hold the vendor's response body.
+ */
+export function describeErrorInfo(info: unknown): string | undefined {
+  if (typeof info === 'string') return info;
+  if (typeof info !== 'object' || info === null) return undefined;
+  const [variant] = Object.keys(info);
+  if (!variant) return undefined;
+  const status = HTTP_VARIANTS.has(variant) ? httpStatusOf(info, variant) : undefined;
+  return typeof status === 'number' ? `${variant}, HTTP ${String(status)}` : variant;
 }
 
 /**
