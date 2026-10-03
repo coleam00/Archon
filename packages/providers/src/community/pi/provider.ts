@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 import { createLogger } from '@archon/paths';
 // Type-only import — erased by TS, so it does NOT trigger Pi's config.js
@@ -23,6 +23,11 @@ import { buildCustomProviderModelsPath } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
+import {
+  beginPiExtensionTurn,
+  piExtensionFailureEvidence,
+  type PiStructuredExtensionError,
+} from './extension-error-broker';
 
 // IMPORTANT: Do NOT add static `import { ... } from '@earendil-works/*'` here,
 // and do NOT statically import sibling modules that themselves import runtime
@@ -314,7 +319,12 @@ export class PiProvider implements IAgentProvider {
       const err = error as Error;
       // The turn already reported its one result; a later error does not change it.
       if (resultReported) getLog().error({ err }, 'pi.error_after_result');
-      else yield failureResult(failureClassOfThrown(err), 'pi_query_failed', err.message);
+      else
+        yield failureResult(
+          failureClassOfThrown(err),
+          'pi_query_failed',
+          piExtensionFailureEvidence(err) ?? err.message
+        );
     }
     // The bridge ends when `prompt()` resolves, after every run of Pi's agent loop
     // (auto-retry, compaction, queued follow-ups) has finished: nothing more runs.
@@ -776,8 +786,8 @@ export class PiProvider implements IAgentProvider {
     );
     // Default ON: extensions (community packages like @plannotator/pi-extension
     // or your own local ones) are a core reason users run Pi. Opt out with
-    // `assistants.pi.enableExtensions: false` (or `interactive: false`) in
-    // `.archon/config.yaml`. Previously default-off, which silently broke
+    // `assistants.pi.enableExtensions: false` in `.archon/config.yaml`.
+    // Previously default-off, which silently broke
     // users who installed or built an extension and expected it to fire.
     //
     // Extension posture is resolved PER NODE (issue #2073): assistant-level
@@ -808,6 +818,7 @@ export class PiProvider implements IAgentProvider {
       ...(skillPaths.length > 0 ? { additionalSkillPaths: skillPaths } : {}),
     };
     let resourceLoader: DefaultResourceLoader;
+    let extensionPaths: string[] = [];
     const extensionProviderNames = new Set<string>();
     if (enableExtensions) {
       const { loader, providerRegistrations } = await getOrCreateReloadedExtensionLoader(
@@ -815,6 +826,10 @@ export class PiProvider implements IAgentProvider {
         loaderOptions
       );
       resourceLoader = loader;
+      extensionPaths = loader
+        .getExtensions()
+        .extensions.flatMap(extension => [extension.path, extension.resolvedPath])
+        .filter(isAbsolute);
       // Re-apply the load-time extension provider registrations to THIS call's
       // fresh ModelRegistry (issue #2064). Extension factories run only during
       // the single cached reload(), and the SDK drains their queued
@@ -883,154 +898,177 @@ export class PiProvider implements IAgentProvider {
     const piCustomTools =
       nativeToolDefs.length > 0 ? [...(baseTools ?? []), ...nativeToolDefs] : filteredTools;
 
-    const { session, modelFallbackMessage } = await createAgentSession({
-      cwd,
-      // model is omitted when not yet resolved (extension provider path).
-      // createAgentSession accepts this — the model will be set via
-      // session.setModel() after bindExtensions() resolves it (step 4g).
-      ...(model ? { model } : {}),
-      // pi 0.84.0+: createAgentSession no longer accepts authStorage +
-      // modelRegistry separately; pass the modelRuntime and the SDK builds its
-      // own internal registry facade. The runtime we pass is the one already
-      // scoped with `setRuntimeApiKey` calls above, and for custom providers
-      // it was built against a per-call `modelsPath` with `${VAR}` references
-      // pre-substituted (see step 2 above) — no further per-call wiring.
-      modelRuntime,
-      sessionManager,
-      settingsManager,
-      resourceLoader,
-      ...(thinkingLevel ? { thinkingLevel } : {}),
-      // Pi 0.68+: `tools` was repurposed as a string[] allowlist of built-in
-      // tool names; the actual Tool[] payload now goes through `customTools`.
-      // `noTools: "builtin"` suppresses the default built-in set so our
-      // filtered (and env-injected bash) list isn't doubled up (the
-      // suppression-behavior bug was fixed in pi 0.70.0). When filteredTools
-      // is undefined we keep Pi's defaults — no overrides.
-      //
-      // `customTools` is also the only path through which we can attach a
-      // BashSpawnHook for managed-env injection: Pi's built-in bash tool is
-      // pre-constructed without a spawnHook (see resolvePiTools in
-      // options-translator.ts), so the env-aware bash MUST go through
-      // customTools, not just for tool restriction.
-      ...(piCustomTools !== undefined
-        ? { customTools: piCustomTools, noTools: 'builtin' as const }
-        : {}),
-    });
+    // A detached process error carries no session id. Keep turns that actually
+    // loaded extension code single-filed so a matching stack has one owner.
+    const extensionTurn =
+      enableExtensions && extensionPaths.length > 0
+        ? await beginPiExtensionTurn(extensionPaths)
+        : undefined;
+    try {
+      const { session, modelFallbackMessage } = await createAgentSession({
+        cwd,
+        // model is omitted when not yet resolved (extension provider path).
+        // createAgentSession accepts this — the model will be set via
+        // session.setModel() after bindExtensions() resolves it (step 4g).
+        ...(model ? { model } : {}),
+        // pi 0.84.0+: createAgentSession no longer accepts authStorage +
+        // modelRegistry separately; pass the modelRuntime and the SDK builds its
+        // own internal registry facade. The runtime we pass is the one already
+        // scoped with `setRuntimeApiKey` calls above, and for custom providers
+        // it was built against a per-call `modelsPath` with `${VAR}` references
+        // pre-substituted (see step 2 above) — no further per-call wiring.
+        modelRuntime,
+        sessionManager,
+        settingsManager,
+        resourceLoader,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
+        // Pi 0.68+: `tools` was repurposed as a string[] allowlist of built-in
+        // tool names; the actual Tool[] payload now goes through `customTools`.
+        // `noTools: "builtin"` suppresses the default built-in set so our
+        // filtered (and env-injected bash) list isn't doubled up (the
+        // suppression-behavior bug was fixed in pi 0.70.0). When filteredTools
+        // is undefined we keep Pi's defaults — no overrides.
+        //
+        // `customTools` is also the only path through which we can attach a
+        // BashSpawnHook for managed-env injection: Pi's built-in bash tool is
+        // pre-constructed without a spawnHook (see resolvePiTools in
+        // options-translator.ts), so the env-aware bash MUST go through
+        // customTools, not just for tool restriction.
+        ...(piCustomTools !== undefined
+          ? { customTools: piCustomTools, noTools: 'builtin' as const }
+          : {}),
+      });
 
-    // Extension models aren't in the static catalog — skip the fallback warning.
-    if (modelFallbackMessage && model) {
-      yield { type: 'warning', code: 'pi.model_fallback', message: modelFallbackMessage };
-    }
+      // Extension models aren't in the static catalog — skip the fallback warning.
+      if (modelFallbackMessage && model) {
+        yield { type: 'warning', code: 'pi.model_fallback', message: modelFallbackMessage };
+      }
 
-    // 4e. Extension flag pass-through. Must happen before bindExtensions
-    //     below — extensions read flags inside their session_start handler.
-    //     `extensionFlags` is the per-node resolved map (assistant-level flags
-    //     shallow-merged with `nodes.<nodeId>.extensionFlags`, node wins).
-    if (enableExtensions && extensionFlags) {
-      const runner = session.extensionRunner;
-      if (runner) {
-        for (const [name, value] of Object.entries(extensionFlags)) {
-          runner.setFlagValue(name, value);
+      // 4e. Extension flag pass-through. Must happen before bindExtensions
+      //     below — extensions read flags inside their session_start handler.
+      //     `extensionFlags` is the per-node resolved map (assistant-level flags
+      //     shallow-merged with `nodes.<nodeId>.extensionFlags`, node wins).
+      if (enableExtensions && extensionFlags) {
+        const runner = session.extensionRunner;
+        if (runner) {
+          for (const [name, value] of Object.entries(extensionFlags)) {
+            runner.setFlagValue(name, value);
+          }
         }
       }
-    }
 
-    // 4f. Bind UI context or fire session_start with no UI. Must run after flag pass-through above.
-    //     Extension providers register their models during bindExtensions() — this is the trigger
-    //     for LOOKUP-2: they call registerProvider() on our modelRegistry during session_start.
-    const uiBridge = interactive ? createArchonUIBridge() : undefined;
-    if (uiBridge) {
-      const uiContext = createArchonUIContext(uiBridge);
-      await session.bindExtensions({ uiContext });
-    } else if (enableExtensions) {
-      await session.bindExtensions({});
-    }
-
-    // 4g. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
-    //     Safe to call session.setModel() here — no prompt has been sent yet.
-    if (!model) {
-      model = modelRegistry.find(parsed.provider, parsed.modelId);
-      if (!model) {
+      // 4f. Bind UI context or fire session_start with no UI. Must run after flag pass-through above.
+      //     Extension providers register their models during bindExtensions() — this is the trigger
+      //     for LOOKUP-2: they call registerProvider() on our modelRegistry during session_start.
+      const uiBridge = interactive ? createArchonUIBridge() : undefined;
+      const onExtensionError = extensionTurn
+        ? (error: PiStructuredExtensionError): void => {
+            extensionTurn.reportStructured(error);
+          }
+        : undefined;
+      try {
+        if (uiBridge) {
+          const uiContext = createArchonUIContext(uiBridge);
+          await session.bindExtensions({ uiContext, onError: onExtensionError });
+        } else if (enableExtensions) {
+          await session.bindExtensions({ onError: onExtensionError });
+        }
+        extensionTurn?.throwIfFailed();
+      } catch (error) {
         session.dispose();
-        const extensionProvider = extensionProviderNames.has(parsed.provider);
-        const catalogProvider =
-          !extensionProvider && modelRegistry.getProvider(parsed.provider) !== undefined;
-        const remedy = catalogProvider
-          ? 'The provider is configured, but this model id is not in the Pi model catalog. ' +
-            'If the model is newer than your catalog, refresh it with `pi update --models`; ' +
-            `Archon reads the refreshed store at ${join(piCodingAgent.getAgentDir(), 'models-store.json')}.`
-          : extensionProvider
-            ? `Provider '${parsed.provider}' comes from an installed Pi extension, but that ` +
-              'extension did not register this model id. Check the extension configuration and model name.'
-            : `Provider '${parsed.provider}' is not in the Pi model catalog. If it comes from a Pi ` +
-              'provider extension, install that extension (e.g. `pi install npm:pi-provider-kiro`) ' +
-              'and set `enableExtensions: true` in .archon/config.yaml. If it is a catalog provider, ' +
-              'refresh the catalog with `pi update --models`.';
-        throw new ClassifiedProviderError(
-          'misconfigured',
-          `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ${remedy}`
-        );
+        throw error;
+      }
+
+      // 4g. [LOOKUP-2] Re-check the registry after bindExtensions() for extension-registered models.
+      //     Safe to call session.setModel() here — no prompt has been sent yet.
+      if (!model) {
+        model = modelRegistry.find(parsed.provider, parsed.modelId);
+        if (!model) {
+          session.dispose();
+          const extensionProvider = extensionProviderNames.has(parsed.provider);
+          const catalogProvider =
+            !extensionProvider && modelRegistry.getProvider(parsed.provider) !== undefined;
+          const remedy = catalogProvider
+            ? 'The provider is configured, but this model id is not in the Pi model catalog. ' +
+              'If the model is newer than your catalog, refresh it with `pi update --models`; ' +
+              `Archon reads the refreshed store at ${join(piCodingAgent.getAgentDir(), 'models-store.json')}.`
+            : extensionProvider
+              ? `Provider '${parsed.provider}' comes from an installed Pi extension, but that ` +
+                'extension did not register this model id. Check the extension configuration and model name.'
+              : `Provider '${parsed.provider}' is not in the Pi model catalog. If it comes from a Pi ` +
+                'provider extension, install that extension (e.g. `pi install npm:pi-provider-kiro`) ' +
+                'and set `enableExtensions: true` in .archon/config.yaml. If it is a catalog provider, ' +
+                'refresh the catalog with `pi update --models`.';
+          throw new ClassifiedProviderError(
+            'misconfigured',
+            `Pi model not found: provider='${parsed.provider}' model='${parsed.modelId}'. ${remedy}`
+          );
+        }
+        try {
+          await session.setModel(model);
+          extensionTurn?.throwIfFailed();
+        } catch (err) {
+          session.dispose();
+          throw err;
+        }
+      }
+
+      // 5. Structured output (best-effort). Pi has no SDK-level JSON schema
+      //    mode the way Claude and Codex do, so we implement it via prompt
+      //    engineering: append the schema + "JSON only, no fences" instruction,
+      //    and have the bridge parse the accumulated assistant text on
+      //    agent_end. Parse failures degrade gracefully — the executor's
+      //    existing dag.structured_output_missing warning path handles them.
+      const outputFormat = requestOptions?.outputFormat;
+      const effectivePrompt = outputFormat
+        ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
+        : prompt;
+
+      // 6. Bridge callback-based events to the async generator contract.
+      //    bridgeSession owns dispose() and abort wiring. When `interactive`
+      //    is on, it also binds/unbinds the UI stub's emitter so extension
+      //    notifications land on the same queue as Pi events.
+      //
+      //    The module-level semaphore is initialized lazily from the first
+      //    config that sets maxConcurrent and reused for the lifetime of the
+      //    process — this is a known v1 tradeoff. Pi concurrency is global
+      //    (one upstream backend) so a process-wide cap is the right scope.
+      const maxConcurrent = piConfig.maxConcurrent;
+      if (maxConcurrent !== undefined && piSemaphore === undefined) {
+        piSemaphore = new Semaphore(maxConcurrent);
+        getLog().info({ maxConcurrent }, 'pi.semaphore_initialized');
+      }
+
+      // Snapshot before the first await — if a concurrent call initializes the
+      // module-level piSemaphore after this point, sem stays undefined and the
+      // finally block correctly skips release (we never acquired).
+      const sem = piSemaphore;
+      if (sem !== undefined) {
+        getLog().debug('pi.semaphore_acquiring');
+        await sem.acquire();
+        getLog().debug('pi.semaphore_acquired');
       }
       try {
-        await session.setModel(model);
+        yield* withResumedOutcome(
+          bridgeSession(
+            session,
+            effectivePrompt,
+            requestOptions?.abortSignal,
+            outputFormat?.schema,
+            uiBridge,
+            extensionTurn
+          ),
+          resumedOutcome(resumeSessionId, !resumeFailed)
+        );
+        getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
       } catch (err) {
-        session.dispose();
+        getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
         throw err;
+      } finally {
+        sem?.release();
       }
-    }
-
-    // 5. Structured output (best-effort). Pi has no SDK-level JSON schema
-    //    mode the way Claude and Codex do, so we implement it via prompt
-    //    engineering: append the schema + "JSON only, no fences" instruction,
-    //    and have the bridge parse the accumulated assistant text on
-    //    agent_end. Parse failures degrade gracefully — the executor's
-    //    existing dag.structured_output_missing warning path handles them.
-    const outputFormat = requestOptions?.outputFormat;
-    const effectivePrompt = outputFormat
-      ? augmentPromptForJsonSchema(prompt, outputFormat.schema)
-      : prompt;
-
-    // 6. Bridge callback-based events to the async generator contract.
-    //    bridgeSession owns dispose() and abort wiring. When `interactive`
-    //    is on, it also binds/unbinds the UI stub's emitter so extension
-    //    notifications land on the same queue as Pi events.
-    //
-    //    The module-level semaphore is initialized lazily from the first
-    //    config that sets maxConcurrent and reused for the lifetime of the
-    //    process — this is a known v1 tradeoff. Pi concurrency is global
-    //    (one upstream backend) so a process-wide cap is the right scope.
-    const maxConcurrent = piConfig.maxConcurrent;
-    if (maxConcurrent !== undefined && piSemaphore === undefined) {
-      piSemaphore = new Semaphore(maxConcurrent);
-      getLog().info({ maxConcurrent }, 'pi.semaphore_initialized');
-    }
-
-    // Snapshot before the first await — if a concurrent call initializes the
-    // module-level piSemaphore after this point, sem stays undefined and the
-    // finally block correctly skips release (we never acquired).
-    const sem = piSemaphore;
-    if (sem !== undefined) {
-      getLog().debug('pi.semaphore_acquiring');
-      await sem.acquire();
-      getLog().debug('pi.semaphore_acquired');
-    }
-    try {
-      yield* withResumedOutcome(
-        bridgeSession(
-          session,
-          effectivePrompt,
-          requestOptions?.abortSignal,
-          outputFormat?.schema,
-          uiBridge
-        ),
-        resumedOutcome(resumeSessionId, !resumeFailed)
-      );
-      getLog().info({ piProvider: parsed.provider }, 'pi.prompt_completed');
-    } catch (err) {
-      getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
-      throw err;
     } finally {
-      sem?.release();
+      extensionTurn?.close();
     }
   }
 
