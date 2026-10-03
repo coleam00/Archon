@@ -11,7 +11,7 @@ import {
 import {
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
-  workflowWaitContextSchema as engineWorkflowWaitContextSchema,
+  publicWorkflowWaitContextSchema,
   RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import { runStopReasonSchema as engineRunStopReasonSchema } from '@archon/workflows/schemas/run-terminal-reason';
@@ -125,7 +125,7 @@ export const workflowRunOutcomeSchema = engineWorkflowRunOutcomeSchema
 
 /** Persisted durable-wait cursor exposed to API clients without erasing its discriminants. */
 export const workflowWaitContextSchema =
-  engineWorkflowWaitContextSchema.openapi('WorkflowWaitContext');
+  publicWorkflowWaitContextSchema.openapi('WorkflowWaitContext');
 
 /** Why a run stopped, as the engine recorded it on the run row. */
 export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');

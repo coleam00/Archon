@@ -4471,8 +4471,6 @@ export interface components {
           nodeId: string;
           bodyWaitId: string;
           iteration: number;
-          sessionId: string | null;
-          sessionProvider: string | null;
           /** @enum {string} */
           kind: 'time';
           /** Format: date-time */
@@ -4486,8 +4484,6 @@ export interface components {
           nodeId: string;
           bodyWaitId: string;
           iteration: number;
-          sessionId: string | null;
-          sessionProvider: string | null;
           /** @enum {string} */
           kind: 'event';
           /** Format: date-time */
@@ -4505,8 +4501,6 @@ export interface components {
           nodeId: string;
           bodyWaitId: string;
           iteration: number;
-          sessionId: string | null;
-          sessionProvider: string | null;
           /** @enum {string} */
           kind: 'attention';
           /** Format: date-time */
@@ -4723,7 +4717,6 @@ export interface components {
                 /** Format: date-time */
                 producedAt: string;
                 size: number;
-                sessionId?: string;
               };
             }[];
             limitations: {

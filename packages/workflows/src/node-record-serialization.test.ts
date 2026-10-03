@@ -169,7 +169,7 @@ describe('node record serializers', () => {
       expect(JSON.stringify(restored?.metadata)).not.toContain(sessionId);
     }
     // The engine still threads the id to the next node through the node's output.
-    expect(serializeNodeOutput(finished[0]).sessionId).toBe(sessionId);
+    expect(serializeNodeOutput(finished[0])).toMatchObject({ state: 'completed', sessionId });
   });
 
   it('only exposes a short provider session preview', () => {
