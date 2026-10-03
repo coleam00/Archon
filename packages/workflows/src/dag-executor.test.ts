@@ -125,6 +125,7 @@ import type {
   SkipCause,
   WorkflowRun,
   WorkflowRunNodeSession,
+  WorkflowNodeSession,
   WorkflowDefinition,
   ResolvedWorkflow,
   WorkflowRunStatus,
@@ -150,7 +151,7 @@ import {
 } from './compiled-command';
 import { OutputRefError } from './output-ref';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
-import type { IWorkflowStore, PersistedNodeOutput } from './store';
+import type { IWorkflowStore, PersistedNodeOutput, WorkflowNodeSessionKey } from './store';
 import { waitCompletionEvents } from './store';
 import {
   buildInstanceSnapshots,
@@ -21382,6 +21383,197 @@ describe('executeDagWorkflow -- persist_session', () => {
       .map((call: unknown[]) => call[1] as string)
       .some(m => m.includes('Could not persist') && m.includes('planner'));
     expect(warned).toBe(true);
+  });
+});
+
+// #2667: two overlapping runs of one workflow in one scope share the persisted row. Each run
+// must take its own copy of the session as it stood when the run started.
+describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => {
+  let rootDir: string;
+
+  /** Node-session store keyed exactly like the table's primary key. */
+  function sessionTableStore(initial: string): {
+    store: MockWorkflowStore;
+    row: () => WorkflowNodeSession | undefined;
+  } {
+    const rows = new Map<string, WorkflowNodeSession>();
+    const key = (k: WorkflowNodeSessionKey): string =>
+      [k.workflow_name, k.node_id, k.scope_key, k.provider].join('|');
+    const seed: WorkflowNodeSessionKey = {
+      workflow_name: 'persist-race',
+      node_id: 'planner',
+      scope_key: 'conv-dag',
+      provider: 'claude',
+    };
+    rows.set(key(seed), {
+      ...seed,
+      provider_session_id: initial,
+      last_run_id: 'earlier-run',
+      created_at: '2026-10-01T00:00:00Z',
+      updated_at: '2026-10-01T00:00:00Z',
+    });
+    const store = createMockStore();
+    store.getWorkflowNodeSession.mockImplementation(async k => rows.get(key(k)) ?? null);
+    store.upsertWorkflowNodeSession.mockImplementation(async params => {
+      rows.set(key(params), {
+        ...params,
+        created_at: '2026-10-03T00:00:00Z',
+        updated_at: '2026-10-03T00:00:00Z',
+      });
+    });
+    store.deleteWorkflowNodeSessions.mockImplementation(async filter => {
+      let deleted = 0;
+      for (const [k, row] of rows) {
+        if (row.workflow_name === filter.workflow_name && row.node_id === filter.node_id) {
+          rows.delete(k);
+          deleted++;
+        }
+      }
+      return { deleted };
+    });
+    return { store, row: () => rows.get(key(seed)) };
+  }
+
+  /**
+   * Starts run B, lets run A run to completion while B's first node is held open, then
+   * releases B. Returns what each run's `planner` handed the provider.
+   */
+  async function raceTwoRuns(opts: {
+    sessionFork: boolean;
+    plannerSessionId: (run: 'a' | 'b') => string | undefined;
+  }): Promise<{
+    store: MockWorkflowStore;
+    row: () => WorkflowNodeSession | undefined;
+    plannerResume: Map<'a' | 'b', { resume: string | undefined; fork: boolean | undefined }>;
+    platforms: Record<'a' | 'b', MockWorkflowPlatform>;
+  }> {
+    const { store, row } = sessionTableStore('S0');
+    const cwds = { a: join(rootDir, 'a'), b: join(rootDir, 'b') } as const;
+    for (const cwd of Object.values(cwds)) {
+      await mkdir(join(cwd, '.archon', 'commands'), { recursive: true });
+    }
+    const runOf = (cwd: string): 'a' | 'b' => (cwd === cwds.a ? 'a' : 'b');
+    let releaseB: () => void = () => {};
+    const bHeld = new Promise<void>(resolve => {
+      releaseB = resolve;
+    });
+    const plannerResume = new Map<
+      'a' | 'b',
+      { resume: string | undefined; fork: boolean | undefined }
+    >();
+    mockSendQueryDag.mockImplementation(async function* (prompt, cwd, resume, options) {
+      const run = runOf(cwd);
+      if (prompt.includes('warm up')) {
+        if (run === 'b') await bHeld;
+        yield { type: 'agent_message_chunk', text: 'warm' };
+        yield { type: 'result', sessionId: `${run}-warmup` };
+        return;
+      }
+      plannerResume.set(run, { resume, fork: options?.forkSession });
+      yield { type: 'agent_message_chunk', text: 'planned' };
+      const sessionId = opts.plannerSessionId(run);
+      yield sessionId === undefined ? { type: 'result' } : { type: 'result', sessionId };
+    });
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: opts.sessionFork }),
+    }));
+    const deps = createMockDeps(store);
+    const platforms = { a: createMockPlatform(), b: createMockPlatform() };
+    const start = (run: 'a' | 'b'): Promise<unknown> =>
+      executeDagWorkflow(
+        dagOptions({
+          deps,
+          platform: platforms[run],
+          cwd: cwds[run],
+          workflow: {
+            name: 'persist-race',
+            nodes: [
+              { id: 'warmup', kind: 'agent', source: { kind: 'inline', prompt: 'warm up' } },
+              {
+                id: 'planner',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'plan it' },
+                depends_on: ['warmup'],
+                persist_session: true,
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(`run-${run}`, { workflow_name: 'persist-race' }),
+        })
+      );
+
+    const runB = start('b');
+    await start('a');
+    releaseB();
+    await runB;
+    return { store, row, plannerResume, platforms };
+  }
+
+  beforeEach(async () => {
+    rootDir = join(
+      tmpdir(),
+      `dag-persist-race-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    mockSendQueryDag.mockClear();
+    mockGetAgentProviderDag.mockClear();
+  });
+
+  afterEach(async () => {
+    await removeTempTree(rootDir);
+  });
+
+  it('each run forks the session the row held when that run started', async () => {
+    const { row, plannerResume } = await raceTwoRuns({
+      sessionFork: true,
+      plannerSessionId: run => `${run}-planner`,
+    });
+
+    expect(plannerResume.get('a')).toEqual({ resume: 'S0', fork: true });
+    // Run A finished `planner` while B was running; B still copies what existed at its start.
+    expect(plannerResume.get('b')).toEqual({ resume: 'S0', fork: true });
+    // B finished last, so the cursor advances to its session.
+    expect(row()?.provider_session_id).toBe('b-planner');
+    expect(row()?.last_run_id).toBe('run-b');
+  });
+
+  it('a provider without sessionFork never receives the persisted session', async () => {
+    const { store, row, plannerResume, platforms } = await raceTwoRuns({
+      sessionFork: false,
+      plannerSessionId: run => `${run}-planner`,
+    });
+
+    expect(plannerResume.get('a')?.resume).toBeUndefined();
+    expect(plannerResume.get('b')?.resume).toBeUndefined();
+    const notContinued = store.createWorkflowEvent.mock.calls
+      .map(([event]) => event)
+      .filter(event => event.event_type === 'node_session_not_continued');
+    expect(notContinued.map(event => event.workflow_run_id).sort()).toEqual(['run-a', 'run-b']);
+    for (const event of notContinued) {
+      expect(event.step_name).toBe('planner');
+      expect(event.data).toEqual({
+        provider: 'claude',
+        scope_key: 'conv-dag',
+        provider_session_id_preview: 'S0…',
+      });
+    }
+    for (const platform of Object.values(platforms)) {
+      const told = platform.sendMessage.mock.calls.some(([, message]) =>
+        message.includes('cannot fork')
+      );
+      expect(told).toBe(true);
+    }
+    expect(row()?.provider_session_id).toBe('b-planner');
+  });
+
+  it("a run that returns no session id leaves a sibling's newer cursor in place", async () => {
+    const { row } = await raceTwoRuns({
+      sessionFork: true,
+      plannerSessionId: run => (run === 'a' ? 'a-planner' : undefined),
+    });
+
+    expect(row()?.provider_session_id).toBe('a-planner');
   });
 });
 
