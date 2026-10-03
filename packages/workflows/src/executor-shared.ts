@@ -2,7 +2,7 @@
  * Shared helpers for executor.ts and dag-executor.ts.
  *
  * Extracted here once the Rule of Three was met — both files had
- * identical copies of these error-classification and prompt-building
+ * identical copies of these retry and prompt-building
  * utilities. Single source of truth; no logic changes from either copy.
  */
 import { readFile } from 'fs/promises';
@@ -33,87 +33,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-// ─── Error Classification ────────────────────────────────────────────────────
-
-/** Result of error classification */
-export type ErrorType = 'TRANSIENT' | 'FATAL' | 'UNKNOWN';
-
-const QUOTA_EXHAUSTION_PATTERNS = [
-  'session limit',
-  'usage limit reached',
-  'credit exhaustion',
-  'credit balance',
-] as const;
-
-/** Fatal errors: authentication/authorization failures plus quota exhaustion. */
-export const FATAL_PATTERNS = [
-  'unauthorized',
-  'forbidden',
-  'invalid token',
-  'authentication failed',
-  'permission denied',
-  '401',
-  '403',
-  ...QUOTA_EXHAUSTION_PATTERNS,
-];
-
-/** Ambiguous fatal patterns that yield to concrete transient evidence. */
-const FALLBACK_FATAL_PATTERNS = ['auth error'];
-
-/** Rate/concurrency pressure (429, provider overload), a subset of TRANSIENT. */
-export const RATE_LIMIT_PATTERNS = [
-  '429',
-  'rate limit',
-  'too many requests',
-  'overloaded', // Anthropic/Minimax overload message text
-  'at capacity', // Codex/OpenAI model-level saturation
-] as const;
-
-/** Transient error patterns - temporary issues that may resolve with retry */
-export const TRANSIENT_PATTERNS = [
-  'timeout',
-  'econnrefused',
-  'econnreset',
-  'etimedout',
-  ...RATE_LIMIT_PATTERNS,
-  '503',
-  '502',
-  '529', // Anthropic HTTP 529 = service overloaded
-  'network error',
-  'stream closed without yielding content', // empty provider stream (#2706): silent rejection or interruption, not a node defect
-  'socket hang up',
-  'exited with code',
-  'claude code crash',
-];
-
-/**
- * Check if error message matches any pattern in the list.
- */
-export function matchesPattern(message: string, patterns: string[]): boolean {
-  return patterns.some(pattern => message.includes(pattern));
-}
-
-/**
- * Classify an error to determine if it's transient (can retry) or fatal (should fail).
- * Decisive FATAL patterns take priority over TRANSIENT patterns to prevent an error
- * containing both (e.g. "unauthorized: process exited with code 1") from being retried.
- * Ambiguous provider wrapper text such as "auth error" is fatal only when no concrete
- * transient signal matches.
- */
-export function classifyError(error: Error): ErrorType {
-  const message = error.message.toLowerCase();
-
-  if (matchesPattern(message, FATAL_PATTERNS)) {
-    return 'FATAL';
-  }
-  if (matchesPattern(message, TRANSIENT_PATTERNS)) {
-    return 'TRANSIENT';
-  }
-  if (matchesPattern(message, FALLBACK_FATAL_PATTERNS)) {
-    return 'FATAL';
-  }
-  return 'UNKNOWN';
-}
+// ─── Retry Classification ────────────────────────────────────────────────────
 
 /** Retry budget for rate-limited failures, replacing the node's own maxRetries when one is seen. */
 export const RATE_LIMIT_MAX_RETRIES = 5;
@@ -968,73 +888,35 @@ export interface SendMessageContext {
   nodeName?: string;
 }
 
-/** Threshold for consecutive UNKNOWN errors before aborting */
-const UNKNOWN_ERROR_THRESHOLD = 3;
-
-/** Mutable counter for tracking consecutive unknown errors across calls */
-export interface UnknownErrorTracker {
-  count: number;
-}
-
 /**
- * Safely send a message to the platform without crashing on failure.
- * Returns true if message was sent successfully, false otherwise.
- * Only suppresses transient/unknown errors; fatal errors are rethrown.
- * When unknownErrorTracker is provided, consecutive UNKNOWN errors are tracked
- * and the workflow is aborted after UNKNOWN_ERROR_THRESHOLD consecutive failures.
+ * Send a message to the platform without failing the run when the send fails.
+ * Returns true if the message was sent, false otherwise. A send failure is logged and
+ * suppressed whatever it says: no adapter reports a typed send failure, and the run's
+ * results persist whether or not the platform heard about them.
  */
 export async function safeSendMessage(
   platform: IWorkflowPlatform,
   conversationId: string,
   message: string,
   context?: SendMessageContext,
-  metadata?: WorkflowMessageMetadata,
-  unknownErrorTracker?: UnknownErrorTracker
+  metadata?: WorkflowMessageMetadata
 ): Promise<boolean> {
   try {
     await platform.sendMessage(conversationId, message, metadata);
-    if (unknownErrorTracker) unknownErrorTracker.count = 0;
     return true;
   } catch (error) {
     const err = error as Error;
-    const errorType = classifyError(err);
-
     getLog().error(
       {
         err,
         conversationId,
         messageLength: message.length,
-        errorType,
         platformType: platform.getPlatformType(),
         ...context,
         stack: err.stack,
       },
       'platform_message_send_failed'
     );
-
-    // Reset tracker on any non-UNKNOWN outcome — only *consecutive* UNKNOWN
-    // errors should trip the threshold (e.g. UNKNOWN→TRANSIENT→UNKNOWN→UNKNOWN
-    // is two separate runs, not three in a row).
-    if (unknownErrorTracker && errorType !== 'UNKNOWN') {
-      unknownErrorTracker.count = 0;
-    }
-
-    // Fatal errors should not be suppressed - they indicate configuration issues
-    if (errorType === 'FATAL') {
-      throw new Error(`Platform authentication/permission error: ${err.message}`);
-    }
-
-    // Track consecutive UNKNOWN errors - abort if threshold exceeded
-    if (errorType === 'UNKNOWN' && unknownErrorTracker) {
-      unknownErrorTracker.count++;
-      if (unknownErrorTracker.count >= UNKNOWN_ERROR_THRESHOLD) {
-        throw new Error(
-          `${String(UNKNOWN_ERROR_THRESHOLD)} consecutive unrecognized errors - aborting workflow: ${err.message}`
-        );
-      }
-    }
-
-    // Transient errors (and below-threshold unknown errors) suppressed to allow workflow to continue
     return false;
   }
 }

@@ -1,5 +1,5 @@
 import { providerFailureClassSchema } from '@archon/provider-contract';
-import { describe, it, expect, mock } from 'bun:test';
+import { describe, it, expect, mock, type Mock } from 'bun:test';
 
 // Mock logger before importing module under test
 const mockLogFn = mock(() => {});
@@ -31,15 +31,11 @@ import {
   isInlineScript,
   formatSubprocessFailure,
   retainStreamTail,
-  classifyError,
   getRetryDelayMs,
-  RATE_LIMIT_PATTERNS,
   RATE_LIMIT_RETRY_DELAY_MS,
-  TRANSIENT_PATTERNS,
   nodeFailureKindOf,
   retryClassOf,
   safeSendMessage,
-  type UnknownErrorTracker,
 } from './executor-shared';
 
 describe('substituteWorkflowVariables', () => {
@@ -963,96 +959,7 @@ describe('formatSubprocessFailure', () => {
   });
 });
 
-describe('classifyError', () => {
-  it('keeps every rate-limit pattern inside TRANSIENT so the widened budget stays reachable', () => {
-    for (const pattern of RATE_LIMIT_PATTERNS) {
-      expect(TRANSIENT_PATTERNS).toContain(pattern);
-    }
-  });
-
-  it('classifies 429 as TRANSIENT', () => {
-    expect(classifyError(new Error('rate limit: 429 too many requests'))).toBe('TRANSIENT');
-  });
-
-  it('classifies 529 as TRANSIENT', () => {
-    expect(classifyError(new Error('HTTP 529 service overloaded'))).toBe('TRANSIENT');
-  });
-
-  it('classifies overloaded messages as TRANSIENT', () => {
-    expect(classifyError(new Error('Minimax: overloaded, try again later'))).toBe('TRANSIENT');
-  });
-
-  it('classifies Codex 503 responses decorated with auth error as TRANSIENT — #2386', () => {
-    expect(
-      classifyError(
-        new Error(
-          "Node 'prime' failed: SDK returned codex_turn_failed — unexpected status 503 Service Unavailable: Service Unavailable, url: https://chatgpt.com/backend-api/codex/responses, cf-ray: ..., auth error: 503, auth error code: biscuit_baker_service_me_circuit_open"
-        )
-      )
-    ).toBe('TRANSIENT');
-  });
-
-  it('classifies a silent empty stream as TRANSIENT — #2706', () => {
-    expect(
-      classifyError(
-        new Error(
-          "Node 'x' produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection."
-        )
-      )
-    ).toBe('TRANSIENT');
-    expect(
-      classifyError(
-        new Error(
-          'Loop iteration produced no assistant output. The provider stream closed without yielding content — likely a silent provider rejection or stream interruption.'
-        )
-      )
-    ).toBe('TRANSIENT');
-  });
-
-  it('classifies Codex model-capacity errors as TRANSIENT — #2425', () => {
-    expect(
-      classifyError(new Error('Selected model is at capacity. Please try a different model.'))
-    ).toBe('TRANSIENT');
-  });
-
-  it('classifies 401 as FATAL', () => {
-    expect(classifyError(new Error('401 unauthorized'))).toBe('FATAL');
-  });
-
-  it('FATAL takes priority over TRANSIENT when both match', () => {
-    expect(classifyError(new Error('unauthorized: exited with code 1'))).toBe('FATAL');
-  });
-
-  it('keeps concrete authentication and quota failures FATAL', () => {
-    expect(classifyError(new Error('auth error: 401'))).toBe('FATAL');
-    expect(classifyError(new Error('rate limit: session limit reached'))).toBe('FATAL');
-  });
-
-  it('keeps a generic auth error FATAL when no transient signal is present', () => {
-    expect(classifyError(new Error('auth error: credentials rejected'))).toBe('FATAL');
-  });
-
-  it('classifies session-limit and usage-limit errors as FATAL (never retried) — #2177', () => {
-    // Verbatim node_failed payload from the issue report — regression pin.
-    expect(
-      classifyError(
-        new Error(
-          'Claude session limit reached — resets 3:20pm (UTC). Abandon this run and retry after reset.'
-        )
-      )
-    ).toBe('FATAL');
-    // CLI-only quota string: not producible by detectCreditExhaustion, so the
-    // drift guard below cannot cover it.
-    expect(classifyError(new Error('Claude AI usage limit reached|1751234567'))).toBe('FATAL');
-  });
-
-  it('distinguishes MiniMax plan exhaustion from transient limit/load errors', () => {
-    const exhausted = '429 Token Plan usage limit reached: purchase Credits (2056)';
-    expect(classifyError(new Error(exhausted))).toBe('FATAL');
-    expect(classifyError(new Error('429 Token Plan rate limit reached (2062)'))).toBe('TRANSIENT');
-    expect(classifyError(new Error('MiniMax overloaded/high load (2064)'))).toBe('TRANSIENT');
-  });
-
+describe('getRetryDelayMs', () => {
   it('backs off flat + jitter on rate limits, exponential otherwise — #2706', () => {
     for (let i = 0; i < 20; i++) {
       const delay = getRetryDelayMs('rate_limited', i, 3000);
@@ -1061,26 +968,6 @@ describe('classifyError', () => {
     }
     expect(getRetryDelayMs('transient', 0, 3000)).toBe(3000);
     expect(getRetryDelayMs('transient', 2, 3000)).toBe(12000);
-  });
-
-  it('session-limit stays FATAL even when the message also matches a TRANSIENT pattern', () => {
-    expect(classifyError(new Error('rate limit: session limit reached'))).toBe('FATAL');
-  });
-
-  it('every detectCreditExhaustion output string classifies FATAL (drift guard)', () => {
-    const outputs = [
-      detectCreditExhaustion("You've hit your session limit · resets 3am"),
-      detectCreditExhaustion('session limit reached'),
-      detectCreditExhaustion('out of credits'),
-    ];
-    for (const msg of outputs) {
-      expect(msg).not.toBeNull();
-      expect(classifyError(new Error(msg as string))).toBe('FATAL');
-    }
-  });
-
-  it('classifies unknown errors as UNKNOWN', () => {
-    expect(classifyError(new Error('something completely unexpected happened'))).toBe('UNKNOWN');
   });
 });
 
@@ -1128,131 +1015,36 @@ describe('typed provider failures decide retry — #3520', () => {
 });
 
 describe('safeSendMessage', () => {
-  const makePlatform = (impl: () => Promise<void>) => ({
-    sendMessage: mock(impl),
-    getPlatformType: mock(() => 'test'),
-  });
-
-  it('returns true and resets tracker to 0 on success', async () => {
-    const platform = makePlatform(() => Promise.resolve());
-    const tracker: UnknownErrorTracker = { count: 5 };
-    const result = await safeSendMessage(
-      platform as unknown as IWorkflowPlatform,
-      'conv-1',
-      'hello',
-      undefined,
-      undefined,
-      tracker
-    );
-    expect(result).toBe(true);
-    expect(tracker.count).toBe(0);
-  });
-
-  it('returns false on TRANSIENT error without throwing', async () => {
-    const platform = makePlatform(() => Promise.reject(new Error('timeout connecting')));
-    const result = await safeSendMessage(
-      platform as unknown as IWorkflowPlatform,
-      'conv-1',
-      'hello'
-    );
-    expect(result).toBe(false);
-  });
-
-  it('rethrows FATAL errors', async () => {
-    const platform = makePlatform(() => Promise.reject(new Error('unauthorized')));
-    await expect(
-      safeSendMessage(platform as unknown as IWorkflowPlatform, 'conv-1', 'hello')
-    ).rejects.toThrow('Platform authentication/permission error: unauthorized');
-  });
-
-  it('increments UNKNOWN tracker and returns false below threshold', async () => {
-    const platform = makePlatform(() => Promise.reject(new Error('some unclassified glitch')));
-    const tracker: UnknownErrorTracker = { count: 0 };
-    const result = await safeSendMessage(
-      platform as unknown as IWorkflowPlatform,
-      'conv-1',
-      'hello',
-      undefined,
-      undefined,
-      tracker
-    );
-    expect(result).toBe(false);
-    expect(tracker.count).toBe(1);
-  });
-
-  it('throws after three consecutive UNKNOWN errors', async () => {
-    const platform = makePlatform(() => Promise.reject(new Error('some unclassified glitch')));
-    const tracker: UnknownErrorTracker = { count: 2 };
-    await expect(
-      safeSendMessage(
-        platform as unknown as IWorkflowPlatform,
-        'conv-1',
-        'hello',
-        undefined,
-        undefined,
-        tracker
-      )
-    ).rejects.toThrow('3 consecutive unrecognized errors');
-  });
-
-  it('TRANSIENT resets tracker so subsequent UNKNOWN does not trip threshold', async () => {
-    // Sequence: UNKNOWN (count→1), TRANSIENT (count→0), UNKNOWN (count→1) — no throw
-    const errors = [
-      new Error('some unclassified glitch'), // UNKNOWN
-      new Error('timeout'), // TRANSIENT
-      new Error('some unclassified glitch'), // UNKNOWN
-    ];
-    let callCount = 0;
-    const platform = {
-      sendMessage: mock(async () => {
-        throw errors[callCount++];
-      }),
+  const platformThat = (send: () => Promise<void>): IWorkflowPlatform =>
+    ({
+      sendMessage: mock(send),
       getPlatformType: mock(() => 'test'),
-    };
-    const tracker: UnknownErrorTracker = { count: 0 };
+    }) as unknown as IWorkflowPlatform;
 
-    await safeSendMessage(
-      platform as unknown as IWorkflowPlatform,
-      'conv-1',
-      'msg',
-      undefined,
-      undefined,
-      tracker
-    );
-    expect(tracker.count).toBe(1);
-
-    await safeSendMessage(
-      platform as unknown as IWorkflowPlatform,
-      'conv-1',
-      'msg',
-      undefined,
-      undefined,
-      tracker
-    );
-    expect(tracker.count).toBe(0);
-
-    const result = await safeSendMessage(
-      platform as unknown as IWorkflowPlatform,
-      'conv-1',
-      'msg',
-      undefined,
-      undefined,
-      tracker
-    );
-    expect(result).toBe(false);
-    expect(tracker.count).toBe(1);
+  it('returns true when the platform accepts the message', async () => {
+    expect(
+      await safeSendMessage(
+        platformThat(() => Promise.resolve()),
+        'conv-1',
+        'hello'
+      )
+    ).toBe(true);
   });
 
-  it('works correctly without unknownErrorTracker (DAG executor path)', async () => {
-    const platform = makePlatform(() => Promise.reject(new Error('some unclassified glitch')));
-    // No tracker passed — UNKNOWN errors never throw regardless of call count
-    for (let i = 0; i < 5; i++) {
-      const result = await safeSendMessage(
-        platform as unknown as IWorkflowPlatform,
+  it('logs and suppresses a send failure whatever it says', async () => {
+    for (const message of ['401 unauthorized', 'timeout connecting', 'some unclassified glitch']) {
+      mockLogFn.mockClear();
+      const sent = await safeSendMessage(
+        platformThat(() => Promise.reject(new Error(message))),
         'conv-1',
         'hello'
       );
-      expect(result).toBe(false);
+      expect(sent).toBe(false);
+      expect(
+        (mockLogFn as unknown as Mock<(obj: unknown, msg?: string) => void>).mock.calls.some(
+          call => call[1] === 'platform_message_send_failed'
+        )
+      ).toBe(true);
     }
   });
 });
