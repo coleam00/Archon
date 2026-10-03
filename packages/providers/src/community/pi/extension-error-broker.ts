@@ -27,6 +27,21 @@ interface ActiveTurn {
 /** Turns that still accept process errors. */
 const activeTurns = new Map<PiExtensionTurn, ActiveTurn>();
 
+// Pi's crash-log.findExtensionStackMatches is the reference; its matcher is not
+// exported through the SDK. Normalize here without importing Pi at startup.
+function normalizeStackPath(value: string): string {
+  try {
+    value = decodeURI(value);
+  } catch {
+    // A literal percent sign need not be URI encoding; Pi also keeps it intact.
+  }
+  return value
+    .replace(/\\/g, '/')
+    .replace(/file:\/\/\/(?=[a-z]:\/)/gi, '')
+    .replace(/file:\/\//g, '')
+    .replace(/\b[A-Z](?=:\/)/g, drive => drive.toLowerCase());
+}
+
 /**
  * A frame names a path only where the path ends: at its line/column, a closing paren,
  * whitespace, the frame end, or a `/` into a directory extension. A bare substring
@@ -46,9 +61,12 @@ function matchingExtensionPath(
   error: Error,
   extensionPaths: readonly string[]
 ): string | undefined {
-  const stackFrames = error.stack?.split('\n').slice(1);
+  const stackFrames = error.stack?.split('\n').slice(1).map(normalizeStackPath);
   if (!stackFrames) return undefined;
-  return extensionPaths.find(path => stackFrames.some(frame => frameNamesPath(frame, path)));
+  return extensionPaths.find(path => {
+    const normalizedPath = normalizeStackPath(path);
+    return stackFrames.some(frame => frameNamesPath(frame, normalizedPath));
+  });
 }
 
 /**
