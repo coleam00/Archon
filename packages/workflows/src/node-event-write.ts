@@ -4,6 +4,7 @@ import {
   serializeNodeTranscript,
   serializeNodeEmitter,
   serializeNodeOutput,
+  nodeDisplayName,
   type NodeExecutionResult,
 } from './node-record-serialization';
 import type { WorkflowDeps } from './deps';
@@ -56,17 +57,9 @@ export interface NodeStateSinks extends DerivedNodeStateSinks {
   store: WorkflowDeps['store'];
 }
 
-function commandNameOf(node: NodeStateSubject): string | undefined {
-  return node.kind === 'agent' && node.source.kind === 'command' ? node.source.name : undefined;
-}
-
-export function getNodeName(node: NodeStateSubject): string {
-  return commandNameOf(node) ?? node.id;
-}
-
 function transcriptContent(node: NodeStateSubject, record: ReadNodeRecordEvent): string {
   if (typeof record.data.command === 'string') return record.data.command;
-  if (node.kind === 'agent') return commandNameOf(node) ?? '<inline>';
+  if (node.kind === 'agent') return node.source.kind === 'command' ? node.source.name : '<inline>';
   if (node.kind === 'exec') return node.runtime === 'sh' ? '<bash>' : '<script>';
   if (typeof record.data.type === 'string') return `<${record.data.type}>`;
   return node.id;
@@ -132,7 +125,7 @@ export function deriveEmitterEvent(
   const record = readNodeRecordEvent(event);
   if (!record) return undefined;
   if (record.metadata) return serializeNodeEmitter(record.metadata);
-  const nodeName = getNodeName(node);
+  const nodeName = nodeDisplayName(node);
   switch (record.eventType) {
     case 'node_started':
       return {
