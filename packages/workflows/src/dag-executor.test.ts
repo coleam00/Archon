@@ -20720,6 +20720,65 @@ describe('executeDagWorkflow -- persist_session', () => {
     });
   });
 
+  it('runs launched from one thread share the session even when each runs in its own conversation (#3585)', async () => {
+    // Web dispatch runs every workflow in a fresh hidden worker conversation and records
+    // the user's chat as parent_conversation_id. The scope must follow the chat.
+    const store = createMockStore();
+    const rows = new Map<string, string>();
+    store.getWorkflowNodeSession.mockImplementation(async key => {
+      const id = rows.get(key.scope_key);
+      return id === undefined
+        ? null
+        : {
+            ...key,
+            provider_session_id: id,
+            last_run_id: null,
+            created_at: '2026-05-01T00:00:00Z',
+            updated_at: '2026-05-01T00:00:00Z',
+          };
+    });
+    store.upsertWorkflowNodeSession.mockImplementation(async params => {
+      rows.set(params.scope_key, params.provider_session_id);
+    });
+    let sessionCount = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      sessionCount += 1;
+      yield { type: 'agent_message_chunk', text: 'AI response' };
+      yield { type: 'result', sessionId: `session-${sessionCount}` };
+    });
+
+    for (const [runId, workerConversation] of [
+      ['run-1', 'worker-1'],
+      ['run-2', 'worker-2'],
+    ]) {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflow: {
+            name: 'persist-test',
+            nodes: [
+              {
+                id: 'planner',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                persist_session: true,
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(runId, {
+            conversation_id: workerConversation,
+            parent_conversation_id: 'chat-1',
+          }),
+        })
+      );
+    }
+
+    expect(mockSendQueryDag.mock.calls[0][2]).toBeUndefined();
+    expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
+    expect([...rows.entries()]).toEqual([['chat-1', 'session-2']]);
+  });
+
   it('persist_session resume returns cold (resumed:false) → surfaced to user, no re-run, fresh id persisted', async () => {
     const store = createMockStore();
     (store.getWorkflowNodeSession as Mock<typeof store.getWorkflowNodeSession>).mockResolvedValue({
