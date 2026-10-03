@@ -1696,6 +1696,36 @@ nodes:
   });
 
   describe('discoverWorkflowsWithConfig', () => {
+    it("treats config.yaml's env: as supplied, suppressing the unbound-env-read warning", async () => {
+      const scriptsDir = join(testDir, '.archon', 'scripts');
+      const workflowsDir = join(testDir, '.archon', 'workflows');
+      await mkdir(scriptsDir, { recursive: true });
+      await mkdir(workflowsDir, { recursive: true });
+      await writeFile(join(scriptsDir, 'verify.ts'), 'console.log(process.env.NAME)\n');
+      await writeFile(
+        join(workflowsDir, 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      const mockLoadConfig = mock(async () => ({
+        envVars: { NAME: 'value' },
+      }));
+
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+
+      expect(result.errors).toEqual([]);
+      const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
+      expect(entry).toBeDefined();
+      expect(entry?.parseWarnings ?? []).toEqual([]);
+    });
+
     it('should pass loadDefaults from config to discoverWorkflows', async () => {
       const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
       const mockLoadConfig = mock(async () => ({

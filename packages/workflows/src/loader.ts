@@ -1374,7 +1374,11 @@ export type ParseResult =
 /**
  * Parse and validate a workflow YAML file
  */
-export function parseWorkflow(content: string, filename: string): ParseResult {
+export function parseWorkflow(
+  content: string,
+  filename: string,
+  configuredEnvNames?: ReadonlySet<string>
+): ParseResult {
   try {
     const raw = parseYaml(content) as Record<string, unknown>;
 
@@ -2090,7 +2094,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       ...(outcomeField !== undefined ? { outcome_field: outcomeField } : {}),
       ...(deprecated !== undefined ? { deprecated } : {}),
     };
-    const execInputValidation = validateInlineExecInputs(workflow);
+    const execInputValidation = validateInlineExecInputs(workflow, configuredEnvNames);
     parseWarnings.push(...execInputValidation.warnings);
     if (execInputValidation.errors.length > 0) {
       return {

@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadArchonEnv } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { parseWorkflow } from './loader';
 import { discoverWorkflows } from './workflow-discovery';
@@ -163,6 +164,7 @@ nodes:
     expect(warnings[0]).toContain('PROJECT_TOKEN');
     expect(warnings[0]).toContain('script line 2');
     expect(warnings[0]).toContain("Available bindings/inputs: 'alpha', 'middle', 'zeta'.");
+    expect(warnings[0]).toContain('might come from');
   });
 
   test('does not claim dynamic, aliased, or unsupported accessors', () => {
@@ -258,6 +260,116 @@ print(fix, repetitions)
       expect(warnings[0]).toContain('FIX_OUTPUT');
       expect(warnings[0]).toContain(`${scriptPath.replaceAll('\\', '/')} line 3`);
       expect(warnings[0]).toContain('test_repetitions');
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  test('a named script reading a variable declared only in .archon/.env validates with no warning', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    try {
+      await writeFile(join(root, '.archon', '.env'), 'PROJECT_SECRET=shh\n');
+      loadArchonEnv(root);
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-dotenv.yaml'),
+        `name: uses-dotenv
+description: Reads a variable supplied by .archon/.env
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.PROJECT_SECRET)\n'
+      );
+
+      const result = await discoverWorkflows(root, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0]?.parseWarnings ?? []).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+      delete process.env.PROJECT_SECRET;
+    }
+  });
+
+  test('a name supplied only via options.envVars validates with no warning', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    try {
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.NAME)\n'
+      );
+
+      const result = await discoverWorkflows(root, {
+        loadDefaults: false,
+        envVars: { NAME: 'x' },
+      });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      expect(result.workflows[0]?.parseWarnings ?? []).toEqual([]);
+    } finally {
+      if (previousHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = previousHome;
+    }
+  });
+
+  test('a name that exists only in the target repo plain .env still warns', async () => {
+    const root = await createProject();
+    const previousHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = join(root, 'home');
+    try {
+      // Never loaded by loadArchonEnv or discoverWorkflows — this is the target repo's
+      // own .env, deliberately excluded (see @archon/paths' strip-cwd-env.ts).
+      await writeFile(join(root, '.env'), 'REPO_DOTENV_ONLY=shh\n');
+      await writeFile(
+        join(root, '.archon', 'workflows', 'uses-repo-dotenv.yaml'),
+        `name: uses-repo-dotenv
+description: Reads a variable that only the target repo's own .env declares
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      await writeFile(
+        join(root, '.archon', 'scripts', 'verify.ts'),
+        'console.log(process.env.REPO_DOTENV_ONLY)\n'
+      );
+
+      const result = await discoverWorkflows(root, { loadDefaults: false });
+
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      const warnings = result.workflows[0]?.parseWarnings ?? [];
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('REPO_DOTENV_ONLY');
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
