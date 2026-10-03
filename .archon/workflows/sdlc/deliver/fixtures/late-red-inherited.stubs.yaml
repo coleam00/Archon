@@ -1,9 +1,11 @@
 # Dry-run fixture: CI concludes red after the
-# review converged, but the red is inherited — the branch did not cause it. The
-# convergence pass must classify it through one honest no-change round, pass
-# the gate with the caveat recorded, and pause with the rerun-and-resume action
-# visible. The fixture pins the route: classification instead of a probe death,
-# then one fresh check read and an action-required wait rather than flip-ready.
+# review converged, but the red is inherited — the branch did not cause it: the
+# failing file is one the PR does not change, and the same check fails on the
+# base commit. The real ci-cause accepts the claim, no correction pass runs, the
+# gate passes with the evidence recorded, and the run pauses with the
+# rerun-and-resume action visible. The fixture pins the route: classification
+# instead of a probe death, then one fresh check read and an action-required
+# wait rather than flip-ready.
 impl__implement:
   done: true
   green: true
@@ -47,23 +49,21 @@ validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], q
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 ci-verdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
-# ci-fix__assert-changed runs for real against the clean scratch worktree: no
-# content changed since the ci-fix invocation started is exactly the
-# honest-decline state, and the real guard must pass it via the inherited
-# cause plus summary — the same proof correction-honest-decline pins
-# for the corrections loop.
-ci-fix__implement:
-  done: true
-  green: false
-  red_cause: inherited
-  summary: "stub: e2e-smoke is red at the run's starting commit on a surface this diff never touches; no edit to make"
+ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
+ci-classify:
+  failing_checks: ["e2e-smoke"]
+  failing_paths: ["e2e/smoke.spec.ts"]
+  base: fails
+  rerun: not_rerun
+  claim: inherited
+  evidence: "stub: e2e-smoke fails the same way on the base commit"
 fix-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 attention-ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:
   expect: paused
-  reached: [review__synthesize, gate-validated, ci-verdict, ci-fix__assert-changed, gate-ci-fix, fix-ci-probe, ci-attention-route, attention-ci-probe]
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-cause, gate-ci-fix, fix-ci-probe, ci-attention-route, attention-ci-probe]
   resolved-text-contains:
     attention-ci-pause: "pull request #10 after Archon classified the failure as inherited: e2e-smoke (fail) Re-run the failing check, then resume this run."
 exec-code: true

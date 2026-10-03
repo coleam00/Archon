@@ -45,6 +45,14 @@ validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], q
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
+ci-classify:
+  failing_checks: ["test (windows-latest)"]
+  failing_paths: ["packages/core/src/feature.test.ts"]
+  base: passes
+  rerun: not_rerun
+  claim: introduced
+  evidence: "stub: the new test fails on Windows; the base passes"
 ci-fix__implement:
   done: true
   green: true

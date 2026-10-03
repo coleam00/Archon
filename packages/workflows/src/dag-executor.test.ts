@@ -33974,12 +33974,13 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     // One persisted value stands in for every completed ancestor. Resume re-checks an
     // include's `when:` even for a cached descendant, so the value carries every field
     // a conditional include reads, set so each one was active: the pre-PR simplify
-    // findings, the CI fix's review, fork validation, and the CI fix. An include the
-    // condition turned off could not also have completed.
+    // findings, the CI fix's review, fork validation, and the CI fix (an introduced
+    // cause). An include the condition turned off could not also have completed.
     const inheritedRoute = {
       number: 3115,
       attention: true,
       red_cause: 'inherited',
+      cause: 'introduced',
       findings: true,
       moved: true,
       fork: true,

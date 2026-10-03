@@ -541,35 +541,93 @@ nodes:
     depends_on: [await-checks]
     output_format: *ci_state
 
-  # One correction pass, entered only on concluded red. A continuation review of
-  # its commits follows (ci-recheck below), and the re-await reads CI on the
-  # pushed fix; the red-cause discipline in its brief is what keeps it honest.
-  - id: ci-fix
-    include: archon-implement
+  # What caused a concluded red is decided before anyone fixes or waits on it.
+  # An agent reads the logs and reports where each failure lives, the base
+  # commit's result, and any re-run's; ci-cause holds its claim to that evidence
+  # against the changed files git reports. A failure in a file the PR changes is
+  # never inherited, so it always reaches the correction pass.
+  - id: ci-changed
+    script: changed-files
+    runtime: bun
     depends_on: [ci-verdict]
     when: "$ci-verdict.output.state == 'red'"
     with:
+      pr:
+        from: "$pr.output"
+    output_format:
+      type: object
+      properties:
+        files: { type: array, items: { type: string } }
+      required: [files]
+
+  - id: ci-classify
+    command: classify-ci-red
+    model: small
+    mutates_checkout: false
+    depends_on: [ci-verdict]
+    when: "$ci-verdict.output.state == 'red'"
+    output_format:
+      type: object
+      properties:
+        failing_checks: { type: array, items: { type: string } }
+        failing_paths: { type: array, items: { type: string } }
+        base: { type: string, enum: [fails, passes, unknown] }
+        rerun: { type: string, enum: [fails, passes, not_rerun] }
+        claim: { type: string, enum: [introduced, inherited, environment] }
+        evidence: { type: string, minLength: 1 }
+      required: [failing_checks, failing_paths, base, rerun, claim, evidence]
+
+  - id: ci-cause
+    script: ci-cause
+    runtime: bun
+    depends_on: [ci-changed, ci-classify]
+    output_type: ci-cause
+    with:
+      changed: "$ci-changed.output"
+      failing_checks: "$ci-classify.output.failing_checks"
+      failing_paths: "$ci-classify.output.failing_paths"
+      base: "$ci-classify.output.base"
+      rerun: "$ci-classify.output.rerun"
+      claim: "$ci-classify.output.claim"
+      evidence: "$ci-classify.output.evidence"
+    output_format:
+      type: object
+      properties:
+        cause: { type: string, enum: [introduced, inherited, environment] }
+        evidence: { type: string, minLength: 1 }
+      required: [cause, evidence]
+
+  # One correction pass, entered only on introduced red. A continuation review
+  # of its commits follows (ci-recheck below), and the re-await reads CI on the
+  # pushed fix.
+  - id: ci-fix
+    include: archon-implement
+    depends_on: [ci-cause]
+    when: "$ci-cause.output.cause == 'introduced'"
+    with:
       work: >-
-        CI concluded non-green after the review converged. The failing
-        checks:
+        CI concluded non-green after the review converged, and this
+        branch's changes caused it:
+
+        $ci-cause.output.evidence
+
+        The failing checks:
 
         $ci-verdict.output.detail
 
-        The same red-cause discipline as every round applies. A concluded
-        CI failure this branch's changes introduced is this pass's work:
-        fix it at the cause and push the correction to the branch this
-        run is on, explicitly by name. Red on a check this branch cannot
-        have caused is classified with evidence — red_cause inherited or
-        environment, with the summary naming the proof — never chased and
-        never "fixed" by weakening a test. Do not change the PR's draft
+        Fix it at the cause and push the correction to the branch this run
+        is on, explicitly by name. The cause is settled: this pass either
+        makes the checks green or reports that it could not, and it never
+        "fixes" a failure by weakening a test. Do not change the PR's draft
         state or edit the canonical review comment.
 
         Accepted work order, for scope only — do not reopen it:
         $INPUTS.work
 
-  # The same gate, same script, fourth consumer: introduced-and-unfixed or
-  # unexplained red refuses loudly; inherited or environment red passes with its
-  # caveat recorded and routes to the explicit action wait below.
+  # The same gate, same script, fourth consumer, with ci-cause's decision as the
+  # cause: an introduced red the correction left red refuses loudly; inherited
+  # or environment red skipped the correction, passes with its evidence
+  # recorded, and routes to the explicit action wait below.
   - id: gate-ci-fix
     script: gate-green
     runtime: bun
@@ -577,23 +635,25 @@ nodes:
     # readers find them by type under nodes/, never through one shared file.
     output_type: green-gate
     output_format: *green_gate
-    depends_on: [ci-fix]
+    depends_on: [ci-cause, ci-fix]
+    trigger_rule: none_failed_min_one_success
     with:
-      green: "$ci-fix.output.green"
-      red_cause: "$ci-fix.output.red_cause"
-      summary: "$ci-fix.output.summary"
+      green: { from: "$ci-fix.output.green", if_skipped: "false" }
+      red_cause: "$ci-cause.output.cause"
+      summary: "$ci-cause.output.evidence"
       stage: "The CI correction"
 
   # A CI fix is written after the review converged, so its commits get a review
   # round of their own: a continuation over the canonical report that judges the
-  # fix's correctness and structure. Skipped when the fix pushed nothing (an
-  # inherited or environment classification). A blocking finding stops the run
+  # fix's correctness and structure. Skipped when no fix ran (an inherited or
+  # environment cause) or the fix pushed nothing. A blocking finding stops the run
   # with the PR still draft and the report public; there is no second correction
   # loop after CI.
   - id: ci-delta-scope
     script: delta-scope
     runtime: bun
     depends_on: [gate-ci-fix]
+    when: "$ci-cause.output.cause == 'introduced'"
     with:
       since: "$ci-fix.execution.checkoutStart"
     output_format:
