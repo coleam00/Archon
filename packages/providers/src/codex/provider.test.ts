@@ -260,6 +260,21 @@ describe('CodexProvider', () => {
       expect(env.HOME).toBe(process.env.HOME as string);
       expect(env.CODEX_HOME).toBe(process.env.CODEX_HOME as string);
     });
+
+    // #3562 renamed Archon's setup variables instead of stripping Codex's own names
+    // here. This fails if the provider starts filtering CODEX_ACCESS_TOKEN out.
+    test('the Codex env is not stripped of a user’s own CODEX_ACCESS_TOKEN (#3562)', async () => {
+      const original = process.env.CODEX_ACCESS_TOKEN;
+      process.env.CODEX_ACCESS_TOKEN = 'user-codex-token';
+      try {
+        const { provider, server } = providerWith();
+        await run(provider, { env: { ARCHON_CODEX_ACCESS_TOKEN: 'archon-setup-token' } });
+        expect(server.processes[0].env.CODEX_ACCESS_TOKEN).toBe('user-codex-token');
+      } finally {
+        if (original === undefined) delete process.env.CODEX_ACCESS_TOKEN;
+        else process.env.CODEX_ACCESS_TOKEN = original;
+      }
+    });
   });
 
   describe('API key opt-in', () => {
