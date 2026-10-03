@@ -116,7 +116,7 @@ export const roadmapItems: RoadmapItem[] = [
       'WORKFLOW.eval.yaml — define test inputs and expected outputs inline',
       'Step-level and output-level correctness scoring',
       'Reliability testing across multiple runs',
-      'Eval score badges on marketplace listings',
+      'Eval score badges on published plugins and the planned archon.diy listing',
       'archon workflow eval <name> — run evals from the CLI',
     ],
     tags: ['quality', 'testing', 'evals'],
