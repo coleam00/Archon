@@ -1,16 +1,11 @@
-/**
- * Headless workflow platform for server-side direct resume execution.
- *
- * `executeWorkflow` only requires `IWorkflowPlatform` (a narrow subset of
- * `IPlatformAdapter`), not a full chat adapter. Used by `resumeRunHeadless`
- * (routes/api.ts, #2008) to resume a run with no parent conversation to
- * dispatch a chat message through — there is no live transport, so this only
- * persists the run's messages for history; it never streams anywhere.
- */
-import type { IWorkflowPlatform, WorkflowMessageMetadata } from '@archon/workflows/deps';
+import type {
+  IWorkflowPlatform,
+  WorkflowMessageMetadata,
+  WorkflowCommandSurface,
+} from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
-import { toPersistedMessageMetadata } from '@archon/core/types';
-import * as messageDb from '@archon/core/db/messages';
+import { toPersistedMessageMetadata } from '../types';
+import * as messageDb from '../db/messages';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -26,7 +21,14 @@ function getLog(): ReturnType<typeof createLogger> {
  * per call.
  */
 export class HeadlessPlatform implements IWorkflowPlatform {
-  constructor(private readonly conversationDbId: string) {}
+  constructor(
+    private readonly conversationDbId: string,
+    private readonly surface: WorkflowCommandSurface = {}
+  ) {}
+
+  formatWorkflowCommand(command: string): string {
+    return this.surface.formatWorkflowCommand?.(command) ?? `/workflow ${command}`;
+  }
 
   async sendMessage(
     _conversationId: string,

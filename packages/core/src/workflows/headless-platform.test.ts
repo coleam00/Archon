@@ -24,7 +24,7 @@ mock.module('@archon/core/db/messages', () => ({
   addMessage: mockAddMessage,
 }));
 
-import { HeadlessPlatform } from './headless';
+import { HeadlessPlatform } from './headless-platform';
 
 describe('HeadlessPlatform', () => {
   test('reports platform type and streaming mode', () => {
@@ -72,4 +72,13 @@ describe('HeadlessPlatform', () => {
       traceId: 'trace-abc',
     });
   });
+});
+
+test('uses the supplied command surface and keeps conversation binding', async () => {
+  const platform = new HeadlessPlatform('bound', {
+    formatWorkflowCommand: command => `archon workflow ${command}`,
+  });
+  expect(platform.formatWorkflowCommand('resume id')).toBe('archon workflow resume id');
+  await platform.sendMessage('other', 'message');
+  expect(mockAddMessage).toHaveBeenLastCalledWith('bound', 'assistant', 'message', undefined);
 });

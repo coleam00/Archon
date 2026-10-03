@@ -18,7 +18,7 @@ import {
 import { captureLogLines, removeTempTree } from '@archon/paths/test-utils';
 import type { IWorkflowEngine, WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
-import { HeadlessPlatform } from '../adapters/headless';
+import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { registerWebhookSourceRoutes } from '../routes/webhooks';
 import { createServerResourceStartHost } from './resource-start-hosting';
 import { loadWebhookSourcePlugins } from './webhook-source-plugins';
