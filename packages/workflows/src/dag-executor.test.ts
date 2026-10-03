@@ -18615,6 +18615,45 @@ describe('executeDagWorkflow -- script nodes', () => {
     );
   });
 
+  it.each([
+    ['ENOENT', 'bun', 'console.log("not reached")'],
+    ['ENOENT', 'uv', 'print("not reached")'],
+    ['EACCES', 'bun', 'console.log("not reached")'],
+  ] as const)(
+    'preserves Docker %s spawn attribution for a container %s script',
+    async (code, runtime, script) => {
+      const mockDeps = createMockDeps();
+      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async (_command, args) => {
+        if (args.at(-1) === CONTAINER_MARKER_PROBE) return { stdout: 'none\n', stderr: '' };
+        throw Object.assign(new Error(`spawn docker ${code}`), { code });
+      });
+
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            cwd: testDir,
+            workflow: {
+              name: `container-${runtime}-${code.toLowerCase()}`,
+              nodes: [{ id: `run-${runtime}`, kind: 'exec', runtime, script }],
+            },
+            workflowRun: makeWorkflowRun(`container-${runtime}-${code.toLowerCase()}-run`),
+            execContext: { kind: 'container', containerId: 'script-container' },
+          })
+        );
+      } finally {
+        execSpy.mockRestore();
+      }
+
+      const failed = persistedEvents(mockDeps.store).find(
+        event => event.event_type === 'node_failed' && event.step_name === `run-${runtime}`
+      );
+      expect(failed?.data?.error).toContain(`spawn docker ${code}`);
+      expect(failed?.data?.error).not.toContain(`'${runtime}' executable not found in PATH`);
+      expect(failed?.data?.error).not.toContain('permission denied (check cwd permissions)');
+    }
+  );
+
   it('failure message strips the "Command failed: bun -e <body>" prefix and stays small', async () => {
     const mockDeps = createMockDeps();
     const platform = createMockPlatform();

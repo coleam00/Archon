@@ -3807,9 +3807,9 @@ async function executeScriptNode(
       errorMsg = err.message;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
-    } else if (err.code === 'ENOENT') {
+    } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
-    } else if (err.code === 'EACCES') {
+    } else if (execContext.kind === 'host' && err.code === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;
