@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { Account } from './protocol/v2/Account';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
-import type { PlanType } from './protocol/PlanType';
 import type { CredentialStatus } from '@archon/provider-contract';
 import {
   collectCredentialValues,
@@ -65,44 +64,22 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-const planTypes = {
-  free: 'free',
-  go: 'go',
-  plus: 'plus',
-  pro: 'pro',
-  prolite: 'prolite',
-  promax: 'promax',
-  team: 'team',
-  self_serve_business_prolite: 'self_serve_business_prolite',
-  self_serve_business_usage_based: 'self_serve_business_usage_based',
-  business: 'business',
-  ent26: 'ent26',
-  enterprise_cbp_automation: 'enterprise_cbp_automation',
-  enterprise_cbp_usage_based: 'enterprise_cbp_usage_based',
-  enterprise: 'enterprise',
-  edu: 'edu',
-  edu_plus: 'edu_plus',
-  edu_pro: 'edu_pro',
-  unknown: 'unknown',
-} satisfies { [Plan in PlanType]: Plan };
+const accountTypes = {
+  apiKey: 'apiKey',
+  chatgpt: 'chatgpt',
+  amazonBedrock: 'amazonBedrock',
+} satisfies { [Kind in Account['type']]: Kind };
 
-const accountSchemas = {
-  apiKey: z.object({ type: z.literal('apiKey') }),
-  chatgpt: z.object({
-    type: z.literal('chatgpt'),
-    email: z.string().nullable(),
-    planType: z.enum(planTypes),
-  }),
-  amazonBedrock: z.object({
-    type: z.literal('amazonBedrock'),
-    usesCodexManagedCredentials: z.boolean(),
-  }),
-} satisfies { [Kind in Account['type']]: z.ZodType<Extract<Account, { type: Kind }>> };
-
-const accountResponseSchema: z.ZodType<GetAccountResponse> = z.object({
-  account: z.union(Object.values(accountSchemas)).nullable(),
+/**
+ * The `account/read` fields the login check decides on. The account's other fields (plan,
+ * email) are left unvalidated, so a Codex that adds a plan or a field still reads as logged in.
+ */
+const accountResponseSchema = z.object({
+  account: z.object({ type: z.enum(accountTypes) }).nullable(),
   requiresOpenaiAuth: z.boolean(),
-});
+}) satisfies z.ZodType<
+  Pick<GetAccountResponse, 'requiresOpenaiAuth'> & { account: Pick<Account, 'type'> | null }
+>;
 
 type CodexConfig = Record<string, JsonValue>;
 
@@ -142,12 +119,31 @@ function resolveModelReasoningEffort(
   return clamped;
 }
 
-/** The process env with the request env on top: managed project env wins on collisions. */
-function buildCodexEnv(requestEnv?: Record<string, string>): Record<string, string> {
+/**
+ * What a Codex app-server starts with: the process env with the request env on top (managed
+ * project env wins on collisions), the API key that env opts into, and the configured binary.
+ * The login check starts the same app-server a turn does.
+ */
+function codexLaunch(
+  assistantConfig: Record<string, unknown> | undefined,
+  requestEnv?: Record<string, string>
+): {
+  config: CodexProviderDefaults;
+  env: Record<string, string>;
+  apiKey: string | undefined;
+  resolveBinary: () => ReturnType<typeof resolveCodexBinary>;
+} {
+  const config = parseCodexConfig(assistantConfig ?? {});
   const baseEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
-  return { ...baseEnv, ...requestEnv };
+  const env = { ...baseEnv, ...requestEnv };
+  return {
+    config,
+    env,
+    apiKey: env.CODEX_API_KEY || undefined,
+    resolveBinary: () => resolveCodexBinary(config.codexBinaryPath),
+  };
 }
 
 const CODEX_MCP_PASSTHROUGH_KEYS = [
@@ -799,13 +795,14 @@ export class CodexProvider implements IAgentProvider {
   async checkCredential(
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
-    const { env, signal } = request;
+    const { signal } = request;
+    const { env, apiKey, resolveBinary } = codexLaunch(request.assistantConfig, request.env);
     let connection: AppServerConnection | undefined;
     let onAbort: (() => void) | undefined;
     try {
       signal.throwIfAborted();
-      if (env.CODEX_API_KEY) return { state: 'usable', source: 'native' };
-      const binary = await resolveCodexBinary();
+      if (apiKey) return { state: 'usable', source: 'native' };
+      const binary = await resolveBinary();
       signal.throwIfAborted();
       connection = AppServerConnection.start(binary, [], env, this.spawner);
       const aborted = new Promise<never>((_resolve, reject) => {
@@ -825,7 +822,8 @@ export class CodexProvider implements IAgentProvider {
       connection.notify('initialized');
       const response = await Promise.race([
         aborted,
-        connection.request('account/read', { refreshToken: false }),
+        // A refresh, as a turn's startup does, so a revoked sign-in reads as no account.
+        connection.request('account/read', { refreshToken: true }),
       ]);
       signal.throwIfAborted();
       const validated = accountResponseSchema.safeParse(response);
@@ -836,21 +834,28 @@ export class CodexProvider implements IAgentProvider {
           evidence: 'Codex account/read returned an invalid protocol response.',
         };
       }
-      return validated.data.account === null
-        ? {
-            state: 'unusable',
-            source: 'native',
-            evidence:
-              'Codex reports no usable login (not signed in, or its sign-in could not be refreshed). Run `codex login`.',
-          }
-        : { state: 'usable', source: 'native' };
+      const { account, requiresOpenaiAuth } = validated.data;
+      if (account !== null) return { state: 'usable', source: 'native' };
+      // A model provider configured in Codex that needs no OpenAI login authenticates on its
+      // own terms, which account/read does not report.
+      if (!requiresOpenaiAuth) return { state: 'not_checked', source: 'native' };
+      return {
+        state: 'unusable',
+        source: 'native',
+        evidence:
+          'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
+      };
     } catch (error) {
       const reason: unknown = signal.aborted ? signal.reason : error;
       return {
         state: 'check_failed',
         source: 'native',
         evidence: redactCredentialValues(
-          reason instanceof Error ? reason.message : String(reason),
+          reason instanceof ConnectionClosedError
+            ? reason.evidence
+            : reason instanceof Error
+              ? reason.message
+              : String(reason),
           collectCredentialValues(env)
         ),
       };
@@ -904,7 +909,8 @@ export class CodexProvider implements IAgentProvider {
       });
     };
 
-    const codexConfig = parseCodexConfig(requestOptions?.assistantConfig ?? {});
+    const launch = codexLaunch(requestOptions?.assistantConfig, requestOptions?.env);
+    const codexConfig = launch.config;
     const model = requestOptions?.model ?? codexConfig.model;
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
@@ -936,11 +942,10 @@ export class CodexProvider implements IAgentProvider {
         yield { type: 'warning', ...warning };
       }
 
-      const binary = await resolveCodexBinary(codexConfig.codexBinaryPath);
-      const env = buildCodexEnv(requestOptions?.env);
+      const binary = await launch.resolveBinary();
+      const { env, apiKey } = launch;
       // `CODEX_API_KEY` opts a turn into API-key auth. Without it Codex uses the user's
       // own login in their CODEX_HOME. The ephemeral store keeps the key out of that home.
-      const apiKey = env.CODEX_API_KEY || undefined;
       const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
       const effort = resolveModelReasoningEffort(
         requestOptions?.nodeConfig,
