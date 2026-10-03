@@ -21,13 +21,28 @@ const failureEvidence = new WeakMap<Error, string>();
 /** Turns that still accept process errors, keyed to the extension paths they loaded. */
 const activeTurns = new Map<PiExtensionTurn, readonly string[]>();
 
+/**
+ * A frame names a path only where the path ends: at its line/column, a closing paren,
+ * whitespace, the frame end, or a `/` into a directory extension. A bare substring
+ * would let `/x/ext.ts` claim a frame in `/x/ext.tsx`.
+ */
+function frameNamesPath(frame: string, path: string): boolean {
+  for (let index = frame.indexOf(path); index !== -1; index = frame.indexOf(path, index + 1)) {
+    const next = frame.charAt(index + path.length);
+    if (next === '' || next === ':' || next === ')' || next === '/' || next.trim() === '') {
+      return true;
+    }
+  }
+  return false;
+}
+
 function matchingExtensionPath(
   error: Error,
   extensionPaths: readonly string[]
 ): string | undefined {
   const stackFrames = error.stack?.split('\n').slice(1);
   if (!stackFrames) return undefined;
-  return extensionPaths.find(path => stackFrames.some(frame => frame.includes(path)));
+  return extensionPaths.find(path => stackFrames.some(frame => frameNamesPath(frame, path)));
 }
 
 /**

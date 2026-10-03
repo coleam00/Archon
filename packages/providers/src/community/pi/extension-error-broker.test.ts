@@ -101,6 +101,30 @@ describe('Pi extension process-error broker', () => {
     }
   });
 
+  test('a loaded path that prefixes another file does not claim that file', () => {
+    const fileTurn = beginPiExtensionTurn(['/extensions/ext.ts']);
+    const dirTurn = beginPiExtensionTurn(['/extensions/bench']);
+    try {
+      const received: string[] = [];
+      fileTurn.onError(() => received.push('file'));
+      dirTurn.onError(() => received.push('dir'));
+      const unrelated = new Error('other file');
+      unrelated.stack =
+        'Error: other file\n    at callback (/extensions/ext.tsx:4:2)\n' +
+        '    at timer (/extensions/bench-two/index.ts:1:1)';
+      expect(claimPiExtensionProcessError(unrelated)).toBe(false);
+
+      // A file inside a directory extension, and a file:// frame, still belong to it.
+      const inDir = new Error('dir helper');
+      inDir.stack = 'Error: dir helper\n    at helper (file:///extensions/bench/lib/util.ts:2:1)';
+      expect(claimPiExtensionProcessError(inDir)).toBe(true);
+      expect(received).toEqual(['dir']);
+    } finally {
+      fileTurn.close();
+      dirTurn.close();
+    }
+  });
+
   test('fails every candidate turn when concurrent turns loaded the same extension', () => {
     const first = beginPiExtensionTurn(['/extensions/shared.ts']);
     const second = beginPiExtensionTurn(['/extensions/shared.ts']);
