@@ -7,6 +7,7 @@ import type {
   AgentSessionEvent,
   CreateAgentSessionOptions,
   CreateAgentSessionResult,
+  ExtensionError,
   ModelRegistry,
 } from '@earendil-works/pi-coding-agent';
 import type { Api, Model } from '@earendil-works/pi-ai';
@@ -327,6 +328,7 @@ import {
   getOrCreateReloadedExtensionLoader,
   resetReloadedExtensionLoaderCache,
 } from './resource-loader';
+import { claimPiExtensionProcessError } from './extension-error-broker';
 
 // ─── Helpers ────────────────────────────────────────────────────────────
 
@@ -2640,6 +2642,80 @@ describe('PiProvider', () => {
     expect(mockBindExtensions).toHaveBeenCalledTimes(1);
     const [bindings] = mockBindExtensions.mock.calls[0] as [{ uiContext?: unknown }];
     expect(bindings.uiContext).toBeDefined();
+  });
+
+  test('a detached extension timer failure becomes the node turn failure', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const extensionPath = '/extensions/fake-extension.ts';
+    const loadedExtension = () =>
+      ({
+        extensions: [{ path: extensionPath, resolvedPath: extensionPath }],
+        errors: [],
+        runtime: mockLoaderRuntime,
+      }) as unknown as ReturnType<typeof mockGetExtensions>;
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    const timerError = new Error('extension timer failed');
+    timerError.stack =
+      `Error: extension timer failed\n    at callback (${extensionPath}:4:2)\n` +
+      '    at timer (bun:1:1)';
+    let claimed = false;
+    mockPrompt.mockImplementationOnce(
+      () =>
+        new Promise<void>(() => {
+          setTimeout(() => {
+            claimed = claimPiExtensionProcessError(timerError);
+          }, 0);
+        })
+    );
+
+    const result = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(claimed).toBe(true);
+    expect(result.failure).toEqual({ class: 'unknown', evidence: timerError.stack });
+    expect(result.chunks.at(-1)).toEqual({ type: 'settled' });
+    expect(mockAbort).toHaveBeenCalledTimes(1);
+    expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('Pi structured extension errors fail the turn with the supplied stack', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const extensionPath = '/extensions/fake-extension.ts';
+    const loadedExtension = () =>
+      ({
+        extensions: [{ path: extensionPath, resolvedPath: extensionPath }],
+        errors: [],
+        runtime: mockLoaderRuntime,
+      }) as unknown as ReturnType<typeof mockGetExtensions>;
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    mockGetExtensions.mockImplementationOnce(loadedExtension);
+    const extensionStack = `Error: extension handler failed\n    at handler (${extensionPath}:9:3)`;
+    mockBindExtensions.mockImplementationOnce(async bindings => {
+      const onError = (bindings as { onError?: (error: ExtensionError) => void }).onError;
+      onError?.({
+        extensionPath,
+        event: 'session_start',
+        error: 'extension handler failed',
+        stack: extensionStack,
+      });
+    });
+
+    const result = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+      })
+    );
+
+    expect(result.failure?.class).toBe('unknown');
+    expect(result.failure?.evidence).toContain(extensionPath);
+    expect(result.failure?.evidence).toContain(extensionStack);
+    expect(mockPrompt).not.toHaveBeenCalled();
+    expect(mockDispose).toHaveBeenCalledTimes(1);
   });
 
   // ─── extensionFlags pass-through ──────────────────────────────────────

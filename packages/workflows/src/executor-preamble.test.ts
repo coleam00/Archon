@@ -143,11 +143,10 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     releaseWritebackClaim: mock(async () => {}),
     cancelWorkflowRun: mock(async () => ({ cancelled: false })),
     cancelFanOutRun: mock(async () => ({ cancelled: false })),
-    getWorkflowNodeSession: mock(async () => null),
+    listWorkflowNodeSessions: mock(async () => []),
     listWorkflowRunNodeSessions: mock(async () => []),
     upsertWorkflowRunNodeSession: mock(async () => {}),
     upsertWorkflowNodeSession: mock(async () => {}),
-    deleteWorkflowNodeSessions: mock(async () => ({ deleted: 0 })),
     ...overrides,
   };
 }

@@ -230,8 +230,8 @@ test('allows single-file cleanup and shared recursive cleanup', () => {
 /**
  * `ls-files` rejecting its own option is a local, constant-cost failure. An unknown *subcommand*
  * fails too, but only after Git searches every PATH entry for a `git-*` executable to offer a
- * correction: 5.3s of that on a Windows runner against a 5s per-test budget (#2882), where every
- * other Git spawn in this file costs ~50ms.
+ * correction: 5.3s of that on a Windows runner against the 5s per-test budget it then had
+ * (#2882), where every other Git spawn in this file costs ~50ms.
  */
 test('propagates Git scan failures', () => {
   expect(() => gitOutput(['ls-files', '--definitely-not-an-option'])).toThrow(

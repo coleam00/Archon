@@ -136,6 +136,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 11. **`remote_agent_workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs
     - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
     - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`)
+    - A run reads its scope's rows once at start, and each node writes its finished session back, so concurrent runs end with the session that finished last
     - No FK on `scope_key`, so a conversation delete does not cascade here. Soft delete plus a never-reused UUID makes the leftovers harmless; a future hard-delete must delete by `scope_key` itself — the mirror of the cascade caveat on `remote_agent_workflow_runs` above.
 
 12. **`remote_agent_user_github_tokens`** - Per-user GitHub device-flow tokens

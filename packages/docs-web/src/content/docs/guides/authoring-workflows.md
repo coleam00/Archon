@@ -894,7 +894,7 @@ On resume, `fetch-data` re-runs regardless of prior success, so `process-data` r
 
 ## Persistent Sessions Across Re-Runs
 
-Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role.
+Different from resuming a failed/paused run or selecting an upstream node with `context.resume`: when you invoke the same workflow *again* with a follow-up prompt, every AI node normally starts fresh and pays to re-establish context. Set `persist_session: true` on a node to make its provider session ID stick across runs, so subsequent invocations continue the prior conversation for that role. Only a provider that can fork a session continues it; with any other provider the node starts fresh on every run (see [Concurrent runs](#concurrent-runs)).
 
 ```yaml
 name: feature-dev
@@ -924,6 +924,15 @@ Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The scope
 
 The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
 
+### Concurrent runs
+
+Two runs of the same workflow in the same scope can run at the same time. Neither waits for the other, and they never write into the same provider conversation:
+
+- When a run starts, it reads the scope's persisted sessions once. Each `persist_session` node continues from that copy, not from a session another run saved after this run started.
+- The node continues the saved session only when its provider can **fork** it (declares `sessionFork: true`). The fork is a new session with the saved history, so the saved one stays unchanged. Claude and Pi fork.
+- A provider that cannot fork would resume the saved session in place, so two runs could append to one conversation. Instead, the node does not continue it. The run records a `node_session_not_continued` workflow event naming the session it skipped (an 8-character preview) and posts a notice in the conversation. `archon validate workflows` also warns before any run, but only for a node whose provider is written in the workflow file itself; a node from an included block, or one whose provider comes from config defaults or a `model:` alias, is checked only when it runs. Codex, OpenCode and Copilot are in this group today, so their `persist_session` nodes do not carry context between runs; pass state between runs through artifacts instead.
+- When a node finishes with a session, that session becomes the saved one. With overlapping runs, the run whose node finished last wins. A node that finishes without a session id leaves the saved session as it was.
+
 ### Workflow-level default
 
 ```yaml
@@ -935,7 +944,7 @@ nodes:
 
 ### Capability requirement
 
-The resolved provider must declare `sessionResume: true` in its capabilities. The loader rejects workflows that set `persist_session: true` against a non-resume-capable provider at the explicit-provider level; the executor catches the implicit-default-provider case at runtime.
+The resolved provider must declare `sessionResume: true` in its capabilities. The loader rejects workflows that set `persist_session: true` against a non-resume-capable provider at the explicit-provider level; the executor catches the implicit-default-provider case at runtime. Continuing a session across runs also needs `sessionFork: true`; see [Concurrent runs](#concurrent-runs).
 
 ### Supported node types
 
@@ -967,11 +976,11 @@ Cross-scope resets are guarded so a dropped scope can't silently wipe every conv
 
 ### Cost caveat
 
-Persistent sessions on Codex/Pi replay the full rollout on each turn, so token cost grows with iteration depth. Claude auto-compacts. If a workflow's persistent sessions get expensive, reset them and start fresh.
+Persistent sessions on Pi replay the full rollout on each turn, so token cost grows with iteration depth. Claude auto-compacts. If a workflow's persistent sessions get expensive, reset them and start fresh.
 
 ### When a resume can't be restored
 
-If the stored session is gone (Codex thread expired, Pi JSONL missing or moved, OpenCode session not found), the provider can't resume it. Rather than silently pretending nothing was lost, the provider starts a **fresh** session for that node and the executor surfaces a visible warning:
+If the stored session is gone (for example, a Pi JSONL file was moved), the provider can't resume it. Rather than silently pretending nothing was lost, the provider starts a **fresh** session for that node and the executor surfaces a visible warning:
 
 > ⚠️ Node `planner`: could not resume the prior session — continued with a fresh session, so the earlier context was not restored.
 

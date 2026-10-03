@@ -34,7 +34,7 @@ Archon ships with ready-to-use workflows that cover common coding tasks. You do 
 
 | Workflow | What It Does |
 |----------|-------------|
-| `archon-assist` | General Q&A, debugging, exploration -- the catch-all |
+| `archon-assist` | General Q&A, debugging, exploration (deprecated) |
 | `archon-fix-github-issue` | Investigate, root cause, implement fix, validate, PR |
 | `archon-create-issue` | Investigate a problem and create a GitHub issue |
 | `archon-issue-review-full` | Comprehensive fix + full multi-agent review for GitHub issues |

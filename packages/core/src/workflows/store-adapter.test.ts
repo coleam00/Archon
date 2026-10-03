@@ -146,7 +146,7 @@ mock.module('../db/env-vars', () => ({
   getCodebaseEnvVars: mock(() => Promise.resolve({})),
 }));
 mock.module('../db/workflow-node-sessions', () => ({
-  getWorkflowNodeSession: mock(() => Promise.resolve(null)),
+  listWorkflowNodeSessions: mock(() => Promise.resolve([])),
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
   deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
 }));
@@ -195,9 +195,8 @@ describe('createWorkflowStore', () => {
       'getDagResumeSnapshot',
       'getCodebase',
       'getCodebaseEnvVars',
-      'getWorkflowNodeSession',
+      'listWorkflowNodeSessions',
       'upsertWorkflowNodeSession',
-      'deleteWorkflowNodeSessions',
       'listWorkflowRunNodeSessions',
       'upsertWorkflowRunNodeSession',
     ];

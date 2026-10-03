@@ -13,8 +13,12 @@ import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { requestRunLiveOwnerStop } from '@archon/core/services/run-live-owner';
+import { isRunOwnerAnswering, requestRunLiveOwnerStop } from '@archon/core/services/run-live-owner';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+import {
+  serializedNodeDataSchema,
+  type SerializedNodeData,
+} from '@archon/workflows/node-record-serialization';
 
 const cleanupPaths: string[] = [];
 const activeRunIds = new Set<string>();
@@ -44,12 +48,13 @@ const CLI_PATH = resolve(import.meta.dir, '..', 'cli.ts');
 interface Fixture {
   projectRoot: string;
   archonHome: string;
+  env?: Record<string, string>;
 }
 
 function makeFixture(
   prefix: string,
   workflows: Record<string, string>,
-  options: { gitInit?: boolean } = {}
+  options: { gitInit?: boolean; env?: Record<string, string> } = {}
 ): Fixture {
   const fixtureRoot = mkdtempSync(join(tmpdir(), prefix));
   cleanupPaths.push(fixtureRoot);
@@ -66,7 +71,7 @@ function makeFixture(
     // runs `wait` has to be a repo.
     Bun.spawnSync(['git', 'init', '-q', projectRoot]);
   }
-  return { projectRoot, archonHome };
+  return { projectRoot, archonHome, env: options.env };
 }
 
 async function runCli(
@@ -75,7 +80,7 @@ async function runCli(
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, CLI_PATH, ...args], {
     cwd: fixture.projectRoot,
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+    env: { ...process.env, ...fixture.env, ARCHON_HOME: fixture.archonHome },
     stdout: 'pipe',
     stderr: 'pipe',
   });
@@ -96,7 +101,7 @@ interface ForegroundOwner {
 function startForegroundOwner(fixture: Fixture, args: string[]): ForegroundOwner {
   const child = Bun.spawn([process.execPath, ...args], {
     cwd: fixture.projectRoot,
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+    env: { ...process.env, ...fixture.env, ARCHON_HOME: fixture.archonHome },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -187,7 +192,7 @@ function startWait(fixture: Fixture, runId: string, timeoutSeconds: number): Pen
     ],
     {
       cwd: fixture.projectRoot,
-      env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+      env: { ...process.env, ...fixture.env, ARCHON_HOME: fixture.archonHome },
       stdout: 'pipe',
       stderr: 'pipe',
     }
@@ -401,6 +406,29 @@ function readNodeCompletedOutput(
   }
 }
 
+/** One node's durable failure evidence, read from its terminal event. */
+function readNodeFailure(
+  archonHome: string,
+  runId: string,
+  nodeId: string
+): SerializedNodeData | undefined {
+  const databasePath = join(archonHome, 'archon.db');
+  if (!existsSync(databasePath)) return undefined;
+  const database = new Database(databasePath, { readonly: true });
+  try {
+    const row = database
+      .query<{ data: string }, [string, string]>(
+        `SELECT data FROM remote_agent_workflow_events
+         WHERE workflow_run_id = ? AND step_name = ? AND event_type = 'node_failed'
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(runId, nodeId);
+    return row ? serializedNodeDataSchema.parse(JSON.parse(row.data) as unknown) : undefined;
+  } finally {
+    database.close();
+  }
+}
+
 /**
  * Every CLI platform conversation the fixture's database holds.
  *
@@ -555,8 +583,9 @@ describe('foreground run discovery', () => {
       'console.log("startup stdout"); console.error("controlled startup failure"); process.exit(23)',
     ]);
     // Through the same helper the boot waits use, at the same deadline: the claim is
-    // that owner exit beats `RUN_BOOT_DEADLINE_MS`, and this test's own budget is Bun's
-    // 5 s default. A guard that stopped firing could only fail here, never pass slowly.
+    // that owner exit beats `RUN_BOOT_DEADLINE_MS`, and this test runs on the default
+    // per-test budget, far below that deadline. A guard that stopped firing could only
+    // fail here, never pass slowly.
     const error = await waitForRunBoot('the failed run row', () => undefined, owner).catch(
       (error: unknown) => error
     );
@@ -606,6 +635,101 @@ describe('foreground run discovery', () => {
 });
 
 describe('archon workflow wait against a detached run', () => {
+  test('a detached Pi extension timer failure reaches workflow wait as a terminal failure', async () => {
+    const endpoint = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () =>
+        new Response(
+          new ReadableStream({
+            start(controller): void {
+              controller.enqueue(new TextEncoder().encode(': waiting\n\n'));
+            },
+          }),
+          { headers: { 'content-type': 'text/event-stream' } }
+        ),
+    });
+    try {
+      const fixture = makeFixture('archon-wait-pi-extension-', {
+        'wait-pi-extension':
+          'name: wait-pi-extension\n' +
+          'description: Detached Pi extension failure fixture.\n' +
+          'provider: pi\n' +
+          'model: fixture/test-model\n' +
+          'nodes:\n' +
+          '  - id: agent\n' +
+          '    prompt: Wait for the extension failure.\n' +
+          '    allowed_tools: []\n' +
+          '    idle_timeout: 30000\n',
+      });
+      const agentDir = join(fixture.projectRoot, 'pi-agent');
+      const extensionDir = join(agentDir, 'extensions');
+      const extensionPath = join(extensionDir, 'detached-failure.ts');
+      mkdirSync(extensionDir, { recursive: true });
+      writeFileSync(
+        join(agentDir, 'models.json'),
+        JSON.stringify({
+          providers: {
+            fixture: {
+              baseUrl: `http://127.0.0.1:${String(endpoint.port)}/v1`,
+              api: 'openai-completions',
+              apiKey: 'test-key',
+              models: [{ id: 'test-model' }],
+            },
+          },
+        })
+      );
+      writeFileSync(
+        extensionPath,
+        `export default function (pi) {
+  pi.on('session_start', async () => {
+    setTimeout(() => {
+      throw new Error('detached Pi extension timer failed');
+    }, 5000);
+  });
+}
+`
+      );
+      fixture.env = { PI_CODING_AGENT_DIR: agentDir };
+
+      const { runId } = await launchDetached(fixture, 'wait-pi-extension');
+      await waitForRunBoot('the detached Pi owner to start running', async () => {
+        if (readRunStatus(fixture.archonHome, runId) !== 'running') return undefined;
+        return (await isRunOwnerAnswering(runId)) ? true : undefined;
+      });
+
+      const waiter = startWait(fixture, runId, 60);
+      expect(await waiter.attached()).toEqual({ observedStatus: 'running' });
+      const settled = await waiter.settled();
+      activeRunIds.delete(runId);
+
+      expectWaitExit(settled, 0);
+      expect(settled.payload).toMatchObject({
+        result: 'attention',
+        attention: { kind: 'terminal', runId, status: 'failed' },
+      });
+      expect(settled.payload).not.toHaveProperty('result', 'owner_lost');
+      expect(
+        await waitFor(
+          'the detached Pi run to be readable as failed',
+          () => (readRunStatus(fixture.archonHome, runId) === 'failed' ? 'failed' : undefined),
+          10_000
+        )
+      ).toBe('failed');
+
+      const failure = await waitFor(
+        'the Pi node failure evidence',
+        () => readNodeFailure(fixture.archonHome, runId, 'agent'),
+        10_000
+      );
+      expect(failure.provider_failure?.class).toBe('unknown');
+      expect(failure.provider_failure?.evidence).toContain('detached Pi extension timer failed');
+      expect(failure.provider_failure?.evidence).toContain(extensionPath);
+    } finally {
+      endpoint.stop(true);
+    }
+  }, 120_000);
+
   test.each([
     { workflow: 'wait-success', status: 'completed' },
     { workflow: 'wait-failure', status: 'failed' },

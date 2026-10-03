@@ -6821,6 +6821,23 @@ nodes:
       }
     });
 
+    it('warns, and still loads, when the provider cannot fork the persisted session', () => {
+      const codex = parseWorkflow(
+        `name: t\ndescription: t\nprovider: codex\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+        't.yaml'
+      );
+      expect(codex.error).toBeNull();
+      expect(codex.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+        expect.stringContaining("Node 'planner'"),
+      ]);
+
+      const claude = parseWorkflow(
+        `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+        't.yaml'
+      );
+      expect(claude.warnings?.some(w => w.includes('cannot fork a session'))).toBe(false);
+    });
+
     it('rejects persist_session: true on a provider without sessionResume', async () => {
       // Register an ephemeral provider with sessionResume: false to drive the capability gate.
       // No unregister API exists; restore via clearRegistry + registerBuiltinProviders in finally.
@@ -7534,7 +7551,7 @@ nodes:
      * both a looser unit and heavy enough to starve the other package test
      * processes running in parallel (`bun --filter '*' --parallel test`). It
      * measurably did: on a 2-core Windows CI runner it pushed an unrelated
-     * SQLite test from 250 ms past Bun's 5000 ms per-test timeout.
+     * SQLite test from 250 ms past the 5000 ms per-test timeout Windows then had.
      */
     const KNOWN_BAD = new Set([
       // `agent:` at workflow and node level — a real bug, silently dropped since
