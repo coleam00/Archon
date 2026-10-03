@@ -137,8 +137,6 @@ describe('CodexProvider', () => {
     test('streams the reply and ends with the thread id and this turn’s usage', async () => {
       const chunks = await streamOf({
         notifications: [
-          // A resumed thread first replays the previous turn's usage under its id.
-          tokenUsage({ input: 999, output: 999 }, 'earlier-turn'),
           agentMessage('hello'),
           tokenUsage({ input: 120, output: 7, cached: 100, cacheWrite: 3 }),
         ],
@@ -153,9 +151,60 @@ describe('CodexProvider', () => {
       ]);
     });
 
-    test('a turn that used no tokens does not report the replayed usage of an earlier turn', async () => {
+    // Snapshots recorded from `codex app-server` 0.160.0: a turn of three requests on a new
+    // thread, then a resumed turn of two requests on the same thread.
+    test('a turn of several requests records all of them, once each', async () => {
       const chunks = await streamOf({
-        notifications: [tokenUsage({ input: 999, output: 999 }, 'earlier-turn')],
+        notifications: [
+          tokenUsage({ input: 26598, output: 37, cached: 7168 }),
+          tokenUsage(
+            { input: 53291, output: 59, cached: 33536 },
+            { input: 26693, output: 22, cached: 26368 }
+          ),
+          tokenUsage(
+            { input: 80066, output: 64, cached: 60032 },
+            { input: 26775, output: 5, cached: 26496 }
+          ),
+          // Codex re-sends its current snapshot without a new request.
+          tokenUsage(
+            { input: 80066, output: 64, cached: 60032 },
+            { input: 26775, output: 5, cached: 26496 }
+          ),
+        ],
+      });
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 80066,
+        output: 64,
+        cacheRead: 60032,
+        cacheWrite: 0,
+      });
+    });
+
+    test('a resumed turn records only its own requests, not the thread’s earlier turns', async () => {
+      const { provider } = providerWith({
+        notifications: [
+          tokenUsage(
+            { input: 106866, output: 99, cached: 86656 },
+            { input: 26800, output: 35, cached: 26624 }
+          ),
+          tokenUsage(
+            { input: 133758, output: 105, cached: 113280 },
+            { input: 26892, output: 6, cached: 26624 }
+          ),
+        ],
+      });
+      const chunks = await run(provider, undefined, THREAD_ID);
+      expect(resultOf(chunks).tokens).toEqual({
+        input: 26800 + 26892,
+        output: 35 + 6,
+        cacheRead: 26624 + 26624,
+        cacheWrite: 0,
+      });
+    });
+
+    test('a turn that used no tokens does not report another turn’s usage', async () => {
+      const chunks = await streamOf({
+        notifications: [tokenUsage({ input: 999, output: 999 }, undefined, 'earlier-turn')],
         completion: { status: 'failed', error: turnError('serverOverloaded', 'busy') },
       });
       expect(resultOf(chunks).tokens).toBeUndefined();
