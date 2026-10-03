@@ -871,7 +871,9 @@ export class PiProvider implements IAgentProvider {
     // session started now would run unobserved.
     if (requestOptions?.abortSignal?.aborted) throw new Error('Query aborted');
     const extensionTurn =
-      extensionPaths.length > 0 ? beginPiExtensionTurn(extensionPaths) : undefined;
+      extensionPaths.length > 0
+        ? beginPiExtensionTurn(extensionPaths, nodeConfig?.nodeId)
+        : undefined;
     try {
       const { session, modelFallbackMessage } = await createAgentSession({
         cwd,

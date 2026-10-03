@@ -3056,6 +3056,47 @@ describe('PiProvider', () => {
     expect(initCalls).toHaveLength(0);
   });
 
+  test('a caller that aborts while waiting for a maxConcurrent slot disposes its session', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
+    const releases: (() => void)[] = [];
+    const holdSlot = (): Promise<void> =>
+      new Promise<void>(resolve => {
+        releases.push(resolve);
+      });
+    mockPrompt.mockImplementationOnce(holdSlot).mockImplementationOnce(holdSlot);
+    const options = { model: 'google/gemini-2.5-pro', assistantConfig: { maxConcurrent: 2 } };
+    const holders = [
+      consume(new PiProvider().sendQuery('one', '/tmp', undefined, options)),
+      consume(new PiProvider().sendQuery('two', '/tmp', undefined, options)),
+    ];
+    const acquiring = (): number =>
+      (mockLogger.debug.mock.calls as unknown[][]).filter(c => c[0] === 'pi.semaphore_acquiring')
+        .length;
+    const controller = new AbortController();
+    try {
+      while (releases.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
+      const waiter = consume(
+        new PiProvider().sendQuery('three', '/tmp', undefined, {
+          ...options,
+          abortSignal: controller.signal,
+        })
+      );
+      while (acquiring() < 3) await new Promise(resolve => setTimeout(resolve, 1));
+      controller.abort();
+      const result = await waiter;
+
+      expect(result.error).toBeDefined();
+      // Only the waiter's session is gone; both slot holders are still mid-prompt.
+      expect(mockDispose).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).toHaveBeenCalledTimes(2);
+    } finally {
+      for (const release of releases) release();
+      await Promise.all(holders);
+    }
+  });
+
   test('settings: create(cwd) called, inMemory seeded with pre-merged global+project (empty project → just global)', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());

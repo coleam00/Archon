@@ -18,8 +18,14 @@ export interface PiExtensionTurn {
 }
 
 const failureEvidence = new WeakMap<Error, string>();
-/** Turns that still accept process errors, keyed to the extension paths they loaded. */
-const activeTurns = new Map<PiExtensionTurn, readonly string[]>();
+interface ActiveTurn {
+  readonly extensionPaths: readonly string[];
+  /** Names the turn in logs; the workflow node id when the turn has one. */
+  readonly owner: string | undefined;
+}
+
+/** Turns that still accept process errors. */
+const activeTurns = new Map<PiExtensionTurn, ActiveTurn>();
 
 /**
  * A frame names a path only where the path ends: at its line/column, a closing paren,
@@ -49,7 +55,10 @@ function matchingExtensionPath(
  * Start one extension-enabled Pi turn. Turns run concurrently: a detached process
  * error is routed by the extension paths in its stack (see claimPiExtensionProcessError).
  */
-export function beginPiExtensionTurn(extensionPaths: readonly string[]): PiExtensionTurn {
+export function beginPiExtensionTurn(
+  extensionPaths: readonly string[],
+  owner?: string
+): PiExtensionTurn {
   let failed: Error | undefined;
   let closed = false;
   const listeners = new Set<(error: Error) => void>();
@@ -97,7 +106,10 @@ export function beginPiExtensionTurn(extensionPaths: readonly string[]): PiExten
     },
   };
 
-  activeTurns.set(turn, [...new Set(extensionPaths.filter(path => path.length > 0))]);
+  activeTurns.set(turn, {
+    extensionPaths: [...new Set(extensionPaths.filter(path => path.length > 0))],
+    owner,
+  });
   return turn;
 }
 
@@ -113,15 +125,22 @@ export function beginPiExtensionTurn(extensionPaths: readonly string[]): PiExten
  */
 export function claimPiExtensionProcessError(reason: unknown): boolean {
   if (!(reason instanceof Error)) return false;
-  const candidates: [PiExtensionTurn, string][] = [];
-  for (const [turn, extensionPaths] of activeTurns) {
+  const candidates: [PiExtensionTurn, string, string | undefined][] = [];
+  for (const [turn, { extensionPaths, owner }] of activeTurns) {
     const extensionPath = matchingExtensionPath(reason, extensionPaths);
-    if (extensionPath) candidates.push([turn, extensionPath]);
+    if (extensionPath) candidates.push([turn, extensionPath, owner]);
   }
   if (candidates.length === 1) {
     const [turn, extensionPath] = candidates[0];
     turn.report(reason, extensionPath);
-  } else {
+  } else if (candidates.length > 1) {
+    getLog().error(
+      {
+        err: reason,
+        candidates: candidates.map(([, extensionPath, owner]) => ({ owner, extensionPath })),
+      },
+      'pi.extension_error_ambiguous'
+    );
     for (const [turn, extensionPath] of candidates) {
       const ambiguous = new Error(
         `Pi extension '${extensionPath}' failed in a detached callback while ${String(candidates.length)} concurrent Pi turns had it loaded; the failing turn cannot be identified, so each of them fails: ${reason.message}`,
