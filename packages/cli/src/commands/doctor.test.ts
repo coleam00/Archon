@@ -466,7 +466,7 @@ describe('checkAssistantLogin', () => {
 
   for (const [state, expected] of [
     ['usable', 'pass'],
-    ['not_checked', 'pass'],
+    ['not_checked', 'skip'],
     ['check_failed', 'warn'],
     ['unusable', 'fail'],
     ['not_connected', 'fail'],
@@ -504,7 +504,7 @@ describe('checkAssistantLogin', () => {
         credentialConnected: false,
         provider: new ClaudeProvider(),
       }));
-      expect(result).toMatchObject({ status: 'pass', message: 'claude: not checked' });
+      expect(result).toMatchObject({ status: 'skip', message: 'claude: not checked' });
       expect(check).toHaveBeenCalledTimes(1);
     } finally {
       check.mockRestore();
@@ -521,7 +521,7 @@ describe('checkAssistantLogin', () => {
     const pi = spyOn(PiProvider.prototype, 'checkCredential');
     try {
       expect(await checkAssistantLogin({ DEFAULT_AI_ASSISTANT: 'pi' })).toMatchObject({
-        status: 'pass',
+        status: 'skip',
         message: 'claude: not checked',
       });
       expect(load).toHaveBeenCalledWith(process.cwd());

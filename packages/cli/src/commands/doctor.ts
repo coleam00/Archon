@@ -419,7 +419,8 @@ export async function checkAssistantLogin(
       case 'usable':
         return { label, status: 'pass', message: `${deps.assistant}: usable` };
       case 'not_checked':
-        return { label, status: 'pass', message: `${deps.assistant}: not checked` };
+        // Nothing was verified, so this is not a pass.
+        return { label, status: 'skip', message: `${deps.assistant}: not checked` };
       case 'check_failed':
         return {
           label,
