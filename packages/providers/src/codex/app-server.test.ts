@@ -369,7 +369,7 @@ describe('Codex native credential check', () => {
       expect(await run(server, AbortSignal.timeout(50))).toMatchObject({ state: 'check_failed' });
       expect(server.processes[0]?.methods).toEqual(['initialize']);
       expect(server.processes[0]?.stdinEnded).toBe(true);
-    }, 2000);
+    });
     test('is never started for a caller that already aborted', async () => {
       const spawner = mock(() => {
         throw new Error('must not spawn');
