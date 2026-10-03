@@ -654,9 +654,12 @@ const MISCONFIGURED_SPAWN_ERRNOS: ReadonlySet<string> = new Set([
  * the binary has no `app-server` or rejects a flag, and another attempt fails the same
  * way. Any other process end is a process failure, which is what `transient` names.
  *
- * JSON-RPC errors are not classified by code: Codex answers an unknown method, a missing
- * thread and a config it cannot load all with -32600, so the code says nothing about
- * whether the setup must change.
+ * JSON-RPC errors are not classified by code, because one code covers setups that need
+ * different classes. Probed against Codex 0.160.0 on 2026-10-03, every one of these came
+ * back as -32600 with only the message differing: an unknown method ("Invalid request:
+ * unknown variant ..."), `thread/resume` of a missing thread ("no rollout found for
+ * thread id ..."), a malformed thread id ("invalid session id: ..."), and `thread/start`
+ * with an unparseable config.toml ("failed to load configuration: ...").
  */
 function failureClassOfStop(error: unknown): ProviderFailureClass {
   if (!(error instanceof ConnectionClosedError)) return failureClassOfThrown(error);
