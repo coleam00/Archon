@@ -435,6 +435,26 @@ describe('user-provider-key-store', () => {
     test.each<[string, Error, string]>([
       ['a rejected grant (400)', new MockOpenAiTokenError('refresh failed (400)', 400), 'unusable'],
       ['a revoked token (401)', new MockOpenAiTokenError('refresh failed (401)', 401), 'unusable'],
+      [
+        'a WAF challenge (403)',
+        new MockOpenAiTokenError('refresh failed (403)', 403),
+        'check_failed',
+      ],
+      [
+        'a moved endpoint (404)',
+        new MockOpenAiTokenError('refresh failed (404)', 404),
+        'check_failed',
+      ],
+      [
+        'a request timeout (408)',
+        new MockOpenAiTokenError('refresh failed (408)', 408),
+        'check_failed',
+      ],
+      [
+        'a server error (500)',
+        new MockOpenAiTokenError('refresh failed (500)', 500),
+        'check_failed',
+      ],
       ['an outage (503)', new MockOpenAiTokenError('refresh failed (503)', 503), 'check_failed'],
       [
         'rate limiting (429)',

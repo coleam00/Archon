@@ -148,11 +148,6 @@ const UNREADABLE: StoredCredentialFailure = {
   evidence: 'The stored credential cannot be read. Reconnect it.',
 };
 
-/** HTTP statuses from a token endpoint that say nothing about the credential itself. */
-function isVendorUnavailableStatus(status: number): boolean {
-  return status === 408 || status === 429 || status >= 500;
-}
-
 /**
  * Serializes concurrent OAuth reads per `(userId, provider)` so a burst of
  * inject calls in one run never triggers (or races) more than one token
@@ -294,10 +289,11 @@ async function resolveOAuthCredential(
         evidence: "The vendor's token refresh failed.",
       };
     }
-    // Archon's own OpenAI flow reports an HTTP status and a body-free message. A token
-    // endpoint that answers 4xx rejected the grant; anything else (network, timeout,
-    // outage) leaves the credential's health unknown.
-    if (err.status && !isVendorUnavailableStatus(err.status)) {
+    // Archon's own OpenAI flow reports an HTTP status and a body-free message. Only
+    // 400 and 401 mean the token endpoint rejected the grant; any other status (a WAF
+    // challenge, a moved endpoint, rate limiting, an outage) or no status at all (network,
+    // timeout) leaves the credential's health unknown.
+    if (err.status === 400 || err.status === 401) {
       return { state: 'unusable', source: 'archon', evidence: err.message };
     }
     return { state: 'check_failed', source: 'archon', evidence: err.message };

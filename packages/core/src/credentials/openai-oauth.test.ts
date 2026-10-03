@@ -237,6 +237,19 @@ describe('refreshOpenAiOAuthCredentials', () => {
 });
 
 describe('mintOpenAiOAuthApiKey', () => {
+  test('an expired blob whose refresh is rejected keeps the HTTP status on the error', async () => {
+    stubTokenEndpoint(401, { error: 'invalid_grant' });
+    const rejected = await mintOpenAiOAuthApiKey({
+      access: 'old-access',
+      refresh: 'old-refresh',
+      expires: 1,
+      accountId: 'acct-42',
+      id_token: 'old-idt',
+    }).catch((e: unknown) => e);
+    expect(rejected).toBeInstanceOf(OpenAiTokenError);
+    expect((rejected as OpenAiTokenError).status).toBe(401);
+  });
+
   test('unexpired blob → returned as-is, no network call', async () => {
     let fetched = 0;
     installFetch(async () => {
