@@ -568,8 +568,7 @@ export async function registerFolder(localPath: string, name?: string): Promise<
   // `canonicalizeProjectPath` is the one canonicalizer for `default_cwd`; the CLI
   // gate, `archon doctor` and `/register-project` all resolve through it, so a
   // symlinked root (macOS `/tmp` → `/private/tmp`) or a Windows 8.3 short path
-  // registers under exactly the string those lookups will ask for (#2927). Repo
-  // projects are immune because git canonicalizes the repo root on both sides.
+  // registers under exactly the string those lookups will ask for (#2927).
   const resolvedPath = await canonicalizeProjectPath(localPath);
 
   // The stat below is the existence gate: canonicalization is fail-safe and

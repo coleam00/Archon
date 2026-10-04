@@ -1508,11 +1508,9 @@ export async function workflowListCommand(
 /**
  * Resolve the project this run belongs to: look it up, else register it.
  *
- * Exact `default_cwd` match first, then a path-prefix lookup so a subdirectory or
- * worktree UNDER a registered root resolves to its covering codebase. Without the
- * prefix fallback, resume/approve re-enter with cwd = the run's worktree
- * working_path, miss the exact match, and fall through to auto-registration —
- * which trips the source-symlink guard for an already-covered path (#2127).
+ * Git paths resolve at the nearest repository root, with linked worktrees mapped
+ * to their registered source through Git checkout identity. Only non-Git paths
+ * use ancestor-prefix lookup, so a registered parent cannot capture a nested repo.
  *
  * One implementation because two callers need the same answer: the `--detach`
  * pre-flight, which must resolve the project before it can create the run row or
@@ -1540,10 +1538,16 @@ async function resolveRunCodebase(
   let lookupError: Error | null = null;
   let registrationError: Error | null = null;
   let registeredFolder: { name: string; defaultCwd: string } | undefined;
+  // Git prints its top level with forward slashes on Windows; canonicalize it so
+  // lookup and registration use the same `default_cwd` spelling as every other
+  // registration path.
+  const gitRoot = await git.findRepoRoot(cwd);
+  const repoRoot = gitRoot ? await archonPaths.canonicalizeProjectPath(gitRoot) : null;
   try {
-    codebase =
-      (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
-      (await codebaseDb.findCodebaseByPathPrefix(cwd));
+    codebase = repoRoot
+      ? await findCodebaseForCheckoutPath(repoRoot)
+      : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
+        (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   } catch (error) {
     const err = error as Error;
     lookupError = err;
@@ -1577,7 +1581,6 @@ async function resolveRunCodebase(
 
   // Auto-register unregistered repos (creates project structure for artifacts/logs)
   if (!codebase && !lookupError) {
-    const repoRoot = await git.findRepoRoot(cwd);
     if (repoRoot) {
       try {
         const result = await registerRepository(repoRoot);
