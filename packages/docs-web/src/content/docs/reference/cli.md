@@ -651,7 +651,9 @@ entry includes `nodeId` and `state`; nodes with a start event include the origin
 `startedAt`, and terminal nodes with both start and end events include `durationMs`.
 Completed nodes may include an `outputPreview`, truncated after 200 characters with
 ASCII `...`, while failed nodes include `error` (or `Unknown error` when none was
-recorded). Nodes whose provider reported a session include `sessionIds`: the full
+recorded). A node a resume reset for re-running (`always_run`, or a stale cached
+success) reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
+Nodes whose provider reported a session include `sessionIds`: the full
 session id of each attempt and loop iteration, in order. Human `--verbose` output prints
 them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in
 the provider's own tool, for example with `claude --resume <id>`. Claude Code finds a
