@@ -3597,7 +3597,6 @@ async function handleWorkflowRunCommand(
     return;
   }
 
-  // No project attached — apply E2 logic
   const codebases = await codebaseDb.listCodebases();
 
   if (codebases.length === 0) {
@@ -3608,100 +3607,7 @@ async function handleWorkflowRunCommand(
     return;
   }
 
-  if (codebases.length === 1) {
-    // Auto-select the only project
-    const codebase = codebases[0];
-    if (request.kind === 'resume') {
-      await dispatchOrchestratorWorkflow(
-        platform,
-        conversationId,
-        conversation,
-        codebase,
-        request,
-        isolationHints,
-        userId,
-        undefined,
-        options
-      );
-      return;
-    }
-    const workflow = request.definition;
-    const workflowCwd = conversation.cwd ?? codebase.default_cwd;
-    // Authoring root for discovery (the canonical repo when `workflowCwd` is a worktree).
-    // This THROWS when git cannot answer — the docblock that once said otherwise was
-    // corrected, and this caller had copied the old claim. Guarded rather than propagated
-    // because this branch only LISTS workflows to validate a name: degrading to the cwd
-    // shows a slightly narrower list, while failing would refuse the command outright.
-    let workflowSourceRoot: string | undefined;
-    try {
-      workflowSourceRoot = await resolveWorkflowSourceRoot(workflowCwd);
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, workflowCwd },
-        'workflow.source_root_unresolved_listing'
-      );
-    }
-
-    let discovery;
-    try {
-      discovery = await discoverWorkflowsWithConfig(
-        workflowCwd,
-        loadConfig,
-        workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
-      );
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, cwd: workflowCwd }, 'workflow_discovery_failed');
-      await platform.sendMessage(
-        conversationId,
-        `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`
-      );
-      return;
-    }
-
-    const resolvedEntry =
-      discovery.workflows.find(w => w.workflow.name === workflow.name) ??
-      discovery.workflows.find(w => w.workflow.name.toLowerCase() === workflow.name.toLowerCase());
-    const resolvedWorkflow = resolvedEntry?.workflow;
-
-    if (!resolvedWorkflow) {
-      const loadError = discovery.errors.find(
-        e =>
-          e.filename.replace(/\.ya?ml$/, '') === workflow.name ||
-          e.filename === `${workflow.name}.yaml` ||
-          e.filename === `${workflow.name}.yml`
-      );
-      if (loadError) {
-        await platform.sendMessage(
-          conversationId,
-          `Workflow \`${workflow.name}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
-        );
-        return;
-      }
-
-      await platform.sendMessage(
-        conversationId,
-        `Workflow \`${workflow.name}\` not found.\n\nUse ${spellWorkflowCommand(platform, 'list')} to see available workflows.`
-      );
-      return;
-    }
-
-    await db.updateConversation(conversation.id, { codebase_id: codebase.id });
-    await dispatchOrchestratorWorkflow(
-      platform,
-      conversationId,
-      conversation,
-      codebase,
-      { ...request, definition: resolvedWorkflow, parseWarnings: resolvedEntry?.parseWarnings },
-      isolationHints,
-      userId,
-      resolvedEntry?.source,
-      options
-    );
-    return;
-  }
-
-  // Multiple projects — ask user to choose
+  // Never pick a project for the user, even when only one is registered.
   const projectList = codebases.map(c => `- ${c.name}`).join('\n');
   await platform.sendMessage(
     conversationId,
