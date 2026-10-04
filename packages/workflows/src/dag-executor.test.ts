@@ -103,6 +103,8 @@ import {
   containerCommandName,
   buildSubprocessDockerArgs,
   childOutcomeFromRun,
+  resolveNodeBindings,
+  type ShellInputContext,
   type ExecuteDagWorkflowOptions,
   type RunChildWorkflowFn,
 } from './dag-executor';
@@ -1406,6 +1408,73 @@ nodes:
 
     // Empty array must be preserved (distinct from absent)
     expect(toolNodes[2].allowed_tools).toEqual([]);
+  });
+});
+
+describe('output reference errors name the reference as written', () => {
+  const ctx = (nodeOutputs: Map<string, NodeOutput>): ShellInputContext => ({
+    workflowRun: { id: 'run', user_message: '', metadata: {} },
+    artifactsDir: '/artifacts',
+    stateDir: '/state',
+    baseBranch: 'main',
+    docsDir: 'docs',
+    nodeOutputs,
+  });
+  const producer = new Map([['p', makeOutput('completed', '{"a":{}}')]]);
+
+  it('whole-value and directive bindings', () => {
+    expect(() =>
+      resolveNodeBindings('c', { v: '$p.output.a.b' }, ctx(producer), undefined)
+    ).toThrow("'$p.output.a.b'");
+    expect(() =>
+      resolveNodeBindings('c', { v: { from: '$p.output.a.b' } }, ctx(producer), undefined)
+    ).toThrow("'$p.output.a.b'");
+    expect(() =>
+      resolveNodeBindings('c', { v: '$ghost.output.a' }, ctx(new Map()), undefined)
+    ).toThrow("'$ghost.output.a'");
+  });
+
+  it('unknown producers in current and prior templates', () => {
+    expect(() => substituteNodeOutputRefs('x $ghost.output.a', new Map())).toThrow(
+      "'$ghost.output.a'"
+    );
+    expect(() =>
+      substituteLoopPrevRefs(
+        '$LOOP_PREV.ghost.output.x',
+        new Map(),
+        false,
+        undefined,
+        new Set(['work'])
+      )
+    ).toThrow("'$LOOP_PREV.ghost.output.x'");
+  });
+
+  it('outcome_field', async () => {
+    const testDir = join(
+      tmpdir(),
+      `dag-outcome-ref-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    );
+    await mkdir(testDir, { recursive: true });
+    try {
+      await expect(
+        executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(createMockStore()),
+            platform: createMockPlatform(),
+            cwd: testDir,
+            workflow: {
+              name: 'outcome-ref',
+              returns: 'r',
+              outcome_field: 'green',
+              nodes: [{ id: 'r', kind: 'exec', runtime: 'sh', script: "printf '%s' '{}'" }],
+            },
+            workflowRun: makeWorkflowRun('outcome-ref'),
+          })
+        )
+      ).rejects.toThrow("'$r.output.green'");
+    } finally {
+      await removeTempTree(testDir);
+    }
   });
 });
 

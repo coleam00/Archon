@@ -1037,3 +1037,12 @@ it('nested conditions still require a scalar', () => {
     ).toThrow('resolved to an');
   }
 });
+
+it('names the reference as written for unknown and missing output refs', () => {
+  expect(() => evaluateCondition("$ghost.output.x == 'a'", new Map())).toThrow("'$ghost.output.x'");
+  expect(() =>
+    evaluateCondition("$LOOP_PREV.work.output.missing == 'a'", new Map(), undefined, {
+      loopPrevOutputs: new Map([['work', makeOutput('{}')]]),
+    })
+  ).toThrow("'$LOOP_PREV.work.output.missing'");
+});
