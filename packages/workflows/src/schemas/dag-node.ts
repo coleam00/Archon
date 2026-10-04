@@ -11,7 +11,8 @@
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
 import { z } from '@hono/zod-openapi';
-import type { ProviderCapabilities } from '@archon/provider-contract';
+import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
+export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
 import { stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
@@ -121,23 +122,6 @@ export const sandboxSettingsSchema = z
   .passthrough();
 
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
-
-/**
- * Claude Agent SDK AgentDefinition — inline sub-agent available via the Task tool.
- * Mirrors the SDK's AgentDefinition type (sdk.d.ts), minus mcpServers and the
- * experimental critical-reminder field.
- */
-export const agentDefinitionSchema = z.object({
-  description: z.string().min(1, "'description' is required"),
-  prompt: z.string().min(1, "'prompt' is required"),
-  model: z.string().min(1).optional(),
-  tools: z.array(z.string().min(1)).optional(),
-  disallowedTools: z.array(z.string().min(1)).optional(),
-  skills: z.array(z.string().min(1)).optional(),
-  maxTurns: z.number().int().positive().optional(),
-});
-
-export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 
 /**
  * Per-node Pi extension posture — the PORTABLE authoring surface for issue #2133.

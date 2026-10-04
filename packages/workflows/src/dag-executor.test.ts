@@ -5604,16 +5604,26 @@ nodes:
         prompt: "You are concise. Return JSON { summary }."
         model: haiku
         tools: [Bash, Read]
+        disallowedTools: [Write]
+        skills: [codebase-search]
+        maxTurns: 5
 `;
     const result = parseWorkflow(yaml, 'agents.yaml');
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
     const node = wf.nodes[0] as DagNode;
-    expect(node.agents).toBeDefined();
-    expect(node.agents!['brief-gen'].description).toBe('Summarises an issue');
-    expect(node.agents!['brief-gen'].model).toBe('haiku');
-    expect(node.agents!['brief-gen'].tools).toEqual(['Bash', 'Read']);
+    expect(node.agents).toEqual({
+      'brief-gen': {
+        description: 'Summarises an issue',
+        prompt: 'You are concise. Return JSON { summary }.',
+        model: 'haiku',
+        tools: ['Bash', 'Read'],
+        disallowedTools: ['Write'],
+        skills: ['codebase-search'],
+        maxTurns: 5,
+      },
+    });
   });
 
   it('rejects an agent missing description', () => {

@@ -68,6 +68,8 @@ export {
   type StrictSchemaIssue,
 } from './output-schema';
 export {
+  agentDefinitionSchema,
+  type AgentDefinition,
   CONTAINER_ENV_DENYLIST,
   defineNativeToolInputSchema,
   type MessageChunk,

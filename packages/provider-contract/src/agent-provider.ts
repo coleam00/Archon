@@ -1,7 +1,25 @@
+import { z } from 'zod';
 import type { CredentialStatus } from './credential-status';
 import type { ProviderCapabilities } from './capabilities';
 import type { ProviderChunk } from './events';
 import type { EffortRung } from './effort';
+
+/**
+ * Claude Agent SDK AgentDefinition — inline sub-agent available via the Task tool.
+ * Mirrors the SDK's AgentDefinition type (sdk.d.ts), minus mcpServers and the
+ * experimental critical-reminder field.
+ */
+export const agentDefinitionSchema = z.object({
+  description: z.string().min(1, "'description' is required"),
+  prompt: z.string().min(1, "'prompt' is required"),
+  model: z.string().min(1).optional(),
+  tools: z.array(z.string().min(1)).optional(),
+  disallowedTools: z.array(z.string().min(1)).optional(),
+  skills: z.array(z.string().min(1)).optional(),
+  maxTurns: z.number().int().positive().optional(),
+});
+
+export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
 
 export interface PiExtensionPosture {
   /** Load Pi's native user and project extensions. Enabled by default; extension
@@ -176,27 +194,8 @@ export interface NodeConfig {
   skills?: string[];
   /** Exact provider plugin ids the node loads; every other user-installed plugin stays off. */
   plugins?: string[];
-  /**
-   * Inline sub-agent definitions (keyed by kebab-case agent ID).
-   *
-   * Intentional hand-written duplicate of `agentDefinitionSchema` (authoritative
-   * source: `@archon/workflows/schemas/dag-node`). Normally we follow the
-   * project rule "derive types from Zod via `z.infer`, never write parallel
-   * interfaces" — the provider contract cannot depend on the workflow schema.
-   * The authoring-schema mirror is tracked in #1276.
-   */
-  agents?: Record<
-    string,
-    {
-      description: string;
-      prompt: string;
-      model?: string;
-      tools?: string[];
-      disallowedTools?: string[];
-      skills?: string[];
-      maxTurns?: number;
-    }
-  >;
+  /** Inline sub-agent definitions (keyed by kebab-case agent ID). */
+  agents?: Record<string, AgentDefinition>;
   allowed_tools?: string[];
   denied_tools?: string[];
   /**
