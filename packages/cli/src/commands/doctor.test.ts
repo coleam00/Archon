@@ -675,6 +675,20 @@ describe('checkAssistantLogin', () => {
     );
   });
 
+  it('fails a dead native login for a configured model with no credential vendor', async () => {
+    // A Pi models.json provider: the model is set, so no connected credential can stand in.
+    const fixture = {
+      ...deps({ state: 'unusable', source: 'native', evidence: 'dead native login' }),
+      model: 'my-gateway/model',
+      vendor: undefined,
+      connectedVendors: ['anthropic'],
+    };
+    expect(await checkAssistantLogin({}, async () => fixture)).toMatchObject({
+      status: 'fail',
+      message: expect.not.stringContaining('set a model'),
+    });
+  });
+
   it('warns if the configured login could not be checked', async () => {
     expect(
       await checkAssistantLogin({}, async () => {

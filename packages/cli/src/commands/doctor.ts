@@ -389,7 +389,10 @@ export interface AssistantLoginDeps {
   assistant: string;
   assistantConfig?: Parameters<IAgentProvider['checkCredential']>[0]['assistantConfig'];
   model?: string;
-  /** The credential vendor the configured model uses; undefined when Archon config names none. */
+  /**
+   * The credential vendor the configured model uses; undefined when Archon config names no
+   * model or the model's provider has no credential vendor (a Pi models.json provider).
+   */
   vendor?: string;
   /** Vendors of the user's connected credentials that this assistant can use, as delivery names them. */
   connectedVendors: readonly string[];
@@ -422,7 +425,7 @@ export async function checkAssistantLogin(
     // no model in Archon config (Pi falls back to its own default), doctor cannot tell
     // whether a connected credential covers a missing native login, so it warns instead.
     const connectedHint =
-      deps.vendor === undefined && deps.connectedVendors.length > 0
+      deps.model === undefined && deps.connectedVendors.length > 0
         ? ` A run also receives your connected ${deps.connectedVendors.join(', ')} credential and uses it if its model is from that vendor; set a model in assistants.${deps.assistant} so doctor can tell.`
         : undefined;
     switch (status.state) {
