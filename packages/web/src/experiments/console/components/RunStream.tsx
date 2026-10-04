@@ -338,6 +338,7 @@ export function RunStream({
               costUsd={entry.node.costUsd}
               costScope={entry.node.costScope}
               numTurns={entry.node.numTurns}
+              tokens={entry.node.tokens}
               stopReason={entry.node.stopReason}
               skipReason={entry.node.skipReason}
               skipExpr={entry.node.skipExpr}
