@@ -55,16 +55,23 @@ export interface NodeTransitionEvent extends RunEventBase {
   /** Only populated for `skipped` — the evaluated expression that gated it. */
   skipExpr: string | null;
   /**
-   * `node_completed` enrichment, read straight from the persisted event payload.
-   * Populated only on the `completed` transition; null on every other transition
-   * (and when a provider doesn't report a given field). Not consumed by any current
-   * renderer — carried so the eventual per-node detail view needn't re-touch this.
+   * Enrichment read straight from the persisted event payload; null when the row
+   * doesn't carry a field. `foldNodeRuns` takes these from the `completed` transition.
    */
   outputPreview: string | null;
   costUsd: number | null;
+  costScope: CostScope;
   stopReason: string | null;
   numTurns: number | null;
 }
+
+/**
+ * What a node row's `cost_usd` measures. `own` is the node's own spend; `total` is a
+ * restatement of spend other rows of the same run already carry (a `loop_group` roll-up,
+ * a composed fan-out wrapper or instance terminal, a retry amendment). Summing only `own`
+ * costs lands on the run total.
+ */
+export type CostScope = 'own' | 'total';
 
 export interface ApprovalEvent extends RunEventBase {
   kind: 'approval';
@@ -129,6 +136,17 @@ function readNumberOrNull(obj: Record<string, unknown>, key: string): number | n
 }
 
 /**
+ * Rows written before `accounting` existed read as `own`, except the `aggregate: true`
+ * marker the engine wrote on restatement rows before `accounting` replaced it as the
+ * disambiguator; current rows carry both and they agree.
+ */
+function readCostScope(data: Record<string, unknown>): CostScope {
+  const accounting = data.accounting;
+  if (typeof accounting === 'string') return accounting === 'node' ? 'own' : 'total';
+  return data.aggregate === true ? 'total' : 'own';
+}
+
+/**
  * DB node-event `event_type` → UI transition. Listed explicitly (rather than
  * string-slicing `node_<x>`) because `node_skipped_prior_success` — emitted on
  * resume for already-completed nodes — doesn't fit that shape, and both skip
@@ -180,6 +198,7 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
       outputPreview: output === null ? null : output.slice(0, 300),
       costUsd: readNumberOrNull(data, 'cost_usd'),
+      costScope: readCostScope(data),
       stopReason: readStringOrNull(data, 'stop_reason'),
       numTurns: readNumberOrNull(data, 'num_turns'),
     };
@@ -394,6 +413,7 @@ export interface NodeRun {
   durationMs: number | null;
   /** Written by the engine only on `node_completed`; null for non-AI nodes and any non-completed terminal. */
   costUsd: number | null;
+  costScope: CostScope;
   numTurns: number | null;
   stopReason: string | null;
   skipReason: string | null;
@@ -450,6 +470,7 @@ export function foldNodeRuns(events: RunEvent[]): NodeRun[] {
       // ...but cost/turns/stop are only ever written on `node_completed`, so read
       // them from that transition (a failed/skipped terminal carries none).
       costUsd: completed?.costUsd ?? null,
+      costScope: completed?.costScope ?? 'own',
       numTurns: completed?.numTurns ?? null,
       stopReason: completed?.stopReason ?? null,
       skipReason: skipped?.skipReason ?? null,

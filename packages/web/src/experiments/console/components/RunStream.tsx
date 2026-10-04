@@ -333,6 +333,7 @@ export function RunStream({
               durationMs={entry.node.durationMs}
               timestamp={entry.node.startedAt}
               costUsd={entry.node.costUsd}
+              costScope={entry.node.costScope}
               numTurns={entry.node.numTurns}
               stopReason={entry.node.stopReason}
               skipReason={entry.node.skipReason}
