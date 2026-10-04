@@ -1,5 +1,5 @@
 import { platformStreamingSchema } from './config-types';
-import { setPlatformPolicies } from '../platforms/registry';
+import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import type { PlatformPolicy } from '../platforms/types';
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { homedir } from 'os';
@@ -135,6 +135,12 @@ describe('config-loader', () => {
     process.env.MATRIX_STREAMING_MODE = 'invalid';
     clearConfigCache();
     expect((await loadConfig()).streaming['matrix-chat']).toBe('stream');
+  });
+
+  test('loading config fails until the host configures platform policies', async () => {
+    clearPlatformPolicies();
+    mockFsReadFile.mockResolvedValue('');
+    await expect(loadConfig()).rejects.toThrow('Platform policies are not configured');
   });
 
   describe('loadGlobalConfig', () => {

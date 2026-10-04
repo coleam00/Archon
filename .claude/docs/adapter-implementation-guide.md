@@ -21,7 +21,7 @@ Defined at `packages/core/src/types/index.ts` — search for `export interface I
 | `sendStructuredEvent` | `(conversationId: string, event: MessageChunk): Promise<void>` | Optional |
 | `emitRetract` | `(conversationId: string): Promise<void>` | Optional |
 
-`IWebPlatformAdapter` extends this with web-only methods — search for `export interface IWebPlatformAdapter`: `sendStructuredEvent` (required), `setConversationDbId`, `setupEventBridge`, `emitLockEvent`, `registerOutputCallback`, `removeOutputCallback`. Type guard: `isWebAdapter()` checks `getPlatformType() === 'web'`.
+`WebAdapter` (`packages/server/src/adapters/web.ts`) adds web-only methods such as `setConversationDbId` and `emitLockEvent`. The server holds the concrete `WebAdapter` and calls them directly; core sees only `IPlatformAdapter`.
 
 ---
 
@@ -208,7 +208,6 @@ Only Discord creates real threads. Slack's `channel:ts` format already ensures t
 - No polling/WebSocket — output-only
 - Message persistence layer (other adapters don't persist)
 - `emitLockEvent()` for UI lock indicators
-- `setupEventBridge()` for workflow worker → parent SSE forwarding
 - `SSETransport.scheduleCleanup()` with `RECONNECT_GRACE_MS = 5000ms`
 
 ---

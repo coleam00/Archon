@@ -101,7 +101,9 @@ import { prepareWorkflowSource, recordSelectedWorkflow } from ${path('packages/w
 import { discoverWorkflowsWithConfig } from ${path('packages/workflows/src/workflow-discovery.ts')};
 import { HeadlessPlatform } from ${path('packages/core/src/workflows/headless-platform.ts')};
 import { startRunLiveOwner } from ${path('packages/core/src/services/run-live-owner.ts')};
+import { setPlatformPolicies } from ${path('packages/core/src/platforms/registry.ts')};
 registerBuiltinProviders();
+setPlatformPolicies([]);
 const cwd = ${JSON.stringify(project)};
 const codebase = await createCodebase({ name: 'cold', default_cwd: cwd, kind: 'folder' });
 const user = await findOrCreateUserByPlatformIdentity('cli', 'cold-operator');

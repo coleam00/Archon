@@ -17,22 +17,25 @@ export function setPlatformPolicies(list: readonly PlatformPolicy[]): void {
   configured = [...list];
 }
 
-export function getRegisteredPlatformPolicies(): readonly PlatformPolicy[] {
-  return configured ?? [];
-}
-
 /**
- * Platforms whose workspaces age-based cleanup must keep. Throws until the
- * host configured policies: guessing an empty set would delete retained
- * workspaces.
+ * Throws until the host configured policies: guessing an empty set would drop
+ * streaming defaults and env overrides from config, and delete retained
+ * workspaces in cleanup.
  */
-export function retainedPlatformIds(): readonly string[] {
+export function getRegisteredPlatformPolicies(): readonly PlatformPolicy[] {
   if (!configured) {
     throw new Error(
-      'Platform policies are not configured; call setPlatformPolicies() before cleanup'
+      'Platform policies are not configured; call setPlatformPolicies() before loading config or running cleanup'
     );
   }
-  return configured.filter(policy => policy.workspaceRetention === 'retain').map(p => p.id);
+  return configured;
+}
+
+/** Platforms whose workspaces age-based cleanup must keep. */
+export function retainedPlatformIds(): readonly string[] {
+  return getRegisteredPlatformPolicies()
+    .filter(policy => policy.workspaceRetention === 'retain')
+    .map(p => p.id);
 }
 
 export function retainsWorkspace(platformId: string | null): boolean {
