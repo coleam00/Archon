@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -19,6 +19,8 @@ const keys = [
   'PI_FIXTURE_TOKEN',
   'PI_HOST_ONLY_KEY',
   'PI_CONFIG_ONLY_KEY',
+  'PI_A',
+  'PI_B',
 ] as const;
 let previous: Record<string, string | undefined>;
 let root: string;
@@ -104,7 +106,7 @@ describe('Pi native credentials', () => {
       source: 'native',
     });
   });
-  test('uses assistant config model and key with request env taking precedence', async () => {
+  test('uses assistant config model and key; an empty request value does not hide it', async () => {
     const request = {
       assistantConfig: { model: 'anthropic/claude-sonnet-4-6', env: { ANTHROPIC_API_KEY: secret } },
       env: {},
@@ -116,7 +118,7 @@ describe('Pi native credentials', () => {
     });
     expect(
       await new PiProvider().checkCredential({ ...request, env: { ANTHROPIC_API_KEY: '' } })
-    ).toEqual({ state: 'not_connected', source: 'native' });
+    ).toEqual({ state: 'usable', source: 'native' });
   });
   test('an expired OAuth grant reports a failed native refresh', async () => {
     writeFileSync(
@@ -431,23 +433,104 @@ describe('Pi native credentials', () => {
       expect(runCount()).toBe(2);
       expect(pin).toHaveBeenCalledTimes(1);
     });
-    test('a turn with no request env lets Pi read the real models.json', async () => {
-      // Pi resolves a host env reference itself, so no per-call models.json is written.
+    test("the pin gate reads Pi's credential store with the turn's abort signal", async () => {
+      localProvider(`!printf '${secret}'`);
+      const controller = new AbortController();
+      const list = spyOn(ModelRuntime.prototype, 'listCredentials');
+      try {
+        for await (const _chunk of new PiProvider().sendQuery('test', root, undefined, {
+          model: 'local/model',
+          abortSignal: controller.signal,
+        }));
+        expect(pin).toHaveBeenCalledTimes(1);
+        expect(list).toHaveBeenCalledWith({ signal: controller.signal });
+      } finally {
+        list.mockRestore();
+      }
+    });
+    test('a turn substitutes a host env reference into an owner-only file it removes', async () => {
       process.env.PI_HOST_ONLY_KEY = secret;
       localProvider('${PI_HOST_ONLY_KEY}');
       const realCreate = ModelRuntime.create.bind(ModelRuntime);
-      const create = spyOn(ModelRuntime, 'create').mockImplementation(options =>
-        realCreate(options)
-      );
+      let modelsPath: string | undefined;
+      let mode: number | undefined;
+      const create = spyOn(ModelRuntime, 'create').mockImplementation(options => {
+        modelsPath = options?.modelsPath ?? undefined;
+        if (modelsPath) mode = statSync(modelsPath).mode & 0o777;
+        return realCreate(options);
+      });
       try {
         await runTurn();
-        expect(create).toHaveBeenCalledTimes(1);
-        expect(create.mock.calls[0]?.[0]?.modelsPath).toBeUndefined();
       } finally {
         create.mockRestore();
       }
+      expect(modelsPath).toBeString();
+      expect(mode).toBe(0o600);
+      expect(existsSync(modelsPath ?? '')).toBe(false);
       expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
     });
+    test('the check and a turn resolve a models.json ${VAR} alike from every env source', async () => {
+      // Every request, assistant config and host assignment of each variable: absent,
+      // empty, or a value naming its source, so the key a turn sends shows which one won.
+      const sources = ['request', 'config', 'host'] as const;
+      // The check reports only a state; the key it resolved is the last getAuth result.
+      const getAuth = spyOn(ModelRuntime.prototype, 'getAuth');
+      const mismatches: string[] = [];
+      let cases = 0;
+      try {
+        for (const vars of [['PI_A'], ['PI_A', 'PI_B']]) {
+          localProvider(vars.map(name => `\${${name}}`).join('-'));
+          const slots = vars.flatMap(name => sources.map(source => ({ name, source })));
+          for (let combo = 0; combo < 3 ** slots.length; combo++) {
+            const env = { request: {}, config: {}, host: {} } as Record<
+              (typeof sources)[number],
+              Record<string, string>
+            >;
+            slots.forEach(({ name, source }, slot) => {
+              const choice = Math.floor(combo / 3 ** slot) % 3;
+              if (choice === 1) env[source][name] = '';
+              if (choice === 2) env[source][name] = `${name}-${source}`;
+            });
+            const setHost = (): void => {
+              for (const name of vars) delete process.env[name];
+              Object.assign(process.env, env.host);
+            };
+            cases++;
+
+            setHost();
+            getAuth.mockClear();
+            const status = await new PiProvider().checkCredential({
+              model: 'local/model',
+              assistantConfig: { env: env.config },
+              env: env.request,
+              signal: AbortSignal.timeout(2000),
+            });
+            const resolution = getAuth.mock.results.at(-1)?.value as ReturnType<
+              ModelRuntime['getAuth']
+            >;
+            const checked =
+              status.state === 'usable' ? `Bearer ${(await resolution)?.auth.apiKey}` : 'none';
+
+            setHost();
+            authorizations.length = 0;
+            for await (const _chunk of new PiProvider().sendQuery('test', root, undefined, {
+              model: 'local/model',
+              assistantConfig: { env: env.config },
+              env: env.request,
+            }));
+            const sent = [...new Set(authorizations)].join(', ') || 'none';
+
+            if (checked !== sent) {
+              mismatches.push(`${JSON.stringify(env)}: check ${checked}, turn ${sent}`);
+            }
+          }
+        }
+      } finally {
+        getAuth.mockRestore();
+      }
+      expect(cases).toBe(27 + 729);
+      expect(mismatches).toEqual([]);
+    }, 300_000);
     test('a stored auth.json key is not pinned when another provider check throws', async () => {
       localProvider(`!printf '${secret}-from-command'`);
       writeFileSync(

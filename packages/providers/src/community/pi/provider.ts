@@ -31,7 +31,6 @@ import { parsePiModelRef } from './model-ref';
 import {
   createRequestModelRuntime,
   getUserModelsStorePath,
-  type CustomProviderEnvScope,
   type RequestModelRuntime,
 } from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
@@ -416,19 +415,14 @@ async function resolvePiTurnAuth(
  * The env a Pi turn authenticates with; the login check builds it here too, so both read
  * the same keys. `credentialEnv` layers request env over process.env over assistant config
  * env (a turn copies config env into process.env only where a key is unset). It supplies
- * the env key that overrides a stored credential and the per-run auth path, and lists the
- * values to redact from Pi's errors.
- *
- * A turn's models.json `${VAR}` substitution does not use that layering: it reads the
- * per-call request env only. Pi resolves a host env reference from the real models.json
- * itself, and a substituted per-call copy is lost when the runtime later refreshes, so a
- * copy is written only when the request env supplies a value. The login check substitutes
- * from `credentialEnv` instead (see `checkCredential`).
+ * the env key that overrides a stored credential, the per-run auth path, and the values a
+ * models.json `${VAR}` reference is substituted with, and lists the values to redact from
+ * Pi's errors.
  */
 interface PiAuthEnv {
   credentialEnv: Readonly<Record<string, string>>;
   credentialValues: readonly string[];
-  modelsSubstitution: Omit<CustomProviderEnvScope, 'provider'>;
+  protectedEnvKeys: readonly string[] | undefined;
 }
 
 function piAuthEnv(
@@ -440,11 +434,16 @@ function piAuthEnv(
   for (const [key, value] of Object.entries(process.env)) {
     if (value !== undefined) credentialEnv[key] = value;
   }
-  Object.assign(credentialEnv, requestEnv);
+  // An empty request value counts as unset, as Pi's own `${VAR}` lookup
+  // (`env[name] || process.env[name]`) treats it; an empty host value still hides config
+  // env, because a turn copies config env into process.env only where a key is unset.
+  for (const [key, value] of Object.entries(requestEnv ?? {})) {
+    if (value) credentialEnv[key] = value;
+  }
   return {
     credentialEnv,
     credentialValues: collectCredentialValues(credentialEnv, protectedEnvKeys),
-    modelsSubstitution: { requestEnv, protectedEnvKeys },
+    protectedEnvKeys,
   };
 }
 
@@ -477,11 +476,11 @@ async function applyPiEnvOverride(
  * `piAuthEnv` layers over process.env for a shell-level override.
  *
  * For a provider with no Archon env mapping, `${VAR}` references in the user's models.json
- * are substituted from the per-call request env (`modelsSubstitution`, not the layered
- * env) into a per-call models.json, because the SDK resolves them only from
- * `process.env`, which Archon keeps free of per-call secrets (see `./request-auth.ts`).
- * The caller must `release()` the result once it stops using the runtime: the file lives
- * as long as the runtime does.
+ * are substituted from `credentialEnv` into a per-call models.json. The SDK resolves them
+ * only from `process.env`, which holds neither request env nor, in the login check, config
+ * env; substituting from the one env makes the check and a turn resolve the same value
+ * (see `./request-auth.ts`). The caller must `release()` the result once it stops using
+ * the runtime: the file lives as long as the runtime does.
  */
 async function createPiModelRuntime(
   piCodingAgent: typeof import('@earendil-works/pi-coding-agent'),
@@ -492,7 +491,9 @@ async function createPiModelRuntime(
   return createRequestModelRuntime(
     options => piCodingAgent.ModelRuntime.create({ ...options, ...(signal ? { signal } : {}) }),
     authEnv.credentialEnv.ARCHON_PI_AUTH_PATH?.trim() || undefined,
-    PI_PROVIDER_ENV_VARS[provider] ? undefined : { provider, ...authEnv.modelsSubstitution }
+    PI_PROVIDER_ENV_VARS[provider]
+      ? undefined
+      : { provider, env: authEnv.credentialEnv, protectedEnvKeys: authEnv.protectedEnvKeys }
   );
 }
 
@@ -509,25 +510,19 @@ export class PiProvider implements IAgentProvider {
     let { credentialValues } = piAuthEnv(undefined, request.env);
     try {
       const piConfig = parsePiConfig(request.assistantConfig ?? {});
-      const turnEnv = piAuthEnv(piConfig.env, request.env);
-      // A turn copies config env into process.env, where Pi resolves a `${VAR}` itself. The
-      // check leaves process.env alone, so it substitutes from the layered env to resolve
-      // what a turn resolves.
-      const authEnv: PiAuthEnv = {
-        ...turnEnv,
-        modelsSubstitution: { ...turnEnv.modelsSubstitution, requestEnv: turnEnv.credentialEnv },
-      };
+      const authEnv = piAuthEnv(piConfig.env, request.env);
       credentialValues = authEnv.credentialValues;
       signal.throwIfAborted();
       ensurePiPackageDirShim();
       const piCodingAgent = await import('@earendil-works/pi-coding-agent');
       const parsed = resolvePiModel(request.model ?? piConfig.model, process.cwd(), piCodingAgent);
-      const { runtime, release } = await createPiModelRuntime(
+      const requestModelRuntime = await createPiModelRuntime(
         piCodingAgent,
         parsed.provider,
         authEnv,
         signal
       );
+      const { runtime } = requestModelRuntime;
       try {
         await applyPiEnvOverride(runtime, parsed.provider, authEnv.credentialEnv);
         const { status } = await resolvePiTurnAuth(
@@ -540,7 +535,7 @@ export class PiProvider implements IAgentProvider {
         );
         return status;
       } finally {
-        release();
+        requestModelRuntime.release();
       }
     } catch (error) {
       return {

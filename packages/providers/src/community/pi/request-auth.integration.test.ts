@@ -18,7 +18,7 @@
  * (no `mock.module` shim) and asserts:
  *   - a credentialless custom provider (`apiKey: '$VAR'`) loaded from a
  *     per-call models.json with substituted values resolves the credential
- *     correctly when the var is in `requestEnv`;
+ *     correctly when the var is in the substitution env;
  *   - the same provider with `${VAR}` left literal (because the var is
  *     missing or protected) fails with the SDK's standard "no value for
  *     env var" error — confirming the protected-env contract holds at the
@@ -252,7 +252,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
 
       const perCallPath = buildCustomProviderModelsPath({
         provider: 'mygw',
-        requestEnv: { MYGW_API_KEY: 'request-secret', MYGW_PROJECT: 'project-123' },
+        env: { MYGW_API_KEY: 'request-secret', MYGW_PROJECT: 'project-123' },
         protectedEnvKeys: [],
       });
       expect(perCallPath).toBeDefined();
@@ -293,7 +293,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
       // No `${VAR}` references in the user entry → no per-call file needed.
       const perCallPath = buildCustomProviderModelsPath({
         provider: 'mygw',
-        requestEnv: { MYGW_API_KEY: 'unused' },
+        env: { MYGW_API_KEY: 'unused' },
         protectedEnvKeys: [],
       });
       expect(perCallPath).toBeUndefined();
@@ -312,7 +312,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
   test.skipIf(!realSdkAvailable)(
     'protected ${VAR} references produce a per-call file with a host-env-independent blocker placeholder',
     async () => {
-      // GH_TOKEN is in requestEnv but is protected — the per-call file must
+      // GH_TOKEN is in the substitution env but is protected — the per-call file must
       // NOT contain the literal GH_TOKEN value (security contract), AND it
       // must NOT fall through to process.env.GH_TOKEN at SDK resolve time.
       makeUserModelsDir({
@@ -326,7 +326,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
 
       const perCallPath = buildCustomProviderModelsPath({
         provider: 'mygw',
-        requestEnv: { GH_TOKEN: 'acting-user-secret' },
+        env: { GH_TOKEN: 'acting-user-secret' },
         protectedEnvKeys: ['GH_TOKEN'],
       });
       // Substitution happened (placeholder written). The literal protected
@@ -339,7 +339,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
       expect(written.providers.mygw.apiKey).not.toContain('acting-user-secret');
 
       // The SDK's own resolveConfigValue fails because the placeholder name
-      // is provably absent from any context — no requestEnv, no process.env
+      // is provably absent from any context — no substitution env, no process.env
       // can supply `__ARCHON_BLOCKED_GH_TOKEN__`. The error message names the
       // placeholder so an operator debugging the failure sees the
       // deliberate-blocker message rather than guessing why a credential
@@ -375,7 +375,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
 
       const perCallPath = buildCustomProviderModelsPath({
         provider: 'mygw',
-        requestEnv: { GH_TOKEN: 'acting-user-secret' },
+        env: { GH_TOKEN: 'acting-user-secret' },
         protectedEnvKeys: ['GH_TOKEN'],
       });
       expect(perCallPath).toBeDefined();
@@ -425,7 +425,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
       const { runtime, release } = await createRequestModelRuntime(
         options => ModelRuntime.create(options),
         undefined,
-        { provider: 'mygw', requestEnv: { MYGW_API_KEY: 'request-secret' }, protectedEnvKeys: [] }
+        { provider: 'mygw', env: { MYGW_API_KEY: 'request-secret' }, protectedEnvKeys: [] }
       );
 
       runtime.registerProvider('other', {
@@ -503,7 +503,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
       const { runtime, release } = await createRequestModelRuntime(
         options => ModelRuntime.create(options),
         undefined,
-        { provider: 'mygw', requestEnv: { MYGW_API_KEY: 'request-secret' }, protectedEnvKeys: [] }
+        { provider: 'mygw', env: { MYGW_API_KEY: 'request-secret' }, protectedEnvKeys: [] }
       );
       try {
         expect(runtime.getModel('openrouter', 'archon-test/store-only-model')).toBeDefined();
@@ -538,7 +538,7 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
 
       const perCallPath = buildCustomProviderModelsPath({
         provider: 'mygw',
-        requestEnv: { MYGW_API_KEY: 'request-secret' },
+        env: { MYGW_API_KEY: 'request-secret' },
         protectedEnvKeys: [],
       });
       expect(perCallPath).toBeDefined();

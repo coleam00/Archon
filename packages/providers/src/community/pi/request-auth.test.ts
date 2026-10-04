@@ -73,11 +73,11 @@ describe('buildCustomProviderModelsPath', () => {
     restoreEnv('COPILOT_GITHUB_TOKEN', originalCopilotToken);
   });
 
-  test('substitutes ${VAR} in apiKey and headers against requestEnv', () => {
+  test('substitutes ${VAR} in apiKey and headers against env', () => {
     createUserModelsDir('prefix-${MYGW_API_KEY}', { 'X-Project': '${MYGW_PROJECT}' });
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: {
+      env: {
         MYGW_API_KEY: 'request-secret',
         MYGW_PROJECT: 'project-123',
       },
@@ -95,21 +95,11 @@ describe('buildCustomProviderModelsPath', () => {
     expect(written.providers.mygw.models).toEqual([{ id: 'demo' }]);
   });
 
-  test('returns undefined when requestEnv is undefined', () => {
-    createUserModelsDir('prefix-${MYGW_API_KEY}');
-    const result = buildCustomProviderModelsPath({
-      provider: 'mygw',
-      requestEnv: undefined,
-      protectedEnvKeys: [],
-    });
-    expect(result).toBeUndefined();
-  });
-
   test('returns undefined when user models.json does not exist', () => {
     process.env.PI_CODING_AGENT_DIR = '/definitely/does/not/exist';
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'request-secret' },
+      env: { MYGW_API_KEY: 'request-secret' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -119,7 +109,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('prefix-${MYGW_API_KEY}');
     const result = buildCustomProviderModelsPath({
       provider: 'nonexistent',
-      requestEnv: { MYGW_API_KEY: 'request-secret' },
+      env: { MYGW_API_KEY: 'request-secret' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -131,7 +121,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('literal-key');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'request-secret' },
+      env: { MYGW_API_KEY: 'request-secret' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -141,12 +131,12 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('${GH_TOKEN}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { GH_TOKEN: 'acting-user-secret' },
+      env: { GH_TOKEN: 'acting-user-secret' },
       protectedEnvKeys: ['GH_TOKEN'],
     });
     // Protected refs ARE substituted into the per-call file — but with a
     // structurally-valid placeholder (one identifier the SDK parses as an
-    // env reference) that is provably absent from both requestEnv and
+    // env reference) that is provably absent from both env and
     // process.env. The SDK's own resolver then fails at request time with
     // `Failed to resolve API key from environment variable:
     // __ARCHON_BLOCKED_GH_TOKEN__` — the failure is host-environment-
@@ -163,7 +153,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('key-${GH_TOKEN}', { Authorization: 'Bearer ${GH_TOKEN}' });
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { GH_TOKEN: 'acting-user-secret' },
+      env: { GH_TOKEN: 'acting-user-secret' },
       protectedEnvKeys: ['GH_TOKEN'],
     });
     expect(result).toBeDefined();
@@ -175,11 +165,11 @@ describe('buildCustomProviderModelsPath', () => {
     expect(JSON.stringify(written.providers.mygw)).not.toContain('acting-user-secret');
   });
 
-  test('does not substitute ${VAR} references absent from requestEnv', () => {
+  test('does not substitute ${VAR} references absent from env', () => {
     createUserModelsDir('prefix-${MYGW_API_KEY}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { OTHER_VAR: 'some-value' },
+      env: { OTHER_VAR: 'some-value' },
       protectedEnvKeys: [],
     });
     // Missing-reference path: leave template unchanged; SDK surface its
@@ -191,7 +181,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('price=$$5.00 ${MYGW_API_KEY}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'token-1' },
+      env: { MYGW_API_KEY: 'token-1' },
       protectedEnvKeys: [],
     });
     expect(result).toBeDefined();
@@ -203,7 +193,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('$!bang ${MYGW_API_KEY}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'token-2' },
+      env: { MYGW_API_KEY: 'token-2' },
       protectedEnvKeys: [],
     });
     expect(result).toBeDefined();
@@ -220,7 +210,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('${MYGW_API_KEY}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: '' },
+      env: { MYGW_API_KEY: '' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -235,7 +225,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('${GH_TOKEN}${MISSING_VAR}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { GH_TOKEN: 'acting-user-secret' },
+      env: { GH_TOKEN: 'acting-user-secret' },
       protectedEnvKeys: ['GH_TOKEN'],
     });
     expect(result).toBeDefined();
@@ -250,7 +240,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('${GH_TOKEN}', { 'X-Extra': '${MISSING_VAR}' });
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { GH_TOKEN: 'acting-user-secret' },
+      env: { GH_TOKEN: 'acting-user-secret' },
       protectedEnvKeys: ['GH_TOKEN'],
     });
     expect(result).toBeDefined();
@@ -287,7 +277,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('!get-key --account $MYGW_API_KEY');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'request-secret' },
+      env: { MYGW_API_KEY: 'request-secret' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -297,7 +287,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('${MYGW_API_KEY}-suffix');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'token-3' },
+      env: { MYGW_API_KEY: 'token-3' },
       protectedEnvKeys: [],
     });
     expect(result).toBeDefined();
@@ -312,7 +302,7 @@ describe('buildCustomProviderModelsPath', () => {
     });
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'token-4', MYGW_PROJECT: 'proj-x' },
+      env: { MYGW_API_KEY: 'token-4', MYGW_PROJECT: 'proj-x' },
       protectedEnvKeys: [],
     });
     expect(result).toBeDefined();
@@ -328,7 +318,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('literal-key', { 'X-Project': 42 as unknown as string });
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'ignored' },
+      env: { MYGW_API_KEY: 'ignored' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -348,7 +338,7 @@ describe('buildCustomProviderModelsPath', () => {
       createUserModelsDir(`$${credentialEnvKey}`);
       const result = buildCustomProviderModelsPath({
         provider: 'mygw',
-        requestEnv: { [credentialEnvKey]: 'acting-user-secret' },
+        env: { [credentialEnvKey]: 'acting-user-secret' },
         protectedEnvKeys: [credentialEnvKey],
       });
       // Two layered guarantees for the security contract:
@@ -377,7 +367,7 @@ describe('buildCustomProviderModelsPath', () => {
 
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'overridden-token' },
+      env: { MYGW_API_KEY: 'overridden-token' },
       protectedEnvKeys: [],
     });
     expect(result).toBeDefined();
@@ -400,7 +390,7 @@ describe('buildCustomProviderModelsPath', () => {
 
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'tok' },
+      env: { MYGW_API_KEY: 'tok' },
       protectedEnvKeys: [],
     });
     expect(result).toBeDefined();
@@ -416,7 +406,7 @@ describe('buildCustomProviderModelsPath', () => {
 
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'tok' },
+      env: { MYGW_API_KEY: 'tok' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -429,7 +419,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('prefix-${UNCLOSED');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { UNCLOSED: 'value' },
+      env: { UNCLOSED: 'value' },
       protectedEnvKeys: [],
     });
     // The literal `$` is in the apiKey, so `value.includes('$')` returns
@@ -449,7 +439,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('${1bad}');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { '1bad': 'value' },
+      env: { '1bad': 'value' },
       protectedEnvKeys: [],
     });
     if (result !== undefined) {
@@ -462,7 +452,7 @@ describe('buildCustomProviderModelsPath', () => {
     createUserModelsDir('end-with-dollar$');
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'tok' },
+      env: { MYGW_API_KEY: 'tok' },
       protectedEnvKeys: [],
     });
     // Trailing `$` with no following character → literal `$`.
@@ -479,7 +469,7 @@ describe('buildCustomProviderModelsPath', () => {
 
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'tok' },
+      env: { MYGW_API_KEY: 'tok' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();
@@ -495,7 +485,7 @@ describe('buildCustomProviderModelsPath', () => {
 
     const result = buildCustomProviderModelsPath({
       provider: 'mygw',
-      requestEnv: { MYGW_API_KEY: 'tok' },
+      env: { MYGW_API_KEY: 'tok' },
       protectedEnvKeys: [],
     });
     expect(result).toBeUndefined();

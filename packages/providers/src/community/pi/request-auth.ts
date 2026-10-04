@@ -15,7 +15,9 @@
  * substituted values and pass it as `modelsPath` to `ModelRuntime.create()`.
  * Pi's own `ModelConfig.load` then resolves the literal directly — no
  * `${VAR}` substitution at request time, so the missing-fallback path can't
- * fire.
+ * fire. The caller passes the env to substitute from: the Pi provider passes
+ * one layered env (request over process over assistant config), so its login
+ * check and a turn resolve every reference the same way.
  *
  * The protected-env contract: protected `${VAR}` references are substituted
  * with a structurally-valid but provably-unresolvable placeholder
@@ -42,7 +44,8 @@ import type { CreateModelRuntimeOptions, ModelRuntime } from '@earendil-works/pi
 
 export interface CustomProviderEnvScope {
   provider: string;
-  requestEnv: Readonly<Record<string, string>> | undefined;
+  /** The values `${VAR}` references are substituted with. */
+  env: Readonly<Record<string, string>>;
   protectedEnvKeys: readonly string[] | undefined;
 }
 
@@ -110,8 +113,7 @@ interface SubstitutionResult {
  *
  * Mirrors the SDK's `resolveConfigValue` (`@earendil-works/pi-coding-agent/dist/core/resolve-config-value.js`)
  * — same parser, same `${VAR}` / `$$` / `$!` semantics — except:
- *   - never falls back to `process.env` (Archon keeps per-call secrets off
- *     process.env; a fallback would silently expose the host shell's value);
+ *   - never reads `process.env` itself: the caller decides which env applies;
  *   - protected keys are substituted with a structurally-valid placeholder
  *     (`${__ARCHON_BLOCKED_${VAR}__}`) so the SDK's own resolver surfaces a
  *     host-environment-independent "no value for env var" error at request
@@ -168,7 +170,7 @@ function resolveProviderConfigValue(
       // Placeholder is one valid identifier the SDK's parser recognises;
       // the SDK attempts to resolve `__ARCHON_BLOCKED_<VAR>` at request
       // time and fails (the name is provably absent from any context —
-      // neither requestEnv nor process.env can supply it). The literal
+      // neither the substitution env nor process.env can supply it). The literal
       // protected value never appears in the per-call file. This
       // substitution is UNCONDITIONAL — a different, merely-missing ref in
       // the same template must never cancel it (the bail-out above only
@@ -224,13 +226,12 @@ export function getUserModelsStorePath(): string {
 
 /**
  * Build a per-call `models.json` with the targeted custom provider's
- * `${VAR}` references substituted against `requestEnv`. Returns the path to
+ * `${VAR}` references substituted against `env`. Returns the path to
  * the written file (suitable for `ModelRuntime.create({ modelsPath })`), or
  * `undefined` when no substitution applies and the SDK's default `modelsPath`
  * lookup should be left in place.
  *
  * Returns `undefined` when:
- *   - `requestEnv` is undefined (no per-call env to substitute against);
  *   - the user's `models.json` doesn't exist or isn't valid JSON;
  *   - the targeted provider isn't in `models.json`;
  *   - no `${VAR}` reference in the provider's `apiKey`/`headers` produces a
@@ -240,8 +241,7 @@ export function getUserModelsStorePath(): string {
  *     so a file is written whenever one is present.
  */
 export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): string | undefined {
-  const { provider, requestEnv, protectedEnvKeys } = scope;
-  if (requestEnv === undefined) return undefined;
+  const { provider, env, protectedEnvKeys } = scope;
 
   const userModelsPath = getUserModelsPath();
   if (!existsSync(userModelsPath)) return undefined;
@@ -267,7 +267,7 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
   let anySubstitution = false;
 
   if (typeof substituted.apiKey === 'string') {
-    const result = resolveProviderConfigValue(substituted.apiKey, requestEnv, protectedSet);
+    const result = resolveProviderConfigValue(substituted.apiKey, env, protectedSet);
     if (result?.didSubstitute) {
       substituted.apiKey = result.resolved;
       anySubstitution = true;
@@ -282,7 +282,7 @@ export function buildCustomProviderModelsPath(scope: CustomProviderEnvScope): st
     const headers = substituted.headers as Record<string, unknown>;
     for (const [key, value] of Object.entries(headers)) {
       if (typeof value !== 'string') continue;
-      const result = resolveProviderConfigValue(value, requestEnv, protectedSet);
+      const result = resolveProviderConfigValue(value, env, protectedSet);
       if (result?.didSubstitute) {
         headers[key] = result.resolved;
         anySubstitution = true;
