@@ -481,7 +481,11 @@ describe('WorktreeProvider', () => {
       worktreeExistsSpy
         .mockResolvedValueOnce(false) // No existing checkout to adopt.
         .mockResolvedValueOnce(true); // Git registered the attempted checkout before failing.
-      mockAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      mockAccess.mockImplementation(async path => {
+        if (path !== baseRequest.canonicalRepoPath) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+      });
 
       const request: IsolationRequest = {
         ...baseRequest,
@@ -3395,8 +3399,11 @@ describe('WorktreeProvider', () => {
         prSha: 'abc123',
       };
 
-      // Directory doesn't exist initially (no orphan directory to clean)
-      accessSpy.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      accessSpy.mockImplementation(async path => {
+        if (path !== request.canonicalRepoPath) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+      });
 
       // First call: worktreeExists returns false (not adopted)
       // Second call (in cleanup): worktreeExists returns true (orphan exists)
@@ -3444,8 +3451,11 @@ describe('WorktreeProvider', () => {
         prSha: 'abc123',
       };
 
-      // Directory doesn't exist initially (no orphan directory to clean)
-      accessSpy.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      accessSpy.mockImplementation(async path => {
+        if (path !== request.canonicalRepoPath) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+      });
 
       // First call: worktreeExists returns false (not adopted)
       // Second call (in cleanup): worktreeExists returns true (orphan exists)

@@ -34,7 +34,7 @@ import {
 import type { WorktreeBaseOverride } from '@archon/git';
 import { isInsideArchonWorkspaces, isPathInside } from '@archon/paths';
 import type { BranchName, RepoPath, WorktreeInfo } from '@archon/git';
-import { recordCleanupFailure } from '../errors';
+import { MissingProjectDirectoryError, recordCleanupFailure } from '../errors';
 import { copyWorktreeFiles } from '../worktree-copy';
 import type {
   DestroyResult,
@@ -185,6 +185,13 @@ export class WorktreeProvider implements IIsolationProvider {
    * object or `null`, never a second chance to reload.
    */
   async create(request: IsolationRequest): Promise<IsolatedEnvironment> {
+    if (!(await this.directoryExists(request.canonicalRepoPath))) {
+      throw new MissingProjectDirectoryError(
+        request.canonicalRepoPath,
+        request.codebaseName ?? request.codebaseId
+      );
+    }
+
     let repoConfig: WorktreeCreateConfig | null;
     try {
       repoConfig = await this.loadConfig(request.canonicalRepoPath);

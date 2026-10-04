@@ -10,7 +10,7 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -20,6 +20,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 import { WorktreeProvider } from './worktree';
 import type { IsolationRequest } from '../types';
+import { MissingProjectDirectoryError } from '../errors';
 
 // The provider logs a full setup failure and its rollback. Both are expected here,
 // and a child logger takes the level set before it is created.
@@ -40,6 +41,41 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   }
   return stdout;
 }
+
+describe('missing registered project directory', () => {
+  const trackTempRoot = trackTempRoots();
+
+  test.each([false, true])(
+    'fails before config or directory creation (loader throws: %s)',
+    async loaderThrows => {
+      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-workspace-')));
+      const repoPath = join(root, 'source');
+      const provider = new WorktreeProvider(() => {
+        if (loaderThrows) throw new Error('config must not load for a missing project');
+        return Promise.resolve(null);
+      });
+      const error = await provider
+        .create({
+          codebaseId: 'cb-missing',
+          codebaseName: CODEBASE_NAME,
+          canonicalRepoPath: toRepoPath(repoPath),
+          workflowType: 'issue',
+          identifier: '1778',
+        })
+        .catch((error: unknown) => error);
+
+      expect(error).toBeInstanceOf(MissingProjectDirectoryError);
+      if (!(error instanceof MissingProjectDirectoryError)) {
+        throw new Error('expected a missing-directory error');
+      }
+      expect(error.message).toContain(repoPath);
+      expect(error.message).toContain(CODEBASE_NAME);
+      expect(error.message).toContain('Restore');
+      expect(error.message).toContain('re-register');
+      expect(await readdir(root)).toEqual([]);
+    }
+  );
+});
 
 describe('WorktreeProvider against real git', () => {
   const trackTempRoot = trackTempRoots();
@@ -136,6 +172,24 @@ describe('WorktreeProvider against real git', () => {
   afterEach(() => {
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  test('an existing repository with a failed fetch still receives network guidance', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', join(root, 'missing-remote.git'));
+
+    await expect(
+      provider.create({
+        codebaseId: request.codebaseId,
+        codebaseName: request.codebaseName,
+        canonicalRepoPath: request.canonicalRepoPath,
+        workflowType: 'issue',
+        identifier: '1778',
+        baseBranch: toBranchName('main'),
+      })
+    ).rejects.toThrow('Check your network connection and remote configuration.');
+
+    expect(existsSync(repoPath)).toBe(true);
+    expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
   });
 
   test('a setup failure after `git worktree add` leaves nothing for the next run to adopt', async () => {
