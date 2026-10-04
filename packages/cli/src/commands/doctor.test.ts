@@ -629,6 +629,11 @@ describe('checkAssistantLogin', () => {
         message: expect.stringContaining('anthropic'),
       });
       expect(native).toHaveBeenCalledTimes(2);
+      // A credential Pi cannot use does not soften a missing native login.
+      rows.mockResolvedValue([{ provider: 'not-a-pi-vendor', kind: 'api_key', label: null }]);
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+      });
       rows.mockResolvedValue([]);
       expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
         status: 'fail',

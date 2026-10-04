@@ -202,6 +202,20 @@ describe('Pi native credentials', () => {
         restore();
       }
     });
+    test('is redacted from the check when the runtime cannot be created', async () => {
+      const create = spyOn(ModelRuntime, 'create').mockRejectedValue(
+        new Error(`models config rejected ${secret}`)
+      );
+      try {
+        expect(await check(undefined, fixtureEnv)).toEqual({
+          state: 'check_failed',
+          source: 'native',
+          evidence: 'models config rejected [REDACTED]',
+        });
+      } finally {
+        create.mockRestore();
+      }
+    });
     test('is redacted from the failed turn', async () => {
       const restore = await leakingRefresh();
       try {
@@ -267,19 +281,28 @@ describe('Pi native credentials', () => {
       failure: { class: 'auth' },
     });
   });
-  test('a node runs a models.json key command once, and doctor runs it once', async () => {
-    const runs = join(root, 'runs');
-    const runCount = (): number =>
-      existsSync(runs) ? readFileSync(runs, 'utf8').trim().split('\n').length : 0;
-    const authorizations: (string | null)[] = [];
-    const server = Bun.serve({
-      port: 0,
-      fetch(request) {
-        authorizations.push(request.headers.get('authorization'));
-        return Response.json({ error: { message: 'fixture rejection' } }, { status: 401 });
-      },
+  describe('a turn against a local server', () => {
+    let server: ReturnType<typeof Bun.serve>;
+    let authorizations: (string | null)[];
+    let pin: ReturnType<typeof spyOn<ModelRuntime, 'setRuntimeApiKey'>>;
+    beforeEach(() => {
+      authorizations = [];
+      server = Bun.serve({
+        port: 0,
+        fetch(request) {
+          authorizations.push(request.headers.get('authorization'));
+          return Response.json({ error: { message: 'fixture rejection' } }, { status: 401 });
+        },
+      });
+      pin = spyOn(ModelRuntime.prototype, 'setRuntimeApiKey');
+      // Each retry resolves the key again; one attempt keeps the counts about the node.
+      writeFileSync(join(root, 'settings.json'), JSON.stringify({ retry: { enabled: false } }));
     });
-    try {
+    afterEach(async () => {
+      pin.mockRestore();
+      await server.stop(true);
+    });
+    const localProvider = (apiKey?: string): void => {
       writeFileSync(
         join(root, 'models.json'),
         JSON.stringify({
@@ -287,28 +310,45 @@ describe('Pi native credentials', () => {
             local: {
               baseUrl: `http://127.0.0.1:${server.port}/v1`,
               api: 'openai-completions',
-              apiKey: `!printf 'run\\n' >> '${runs}'; printf '${secret}'`,
+              ...(apiKey ? { apiKey } : {}),
               models: [{ id: 'model', name: 'Local' }],
             },
           },
         })
       );
-      // Each retry resolves the key again; one attempt keeps the count about the node.
-      writeFileSync(join(root, 'settings.json'), JSON.stringify({ retry: { enabled: false } }));
+    };
+    const runTurn = async (): Promise<void> => {
+      for await (const _chunk of new PiProvider().sendQuery('test', root, undefined, {
+        model: 'local/model',
+      }));
+    };
+
+    test('a node runs a models.json key command once, and doctor runs it once', async () => {
+      const runs = join(root, 'runs');
+      const runCount = (): number =>
+        existsSync(runs) ? readFileSync(runs, 'utf8').trim().split('\n').length : 0;
+      localProvider(`!printf 'run\\n' >> '${runs}'; printf '${secret}'`);
 
       expect(await check('local/model')).toEqual({ state: 'usable', source: 'native' });
       expect(runCount()).toBe(1);
 
-      for await (const _chunk of new PiProvider().sendQuery('test', root, undefined, {
-        model: 'local/model',
-      }));
+      await runTurn();
       // The request carried the key the command printed, and the command ran once more.
       expect(authorizations.length).toBeGreaterThan(0);
       expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
       expect(runCount()).toBe(2);
-    } finally {
-      await server.stop(true);
-    }
+      expect(pin).toHaveBeenCalledTimes(1);
+    });
+    test('a stored auth.json key is not pinned, so Pi keeps resolving it', async () => {
+      localProvider();
+      writeFileSync(
+        join(root, 'auth.json'),
+        JSON.stringify({ local: { type: 'api_key', key: secret } })
+      );
+      await runTurn();
+      expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
+      expect(pin).not.toHaveBeenCalled();
+    });
   });
   test('a model only in the persisted catalog is checked as a turn checks it', async () => {
     // Pi's refresh restores the persisted pi.dev catalog, where models newer than the
