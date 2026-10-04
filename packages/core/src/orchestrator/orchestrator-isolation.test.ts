@@ -567,19 +567,17 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   }
 
-  test('adapter finalization also runs when source preparation fails before execution', async () => {
-    const finish = mock(async () => {});
+  test('nothing is prepared when source preparation fails', async () => {
+    const prepare = mock<NonNullable<IPlatformAdapter['prepareBackgroundConversation']>>(
+      async () => async () => {}
+    );
     mockPrepareWorkflowSource.mockRejectedValueOnce(new Error('capture failed'));
     await dispatchBackgroundWorkflow(
-      makeRoutingCtx({
-        platform: {
-          ...platform,
-          prepareBackgroundConversation: async () => finish,
-        },
-      }),
+      makeRoutingCtx({ platform: { ...platform, prepareBackgroundConversation: prepare } }),
       makeWorkflow()
     );
-    expect(finish).toHaveBeenCalledTimes(1);
+    await flushBackgroundExecution();
+    expect(prepare).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
