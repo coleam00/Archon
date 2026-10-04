@@ -15916,8 +15916,10 @@ describe('executeDagWorkflow -- approval node', () => {
     expect(store.failWorkflowRun).toHaveBeenCalled();
   });
 
-  it('delivers the nested proposal action at the approval gate, including a legacy local resume', async () => {
-    for (const resume of [false, true]) {
+  it('delivers the nested proposal action at the approval gate, including legacy local resumes', async () => {
+    // 'legacy' is a row an older binary wrote: the reader turns its declared_fields into
+    // depth-1 paths, and the producer's own schema must still authorize the nested read.
+    for (const resume of ['none', 'no-contract', 'legacy'] as const) {
       const store = createMockStore();
       await executeDagWorkflow(
         dagOptions({
@@ -15955,11 +15957,17 @@ describe('executeDagWorkflow -- approval node', () => {
               },
             ],
           },
-          workflowRun: makeWorkflowRun(`nested-gate-${String(resume)}`),
-          ...(resume
+          workflowRun: makeWorkflowRun(`nested-gate-${resume}`),
+          ...(resume !== 'none'
             ? {
                 priorCompletedNodes: new Map([
-                  ['review', { output: '{"proposal":{"action":"add"}}' }],
+                  [
+                    'review',
+                    {
+                      output: '{"proposal":{"action":"add"}}',
+                      ...(resume === 'legacy' ? { declaredOutputPaths: [['proposal']] } : {}),
+                    },
+                  ],
                 ]),
               }
             : {}),
@@ -25463,8 +25471,16 @@ describe('executeDagWorkflow -- loop_group node', () => {
       const store = createMockStore();
       const mockDeps = createMockDeps(store);
 
+      // The row's own contract authorizes `extra`, as one written under an older schema
+      // would; the body node's current definition still decides on resume.
       const priorCompletedNodes = new Map([
-        ['refine.work', { output: '{"type":"BUG","extra":"x","details":{"extra":"x"}}' }],
+        [
+          'refine.work',
+          {
+            output: '{"type":"BUG","extra":"x","details":{"extra":"x"}}',
+            declaredOutputPaths: [['type'], ['extra'], ['details'], ['details', 'extra']],
+          },
+        ],
       ]);
 
       const workflow: { name: string; nodes: DagNode[] } = {

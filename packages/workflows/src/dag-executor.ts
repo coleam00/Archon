@@ -4352,18 +4352,16 @@ async function executeLoopGroupBody(
     for (const id of directBodyIds) {
       const prior = outerNodeOutputs.get(bodyStepNamePrefix + id);
       if (!prior) continue;
-      // The persisted row's dotted `<groupId>.<bodyId>` step name never matches a
-      // TOP-LEVEL node id, so the pre-population `prior` came from (executeDagWorkflow's
-      // resume loop) can only supply a contract the ROW itself carried — a body
-      // `workflow:` node's child-owned projection (#2453). Otherwise re-derive from the
-      // body node's OWN current definition — the same source the in-process per-iteration
-      // path uses (~line 3111) — so a resumed $LOOP_PREV.<id>.output.<field> ref keeps
-      // the same schema-typo strictness a live iteration has, instead of silently
-      // degrading to lenient '' for a genuinely undeclared field.
+      // Same rule as executeDagWorkflow's resume loop: the body node's OWN current
+      // definition owns its contract — the source a live iteration uses — so a resumed
+      // $LOOP_PREV.<id>.output.<path> ref keeps the same strictness, and a row an older
+      // binary wrote (top-level fields only) cannot narrow it. The persisted row supplies
+      // only a contract the definition cannot state: a body `workflow:` node's
+      // child-owned projection (#2453).
       const bodyNodeDef = bodyNodesById.get(id);
       const declaredOutputPaths =
-        ('declaredOutputPaths' in prior ? prior.declaredOutputPaths : undefined) ??
-        (bodyNodeDef !== undefined ? definedOutputPaths(bodyNodeDef) : undefined);
+        (bodyNodeDef !== undefined ? definedOutputPaths(bodyNodeDef) : undefined) ??
+        ('declaredOutputPaths' in prior ? prior.declaredOutputPaths : undefined);
       restoredLoopPrevOutputs.set(id, {
         ...prior,
         ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
@@ -11199,15 +11197,16 @@ export async function executeDagWorkflow(
       const node = nodesById.get(nodeId);
       // Nodes flagged always_run re-execute on resume — leave them for fresh output.
       if (node?.always_run) continue;
-      // Prefer the contract the node actually completed under (#2453) — a `workflow:`
-      // node's is the CHILD's, which this definition does not state and re-derivation
-      // would therefore lose. Otherwise re-derive a schema-capable producer's declared
-      // field set from the loaded definition so its strict `$node.output.field` contract
-      // survives resume (#2091). A loop_group is the exception: its output_format is
-      // ignored, so it never gets a contract — but its persisted terminal payload
-      // (below) still rehydrates, matching fresh completion since #2637.
+      // A local producer's loaded definition owns its contract, so its strict
+      // `$node.output.<path>` contract survives resume (#2091) and matches the load-time
+      // check, even when the row was written by an older binary that recorded only
+      // top-level fields. The persisted contract serves producers whose definition states
+      // none: a `workflow:` node's is the CHILD's (#2453), and a wait node's is fixed by
+      // the engine. A loop_group gets none: its output_format is ignored, but its
+      // persisted terminal payload (below) still rehydrates, matching fresh completion
+      // since #2637.
       const declaredOutputPaths =
-        prior.declaredOutputPaths ?? (node !== undefined ? definedOutputPaths(node) : undefined);
+        (node !== undefined ? definedOutputPaths(node) : undefined) ?? prior.declaredOutputPaths;
       nodeOutputs.set(nodeId, {
         state: 'completed',
         output: prior.output,
