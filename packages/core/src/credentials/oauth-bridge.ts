@@ -96,10 +96,22 @@ export class OAuthCallbackPortBusyError extends Error {
   }
 }
 
+const ABORT_MESSAGES = {
+  'superseded-same-user': 'Login superseded by a newer attempt.',
+  'superseded-port-conflict': 'Login superseded by a newer attempt.',
+  expired: 'Login session expired.',
+  cancelled: 'Login cancelled.',
+  'test-reset': 'Test reset.',
+};
+
+type OAuthAbortCause =
+  | { reason: Exclude<keyof typeof ABORT_MESSAGES, 'superseded-port-conflict'> }
+  | { reason: 'superseded-port-conflict'; initiatedByUserId: string };
+
 /** Internal: injected into an aborted session's manual-code deferred (see header). */
 class OAuthLoginAbortedError extends Error {
-  constructor(message: string) {
-    super(message);
+  constructor(reason: OAuthAbortCause['reason']) {
+    super(ABORT_MESSAGES[reason]);
     this.name = 'OAuthLoginAbortedError';
   }
 }
@@ -123,6 +135,7 @@ function deferred<T>(): Deferred<T> {
 }
 
 interface OAuthSession {
+  sessionId: string;
   userId: string;
   provider: string;
   mode: OAuthMode;
@@ -157,9 +170,22 @@ const sessions = new Map<string, OAuthSession>();
  * 1455; #1963). Rejecting an already-resolved deferred is a no-op, so this is
  * safe after a code was submitted.
  */
-function abortSession(session: OAuthSession, reason: string): void {
+function abortSession(session: OAuthSession, cause: OAuthAbortCause): void {
   session.abort.abort();
-  session.codeDeferred.reject(new OAuthLoginAbortedError(reason));
+  session.codeDeferred.reject(new OAuthLoginAbortedError(cause.reason));
+  // Log at the abort boundary: device flows and already-resolved deferreds
+  // need not reject with the bridge's error, and some providers ignore aborts.
+  if (cause.reason !== 'test-reset') {
+    getLog().info(
+      {
+        userId: session.userId,
+        provider: session.provider,
+        sessionId: session.sessionId,
+        ...cause,
+      },
+      'oauth_bridge.login_aborted'
+    );
+  }
 }
 
 /** Abort + drop expired sessions; returns their settled promises so `start` can wait. */
@@ -168,7 +194,7 @@ function sweepExpired(): Promise<void>[] {
   const sweptSettled: Promise<void>[] = [];
   for (const [id, s] of sessions) {
     if (now > s.expiresAt) {
-      abortSession(s, 'Login session expired.');
+      abortSession(s, { reason: 'expired' });
       sweptSettled.push(s.settled);
       sessions.delete(id);
     }
@@ -264,7 +290,12 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   for (const [id, s] of sessions) {
     const callbackPortConflict = piProvider?.usesCallbackServer === true && s.provider === provider;
     if (s.userId === userId || callbackPortConflict) {
-      abortSession(s, 'Login superseded by a newer attempt.');
+      abortSession(
+        s,
+        s.userId === userId
+          ? { reason: 'superseded-same-user' }
+          : { reason: 'superseded-port-conflict', initiatedByUserId: userId }
+      );
       supersededSettled.push(s.settled);
       sessions.delete(id);
     }
@@ -277,6 +308,7 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
   }
   const sessionId = randomUUID();
   const session: OAuthSession = {
+    sessionId,
     userId,
     provider,
     mode: 'pending',
@@ -334,6 +366,7 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
         signal: session.abort.signal,
       })
     : runOpenAiManualLogin(session);
+  getLog().info({ userId, provider, sessionId, mode: session.mode }, 'oauth_bridge.login_started');
   session.settled = loginPromise
     .then(async (creds: DeliveryOAuthCredentials) => {
       await persistProviderOAuth(userId, provider, creds);
@@ -342,10 +375,9 @@ export async function startOAuth(userId: string, providerId: string): Promise<St
     })
     .catch((err: unknown) => {
       // An intentional cancel (supersede / expiry sweep / cancelOAuth) unwinding
-      // through pi's login is expected — log quietly and don't mark error state.
+      // through pi's login is expected — don't mark error state.
       if (err instanceof OAuthLoginAbortedError) {
         session.firstSignal.resolve(true);
-        getLog().info({ userId, provider }, 'oauth_bridge.login_aborted');
         return;
       }
       const rawMessage = err instanceof Error ? err.message : 'OAuth login failed.';
@@ -421,7 +453,7 @@ export function pollOAuth(sessionId: string, userId: string, code?: string): Pol
     return { status: 'error', detail: 'Login session not found or expired.' };
   }
   if (Date.now() > session.expiresAt) {
-    abortSession(session, 'Login session expired.');
+    abortSession(session, { reason: 'expired' });
     sessions.delete(sessionId);
     return { status: 'error', detail: 'Login session expired.' };
   }
@@ -450,7 +482,7 @@ export function pollOAuth(sessionId: string, userId: string, code?: string): Pol
 export function cancelOAuth(sessionId: string, userId: string): void {
   const session = sessions.get(sessionId);
   if (session?.userId === userId) {
-    abortSession(session, 'Login cancelled.');
+    abortSession(session, { reason: 'cancelled' });
     sessions.delete(sessionId);
   }
 }
@@ -461,6 +493,6 @@ function sleep(ms: number): Promise<void> {
 
 /** Test-only: drop all in-flight sessions. */
 export function resetOAuthSessionsForTest(): void {
-  for (const s of sessions.values()) abortSession(s, 'Test reset.');
+  for (const s of sessions.values()) abortSession(s, { reason: 'test-reset' });
   sessions.clear();
 }
