@@ -1,9 +1,10 @@
+import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdir, open, readFile, rm } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
-import { BUNDLED_IS_BINARY, getArchonHome } from '@archon/paths';
+import { getArchonHome } from '@archon/paths';
 import {
   acceptStartReceipt,
   getResourceStartRequest,
@@ -60,15 +61,11 @@ async function loadTimerConfig(
   return value.data;
 }
 
-function cliPrefix(): [string, ...string[]] {
-  return BUNDLED_IS_BINARY ? [process.execPath] : [process.execPath, resolve(process.argv[1])];
-}
-
 /** Hand one admitted request to a detached `trigger execute` process with its own log. */
 async function spawnAdmitted(requestId: string, hostId: string): Promise<void> {
   const request = await getResourceStartRequest(requestId);
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
-  const [executable, ...prefix] = cliPrefix();
+  const [executable, ...prefix] = cliProgramArguments();
   const logDirectory = join(getArchonHome(), 'logs');
   await mkdir(logDirectory, { recursive: true });
   const log = await open(join(logDirectory, `trigger-run-${requestId}.log`), 'a', 0o600);
@@ -271,7 +268,7 @@ export async function triggerCommand(
       .digest('hex');
     if (args[0] === 'remove') await removeMacosNativeSchedule(scheduleId);
     else {
-      const [executable, ...prefix] = cliPrefix();
+      const [executable, ...prefix] = cliProgramArguments();
       await installMacosNativeSchedule({
         id: scheduleId,
         programArguments: [

@@ -37,14 +37,16 @@ export type { WorkflowEventRow } from './workflow-event';
 export { codebaseEnvVarSchema } from './env-var';
 export type { CodebaseEnvVar } from './env-var';
 
-// WorkflowRun (dashboard types)
+// WorkflowRun requests and dashboard types
 export {
   dashboardWorkflowRunSchema,
   listDashboardRunsOptionsSchema,
   dashboardRunsResultSchema,
+  signalWorkflowWaitRequestSchema,
 } from './workflow-run';
 export type {
   DashboardWorkflowRun,
   ListDashboardRunsOptions,
   DashboardRunsResult,
+  SignalWorkflowWaitRequest,
 } from './workflow-run';

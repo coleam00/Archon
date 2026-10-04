@@ -53,6 +53,10 @@ const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
 
 export class GitLabAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private readonly gitlabUrl: string;
   private readonly token: string;
   private readonly webhookSecret: string;

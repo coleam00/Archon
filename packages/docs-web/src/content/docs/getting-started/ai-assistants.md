@@ -13,6 +13,14 @@ You must configure **at least one** AI assistant. All five can be configured and
 
 For a canonical, at-a-glance comparison of which per-node features each provider supports, see the [Provider Capability Matrix](/reference/provider-capabilities/) — it is generated directly from the providers' capability declarations, so it never drifts from runtime behavior. The per-provider sections below add the field-level YAML syntax and caveats.
 
+## Deprecated providers
+
+OpenCode and GitHub Copilot are deprecated. No Archon maintainer owns them, and only Claude, Codex and Pi stay first-party. Both keep working as they do today and stay bundled until a community owner takes each one on. There is no removal date.
+
+The plan is for each to become a community plugin, published from its owner's repository and installed with [`archon plugin install`](/reference/cli/#plugin). [#3642](https://github.com/coleam00/Archon/issues/3642) builds the route that lets a provider load as a plugin. If you use OpenCode or Copilot and would maintain its plugin, or want to follow the plan, [open a discussion](https://github.com/coleam00/Archon/discussions).
+
+Archon shows the notice once per command or process: `archon doctor` reports it when one of these is your default assistant, `archon ai default` prints it when you select one, and a process logs one warning the first time a run uses one.
+
 ## Structured output guarantees
 
 When a workflow node sets `output_format`, the guarantee level depends on the provider's tier (exposed as `capabilities.structuredOutput` on `GET /api/providers`):
@@ -194,7 +202,7 @@ In compiled Archon binaries, if `codex` is not on the default PATH Archon expect
 3. **Vendor directory** (zero-config fallback): drop the native binary at `~/.archon/vendor/codex/codex` (or `codex.exe` on Windows).
 4. **Autodetect** (zero-config fallback): if the vendor directory is empty, Archon probes the common npm-global install layouts: `~/.npm-global/bin/codex` (POSIX), `/opt/homebrew/bin/codex` (macOS Apple Silicon), `/usr/local/bin/codex` (macOS Intel and Linux), `%APPDATA%\npm\codex.cmd` and `%USERPROFILE%\.npm-global\codex.cmd` (Windows). For other npm prefixes or custom layouts, set `CODEX_BIN_PATH` or the config path explicitly.
 
-Dev mode (`bun run`) does not require any of the above — the SDK resolves `codex` via `node_modules`.
+A source install (`bun run`) needs none of the above unless you pin a binary: it runs the native binary of the `@openai/codex` package Archon depends on, from `node_modules`.
 
 ### Authenticate
 
@@ -218,14 +226,24 @@ type %USERPROFILE%\.codex\auth.json
 
 ### Set Environment Variables
 
-Set all four environment variables in your `.env`:
+Set all four environment variables in your `.env`. They carry an `ARCHON_` prefix because Codex reads `CODEX_ACCESS_TOKEN` itself, so an unprefixed copy would override your own Codex login. If your `.env` still has the old `CODEX_*` names from an earlier Archon, re-run `archon setup` to move them to the new names, or rename all four yourself and delete the old lines. Until the next release Archon still reads the old names, with a deprecation warning, but only when `CODEX_ID_TOKEN` is set and no `ARCHON_CODEX_*` variable is.
 
 ```ini
-CODEX_ID_TOKEN=eyJhbGc...
-CODEX_ACCESS_TOKEN=eyJhbGc...
-CODEX_REFRESH_TOKEN=rt_...
-CODEX_ACCOUNT_ID=6a6a7ba6-...
+ARCHON_CODEX_ID_TOKEN=eyJhbGc...
+ARCHON_CODEX_ACCESS_TOKEN=eyJhbGc...
+ARCHON_CODEX_REFRESH_TOKEN=rt_...
+ARCHON_CODEX_ACCOUNT_ID=6a6a7ba6-...
 ```
+
+### Use an API key instead (optional)
+
+By default Codex uses the login in your Codex home (`~/.codex`, or `CODEX_HOME`), exactly as `codex login` left it. To run Codex on an OpenAI API key instead, set `CODEX_API_KEY` in Archon's environment, for example in `~/.archon/.env`. Archon hands the key to the Codex process in memory and never writes it into your Codex home, so your own login is untouched. Codex does not read `OPENAI_API_KEY`.
+
+### How Archon runs Codex
+
+Each Codex turn runs on its own `codex app-server` process, which Archon drives over JSON-RPC. Your Codex config, hooks and `AGENTS.md` guidance load as they do for `codex` itself. In direct chat your plugins and MCP servers load too. A workflow node loads only the MCP servers its `mcp:` file declares and the plugins its `plugins:` list names, with ChatGPT apps off (see [Plugins](/guides/authoring-workflows/#plugins)). A failed turn reports a typed failure class taken from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with the reset time when Codex reports a full window, so `autoResumeOnQuotaReset` can resume the run), `rate_limited`, `transient` for overload, network or a crashed process, `budget_exceeded` for Codex's session budget, `misconfigured` for a binary that is missing or cannot run, or a Codex that exits before answering (its stderr is kept as evidence), and `unknown` for the rest, including a thread that can no longer be resumed.
+
+Title generation preserves your native guidance and provider settings but starts with no ambient skills catalog, plugins, apps or MCP servers in a read-only sandbox, and falls back to a truncated message title on failure.
 
 ### Codex Configuration Options
 
@@ -261,6 +279,10 @@ Run `archon skill install` (or `archon setup`) to install the bundled
 See [Per-Node Skills](/guides/skills/#codex-compatibility) for behavior details and limitations.
 
 ## OpenCode (Community Provider)
+
+:::caution[Deprecated]
+This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+:::
 
 **SDK-backed community provider.** Archon's OpenCode adapter uses `@opencode-ai/sdk`, which provides a multi-provider AI coding agent with support for Anthropic, OpenAI, Google, and more through a unified interface.
 
@@ -423,7 +445,7 @@ assistants:
     # interactive: false       # keep extensions loaded, but give them no UI bridge
 ```
 
-Pi nodes that discover extension code run one at a time within an Archon process. Detached extension callbacks carry a stack but no session identifier, so this keeps any escaped exception attributable to exactly one node. Pi nodes with no discovered extensions, including nodes with `enableExtensions: false`, keep their normal concurrency.
+An exception that escapes a detached extension callback (a timer, a watcher) fails the Pi node that loaded that extension instead of the Archon process. The error carries a stack but no session identifier, so Archon routes it by the extension path in the stack. When several concurrent Pi nodes loaded that extension, Archon cannot tell which one failed, so each of them fails with an error that says so and carries the original stack. An escaped error that names no loaded extension still terminates the process.
 
 Most extensions need three config surfaces:
 
@@ -685,6 +707,10 @@ Unsupported YAML fields that are ignored trigger a visible warning from the dag-
 - [Pi on GitHub](https://github.com/earendil-works/pi) — upstream project.
 
 ## GitHub Copilot (Community Provider)
+
+:::caution[Deprecated]
+This provider is deprecated and waits for a community owner to publish it as a plugin. It keeps working until then. See [Deprecated providers](#deprecated-providers).
+:::
 
 **Use a GitHub Copilot subscription inside Archon workflows.** Drives the Copilot CLI via `@github/copilot-sdk`, supporting OpenAI, Anthropic via BYOK, Gemini, and the other models Copilot exposes — switch between them with the `model` field.
 

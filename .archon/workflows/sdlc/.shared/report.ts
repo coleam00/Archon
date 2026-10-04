@@ -149,14 +149,21 @@ function discoveries(artifacts: string, failed: boolean): string {
   }
   if (read.value.length === 0) return '';
 
-  const titles = read.value.map(entry => {
+  // Delivery files each record as an issue and writes its URL back as `issue`.
+  // Once every record has one, the tracker knows about them and the relay is moot.
+  const entries = read.value.map(entry => {
     const record = records([entry])[0];
-    return (record === undefined ? '' : display(record.title)) || '(untitled discovery)';
+    const title = (record === undefined ? '' : display(record.title)) || '(untitled discovery)';
+    const issue = record !== undefined && typeof record.issue === 'string' ? record.issue : '';
+    return { title, issue };
   });
-  const listed = titles.map(title => `- ${title}`).join('\n');
+  const listed = entries
+    .map(entry => `- ${entry.title}${entry.issue === '' ? '' : ` — ${entry.issue}`}`)
+    .join('\n');
+  const relay = entries.every(entry => entry.issue !== '') ? '' : `\n\n${DISCOVERY_RELAY}`;
   return (
     `\n\nDiscoveries (${read.value.length}):\n${listed}\n\n` +
-    `Report: ${join(artifacts, 'discoveries.md')}\n\n${DISCOVERY_RELAY}`
+    `Report: ${join(artifacts, 'discoveries.md')}${relay}`
   );
 }
 

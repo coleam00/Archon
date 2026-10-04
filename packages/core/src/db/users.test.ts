@@ -54,6 +54,20 @@ describe('users', () => {
     mockWithTransaction.mockClear();
   });
 
+  test('invalid platform fails before database access', async () => {
+    await expect(findOrCreateUserByPlatformIdentity('invalid_platform', 'user')).rejects.toThrow();
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockWithTransaction).not.toHaveBeenCalled();
+  });
+
+  test('an identity from an unregistered adapter can be reused', async () => {
+    const user = userRow();
+    mockQuery.mockResolvedValueOnce(createQueryResult([identityRow({ platform: 'matrix-chat' })]));
+    mockQuery.mockResolvedValueOnce(createQueryResult([user]));
+    expect(await findOrCreateUserByPlatformIdentity('matrix-chat', 'U123')).toEqual(user);
+    expect(mockWithTransaction).not.toHaveBeenCalled();
+  });
+
   describe('getUserById', () => {
     test('returns user when found', async () => {
       const u = userRow();
@@ -179,6 +193,28 @@ describe('users', () => {
         3,
         expect.stringContaining('INSERT INTO remote_agent_user_identities'),
         ['user-new', 'telegram', '7654321', 'Bob']
+      );
+    });
+
+    test('creates a new identity for an unregistered adapter', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      const newUser = userRow({ id: 'user-new', display_name: 'Bob' });
+      mockQuery.mockResolvedValueOnce(createQueryResult([newUser]));
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+
+      const result = await findOrCreateUserByPlatformIdentity('matrix-chat', '7654321', 'Bob');
+
+      expect(result).toEqual(newUser);
+      expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        2,
+        'INSERT INTO remote_agent_users (display_name) VALUES ($1) RETURNING *',
+        ['Bob']
+      );
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        3,
+        expect.stringContaining('INSERT INTO remote_agent_user_identities'),
+        ['user-new', 'matrix-chat', '7654321', 'Bob']
       );
     });
 

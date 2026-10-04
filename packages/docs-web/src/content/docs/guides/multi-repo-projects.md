@@ -13,11 +13,11 @@ Many platforms are not a single repository — they're a **root directory holdin
 
 ## Register the root
 
-From the multi-repo root, run any workflow with `--folder`. The first run registers the folder project; later runs from anywhere under the root need no flag.
+From the multi-repo root, run any workflow with `--folder`. The first run registers the folder project; later runs from the root or its non-Git subdirectories need no flag. For cross-service runs, start at the non-Git root or pass `--cwd ~/platform`. Running from inside a nested Git service repository resolves that service as its own repository project and registers it on first use.
 
 ```bash
 cd ~/platform          # contains auth-service/, billing-service/, ... — NOT itself a git repo
-archon workflow run assist --folder "List every service and its current branch"
+archon workflow run investigate --folder "How do these services call each other?"
 # → Registered folder project "platform" (~/platform)
 # → Folder project — running in place (no worktree isolation).
 ```

@@ -16,6 +16,7 @@ import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { readFile } from 'node:fs/promises';
 import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
 import { nodeInvocationKey, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import {
   orderProviderEventRecords,
@@ -36,6 +37,7 @@ import {
   type PersistedNodeOutput,
   type WorkflowEventInput,
   type ObservabilityEventInput,
+  type WorkflowEventType,
 } from '@archon/workflows/store';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -473,7 +475,7 @@ export async function listWorkflowEventsSince(
  * Throws on DB error — caller owns the degradation policy.
  *
  * Both usage axes are summed from `node_completed` and `node_failed` rows, and only
- * from rows that are not marked `data.aggregate`. Failed rows contribute spend but
+ * from rows whose `nodeCostScope` is their own spend. Failed rows contribute spend but
  * never completed outputs, so their nodes remain eligible for resume.
  *
  * This makes a run's total MONEY BURNED, not the cost of the surviving path — the
@@ -499,7 +501,7 @@ export async function listWorkflowEventsSince(
  *
  * - `node_skipped_prior_success` rows replay a node an earlier pass already counted, so
  *   counting them would multiply that node's usage by the number of resume passes.
- * - `aggregate: true` rows are derived from other rows already in this log — a
+ * - `total`-scope rows are derived from other rows already in this log — a
  *   `loop_group`'s roll-up restates the `cost_usd` its own `<groupId>.<nodeId>` body rows
  *   carry, so summing both counts that group twice (#2469).
  *
@@ -610,6 +612,40 @@ export async function listActiveWorkflowNodeIds(
   }
 
   return new Map([...activeByRun].map(([runId, activeNodeIds]) => [runId, [...activeNodeIds]]));
+}
+
+/**
+ * Rows of the given event types, data included, for several runs in one query: each
+ * run's rows in event order, and an entry (possibly empty) for every requested run. A
+ * run list uses it to report per-node state without one query per run, fetching only the
+ * types its fold reads so high-volume rows such as provider events never leave the
+ * database.
+ */
+export async function listEventsForRuns(
+  workflowRunIds: readonly string[],
+  eventTypes: readonly WorkflowEventType[]
+): Promise<Map<string, WorkflowEventRow[]>> {
+  const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
+  if (workflowRunIds.length === 0) return byRun;
+
+  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
+  const eventPlaceholders = eventTypes.map(
+    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
+  );
+  try {
+    const result = await pool.query<WorkflowEventRow>(
+      `SELECT * FROM remote_agent_workflow_events
+       WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
+         AND event_type IN (${eventPlaceholders.join(', ')})
+       ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC`,
+      [...workflowRunIds, ...eventTypes]
+    );
+    for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
+    return byRun;
+  } catch (error) {
+    getLog().error({ err: error as Error }, 'db.events_for_runs_list_failed');
+    throw new Error(`Failed to list events for runs: ${(error as Error).message}`);
+  }
 }
 
 export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagResumeSnapshot> {
@@ -770,15 +806,6 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
           );
         }
       }
-      // The field-access contract this node completed under (#2453), written only by
-      // `workflow:` nodes — the child owns that projection, so re-deriving it from the
-      // parent's own definition on resume would lose it. Accepted only as an array of
-      // strings; anything else is corrupt and degrades to "no persisted contract".
-      const rawDeclaredFields = data.declared_fields;
-      const declaredFields =
-        Array.isArray(rawDeclaredFields) && rawDeclaredFields.every(f => typeof f === 'string')
-          ? rawDeclaredFields
-          : undefined;
       completedNodeOutputs.set(row.step_name, {
         output,
         ...(outputTruncation !== undefined ? { outputTruncation } : {}),
@@ -788,7 +815,12 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
         ...(data.structured_output !== undefined
           ? { structuredOutput: data.structured_output }
           : {}),
-        ...(declaredFields !== undefined ? { declaredFields } : {}),
+        // The persisted contract owns authorization on resume, especially for a child
+        // result whose schema is not available in the parent's definition. The reader
+        // already turned a legacy `declared_fields` row into depth-1 paths.
+        ...(data.declared_output_paths !== undefined
+          ? { declaredOutputPaths: data.declared_output_paths }
+          : {}),
         ...(completedExecutions.has(row.step_name)
           ? { execution: completedExecutions.get(row.step_name) }
           : {}),
@@ -801,7 +833,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
       (row.event_type === 'node_completed' || row.event_type === 'node_failed');
     if (isAuthoritativeInstanceUsage) authoritativeInstanceScopes.add(row.step_name);
     // Other aggregate rows merely restate usage already carried by their leaves.
-    if (data.aggregate === true && !isAuthoritativeInstanceUsage) continue;
+    if (nodeCostScope(data) === 'total' && !isAuthoritativeInstanceUsage) continue;
     const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
       stepName: row.step_name,
     };

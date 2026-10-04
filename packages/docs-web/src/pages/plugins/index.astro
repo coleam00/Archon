@@ -1,0 +1,18 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import PluginMetadata from '../../components/PluginMetadata.astro';
+import { getPluginIndex } from '../../data/plugins';
+const plugins = await getPluginIndex();
+---
+<StarlightPage frontmatter={{ title: 'Plugins', description: 'Discover Archon plugins published on GitHub.' }}>
+  <p>Plugins published by their GitHub owners, discovered from the <code>archon-plugin</code> topic at build time. Listings refresh daily.</p>
+  <p>Listing validates the manifest and does not execute or review plugin code. Inspect the source before installing. You can install any public plugin even if it is not listed here.</p>
+  <p><a href="/guides/publishing-plugins/">Publish a plugin</a> · <a href="/reference/cli/#plugin">Plugin commands</a></p>
+  {plugins.length === 0 && <p>No plugins are currently listed.</p>}
+  {plugins.map(plugin => (
+    <article>
+      <h2><a href={`/plugins/${plugin.id}/`}>{plugin.manifest.name}</a></h2>
+      <PluginMetadata plugin={plugin} />
+    </article>
+  ))}
+</StarlightPage>

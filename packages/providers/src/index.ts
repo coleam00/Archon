@@ -48,6 +48,7 @@ export {
   validateStructuredOutput,
   formatSchemaErrors,
   findStrictSchemaIssues,
+  isObjectSchemaNode,
   type StrictSchemaIssue,
   type StructuredValidationResult,
 } from './shared/structured-output';
@@ -66,7 +67,6 @@ export {
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 
 // Utilities (needed by consumers)
-export { resetCodexSingleton } from './codex/provider';
 export { loadMcpConfig, type LoadedMcpConfig } from './mcp/config';
 export {
   resolveCodexBinaryPath,
@@ -116,3 +116,10 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+export { DEPRECATED_PROVIDERS_DOCS_PATH } from './community/deprecation';
+
+export {
+  singleVendorCatalog,
+  normalizeCredentialVendor,
+  LEGACY_VENDOR_ALIASES,
+} from './credential-catalog';

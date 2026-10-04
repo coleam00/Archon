@@ -15,6 +15,11 @@ interface MyMessageContext {
 }
 
 export class MyChatAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
+
   private messageHandler?: (ctx: MyMessageContext) => Promise<void>;
 
   onMessage(handler: (ctx: MyMessageContext) => Promise<void>): void {
@@ -75,6 +80,24 @@ if (process.env.MY_PLATFORM_TOKEN) {
   await myAdapter.start();
 }
 ```
+
+Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
+
+Hosts must set the complete offline policy set before loading config or running cleanup, even when credentials are absent or the transport is disabled. Cleanup throws until this is called; a host with no chat platforms passes `[]`. Each call replaces the whole set.
+
+```typescript
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
+
+setPlatformPolicies([
+  {
+    id: 'my-platform',
+    workspaceRetention: 'age-based',
+    streaming: { defaultMode: 'batch', envVar: 'MY_PLATFORM_STREAMING_MODE' },
+  },
+]);
+```
+
+Use `workspaceRetention: 'retain'` to exempt workspaces from age-based cleanup. Merged and missing worktrees can still be removed. Platforms missing from the set use age-based cleanup. Bundled hosts pass `bundledPlatformPolicies` from `@archon/adapters/platform-policies`; a host that adds a platform passes `[...bundledPlatformPolicies, myPolicy]`. Policies load without transport SDKs or credentials. Platform identifiers are lowercase kebab-case, start with a letter, and contain at most 32 characters.
 
 ## Testing
 

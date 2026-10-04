@@ -165,8 +165,7 @@ mock.module('@archon/paths', () => ({
   createLogger: noopLogger,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   getArchonHome: () => '/tmp/.archon',
   getRunArtifactsPath: (owner: string, repo: string, runId: string): string =>
@@ -442,6 +441,35 @@ describe('DELETE /api/auth/providers/:provider', () => {
       headers: ALICE,
     });
     expect(res2.status).toBe(200);
+  });
+
+  test('unauthenticated request cannot disconnect another user by supplying their ID', async () => {
+    const originalKeys = [...savedKeys];
+    const res = await makeApp().request('/api/auth/providers/openrouter?userId=user-from-alice', {
+      method: 'DELETE',
+    });
+    expect(res.status).toBe(401);
+    expect(mockDelete).not.toHaveBeenCalled();
+    expect(savedKeys).toEqual(originalKeys);
+  });
+
+  test('session user cannot disconnect another user through a conflicting header', async () => {
+    savedKeys.push({
+      userId: 'user-from-bob',
+      provider: 'openrouter',
+      apiKey: 'bob-key',
+      label: null,
+    });
+    authInstance = { api: { getSession: async () => ({ user: { id: 'alice', name: 'Alice' } }) } };
+    const res = await makeApp().request('/api/auth/providers/openrouter?userId=user-from-bob', {
+      method: 'DELETE',
+      headers: { 'X-Archon-User': 'bob' },
+    });
+    expect(res.status).toBe(200);
+    expect(mockDelete).toHaveBeenCalledWith('user-from-alice', 'openrouter');
+    expect(savedKeys).toEqual([
+      { userId: 'user-from-bob', provider: 'openrouter', apiKey: 'bob-key', label: null },
+    ]);
   });
 
   test("legacy 'claude' id deletes the migrated 'anthropic' row", async () => {

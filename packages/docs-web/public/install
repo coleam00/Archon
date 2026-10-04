@@ -325,7 +325,7 @@ main() {
   echo ""
   echo "Get started:"
   echo "  archon workflow list"
-  echo "  archon workflow run assist \"What workflows are available?\""
+  echo "  archon workflow run archon-investigate \"Why does the test suite fail?\""
   echo ""
 }
 

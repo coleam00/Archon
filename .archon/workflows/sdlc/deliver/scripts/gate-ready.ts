@@ -21,9 +21,10 @@ if (reviewAction === 'none' || (reviewAction === 'correct' && correctionAction =
   report('{"ready":"true"}');
 } else if (reviewAction === 'replan' || correctionAction === 'replan') {
   refuse(
-    'replan required: the review proved that the requested outcome cannot be ' +
-      'completed inside the accepted work order. The pull request remains draft; ' +
-      'see the canonical review report and discovery artifacts.'
+    'replan required: the review found work no correction inside the accepted work ' +
+      'order can complete (a blocker that crosses a boundary, or a change its tier ' +
+      'under-reviewed). The pull request remains draft; see the canonical review ' +
+      'report and discovery artifacts.'
   );
 } else {
   refuse(

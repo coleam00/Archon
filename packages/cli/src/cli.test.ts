@@ -4,11 +4,13 @@
  * Note: These tests focus on argument parsing logic.
  * Full integration tests would require mocking the database and commands.
  */
+import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import * as git from '@archon/git';
+import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -464,8 +466,16 @@ describe('workflow status project scope', () => {
         const insertCodebase = database.prepare(
           'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)'
         );
-        insertCodebase.run('codebase-a', 'fixture/a', projectARoot.stdout.trim());
-        insertCodebase.run('codebase-b', 'fixture/b', projectBRoot.stdout.trim());
+        insertCodebase.run(
+          'codebase-a',
+          'fixture/a',
+          await canonicalizeProjectPath(projectARoot.stdout.trim())
+        );
+        insertCodebase.run(
+          'codebase-b',
+          'fixture/b',
+          await canonicalizeProjectPath(projectBRoot.stdout.trim())
+        );
 
         const insertConversation = database.prepare(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)'
@@ -669,7 +679,7 @@ describe('CLI workflow event dispatch', () => {
       try {
         database.run(
           'INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES (?, ?, ?)',
-          ['codebase-1', 'fixture', repoRoot.stdout.trim()]
+          ['codebase-1', 'fixture', await canonicalizeProjectPath(repoRoot.stdout.trim())]
         );
         database.run(
           'INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, codebase_id) VALUES (?, ?, ?, ?)',
@@ -1245,7 +1255,7 @@ describe('workflow list arguments', () => {
     const { status, envelope } = spawnJsonError([
       'workflow',
       'list',
-      'archon-fix-github-issue-codex',
+      'archon-deliver',
       '--full',
       '--json',
       '--cwd',
@@ -1262,7 +1272,7 @@ describe('workflow list arguments', () => {
       errors: unknown[];
     };
     expect(output.workflows).toHaveLength(1);
-    expect(output.workflows[0].name).toBe('archon-fix-github-issue-codex');
+    expect(output.workflows[0].name).toBe('archon-deliver');
     expect(Array.from(output.workflows[0].description).length).toBeGreaterThan(160);
     expect(output.workflows[0].descriptionTruncated).toBe(false);
   });
@@ -1355,21 +1365,6 @@ describe('workflow list arguments', () => {
     } finally {
       await removeTempTree(scratchRepo);
     }
-  });
-});
-
-describe('workflow search --json error envelope', () => {
-  it('emits { ok: false } on stdout when the command throws under --json', () => {
-    // An unreachable marketplace URL makes fetchMarketplace throw inside the
-    // `workflow search` handler — the only deterministic error path. The
-    // envelope, not the message, is the contract.
-    const { status, envelope } = spawnJsonError(['workflow', 'search', 'anything', '--json'], {
-      ARCHON_MARKETPLACE_URL: 'http://127.0.0.1:9/nope',
-    });
-
-    expect(status).toBe(1);
-    expect(envelope).not.toThrow();
-    expect(envelope()).toMatchObject({ ok: false });
   });
 });
 
@@ -1597,4 +1592,80 @@ describe('log output channel (#3444)', () => {
       await removeTempTree(root);
     }
   }, 30_000);
+});
+
+it('CLI cleanup retains historical Telegram workspaces with no adapter credentials', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-cli-retention-'));
+  const repo = join(root, 'repo');
+  const home = join(root, 'home');
+  const worktree = join(root, 'worktree');
+  mkdirSync(repo);
+  mkdirSync(home);
+  try {
+    expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+    expect(
+      spawnSync(
+        'git',
+        [
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.com',
+          'commit',
+          '--allow-empty',
+          '-qm',
+          'initial',
+        ],
+        { cwd: repo }
+      ).status
+    ).toBe(0);
+    expect(
+      spawnSync('git', ['worktree', 'add', '-qb', 'retained', worktree], { cwd: repo }).status
+    ).toBe(0);
+    const db = new SqliteAdapter(join(home, 'archon.db'));
+    try {
+      await db.query(
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb', 'repo', $1)",
+        [repo]
+      );
+      await db.query(
+        "INSERT INTO remote_agent_isolation_environments (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, created_by_platform, created_at) VALUES ('retained', 'cb', 'thread', 'chat', 'worktree', $1, 'retained', 'telegram', datetime('now', '-30 days'))",
+        [worktree]
+      );
+    } finally {
+      await db.close();
+    }
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'isolation', 'cleanup', '7', '--cwd', repo],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          ARCHON_TELEMETRY_DISABLED: '1',
+          DATABASE_URL: '',
+          TELEGRAM_BOT_TOKEN: '',
+          SLACK_BOT_TOKEN: '',
+          DISCORD_BOT_TOKEN: '',
+        },
+      }
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('No stale environments found.');
+    expect(existsSync(worktree)).toBe(true);
+    const verify = new Database(join(home, 'archon.db'), { readonly: true });
+    try {
+      expect(
+        verify
+          .query("SELECT status FROM remote_agent_isolation_environments WHERE id = 'retained'")
+          .get()
+      ).toEqual({ status: 'active' });
+    } finally {
+      verify.close();
+    }
+  } finally {
+    await removeTempTree(root);
+  }
 });

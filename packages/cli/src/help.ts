@@ -125,6 +125,12 @@ const commandHelp: HelpEntry[] = [
     subcommand: 'runs',
     spec: 'workflow runs',
     description: 'List recent runs (all statuses) for this project',
+    scopedFlags: [
+      {
+        spec: '--verbose, -v',
+        description: "With --json: add each run's per-node state and attention",
+      },
+    ],
   },
   {
     command: 'workflow',
@@ -152,6 +158,40 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
+    subcommand: 'wake',
+    spec: 'workflow wake [--watch] [--json]',
+    description: 'Wake due continuations across this install',
+    scopedFlags: [
+      {
+        spec: '--watch',
+        description: 'Repeat serial passes every 5 seconds; drain execution on shutdown',
+      },
+      { spec: '--json', description: 'One JSON document per pass' },
+      { spec: 'schedule install|remove', description: 'Manage a macOS wake timer' },
+      {
+        spec: '--interval <seconds>',
+        description: 'Timer interval (positive integer, default: 5)',
+      },
+    ],
+  },
+  {
+    command: 'workflow',
+    subcommand: 'signal',
+    spec: 'workflow signal <full-run-id>',
+    description: 'Signal and wake one exact event wait occurrence',
+    scopedFlags: [
+      { spec: '--event <name>', description: 'Required event name' },
+      {
+        spec: '--resume-at <ISO timestamp>',
+        description: 'Required occurrence deadline from the run',
+      },
+      { spec: '--data <JSON>', description: 'Optional signal payload' },
+      { spec: '--json', description: 'Report signal and execution separately' },
+    ],
+  },
+
+  {
+    command: 'workflow',
     subcommand: 'cancel',
     spec: 'workflow cancel <run-id>',
     description: 'Stop a running workflow (stops an owning process first)',
@@ -168,18 +208,6 @@ const commandHelp: HelpEntry[] = [
     spec: 'workflow respond <run-id> <decision> [text]',
     description:
       "Resolve a paused gate with any of its declared decisions\n('approve'/'reject' are sugar for the dedicated commands)",
-  },
-  {
-    command: 'workflow',
-    subcommand: 'search',
-    spec: 'workflow search [query]',
-    description: 'Search the workflow marketplace',
-  },
-  {
-    command: 'workflow',
-    subcommand: 'install',
-    spec: 'workflow install <slug>',
-    description: 'Install a workflow from the marketplace',
   },
   {
     command: 'workflow',
@@ -692,7 +720,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--detach',
     description:
-      "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)",
+      "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'approve' },
@@ -759,8 +787,9 @@ const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--force',
-    description: 'Overwrite existing file (for workflow install)',
-    owners: [{ command: 'workflow', subcommand: 'install' }],
+    description:
+      "For 'setup': overwrite existing values instead of merging\nFor 'complete': remove even when safety checks block it",
+    owners: [{ command: 'setup' }, { command: 'complete' }],
   },
 ];
 
@@ -788,15 +817,15 @@ const orderedExamples: ExampleHelp[] = [
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run assist --folder "List every repo under this multi-repo root"',
+    text: 'archon workflow run investigate --folder "Explain how the repos under this root fit together"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run archon-assist --detach "Investigate the flaky test"',
+    text: 'archon workflow run archon-investigate --detach "Investigate the flaky test"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   {
-    text: 'archon workflow run assist --dry-run --stubs ./stubs.yaml --json',
+    text: 'archon workflow run investigate --dry-run --stubs ./stubs.yaml --json',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   { text: 'archon workflow runs --json', owner: { command: 'workflow', subcommand: 'runs' } },
@@ -820,7 +849,7 @@ const orderedExamples: ExampleHelp[] = [
   { text: 'archon workflow cancel <run-id>', owner: { command: 'workflow', subcommand: 'cancel' } },
   { text: 'archon workflow runs --open', owner: { command: 'workflow', subcommand: 'runs' } },
   {
-    text: 'archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"',
+    text: 'archon workflow run archon-review --adopt <run-id> "Review the changes"',
     owner: { command: 'workflow', subcommand: 'run' },
   },
   { text: 'archon skill install', owner: { command: 'skill', subcommand: 'install' } },
@@ -831,14 +860,6 @@ const orderedExamples: ExampleHelp[] = [
   {
     text: 'archon plugin install coleam00/Archon/plugins/forge-github',
     owner: { command: 'plugin', subcommand: 'install' },
-  },
-  {
-    text: 'archon workflow search "pr review"',
-    owner: { command: 'workflow', subcommand: 'search' },
-  },
-  {
-    text: 'archon workflow install archon-piv-loop',
-    owner: { command: 'workflow', subcommand: 'install' },
   },
 ];
 

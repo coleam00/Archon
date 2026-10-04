@@ -1307,17 +1307,25 @@ describe('executeWorkflow', () => {
           order.push('notify');
           throw new Error('unauthorized');
         });
-        const result = await executeWorkflow(
-          makeDeps(store),
-          platform,
-          'conv-1',
-          '/tmp',
-          makeWorkflow(),
-          'test',
-          'db-conv-1'
-        );
+        // A critical send retries every failure with a 1s, 2s backoff; clamp the sleep.
+        const realSetTimeout = globalThis.setTimeout;
+        globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+        let result: Awaited<ReturnType<typeof executeWorkflow>>;
+        try {
+          result = await executeWorkflow(
+            makeDeps(store),
+            platform,
+            'conv-1',
+            '/tmp',
+            makeWorkflow(),
+            'test',
+            'db-conv-1'
+          );
+        } finally {
+          globalThis.setTimeout = realSetTimeout;
+        }
         expect(result.success).toBe(false);
-        expect(order).toEqual(['notify', 'cancel']);
+        expect(order).toEqual(['notify', 'notify', 'notify', 'cancel']);
         expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
       }
@@ -1486,7 +1494,7 @@ describe('executeWorkflow', () => {
       // Provider is explicit; the model string is forwarded verbatim to
       // whichever SDK the resolved provider names. A workflow that sets
       // provider:codex with a Claude-looking model gets the request handed
-      // to the codex SDK as-is — the SDK decides whether to accept it.
+      // to Codex as-is — Codex decides whether to accept it.
       const store = makeStore();
       const deps = makeDeps(store);
       await executeWorkflow(

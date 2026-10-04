@@ -52,17 +52,17 @@ export async function generateAndSetTitle(
     // Build the title generation prompt
     const titlePrompt = buildTitlePrompt(userMessage, workflowName);
 
-    // Use the configured AI client with no tools (pure text generation)
     const client = getAgentProvider(assistantType);
     let generatedTitle = '';
 
     const options: SendQueryOptions = {
       ...(requestOptions ?? {}),
+      purpose: 'title-generation',
       ...(titleModel ? { model: titleModel } : {}),
       assistantConfig: requestOptions?.assistantConfig ?? assistantConfig,
       nodeConfig: {
         ...(requestOptions?.nodeConfig ?? {}),
-        allowed_tools: [], // No tool access — pure text generation
+        allowed_tools: [],
       },
     };
 

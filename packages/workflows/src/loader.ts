@@ -13,6 +13,7 @@ import {
   isAgentNode,
   isLoopNode,
   isLoopGroupNode,
+  definedOutputPaths,
   loopGroupSoleTerminalSink,
   isGateNode,
   isWaitNode,
@@ -61,9 +62,21 @@ import type {
 } from './schemas/workflow';
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
-import { parseLoopPrevWhenAtom, parseWhenAtom, whenAtoms, WHEN_INPUTS_SCOPE } from './when-atom';
+import {
+  findUnsupportedNestedWhenRef,
+  assertSupportedWhenOutputRefs,
+  parseLoopPrevWhenAtom,
+  parseWhenAtom,
+  whenAtoms,
+  WHEN_INPUTS_SCOPE,
+} from './when-atom';
 import {
   declaredFieldsFromSchema,
+  assertDeclaredOutputPath,
+  assertSupportedOutputRefs,
+  outputRefText,
+  CURRENT_OUTPUT_PATH_SOURCE,
+  PRIOR_OUTPUT_PATH_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
   OUTPUT_REF_SOURCE,
   parseWholeExecutionCheckoutRef,
@@ -71,7 +84,7 @@ import {
 } from './output-ref';
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
-import { visitNodeTemplateSlots } from './template-walker';
+import { visitNodeTemplateSlots, type TemplateSurface } from './template-walker';
 import { validateInlineExecInputs } from './exec-input-validation';
 import { z } from '@hono/zod-openapi';
 
@@ -747,7 +760,7 @@ function parseDagNode(
  *   'loop-group'     — `loop_group:`: `output_format` survives the transform here too,
  *                      but the group never calls the provider itself — its completion
  *                      returns `output: lastIterationOutput` with no `structuredOutput`
- *                      and no `declaredFields`, so the whole-output channel is still the
+ *                      and no `declaredOutputPaths`, so the whole-output channel is still the
  *                      last iteration's raw text. Declaring a schema cannot make
  *                      `$group.output` a JSON document. This is the one asymmetry left.
  *
@@ -788,10 +801,14 @@ const GATE_ON_A_SHELL_NODE =
  * `enclosingNodes` carries the enclosing loop scope's nodes BY ID rather than just
  * their ids, because a `loop_group` body's `when:` may reference an outer producer and
  * the free-form-AI check needs that producer's type and `output_format`.
+ *
+ * `includeAliases` maps a flattened producer id back to the include alias the author
+ * referenced, so an output-contract error names `$alias.output.x` as written.
  */
 export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
-  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>
+  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>,
+  includeAliases?: ReadonlyMap<string, string>
 ): string | null {
   // Check ID uniqueness
   const nodesById = new Map<string, DagNode | IncludeDirective>();
@@ -926,6 +943,7 @@ export function validateDagStructure(
     const sources: {
       field: string;
       text: string;
+      surface: TemplateSurface;
       bodyNodes?: readonly (DagNode | IncludeDirective)[];
     }[] = [];
     if (!isIncludeDirective(node)) {
@@ -936,6 +954,7 @@ export function validateDagStructure(
           sources.push({
             field: slot.path,
             text: slot.value,
+            surface: slot.surface,
             ...(slot.path === 'loop_group.until_bash' && isLoopGroupNode(node)
               ? { bodyNodes: node.loop_group.nodes }
               : {}),
@@ -945,6 +964,67 @@ export function validateDagStructure(
       );
     }
     for (const source of sources) {
+      try {
+        if (source.surface === 'condition') assertSupportedWhenOutputRefs(source.text);
+        else assertSupportedOutputRefs(source.text);
+      } catch (error) {
+        return `Node '${node.id}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;
+      }
+      if (source.surface === 'condition') {
+        const unsupported = findUnsupportedNestedWhenRef(source.text);
+        if (unsupported)
+          return `Node '${node.id}' field '${source.field}' contains nested shorthand '${unsupported.reference}'; use canonical '.output' spelling.`;
+      }
+      const refs: { nodeId: string; field?: string; reference: string; prior: boolean }[] = [];
+      if (source.surface === 'condition') {
+        for (const text of whenAtoms(source.text)) {
+          const atom = parseLoopPrevWhenAtom(text);
+          if (!atom || atom.ref.kind === 'input') continue;
+          const { nodeId, field } = atom.ref;
+          const prior = atom.ref.kind === 'loop_prev';
+          refs.push({
+            nodeId,
+            field,
+            prior,
+            reference: outputRefText(nodeId, field, prior ? 'prior' : 'current'),
+          });
+        }
+      } else {
+        for (const [pattern, prior] of [
+          [CURRENT_OUTPUT_PATH_SOURCE, false],
+          [PRIOR_OUTPUT_PATH_SOURCE, true],
+        ] as const) {
+          for (const match of source.text.matchAll(new RegExp(pattern, 'g'))) {
+            refs.push({ nodeId: match[1], field: match[2], reference: match[0], prior });
+          }
+        }
+      }
+      for (const ref of refs) {
+        if (ref.nodeId === WHEN_INPUTS_SCOPE || ref.field === undefined) continue;
+        const producer = ref.prior
+          ? (source.bodyNodes ?? (enclosingNodes ? nodes : undefined))?.find(
+              candidate => candidate.id === ref.nodeId
+            )
+          : (nodesById.get(ref.nodeId) ??
+            enclosingNodes?.get(ref.nodeId) ??
+            source.bodyNodes?.find(candidate => candidate.id === ref.nodeId));
+        if (!producer || isIncludeDirective(producer)) continue;
+        const paths = definedOutputPaths(producer);
+        if (paths === undefined) continue;
+        // `$LOOP_PREV` refs are never rewritten to an include's sink, so only a current
+        // ref can carry an alias.
+        const alias = ref.prior ? undefined : includeAliases?.get(ref.nodeId);
+        try {
+          if (alias === undefined) {
+            assertDeclaredOutputPath(paths, ref.nodeId, ref.field, ref.reference);
+          } else {
+            assertDeclaredOutputPath(paths, alias, ref.field, outputRefText(alias, ref.field));
+          }
+        } catch (error) {
+          return `Node '${node.id}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+
       let m: RegExpExecArray | null;
       outputRefPattern.lastIndex = 0; // reset stateful g-flag regex before each new source string
       while ((m = outputRefPattern.exec(source.text)) !== null) {
@@ -1212,7 +1292,7 @@ export function validateDagStructure(
         ...(enclosingNodes ?? []),
         ...nodesById,
       ]);
-      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes);
+      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes, includeAliases);
       if (bodyError) {
         return `loop_group '${node.id}' body: ${bodyError}`;
       }
@@ -1374,7 +1454,11 @@ export type ParseResult =
 /**
  * Parse and validate a workflow YAML file
  */
-export function parseWorkflow(content: string, filename: string): ParseResult {
+export function parseWorkflow(
+  content: string,
+  filename: string,
+  configuredEnvNames?: ReadonlySet<string>
+): ParseResult {
   try {
     const raw = parseYaml(content) as Record<string, unknown>;
 
@@ -2090,7 +2174,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       ...(outcomeField !== undefined ? { outcome_field: outcomeField } : {}),
       ...(deprecated !== undefined ? { deprecated } : {}),
     };
-    const execInputValidation = validateInlineExecInputs(workflow);
+    const execInputValidation = validateInlineExecInputs(workflow, configuredEnvNames);
     parseWarnings.push(...execInputValidation.warnings);
     if (execInputValidation.errors.length > 0) {
       return {

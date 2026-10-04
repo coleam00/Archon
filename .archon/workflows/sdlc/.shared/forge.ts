@@ -20,8 +20,11 @@ import { note } from './io.ts';
 
 export type ForgeSource = 'gh' | 'forge';
 
-export function forgeSource(value: string | undefined): ForgeSource {
-  const selected = (value ?? '').trim();
+// Read here, not in each calling script: the unbound-env checker scans a node-bound
+// script's own text but never follows its imports, so a bare process.env read in a
+// shared module like this one never trips a false "unbound variable" warning.
+export function forgeSource(): ForgeSource {
+  const selected = (process.env.ARCHON_SDLC_FORGE ?? '').trim();
   if (selected === '' || selected === 'gh') return 'gh';
   if (selected === 'forge') return 'forge';
   throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);

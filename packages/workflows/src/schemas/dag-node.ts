@@ -27,6 +27,8 @@ export type { EffortLevel } from './effort';
 // grammar, everywhere (#2637).
 import {
   declaredFieldsFromSchema,
+  declaredOutputPathsFromSchema,
+  type DeclaredOutputPaths,
   jsonValueSchema,
   parseWholeOutputRef,
   parseWholeInputsRef,
@@ -259,14 +261,16 @@ export const dagNodeBaseSchema = z.object({
   // error naming it if the snapshot changed — outside the run's engine-owned
   // directories (artifacts/state/logs). Enforced for exec and agent nodes; warned
   // as ignored on wait and workflow (sub-run) nodes, whose execution is not a
-  // single checkout-scoped payload. Absent means no enforcement.
+  // single checkout-scoped payload. Absent means no enforcement. A layer of guarded
+  // nodes only runs concurrently; a layer mixing guarded nodes with any node that
+  // isn't checkout-guarded runs sequentially so a sibling's write is never blamed on
+  // a guarded node.
   mutates_checkout: z.boolean().optional(),
   // Persist this node's provider session ID across workflow re-runs in the same
   // scope (typically the conversation). The next run in that scope forks the session
   // that existed when it started; a provider without sessionFork starts fresh
   // instead (see `persistedSessionHandling`). Requires a provider with sessionResume
-  // capability. Distinct from the Claude SDK's AgentRequestOptions.persistSession
-  // (on-disk transcript persistence).
+  // capability.
   persist_session: z.boolean().optional(),
   // Declares the semantic type of this node's output (e.g. 'plan', 'findings',
   // 'code', 'summary' — an open set). When set, the executor writes a typed
@@ -286,7 +290,7 @@ export type DagNodeBase = z.infer<typeof dagNodeBaseSchema>;
 /**
  * Node-local binding directive (#2637) — the explicit form of a `with:` value on a
  * `command:`/`script:` node that reads an upstream output across a possibly-skipped
- * branch. `from` must be exactly one whole `$node.output[.field]` reference; when the
+ * branch. `from` must be exactly one whole `$node.output[.a.b]` reference; when the
  * producer was skipped, the binding takes `if_skipped` instead — and without one, the
  * consuming node fails loudly (never a silent `''`).
  *
@@ -335,7 +339,7 @@ export const promptSourceSchema = z.discriminatedUnion('kind', [
     name: z.string(),
     // Node-local named bindings (#2637): values delivered to the command file's
     // `$INPUTS.<name>` surface. Strings may hold refs/templates; a whole
-    // `$node.output[.field]` ref passes the logical value; objects are binding
+    // `$node.output[.a.b]` ref passes the logical value; objects are binding
     // directives ({ from, if_skipped }) — validated in dagNodeSchema's superRefine.
     with: nodeBindingsSchema.optional(),
   }),
@@ -859,7 +863,7 @@ export type IncludeDirective = z.infer<typeof includeDirectiveSchema>;
 /**
  * Dynamic fan-out config for a `workflow:` node (#2121 slice 2, PR-C). Expands the
  * node into N governed child runs — one per element of a runtime-length item list —
- * joined into a single node outcome. `items` is a `$node.output[.field]` ref that
+ * joined into a single node outcome. `items` is a `$node.output[.a.b]` ref that
  * MUST resolve to a JSON array at run time (DATA, per the constitution's
  * §load-time-composition — the child target stays a static name; only the item
  * COUNT is runtime). Each item becomes a child's `input`/`$ARGUMENTS`. `max_parallel`
@@ -1405,7 +1409,7 @@ export const dagNodeSchema = z
             code: z.ZodIssueCode.custom,
             message:
               `${kind} binding '${key}': an object value must be a binding directive ` +
-              "{ from: '$node.output[.field]', if_skipped?: <value> } — " +
+              "{ from: '$node.output[.a.b]', if_skipped?: <value> } — " +
               `${parsed.error.issues[0]?.message ?? 'invalid shape'}. ` +
               'Use a string, number, boolean, null, or array for a literal value.',
             path: ['with', key],
@@ -1418,7 +1422,7 @@ export const dagNodeSchema = z
           // check. Name the supported spelling instead of the generic grammar error.
           const message = parsed.data.from.trim().startsWith('$LOOP_PREV')
             ? `${kind} binding '${key}': 'from' cannot read '$LOOP_PREV' — it is not a node reference. Use the string form (e.g. '${key}: ${parsed.data.from.trim()}'), which substitutes the previous iteration's text each pass.`
-            : `${kind} binding '${key}': 'from' must be exactly one whole '$node.output' or '$node.output.field' reference, got '${parsed.data.from}'`;
+            : `${kind} binding '${key}': 'from' must be exactly one whole '$node.output[.a.b]' reference, got '${parsed.data.from}'`;
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message,
@@ -2020,6 +2024,16 @@ export function isLoopNode(node: DagNode): node is LoopNode {
 /** Type guard: check if a DAG node is a loop_group (cross-node iterative subgraph) node */
 export function isLoopGroupNode(node: DagNode): node is LoopGroupNode {
   return node.kind === 'loop_group';
+}
+
+/**
+ * The field-path contract a node's own definition declares for its output. A
+ * loop_group's `output_format` is not applied to the group's own output, so it declares
+ * none. A `workflow:` node has no schema; its contract is the child's, carried at run
+ * time.
+ */
+export function definedOutputPaths(node: DagNode): DeclaredOutputPaths | undefined {
+  return isLoopGroupNode(node) ? undefined : declaredOutputPathsFromSchema(node.output_format);
 }
 
 /**

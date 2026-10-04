@@ -1,4 +1,6 @@
 import { providerChunkSchema, subtaskTerminalStatusSchema, type ProviderChunk } from './events';
+import type { ProviderCapabilities } from './capabilities';
+import { credentialStatusSchema, type CredentialStatus } from './credential-status';
 import { providerFailureSchema, type ProviderFailureClass } from './failure';
 
 /**
@@ -212,6 +214,39 @@ function toolAndSubtaskClosure(chunks: readonly ProviderChunk[]): string[] {
 }
 
 /**
+ * Every result of a non-failing turn names the session the turn ran in. The engine records
+ * it on the node record, which is how a user finds the session to resume it outside Archon.
+ * Only a provider that declares `sessionResume` is held to this: one that cannot resume has
+ * no session to name.
+ */
+export async function checkSessionIdReported(
+  cases: readonly ProviderTurnCase[]
+): Promise<string[]> {
+  const violations: string[] = [];
+  for (const turnCase of cases) {
+    let results = 0;
+    let unnamed = 0;
+    try {
+      for await (const chunk of turnCase.run()) {
+        if (!isResultChunk(chunk)) continue;
+        results++;
+        const { sessionId } = chunk as { sessionId?: unknown };
+        if (typeof sessionId !== 'string' || sessionId === '') unnamed++;
+      }
+    } catch {
+      // checkSettled reports the throw.
+      continue;
+    }
+    if (unnamed > 0) {
+      violations.push(
+        `${turnCase.name}: ${String(unnamed)} of ${String(results)} results carry no sessionId`
+      );
+    }
+  }
+  return violations;
+}
+
+/**
  * The `toolTurn` fixture must exercise what rule 2 is about: at least two tool calls, one of
  * them interrupted and closed as `cancelled`. A smaller fixture would pass rule 2 vacuously.
  */
@@ -238,8 +273,56 @@ async function checkToolTurnShape(toolTurn: ProviderTurnCase): Promise<string[]>
       ];
 }
 
+/** One credential setup, the state its check must report, and the secret it must never echo. */
+export interface CredentialStatusCase {
+  name: string;
+  expected: CredentialStatus['state'];
+  /** A credential value planted in the setup. The status must not contain it anywhere. */
+  secret: string;
+  /** Runs the check against the case's setup. */
+  check: () => Promise<unknown>;
+}
+
+/**
+ * A credential check reports a status that parses, carries the expected state, and never
+ * contains the credential it checked: a status reaches logs, run messages and `archon doctor`.
+ */
+export async function checkCredentialStatuses(
+  cases: readonly CredentialStatusCase[]
+): Promise<string[]> {
+  const violations: string[] = [];
+  for (const statusCase of cases) {
+    let status: unknown;
+    try {
+      status = await statusCase.check();
+    } catch (error) {
+      violations.push(
+        `${statusCase.name}: threw instead of reporting a status (${(error as Error).message})`
+      );
+      continue;
+    }
+    const parsed = credentialStatusSchema.safeParse(status);
+    if (!parsed.success) {
+      violations.push(`${statusCase.name}: status is malformed (${parsed.error.message})`);
+      continue;
+    }
+    if (parsed.data.state !== statusCase.expected) {
+      violations.push(
+        `${statusCase.name}: reported ${parsed.data.state}, expected ${statusCase.expected}`
+      );
+    }
+    // The raw value, not the parsed one: parsing strips unknown keys a secret could hide in.
+    if (JSON.stringify(status).includes(statusCase.secret)) {
+      violations.push(`${statusCase.name}: status contains the credential value`);
+    }
+  }
+  return violations;
+}
+
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
+  /** The provider's declared capabilities; pass `getCapabilities()`. */
+  capabilities: Pick<ProviderCapabilities, 'sessionResume'>;
   failureCases: readonly ProviderFailureCase[];
   /** Turns that succeed, including one whose result arrives before its work drains. */
   turns: readonly ProviderTurnCase[];
@@ -258,5 +341,8 @@ export async function runProviderConformance(suite: ProviderConformanceSuite): P
     // Every fixture streams the vocabulary, a failed turn included.
     ...(await checkEventVocabulary([...suite.turns, ...toolTurns, ...suite.failureCases])),
     ...(suite.toolTurn ? await checkToolTurnShape(suite.toolTurn) : []),
+    ...(suite.capabilities.sessionResume
+      ? await checkSessionIdReported([...suite.turns, ...toolTurns])
+      : []),
   ];
 }

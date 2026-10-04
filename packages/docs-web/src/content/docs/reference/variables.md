@@ -100,9 +100,31 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 | Pattern | Resolves to | Notes |
 |---------|-------------|-------|
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
-| `$nodeId.output.field` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
+| `$nodeId.output.field` / `$nodeId.output.a.b` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
 
-A `.field` reference **fails the consuming node** when the producer's output is not a JSON object — whether or not the producer declared an `output_format`. Declaring a schema buys you a stricter check on the field *name* (an undeclared field fails the consuming node with a named error rather than resolving to a silent empty), and lets a declared-but-absent field resolve to `''`; it never makes a broken producer quieter. For a `workflow:` sub-run node the contract is the child's own: the `output_format` on the child's `returns:` node certifies the value and its declared field names travel back with the result, so `$sub.output.field` is strict under the child's schema. Declaring `output_format` on the `workflow:` node itself is a load error — the result contract belongs to the child's `returns:` node.
+Dot paths read nested object fields: `$review.output.proposal.action` resolves the
+`action` inside `proposal`. The same paths work in templates, scalar `when:`
+comparisons, whole-value `with:` bindings, and `$LOOP_PREV.review.output.proposal.action`.
+A whole-value binding preserves the logical value, including objects and arrays;
+`when:` requires a scalar. Paths cannot index or traverse arrays, use wildcards, or
+compute expressions. Shorthand conditions (`$node.field`) remain single-field only.
+
+With `output_format`, each segment must be an explicit `properties` entry. A reference
+to an undeclared segment, at any depth, fails validation when the producer's schema is
+known locally; otherwise it fails the consuming node at runtime, naming the reference
+and segment. `additionalProperties`, array `items`, `$ref`, and schema combinators do not
+supply declarations. An object with nullable type can declare child properties.
+Authorization checks the entire path before reading values, so a typo fails even under
+an absent optional parent. A declared missing or null field or parent resolves to `''`.
+The root output must still be a JSON object. For schemaless `bash:`/`script:` producers,
+every nested key must exist and intermediate values must be objects; a missing key or
+non-object intermediate fails the consuming node.
+
+For `workflow:` results, the selected child producer owns the contract. Its declared
+paths travel with the result and survive resume; the parent cannot declare an
+`output_format` on the `workflow:` node. A child result recorded before nested paths
+carries only its top-level fields, so a nested read from it fails as undeclared until
+the producer reruns.
 
 During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful bash events retain only a 32 KiB UTF-8 audit preview, so after a process boundary a resumed run rehydrates that persisted preview rather than the full output. If a large gate verdict must survive a restart intact, store it through a deliberately managed artifact contract instead of relying on the event preview.
 
@@ -188,7 +210,8 @@ An object value is reserved for the **binding directive** `{ from, if_skipped }`
 one whole `$node.output[.field]` reference, and when that producer was **skipped** (a
 `when:`-false branch reached through `trigger_rule: all_done`) the binding takes `if_skipped`
 instead. A skipped producer with no `if_skipped` fails the node with the fix named — a
-binding never silently resolves to an empty string.
+binding never silently resolves to an empty string. `if_skipped` is literal data, so
+reference-looking text there is neither substituted nor validated as an output reference.
 
 ```yaml
   - id: join

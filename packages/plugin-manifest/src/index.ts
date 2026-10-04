@@ -12,6 +12,10 @@ import { z } from 'zod';
 
 export const PLUGIN_MANIFEST_FILE = 'archon-plugin.json';
 
+export function isPluginPathSegment(segment: string): boolean {
+  return /^[A-Za-z0-9._-]+$/.test(segment) && segment !== '.' && segment !== '..';
+}
+
 const pluginName = z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'lowercase words joined by "-"');
 
 /** The file name forge discovery scans for, without the Windows `.exe` suffix. */

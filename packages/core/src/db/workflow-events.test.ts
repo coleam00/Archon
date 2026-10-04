@@ -17,8 +17,7 @@ mock.module('@archon/paths', () => ({
   getArchonConfigPath: mock(() => '/home/test/.archon/config.yaml'),
   getArchonWorkspacesPath: mock(() => '/home/test/.archon/workspaces'),
   getArchonWorktreesPath: mock(() => '/home/test/.archon/worktrees'),
-  getDefaultCommandsPath: mock(() => '/app/.archon/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/app/.archon/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/app/.archon/workflows'),
 }));
 
 const mockQuery = createMockQuery();
@@ -43,6 +42,7 @@ import {
   listWorkflowEvents,
   listRecentEvents,
   listActiveWorkflowNodeIds,
+  listEventsForRuns,
   getDagResumeSnapshot,
 } from './workflow-events';
 
@@ -379,6 +379,56 @@ describe('workflow-events', () => {
     });
   });
 
+  describe('listEventsForRuns', () => {
+    test('groups the requested event types by run in one query, with an entry for every run', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          { workflow_run_id: 'run-a', step_name: 'plan', event_type: 'node_started', data: '{}' },
+          {
+            workflow_run_id: 'run-a',
+            step_name: 'plan',
+            event_type: 'node_completed',
+            data: '{"node_output":"done"}',
+          },
+          { workflow_run_id: 'run-b', step_name: 'build', event_type: 'node_failed', data: {} },
+        ])
+      );
+
+      const result = await listEventsForRuns(
+        ['run-a', 'run-b', 'run-c'],
+        ['node_started', 'node_completed', 'node_failed']
+      );
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'ORDER BY workflow_run_id, created_at ASC, COALESCE(event_order, 0) ASC, id ASC'
+        ),
+        ['run-a', 'run-b', 'run-c', 'node_started', 'node_completed', 'node_failed']
+      );
+      expect([...result.keys()]).toEqual(['run-a', 'run-b', 'run-c']);
+      expect(result.get('run-a')?.map(row => [row.event_type, row.data])).toEqual([
+        ['node_started', {}],
+        ['node_completed', { node_output: 'done' }],
+      ]);
+      expect(result.get('run-b')).toHaveLength(1);
+      expect(result.get('run-c')).toEqual([]);
+    });
+
+    test('throws wrapped error on query failure', async () => {
+      mockQuery.mockRejectedValueOnce(new Error('connection lost'));
+
+      await expect(listEventsForRuns(['run-a'], ['node_started'])).rejects.toThrow(
+        'Failed to list events for runs: connection lost'
+      );
+    });
+
+    test('returns an empty map without querying for an empty run list', async () => {
+      expect(await listEventsForRuns([], ['node_started'])).toEqual(new Map());
+      expect(mockQuery).not.toHaveBeenCalled();
+    });
+  });
+
   describe('getDagResumeSnapshot', () => {
     test('returns outputs and summed tokens from node_completed events', async () => {
       mockQuery.mockResolvedValueOnce(
@@ -467,7 +517,7 @@ describe('workflow-events', () => {
       });
     });
 
-    test('carries declared_fields back out; rows without it re-derive from the schema (#2453)', async () => {
+    test('carries the path contract back out, reading a legacy declared_fields row as depth-1 paths (#2453)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           {
@@ -479,10 +529,11 @@ describe('workflow-events', () => {
               node_output: '{"green":true}',
               structured_output: { green: true },
               declared_fields: ['green', 'note'],
+              declared_output_paths: [['green'], ['note'], ['note', 'text']],
             },
           },
           {
-            // The resume re-emit copies it forward for a SECOND resume.
+            // Written by an older binary (or its resume re-emit): only the root fields.
             step_name: 'replayed-sub',
             event_type: 'node_skipped_prior_success',
             data: { node_output: '{"n":1}', declared_fields: ['n'] },
@@ -508,17 +559,30 @@ describe('workflow-events', () => {
       expect(result.completedNodeOutputs.get('sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
-        declaredFields: ['green', 'note'],
+        declaredOutputPaths: [['green'], ['note'], ['note', 'text']],
       });
       expect(result.completedNodeOutputs.get('replayed-sub')).toEqual({
         output: '{"n":1}',
-        declaredFields: ['n'],
+        declaredOutputPaths: [['n']],
       });
       expect(result.completedNodeOutputs.get('legacy-sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
       });
       expect(result.completedNodeOutputs.get('corrupt-sub')).toEqual({ output: '{}' });
+    });
+
+    test('rejects malformed persisted nested contracts instead of restoring schemaless output', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'sub',
+            event_type: 'node_completed',
+            data: { node_output: '{}', declared_output_paths: [[]] },
+          },
+        ])
+      );
+      await expect(getDagResumeSnapshot('bad-contract')).rejects.toThrow();
     });
 
     test('reports cache from a mixed run as a floor instead of withholding it', async () => {

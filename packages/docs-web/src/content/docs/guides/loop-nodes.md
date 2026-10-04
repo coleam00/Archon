@@ -625,10 +625,10 @@ If you need to accumulate results across iterations, write them to files in
 
 | Scenario | Behavior |
 |----------|----------|
-| Iteration throws an error | Node fails immediately (no more iterations) |
+| Iteration fails | A transient or rate-limited failure retries the iteration. Any other failure fails the node (no more iterations) |
 | Max iterations exceeded | Node fails with descriptive error |
 | Workflow cancelled | Detected between iterations, node stops |
-| Idle timeout per iteration | An iteration with no output yet is retried as a transient failure. An iteration whose provider produced output but never signalled that its turn settled fails, and the node fails with it |
+| Idle timeout per iteration | The iteration is retried as a transient failure, whether or not its provider produced output first |
 | `retry` configured on node | Rejected at parse time — workflow fails to load |
 
 ## Cross-Node Loops with `loop_group`

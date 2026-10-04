@@ -8,6 +8,7 @@ import { isSystemCategory } from '../primitives/message';
 import { foldNodeRuns } from '../primitives/event';
 import type {
   RunEvent,
+  RunNodeState,
   NodeRun,
   ArtifactEvent,
   SystemEvent,
@@ -19,6 +20,8 @@ import { StreamCard } from './StreamCard';
 interface RunStreamProps {
   messages: Message[];
   events: RunEvent[];
+  /** The engine's node states (`run.nodes`); the only source of node status. */
+  nodes: readonly RunNodeState[];
   /** The run's provider events by node (lib/provider-events.ts). */
   providerEvents: RunProviderEvents;
   showToolCalls: boolean;
@@ -146,6 +149,7 @@ export function runToolCalls(
 export function RunStream({
   messages,
   events,
+  nodes,
   providerEvents,
   showToolCalls,
   showSystem,
@@ -153,7 +157,7 @@ export function RunStream({
 }: RunStreamProps): ReactElement {
   // Single source for the folded nodes — consumed by both the timeline (one
   // divider per node) and the node-filter window so they can't drift.
-  const nodeRuns = useMemo(() => foldNodeRuns(events), [events]);
+  const nodeRuns = useMemo(() => foldNodeRuns(events, nodes), [events, nodes]);
   const toolCalls = useMemo(
     () => runToolCalls(messages, providerEvents),
     [messages, providerEvents]
@@ -245,9 +249,8 @@ export function RunStream({
       });
     }
 
-    // One divider per node: fold each node's 2–3 transitions (started + terminal,
-    // plus a resume-time skipped_prior_success) into a single NodeRun, positioned
-    // at its first transition so it heads that node's events in the stream.
+    // One divider per node, positioned at its first transition so it heads that
+    // node's events in the stream.
     for (const nr of nodeRuns) {
       entries.push({
         kind: 'node',
@@ -333,7 +336,9 @@ export function RunStream({
               durationMs={entry.node.durationMs}
               timestamp={entry.node.startedAt}
               costUsd={entry.node.costUsd}
+              costScope={entry.node.costScope}
               numTurns={entry.node.numTurns}
+              tokens={entry.node.tokens}
               stopReason={entry.node.stopReason}
               skipReason={entry.node.skipReason}
               skipExpr={entry.node.skipExpr}

@@ -352,3 +352,32 @@ describe('core schemas', () => {
     expect(result.success).toBe(true);
   });
 });
+
+test('identity platforms are open lowercase identifiers bounded by persisted storage', () => {
+  for (const id of [
+    'slack',
+    'telegram',
+    'discord',
+    'github',
+    'gitea',
+    'gitlab',
+    'web',
+    'cli',
+    'matrix-chat',
+    'a'.repeat(32),
+  ]) {
+    expect(identityPlatformSchema.parse(id)).toBe(id);
+  }
+  for (const id of [
+    '',
+    ' matrix',
+    'Matrix',
+    'matrix_chat',
+    'matrix/chat',
+    'matrix--chat',
+    'matrix-',
+    'a'.repeat(33),
+  ]) {
+    expect(identityPlatformSchema.safeParse(id).success).toBe(false);
+  }
+});

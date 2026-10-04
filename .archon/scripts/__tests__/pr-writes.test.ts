@@ -6,6 +6,8 @@
  * not read back is reported as a failure rather than a delivery.
  */
 import { describe, expect, it } from 'bun:test';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
   PR,
   PR_URL,
@@ -278,6 +280,8 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
     inputs: {
       INPUTS_PR: JSON.stringify(PR),
       INPUTS_REPORT: '{ARTIFACTS}/review/report.md',
+      INPUTS_HEAD: REVIEWED,
+      ARCHON_NODE_EXECUTION: atCommit(REVIEWED),
       INPUTS_READY: 'true',
       INPUTS_ACTION: 'none',
       INPUTS_SUMMARY: 'stub: nothing open',
@@ -288,9 +292,18 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
       }),
       ...options.inputs,
     },
-    artifacts: { 'review-report.md': REPORT, ...options.artifacts },
+    artifacts: { 'review-report.md': `${REPORT}\nReviewed head SHA: ${REVIEWED}`, ...options.artifacts },
   });
 }
+
+/** The PR head the fake gh and forge report, and so the commit a passing round reviewed. */
+const REVIEWED = 'deadbeef';
+
+function atCommit(commit: string): string {
+  return JSON.stringify({ attempt: { checkoutStart: { kind: 'git', commit } } });
+}
+
+const prView = forgeOperation('pr.view', { pr: forgePrRecord(), title: 'A title', body: 'A body' });
 
 describe('publish-review keeps one canonical comment per pull request', () => {
   const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
@@ -377,22 +390,25 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       inputs: report,
       forge: {
         kind: 'fake',
-        response: forgeOperation('comment.upsert', {
-          target: PR,
-          outcome: 'applied',
-          changed: true,
-          comment: {
-            ref: PR,
-            id: '900',
-            url: `${PR_URL}#issuecomment-900`,
-            bodyDigest: 'digest',
-          },
-        }),
+        response: [
+          prView,
+          forgeOperation('comment.upsert', {
+            target: PR,
+            outcome: 'applied',
+            changed: true,
+            comment: {
+              ref: PR,
+              id: '900',
+              url: `${PR_URL}#issuecomment-900`,
+              bodyDigest: 'digest',
+            },
+          }),
+        ],
       },
     });
     expect(result.code).toBe(0);
     expect(result.gh).toEqual([]);
-    const request = JSON.parse(result.forgeRequests[0]) as { marker: string; body: string };
+    const request = JSON.parse(result.forgeRequests[1]) as { marker: string; body: string };
     expect(request.marker).toBe(MARKER);
     expect(request.body.split('\n')[0]).toBe(MARKER);
     expect(request.body).toContain(REPORT);
@@ -406,17 +422,20 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       forge: {
         kind: 'fake',
         okExitCode: 2,
-        response: forgeOperation('comment.upsert', {
-          target: PR,
-          outcome: 'applied',
-          changed: true,
-          comment: {
-            ref: PR,
-            id: '900',
-            url: `${PR_URL}#issuecomment-900`,
-            bodyDigest: 'digest',
-          },
-        }),
+        response: [
+          prView,
+          forgeOperation('comment.upsert', {
+            target: PR,
+            outcome: 'applied',
+            changed: true,
+            comment: {
+              ref: PR,
+              id: '900',
+              url: `${PR_URL}#issuecomment-900`,
+              bodyDigest: 'digest',
+            },
+          }),
+        ],
       },
     });
     expect(result.code).toBe(0);
@@ -430,11 +449,61 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       inputs: report,
       forge: {
         kind: 'fake',
-        response: forgeFailure('comment.upsert', 'outcome_unknown', 'forge plugin timed out'),
+        response: [prView, forgeFailure('comment.upsert', 'outcome_unknown', 'forge plugin timed out')],
       },
     });
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('outcome_unknown');
+  });
+});
+
+// A round's verdict goes public only about the commit it reviewed. The stale case
+// is a pull-request record whose head revision was captured when the PR opened:
+// a report about that commit must not stand as the verdict on the PR's head.
+describe('publish-review publishes a verdict only about the head it reviewed', () => {
+  const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
+  const STALE = 'stale0000';
+
+  it('records the reviewed commit beside the report as the next round\'s cursor', () => {
+    const result = publishReview({ inputs: report });
+    expect(result.code).toBe(0);
+    expect(readFileSync(join(result.artifacts, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
+  });
+
+  it('refuses a round that reviewed a commit the pull request no longer carries', () => {
+    const result = publishReview({
+      inputs: {
+        ...report,
+        INPUTS_SCOPE: JSON.stringify(PR),
+        INPUTS_HEAD: STALE,
+        ARCHON_NODE_EXECUTION: atCommit(STALE),
+      },
+      artifacts: { 'review-report.md': `Reviewed head SHA: ${STALE}` },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`this round reviewed ${STALE}, but`);
+    expect(result.stderr).toContain(`is at ${REVIEWED}`);
+    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
+  });
+
+  it('refuses a report that names a different commit than the one reviewed', () => {
+    const result = publishReview({
+      inputs: report,
+      artifacts: { 'review-report.md': `Reviewed head SHA: ${STALE}` },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`does not name ${REVIEWED}`);
+    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
+  it('refuses when the checkout moved after the round fixed its commit', () => {
+    const result = publishReview({
+      inputs: { ...report, ARCHON_NODE_EXECUTION: atCommit('moved0000') },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain(`reviewed ${REVIEWED}, but the checkout is now at moved0000`);
+    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
   });
 });

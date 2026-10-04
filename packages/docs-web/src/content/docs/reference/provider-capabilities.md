@@ -38,9 +38,9 @@ reporting declarations; absence means unknown, not unsupported.
 
 - `claude` — Claude (Anthropic)
 - `codex` — Codex (OpenAI)
-- `opencode` — OpenCode (community) *(community provider)*
+- `opencode` — OpenCode (community) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
 - `pi` — Pi (community) *(community provider)*
-- `copilot` — Copilot (GitHub) *(community provider)*
+- `copilot` — Copilot (GitHub) *(community provider, [deprecated](/getting-started/ai-assistants/#deprecated-providers))*
 
 ## Capabilities
 
@@ -51,7 +51,7 @@ reporting declarations; absence means unknown, not unsupported.
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Plugins (`plugins:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Plugins (`plugins:`) | ✅ | ✅ | ❌ | ❌ | ❌ |
 | Inline sub-agents (`agents:`) | ✅ | ❌ | ✅¹ | ❌ | ✅ |
 | Tool restrictions (`allowed_tools`/`denied_tools`) | ✅ | ❌ | ✅ | ✅ | ✅ |
 | Structured output (`output_format`) | **enforced** | **enforced** | **enforced** | best-effort | best-effort |

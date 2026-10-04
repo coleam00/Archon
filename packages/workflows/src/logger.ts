@@ -93,17 +93,31 @@ export interface WorkflowEvent extends Partial<ProviderEventEnvelope> {
  * failed after spending reports that spend the same way a node that completed does
  * (#2693).
  *
- * That symmetry holds per SINK, not yet across every node type. A `loop:` node's
- * cumulative totals reach its transcript row on failure and its persisted event on
- * either outcome, but no success exit writes a terminal transcript row for the loop's
- * own id — only per-iteration rows, which carry duration and no usage. `workflow:` and
- * fan-out nodes write no transcript rows at all. So do not read an absent `cost_usd` on
- * a run's transcript as "the whole run was free"; read it per row, where it means the
- * provider reported no cost. Completing that coverage is #2614's audit.
+ * A row reports `cost_usd` and `tokens` as its OWN spend only when the record's
+ * `accounting` is `'node'`. Every other value restates spend other rows of the same run
+ * already carry — a `loop_group` roll-up over its `<groupId>.<nodeId>` body rows, a
+ * composed fan-out wrapper over its instances, an instance terminal over its own leaves,
+ * an amendment over the attempt it amends — so those rows omit both axes. The durable row
+ * keeps its `cost_usd` and marks a restatement `aggregate: true`; the resume fold skips a
+ * marked row because its scope's own rows already carry that spend, except a
+ * composed-instance terminal, which the fold keeps as the authoritative source for its
+ * scope because that instance's inner rows are observability writes that can be missing
+ * after a crash. No row restates another's spend, so summing the rows that carry a
+ * `cost_usd` lands on `workflow_complete.cost_usd` (#3508); count `node_error` rows in
+ * that sum, because a retried attempt that already spent reports on its own. So an absent
+ * `cost_usd` says one of two things, and the row's `accounting` says which: on a row that
+ * reports its own spend, the provider reported no cost; on a restatement row, that scope's
+ * spend is on the rows it names.
  *
- * Each axis is omitted when nothing was reported for it, so an absent `cost_usd` means
- * the provider reported no cost (Codex reports none at all — #2334) and `0` means it
- * reported zero. Build it with `!== undefined` tests, never truthiness.
+ * Do not read an absent `cost_usd` on a run's transcript as "the whole run was free"; read
+ * it per row. A `loop:` node's cumulative totals reach its persisted event on either
+ * outcome, and a success exit writes the terminal transcript row for the loop's own id just
+ * as a failure does; its per-iteration rows carry duration and no usage.
+ *
+ * Each axis is omitted when nothing was reported for it, so on a row that reports its own
+ * spend an absent `cost_usd` means the provider reported no cost (Codex reports none at all
+ * — #2334) and `0` means it reported zero. Build it with `!== undefined` tests, never
+ * truthiness.
  */
 export type WorkflowUsage = Pick<WorkflowEvent, 'tokens' | 'cost_usd'>;
 

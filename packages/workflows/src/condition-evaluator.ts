@@ -41,9 +41,12 @@ import {
   OutputRefError,
   similarNodeIds,
   canonicalValueText,
+  outputRefText,
   type JsonValue,
 } from './output-ref';
 import {
+  findUnsupportedNestedWhenRef,
+  assertSupportedWhenOutputRefs,
   parseLoopPrevWhenAtom,
   parseWhenAtom,
   splitOutsideQuotes,
@@ -75,7 +78,8 @@ function resolveOutputRef(
   nodeId: string,
   field: string | undefined,
   nodeOutputs: ReadonlyMap<string, NodeOutput>,
-  exprSnippet: string
+  exprSnippet: string,
+  reference: string
 ): string {
   const nodeOutput = nodeOutputs.get(nodeId);
   if (!nodeOutput) {
@@ -85,12 +89,10 @@ function resolveOutputRef(
     // `substituteNodeOutputRefs` in dag-executor). A whole-text `$id.output` stays
     // lenient ('').
     if (field) {
-      throw new OutputRefError(
-        nodeId,
-        field,
-        'unknown-node',
-        similarNodeIds(nodeId, nodeOutputs.keys())
-      );
+      throw new OutputRefError(nodeId, field, 'unknown-node', {
+        reference,
+        candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
+      });
     }
     getLog().warn({ nodeId }, 'condition_output_ref_unknown_node');
     return '';
@@ -113,7 +115,7 @@ function resolveOutputRef(
     return nodeOutput.output;
   }
 
-  const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+  const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, reference);
   if (resolution.kind === 'empty') return '';
   if (
     Array.isArray(resolution.value) ||
@@ -122,7 +124,7 @@ function resolveOutputRef(
     const actualType = Array.isArray(resolution.value) ? 'array' : 'object';
     getLog().error({ nodeId, field, actualType, exprSnippet }, 'dag.condition_field_not_primitive');
     throw new Error(
-      `Condition reference '$${nodeId}.output.${field}' resolved to an ${actualType}. ` +
+      `Condition reference '${reference}' resolved to an ${actualType}. ` +
         "A 'when:' field must be a string, number, boolean, or null; emit a scalar routing field " +
         'or inspect structured data in a script node.'
     );
@@ -216,7 +218,8 @@ function resolveAtomRef(
     ref.nodeId,
     ref.field,
     ref.kind === 'loop_prev' ? (loopPrevOutputs ?? new Map()) : nodeOutputs,
-    exprSnippet
+    exprSnippet,
+    outputRefText(ref.nodeId, ref.field, ref.kind === 'loop_prev' ? 'prior' : 'current')
   );
 }
 
@@ -296,6 +299,12 @@ export function evaluateCondition(
   options?: { loopPrevOutputs?: ReadonlyMap<string, NodeOutput> }
 ): { result: boolean; parsed: boolean } {
   const trimmed = expr.trim();
+  assertSupportedWhenOutputRefs(trimmed);
+  const nestedRef = findUnsupportedNestedWhenRef(trimmed);
+  if (nestedRef)
+    throw new Error(
+      `Reference '${nestedRef.reference}' uses nested shorthand; use canonical '.output' spelling for nested paths.`
+    );
 
   // Split on || — OR has lower precedence
   const orClauses = splitOutsideQuotes(trimmed, '||');

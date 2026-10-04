@@ -7,7 +7,13 @@ import { basename, join } from 'node:path';
 import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runLiveOwnerPath } from '@archon/core/services/run-live-owner';
+import { DETACHED_RUN_FAILED_EXIT_CODE } from './workflow-exit-code';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
+
+import {
+  DETACHED_RESUME_RECEIPT_ENV,
+  waitForDetachedResumeReceipt,
+} from './detached-resume-receipt';
 
 // These fixtures are torn down after tests that spawn, and then kill, a real detached
 // child. A killed process can still hold a handle inside its temp tree at the instant of
@@ -164,6 +170,78 @@ function stubOwner(pid: number, leaseMs?: number): Server {
 }
 
 describe('detached run control integration', () => {
+  for (const closedLauncher of [false, true]) {
+    it(`keeps the detached child executing (closed launcher: ${String(closedLauncher)})`, async () => {
+      const fixtureDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-receipt-')));
+      const fixturePath = join(fixtureDir, 'receipt.ts');
+      const continuedPath = join(fixtureDir, 'continued');
+      const errorPath = join(fixtureDir, 'transport-error');
+      writeFileSync(
+        fixturePath,
+        `
+        import { consumeDetachedResumeReceiptRequest } from ${JSON.stringify(join(import.meta.dir, 'detached-resume-receipt.ts'))};
+        import { writeFileSync } from 'node:fs';
+        const notify = consumeDetachedResumeReceiptRequest((runId, error) => {
+          writeFileSync(process.argv[3], JSON.stringify({ runId, code: error instanceof Error && 'code' in error ? error.code : null }));
+        });
+        setTimeout(() => {
+          notify?.('fixture');
+          writeFileSync(process.argv[2], 'continued');
+        }, 100);
+      `
+      );
+      const child = spawn(process.execPath, [fixturePath, continuedPath, errorPath], {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+        env: { ...process.env, [DETACHED_RESUME_RECEIPT_ENV]: '1' },
+      });
+      const exit = waitForExit(child);
+      try {
+        const pipe = child.stdio[3];
+        if (!pipe || !('readable' in pipe)) throw new Error('Missing receipt pipe');
+        if (closedLauncher) {
+          pipe.destroy();
+          child.unref();
+        } else {
+          await waitForDetachedResumeReceipt(
+            child,
+            pipe,
+            (code, signal) => new Error(`No receipt: ${String(code)} ${String(signal)}`)
+          );
+        }
+        await waitForFixtureProcess(() => existsSync(continuedPath));
+        expect(await exit).toEqual({ code: 0, signal: null });
+        if (closedLauncher) {
+          expect(JSON.parse(readFileSync(errorPath, 'utf8'))).toMatchObject({
+            runId: 'fixture',
+            code: 'EPIPE',
+          });
+        }
+      } finally {
+        if (child.pid !== undefined && processExists(child.pid)) child.kill();
+      }
+    });
+  }
+
+  for (const code of [0, DETACHED_RUN_FAILED_EXIT_CODE]) {
+    it(`preserves exit ${String(code)} when the real child sends no receipt`, async () => {
+      const child = spawn(process.execPath, ['-e', `process.exit(${String(code)})`], {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore', 'pipe'],
+      });
+      const pipe = child.stdio[3];
+      if (!pipe || !('readable' in pipe)) throw new Error('Missing receipt pipe');
+      const error = await rejectedError(() =>
+        waitForDetachedResumeReceipt(
+          child,
+          pipe,
+          (exitCode, signal) => new Error(`No receipt: ${String(exitCode)} ${String(signal)}`)
+        )
+      );
+      expect(error.message).toBe(`No receipt: ${String(code)} null`);
+    });
+  }
+
   it(
     'stops the detached owner process group before its descendant can leak work',
     async () => {

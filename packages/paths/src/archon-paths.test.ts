@@ -29,8 +29,7 @@ import {
   canonicalizeProjectPath,
   getAppArchonBasePath,
   getSourceWebDistDir,
-  getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   logArchonPaths,
   validateAppDefaultsPaths,
   parseOwnerRepo,
@@ -326,18 +325,14 @@ describe('archon-paths', () => {
   });
 
   describe('getCommandFolderSearchPaths', () => {
-    test('returns .archon/commands and defaults by default', () => {
+    test('returns .archon/commands by default', () => {
       const paths = getCommandFolderSearchPaths();
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+      expect(paths).toEqual(['.archon/commands']);
     });
 
     test('includes configured folder when provided', () => {
       const paths = getCommandFolderSearchPaths('.claude/commands/archon');
-      expect(paths).toEqual([
-        '.archon/commands',
-        '.archon/commands/defaults',
-        '.claude/commands/archon',
-      ]);
+      expect(paths).toEqual(['.archon/commands', '.claude/commands/archon']);
     });
 
     test('.archon/commands has highest priority', () => {
@@ -345,19 +340,9 @@ describe('archon-paths', () => {
       expect(paths[0]).toBe('.archon/commands');
     });
 
-    test('.archon/commands/defaults has second priority', () => {
-      const paths = getCommandFolderSearchPaths('.custom/commands');
-      expect(paths[1]).toBe('.archon/commands/defaults');
-    });
-
     test('does not duplicate .archon/commands if configured', () => {
       const paths = getCommandFolderSearchPaths('.archon/commands');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
-    });
-
-    test('does not duplicate .archon/commands/defaults if configured', () => {
-      const paths = getCommandFolderSearchPaths('.archon/commands/defaults');
-      expect(paths).toEqual(['.archon/commands', '.archon/commands/defaults']);
+      expect(paths).toEqual(['.archon/commands']);
     });
   });
 
@@ -499,26 +484,12 @@ describe('archon-paths', () => {
     });
   });
 
-  describe('getDefaultCommandsPath', () => {
-    test('returns commands/defaults under app archon base', () => {
+  describe('getBundledWorkflowsPath', () => {
+    test('returns workflows under app archon base', () => {
       delete process.env.ARCHON_DOCKER;
       delete process.env.WORKSPACE_PATH;
-      const path = getDefaultCommandsPath();
-      expect(path).toContain('.archon');
-      expect(path).toContain('commands');
-      expect(path).toContain('defaults');
-      expect(path).not.toContain('packages/core');
-    });
-  });
-
-  describe('getDefaultWorkflowsPath', () => {
-    test('returns workflows/defaults under app archon base', () => {
-      delete process.env.ARCHON_DOCKER;
-      delete process.env.WORKSPACE_PATH;
-      const path = getDefaultWorkflowsPath();
-      expect(path).toContain('.archon');
-      expect(path).toContain('workflows');
-      expect(path).toContain('defaults');
+      const path = getBundledWorkflowsPath();
+      expect(path).toBe(join(getAppArchonBasePath(), 'workflows'));
       expect(path).not.toContain('packages/core');
     });
   });

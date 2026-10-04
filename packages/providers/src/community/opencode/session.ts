@@ -1,6 +1,10 @@
 import { createLogger } from '@archon/paths';
 
-import { truncateToolOutput, type ProviderStopReason } from '@archon/provider-contract';
+import {
+  sessionPreview,
+  truncateToolOutput,
+  type ProviderStopReason,
+} from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk, SendQueryOptions } from '../../types';
 
@@ -130,7 +134,10 @@ export async function resolveSessionId(
         return { sessionId, resumed: true };
       }
     } catch (error) {
-      getLog().warn({ err: error, resumeSessionId, cwd }, 'opencode.session_resume_failed');
+      getLog().warn(
+        { err: error, resumeSessionIdPreview: sessionPreview(resumeSessionId), cwd },
+        'opencode.session_resume_failed'
+      );
     }
   }
 
@@ -201,7 +208,10 @@ async function readStructuredOutput(
       return info.structured_output;
     }
   } catch (error) {
-    getLog().warn({ err: error, sessionId, messageId }, 'opencode.structured_output_lookup_failed');
+    getLog().warn(
+      { err: error, sessionIdPreview: sessionPreview(sessionId), messageId },
+      'opencode.structured_output_lookup_failed'
+    );
   }
 
   return undefined;
@@ -229,7 +239,10 @@ export async function* streamOpencodeSession(
     void client.session
       .abort({ path: { id: sessionId }, query: { directory: cwd } })
       .catch((error): void => {
-        getLog().debug({ err: error, sessionId }, 'opencode.session_abort_failed');
+        getLog().debug(
+          { err: error, sessionIdPreview: sessionPreview(sessionId) },
+          'opencode.session_abort_failed'
+        );
       });
     streamController.abort();
   };
@@ -341,14 +354,16 @@ export async function* streamOpencodeSession(
     if (aborted) {
       const abortReason = requestOptions?.abortSignal?.reason;
       throw new Error(
-        `OpenCode query aborted (session: ${sessionId}, cwd: ${cwd})` +
+        `OpenCode query aborted (session: ${sessionPreview(sessionId)}, cwd: ${cwd})` +
           (abortReason ? `: ${String(abortReason)}` : '')
       );
     }
     // Only `session.idle` reports the turn's outcome. A stream that closed before it
     // (the embedded server died or dropped the connection) is a failed turn, not an
     // empty success.
-    throw new Error(`OpenCode event stream ended before session.idle (session: ${sessionId})`);
+    throw new Error(
+      `OpenCode event stream ended before session.idle (session: ${sessionPreview(sessionId)})`
+    );
   } catch (error) {
     // Preserve partial output: a part still open when the turn fails reaches the user.
     yield* textBlocks.drain();

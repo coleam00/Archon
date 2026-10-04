@@ -91,7 +91,7 @@ Compiled-binary builds of Archon no longer embed Claude Code / Codex — you ins
 
 **Fix (Codex):**
 - Install: `npm install -g @openai/codex` (or platform-specific instructions)
-- Set `CODEX_CLI_PATH=/path/to/codex` or `assistants.codex.codexBinaryPath` in config
+- Set `CODEX_BIN_PATH=/path/to/codex` or `assistants.codex.codexBinaryPath` in config
 - Autodetect covers the standard npm / Homebrew locations per platform
 
 See [archon.diy/getting-started/installation/](https://archon.diy/getting-started/installation/) for full platform-specific install paths.

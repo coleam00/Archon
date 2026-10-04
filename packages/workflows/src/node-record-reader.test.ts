@@ -88,3 +88,23 @@ describe('readNodeRecordEvent', () => {
     );
   });
 });
+
+it('retains nested contracts and rejects malformed present authorization evidence', () => {
+  const envelope = { workflow_run_id: 'r', step_name: 'p', event_type: 'node_completed' };
+  expect(
+    readNodeRecordEvent({ ...envelope, data: { declared_output_paths: [['a'], ['a', 'b']] } })?.data
+      .declared_output_paths
+  ).toEqual([['a'], ['a', 'b']]);
+  expect(
+    readNodeRecordEvent({ ...envelope, data: { declared_output_paths: [] } })?.data
+      .declared_output_paths
+  ).toEqual([]);
+  for (const bad of [null, undefined, ['a'], [[]], [['a', 1]]]) {
+    expect(() =>
+      readNodeRecordEvent({ ...envelope, data: { declared_output_paths: bad } })
+    ).toThrow();
+  }
+  expect(readNodeRecordEvent({ ...envelope, data: {} })?.data).not.toHaveProperty(
+    'declared_output_paths'
+  );
+});

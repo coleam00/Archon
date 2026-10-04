@@ -13,14 +13,19 @@
  *
  * Grammar (compound expressions are split into atoms by {@link whenAtoms}):
  *   $nodeId.output            — whole output text of a node
- *   $nodeId.output.field      — a field of a node's JSON output
+ *   $nodeId.output.a.b        — an object-field path of a node's JSON output
  *   $nodeId.field             — shorthand for the line above (cannot nest)
  *   $INPUTS.name              — a named workflow input (#2470)
  *   $LOOP_PREV.node.output    — prior loop-group body output (loop context only)
  *   <op> is == != <= >= < >, RHS is a single-quoted literal or a bare
  *   number/boolean.
  */
-import { INPUT_NAME_SOURCE } from './schemas/dag-node';
+import {
+  assertSupportedOutputRefs,
+  INPUT_NAME_SOURCE,
+  OUTPUT_FIELD_SOURCE,
+  OUTPUT_PATH_SOURCE,
+} from './output-ref';
 
 /**
  * The reserved scope name for workflow inputs. `loader.ts` imports this rather than
@@ -49,14 +54,18 @@ function isWhenOperator(value: string): value is WhenOperator {
 
 /** A node id may contain hyphens; a path segment (a JSON field name) may not. */
 const NODE_ID_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
-const PATH_SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
+const PATH_SEGMENT_SOURCE = OUTPUT_FIELD_SOURCE;
+
+const NESTED_SHORTHAND_WHEN_REF_PATTERN = new RegExp(
+  String.raw`^\s*(\$(${NODE_ID_SOURCE})\.(${OUTPUT_FIELD_SOURCE})(?:\.${OUTPUT_FIELD_SOURCE})+)`
+);
 
 /**
  * Capture groups:
  *   1. inputName   — `$INPUTS.<name>` (the input branch; tried first)
  *   2. nodeId      — `$nodeId`
  *   3. segment1    — first path segment (`output` for canonical refs, else a shorthand field)
- *   4. segment2    — optional second segment (the field name when segment1 is `output`)
+ *   4. segment2    — optional object-field path (when segment1 is `output`)
  *   5. operator
  *   6. quotedValue — single-quoted RHS literal (may be empty)
  *   7. unquotedValue — bare numeric or boolean RHS
@@ -76,14 +85,14 @@ export const WHEN_ATOM_PATTERN = new RegExp(
   '^(?:' +
     String.raw`\$${WHEN_INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
     '|' +
-    String.raw`\$(${NODE_ID_SOURCE})\.(${PATH_SEGMENT_SOURCE})(?:\.(${PATH_SEGMENT_SOURCE}))?` +
+    String.raw`\$(${NODE_ID_SOURCE})\.(${PATH_SEGMENT_SOURCE})(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     ')' +
     String.raw`\s*(${WHEN_OPERATORS.join('|')})\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
 );
 
 const LOOP_PREV_WHEN_ATOM_PATTERN = new RegExp(
-  String.raw`^\$LOOP_PREV\.(${NODE_ID_SOURCE})\.output(?:\.(${PATH_SEGMENT_SOURCE}))?` +
+  String.raw`^\$LOOP_PREV\.(${NODE_ID_SOURCE})\.output(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     String.raw`\s*(${WHEN_OPERATORS.join('|')})\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
 );
@@ -144,6 +153,31 @@ export function splitOutsideQuotes(expr: string, sep: string): string[] {
  */
 export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
+}
+
+/** Quoted RHS values are literal data, even when they contain reference-shaped text. */
+export function assertSupportedWhenOutputRefs(expr: string): void {
+  for (const atom of whenAtoms(expr)) {
+    const quote = atom.indexOf("'");
+    assertSupportedOutputRefs(quote < 0 ? atom : atom.slice(0, quote));
+  }
+}
+
+/** Find unsupported nested shorthand on the left-hand side of a `when:` atom. */
+export function findUnsupportedNestedWhenRef(expr: string): { reference: string } | undefined {
+  for (const atom of whenAtoms(expr)) {
+    const shorthand = NESTED_SHORTHAND_WHEN_REF_PATTERN.exec(atom);
+    if (shorthand?.[1] !== undefined && shorthand[2] !== undefined && shorthand[3] !== undefined) {
+      const nodeId = shorthand[2];
+      const firstSegment = shorthand[3];
+      if (nodeId === WHEN_INPUTS_SCOPE || nodeId === 'LOOP_PREV' || firstSegment === 'output')
+        continue;
+      return {
+        reference: shorthand[1],
+      };
+    }
+  }
+  return undefined;
 }
 
 /**

@@ -4,6 +4,7 @@ import {
   serializeNodeTranscript,
   serializeNodeEmitter,
   serializeNodeOutput,
+  nodeDisplayName,
   type NodeExecutionResult,
 } from './node-record-serialization';
 import type { WorkflowDeps } from './deps';
@@ -29,7 +30,7 @@ export class NodeEventWriteError extends Error {
 }
 
 export async function persistNodeEvent(
-  store: WorkflowDeps['store'],
+  store: Pick<WorkflowDeps['store'], 'persistWorkflowEvent'>,
   event: NodeStateEventInput
 ): Promise<void> {
   try {
@@ -53,20 +54,12 @@ export interface DerivedNodeStateSinks {
 }
 
 export interface NodeStateSinks extends DerivedNodeStateSinks {
-  store: WorkflowDeps['store'];
-}
-
-function commandNameOf(node: NodeStateSubject): string | undefined {
-  return node.kind === 'agent' && node.source.kind === 'command' ? node.source.name : undefined;
-}
-
-export function getNodeName(node: NodeStateSubject): string {
-  return commandNameOf(node) ?? node.id;
+  store: Pick<WorkflowDeps['store'], 'persistWorkflowEvent'>;
 }
 
 function transcriptContent(node: NodeStateSubject, record: ReadNodeRecordEvent): string {
   if (typeof record.data.command === 'string') return record.data.command;
-  if (node.kind === 'agent') return commandNameOf(node) ?? '<inline>';
+  if (node.kind === 'agent') return node.source.kind === 'command' ? node.source.name : '<inline>';
   if (node.kind === 'exec') return node.runtime === 'sh' ? '<bash>' : '<script>';
   if (typeof record.data.type === 'string') return `<${record.data.type}>`;
   return node.id;
@@ -132,7 +125,7 @@ export function deriveEmitterEvent(
   const record = readNodeRecordEvent(event);
   if (!record) return undefined;
   if (record.metadata) return serializeNodeEmitter(record.metadata);
-  const nodeName = getNodeName(node);
+  const nodeName = nodeDisplayName(node);
   switch (record.eventType) {
     case 'node_started':
       return {
@@ -240,7 +233,7 @@ export async function recordDerivedExecution(
 export async function recordNodeState(
   sinks: NodeStateSinks,
   record: NodeStateRecord,
-  continuation: { sessionId?: string; resumed?: boolean } = {}
+  continuation: { resumed?: boolean } = {}
 ): Promise<NodeExecutionResult> {
   await persistNodeEvent(sinks.store, serializeNodeStateRecord(record));
   await recordDerivedExecution(sinks, record);
@@ -251,6 +244,8 @@ export async function recordNodeState(
     state: 'completed',
     output: output.text,
     ...(output.structured !== undefined ? { structuredOutput: output.structured } : {}),
-    ...(output.declaredFields !== undefined ? { declaredFields: output.declaredFields } : {}),
+    ...(output.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: output.declaredOutputPaths }
+      : {}),
   };
 }

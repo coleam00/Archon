@@ -88,8 +88,8 @@ export function findWorkflow<T extends Pick<WorkflowDefinition, 'name'>>(
  * Resolve a workflow by name using a 4-tier fallback hierarchy:
  * 1. Exact match
  * 2. Case-insensitive match
- * 3. Suffix match (e.g. "assist" → "archon-assist")
- * 4. Substring match (e.g. "smart" → "archon-smart-pr-review")
+ * 3. Suffix match (e.g. "review" → "archon-review")
+ * 4. Substring match (e.g. "vestig" → "archon-investigate")
  *
  * A qualified installed name (`owner/plugin:entrypoint`) stops after tier 2.
  *
@@ -132,12 +132,12 @@ export function resolveWorkflowName<T extends Pick<WorkflowDefinition, 'name'>>(
   return (
     // Tier 2: Case-insensitive match
     caseInsensitive ??
-    // Tier 3: Suffix match (e.g. "assist" matches "archon-assist")
+    // Tier 3: Suffix match (e.g. "review" matches "archon-review")
     checkTier(
       workflows.filter(w => w.name.toLowerCase().endsWith(`-${lowerName}`)),
       'workflow.resolve_suffix_match'
     ) ??
-    // Tier 4: Substring match (e.g. "smart" matches "archon-smart-pr-review")
+    // Tier 4: Substring match (e.g. "vestig" matches "archon-investigate")
     checkTier(
       workflows.filter(w => w.name.toLowerCase().includes(lowerName)),
       'workflow.resolve_substring_match'

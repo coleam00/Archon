@@ -54,7 +54,7 @@ Slack event
 
 ---
 
-## 2. Workflow Execution: `/workflow run archon-fix-github-issue #42`
+## 2. Workflow Execution: `/workflow run archon-ship #42`
 
 ```
 User message starts with /workflow
@@ -301,8 +301,8 @@ All git subprocess calls use `packages/git/src/exec.ts` — avoids shell injecti
 ### Structured Event Side-Channel
 `IPlatformAdapter.sendStructuredEvent?()` — optional method only `WebAdapter` implements. Orchestrator and executor check `if (platform.sendStructuredEvent)` before calling. Sends raw SDK tool call objects to SSE separately from formatted text.
 
-### `isWebAdapter()` Type Guard
-Narrows `IPlatformAdapter` to `WebAdapter` for web-specific methods: `setConversationDbId()`, `setupEventBridge()`, `emitRetract()`.
+### Web-only adapter methods
+The server holds the concrete `WebAdapter` and calls web-only methods such as `setConversationDbId()` and `emitLockEvent()` directly. Core sees only `IPlatformAdapter`, where `emitRetract?()` is optional.
 
 ---
 

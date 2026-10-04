@@ -3,7 +3,8 @@
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
 
-import { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
+import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
@@ -20,7 +21,7 @@ import type {
   HandleMessageContext,
   GlobalConfig,
   TiersPatch,
-  UserRole,
+  User,
   SchemaVersionInfo,
 } from '@archon/core';
 import {
@@ -72,8 +73,7 @@ import {
   createLogger,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
-  getDefaultCommandsPath,
-  getDefaultWorkflowsPath,
+  getBundledWorkflowsPath,
   getArchonWorkspacesPath,
   getHomeCommandsPath,
   getHomeWorkflowsPath,
@@ -111,6 +111,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
+import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { findCommandFiles } from '@archon/core/utils/commands';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 
@@ -254,7 +255,7 @@ async function findWorkflowAt(
 }
 
 function isBundledWorkflowsRoot(workflowsRoot: string): boolean {
-  return resolve(workflowsRoot) === resolve(dirname(getDefaultWorkflowsPath()));
+  return resolve(workflowsRoot) === resolve(getBundledWorkflowsPath());
 }
 
 function findBundledWorkflow(
@@ -1018,12 +1019,6 @@ const resumeWorkflowRunRoute = createRoute({
   },
 });
 
-const signalWorkflowWaitBodySchema = z.object({
-  event: z.string().min(1),
-  resumeAt: z.string().datetime(),
-  payload: z.unknown().optional(),
-});
-
 const signalWorkflowWaitRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/signal',
@@ -1035,7 +1030,7 @@ const signalWorkflowWaitRoute = createRoute({
       required: true,
       content: {
         'application/json': {
-          schema: signalWorkflowWaitBodySchema,
+          schema: signalWorkflowWaitRequestSchema,
         },
       },
     },
@@ -1658,6 +1653,110 @@ const getUpdateCheckRoute = createRoute({
   },
 });
 
+function apiError(
+  c: Context,
+  status: 400 | 401 | 404 | 409 | 422 | 500 | 503,
+  message: string,
+  detail?: string
+): Response {
+  return c.json({ error: message, ...(detail ? { detail } : {}) }, status);
+}
+
+interface WebUserContext {
+  userId: User['id'];
+  role: User['role'];
+}
+
+/**
+ * Trusted proxy headers require a proxy that strips client-supplied values, or
+ * a loopback-only server. Missing identity leaves solo requests unattributed;
+ * the API gate maps it to 401 when authentication is required.
+ */
+export async function resolveAuthContext(c: Context): Promise<WebUserContext | undefined> {
+  const auth = getAuth();
+  if (auth) {
+    try {
+      const session = await auth.api.getSession({ headers: c.req.raw.headers });
+      if (session?.user) {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'web',
+          session.user.id,
+          session.user.name ?? session.user.email ?? undefined
+        );
+        return { userId: user.id, role: user.role };
+      }
+    } catch (err) {
+      // Proxy-authenticated installs can keep attributing requests during a
+      // session-backend outage. Without a header the API gate fails closed.
+      getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
+    }
+  }
+
+  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerVal = c.req.header(headerName)?.trim();
+  if (!headerVal) return undefined;
+  try {
+    const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
+    return { userId: user.id, role: user.role };
+  } catch (err) {
+    // Attribution is best-effort; the strict credential guard reports 503.
+    getLog().warn(
+      { err: err as Error, headerPresent: true, path: c.req.path },
+      'web.user_resolve_failed'
+    );
+    return undefined;
+  }
+}
+
+export async function resolveWebUserId(c: Context): Promise<string | undefined> {
+  return (await resolveAuthContext(c))?.userId;
+}
+
+/**
+ * Credential endpoints must distinguish missing identity (401) from a backend
+ * outage (503). Unlike soft attribution, a session outage cannot use a header
+ * fallback here.
+ */
+export async function requireWebUser(
+  c: Context,
+  failMessage = 'Web authentication required'
+): Promise<WebUserContext | { error: Response }> {
+  const auth = getAuth();
+  if (auth) {
+    let session: Awaited<ReturnType<typeof auth.api.getSession>> | undefined;
+    try {
+      session = await auth.api.getSession({ headers: c.req.raw.headers });
+    } catch (err) {
+      getLog().error({ err: err as Error }, 'web.session_resolve_failed');
+      return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
+    }
+    if (session?.user) {
+      try {
+        const user = await userDb.findOrCreateUserByPlatformIdentity(
+          'web',
+          session.user.id,
+          session.user.name ?? session.user.email ?? undefined
+        );
+        return { userId: user.id, role: user.role };
+      } catch (err) {
+        getLog().error({ err: err as Error }, 'web.user_resolve_failed');
+        return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+      }
+    }
+  }
+
+  const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
+  const headerVal = c.req.header(headerName)?.trim();
+  if (!headerVal) return { error: apiError(c, 401, failMessage) };
+  try {
+    const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
+    return { userId: user.id, role: user.role };
+  } catch (err) {
+    getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
+    return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
+  }
+}
+
 /**
  * Register all /api/* routes on the Hono app.
  */
@@ -1668,15 +1767,6 @@ export function registerApiRoutes(
   activePlatforms?: readonly string[]
 ): void {
   app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
-
-  function apiError(
-    c: Context,
-    status: 400 | 401 | 404 | 409 | 422 | 500 | 503,
-    message: string,
-    detail?: string
-  ): Response {
-    return c.json({ error: message, ...(detail ? { detail } : {}) }, status);
-  }
 
   /**
    * Validate a run request's declared-inputs map (#2554): a flat object whose every
@@ -1775,7 +1865,6 @@ export function registerApiRoutes(
   //   - /api/health* — the Docker/uptime healthcheck MUST stay reachable
   // /webhooks/* (HMAC-verified) and /internal/* (loopback-guarded) are outside
   // /api/* and untouched. No-op when web auth is disabled (solo/local unchanged).
-  // `resolveAuthContext`/`apiError` are function declarations below → hoisted.
   //
   // SECURITY: resolveAuthContext also accepts the trusted reverse-proxy header
   // (ARCHON_WEB_AUTH_HEADER, default `X-Archon-User`) as an identity. That header
@@ -1792,122 +1881,6 @@ export function registerApiRoutes(
     if (!ctx) return apiError(c, 401, 'Authentication required');
     return next();
   });
-
-  /**
-   * Resolve the per-request auth context: `{ userId, role }`, or undefined when
-   * no identity is present. This is the single chokepoint generalised from the
-   * old header-only seam. Resolution order:
-   *   1. Better Auth session (when web auth is enabled) → canonical
-   *      remote_agent_users row via the 'web' platform identity.
-   *   2. Trusted reverse-proxy header (ARCHON_WEB_AUTH_HEADER, default
-   *      `X-Archon-User`) — kept for proxy deploys and the auth-service sidecar.
-   *   3. undefined → NULL attribution, never elevated.
-   *
-   * `role` rides along on the canonical user row (defaults 'admin'); it is the
-   * durable seam future per-resource scoping hooks into. Visibility stays open.
-   *
-   * SECURITY: header trust is only safe when Archon is reachable solely through
-   * a reverse proxy (bind 127.0.0.1). The server logs a startup warning otherwise.
-   */
-  async function resolveAuthContext(
-    c: Context
-  ): Promise<{ userId: string; role: UserRole } | undefined> {
-    // 1. Better Auth session first (no-op when web auth is disabled).
-    const auth = getAuth();
-    if (auth) {
-      try {
-        const session = await auth.api.getSession({ headers: c.req.raw.headers });
-        if (session?.user) {
-          const user = await userDb.findOrCreateUserByPlatformIdentity(
-            'web',
-            session.user.id,
-            session.user.name ?? session.user.email ?? undefined
-          );
-          return { userId: user.id, role: user.role };
-        }
-      } catch (err) {
-        // Session lookup failed (e.g. DB outage). Fall through to the header so a
-        // proxy-authenticated deploy still resolves; absent that → undefined
-        // (NULL attribution). warn (not error): this is the soft attribution seam
-        // — it returns undefined rather than throwing. The /api/* gate maps that
-        // undefined to a 401 (fail-closed); requireWebUser is the strict variant
-        // that distinguishes a backend 503 from a missing identity.
-        getLog().warn({ err: err as Error, path: c.req.path }, 'web.session_resolve_failed');
-      }
-    }
-
-    // 2. Trusted reverse-proxy header.
-    const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
-    const headerVal = c.req.header(headerName)?.trim();
-    if (!headerVal) return undefined;
-    try {
-      const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
-      return { userId: user.id, role: user.role };
-    } catch (err) {
-      // Best-effort attribution: the header WAS present, but identity resolution
-      // failed (e.g. DB outage). Fall back to NULL attribution rather than
-      // failing the request. headerPresent distinguishes this from "no header".
-      getLog().warn(
-        { err: err as Error, headerPresent: true, path: c.req.path },
-        'web.user_resolve_failed'
-      );
-      return undefined;
-    }
-  }
-
-  /** Soft attribution: call sites that only need the user id, not the role. */
-  async function resolveWebUserId(c: Context): Promise<string | undefined> {
-    return (await resolveAuthContext(c))?.userId;
-  }
-
-  /**
-   * Strict variant for endpoints that REQUIRE a web identity (connect/disconnect).
-   * Session-first then header, mirroring resolveAuthContext, but distinguishing a
-   * missing identity (401) from a backend failure resolving it (503) — a DB
-   * outage must not masquerade as "authentication required". Returns the resolved
-   * context, or the HTTP error Response the caller should return verbatim.
-   */
-  async function requireWebUser(
-    c: Context,
-    failMessage = 'Web authentication required'
-  ): Promise<{ userId: string; role: UserRole } | { error: Response }> {
-    // 1. Better Auth session.
-    const auth = getAuth();
-    if (auth) {
-      let session: Awaited<ReturnType<typeof auth.api.getSession>> | undefined;
-      try {
-        session = await auth.api.getSession({ headers: c.req.raw.headers });
-      } catch (err) {
-        getLog().error({ err: err as Error }, 'web.session_resolve_failed');
-        return { error: apiError(c, 503, 'Could not verify session — backend unavailable') };
-      }
-      if (session?.user) {
-        try {
-          const user = await userDb.findOrCreateUserByPlatformIdentity(
-            'web',
-            session.user.id,
-            session.user.name ?? session.user.email ?? undefined
-          );
-          return { userId: user.id, role: user.role };
-        } catch (err) {
-          getLog().error({ err: err as Error }, 'web.user_resolve_failed');
-          return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
-        }
-      }
-    }
-
-    // 2. Trusted reverse-proxy header.
-    const headerName = process.env.ARCHON_WEB_AUTH_HEADER || 'X-Archon-User';
-    const headerVal = c.req.header(headerName)?.trim();
-    if (!headerVal) return { error: apiError(c, 401, failMessage) };
-    try {
-      const user = await userDb.findOrCreateUserByPlatformIdentity('web', headerVal, headerVal);
-      return { userId: user.id, role: user.role };
-    } catch (err) {
-      getLog().error({ err: err as Error, headerPresent: true }, 'web.user_resolve_failed');
-      return { error: apiError(c, 503, 'Could not verify web identity — backend unavailable') };
-    }
-  }
 
   // GET /api/auth/status - web auth availability + signup posture.
   // Public (no identity required): the web UI calls this before login to decide
@@ -3840,7 +3813,7 @@ export function registerApiRoutes(
 
   registerOpenApiRoute(signalWorkflowWaitRoute, async c => {
     const runId = c.req.param('runId') ?? '';
-    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitBodySchema);
+    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
@@ -4359,15 +4332,23 @@ export function registerApiRoutes(
         parentPlatformId = parentConv?.platform_conversation_id;
       }
 
+      const terminalRecord = getTerminalRecord(run.status, events);
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
-          terminal_record: getTerminalRecord(run.status, events),
+          terminal_record: terminalRecord,
+          // The console reads node state from here and keeps no fold of its own.
+          nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
         },
-        events,
+        // The console renders each cost's scope from here and keeps no copy of the rule.
+        events: events.map(event =>
+          typeof event.data.cost_usd === 'number'
+            ? { ...event, cost_scope: nodeCostScope(event.data) }
+            : event
+        ),
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');
@@ -4529,9 +4510,7 @@ export function registerApiRoutes(
 
       if (!isBinaryBuild()) {
         try {
-          const hit =
-            (await tryReadWorkflowAt(getDefaultWorkflowsPath(), name)) ??
-            (await findPackagedWorkflowAt(dirname(getDefaultWorkflowsPath()), name));
+          const hit = await findPackagedWorkflowAt(getBundledWorkflowsPath(), name);
           if (hit) {
             const result = hit.parsed;
             if (result.error) {
@@ -4728,23 +4707,7 @@ export function registerApiRoutes(
         commandMap.set(name, 'bundled');
       }
 
-      // 2. If not binary build, also check filesystem defaults
-      if (!isBinaryBuild()) {
-        try {
-          const defaultsPath = getDefaultCommandsPath();
-          const files = await findCommandFiles(defaultsPath);
-          for (const { commandName } of files) {
-            commandMap.set(commandName, 'bundled');
-          }
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-            getLog().error({ err }, 'commands.list_defaults_failed');
-          }
-          // ENOENT: defaults path missing — not an error
-        }
-      }
-
-      // 3. Home-scoped commands (~/.archon/commands/) override bundled
+      // 2. Home-scoped commands (~/.archon/commands/) override bundled
       try {
         const homeCommandsPath = getHomeCommandsPath();
         const files = await findCommandFiles(homeCommandsPath);
@@ -4758,7 +4721,7 @@ export function registerApiRoutes(
         // ENOENT: home commands dir not created yet — not an error
       }
 
-      // 4. Project-defined commands override bundled AND global
+      // 3. Project-defined commands override bundled AND global
       if (workingDir) {
         const searchPaths = getCommandFolderSearchPaths();
         for (const folder of searchPaths) {

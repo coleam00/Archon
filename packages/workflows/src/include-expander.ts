@@ -56,6 +56,7 @@ import {
 } from './schemas';
 import {
   canonicalValueText,
+  OUTPUT_REF_SOURCE,
   LOOP_PREV_OUTPUT_REF_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
   parseWholeInputsRef,
@@ -189,14 +190,8 @@ export function collectComposedSuspensionPaths(
  */
 export const INCLUDE_MAX_DEPTH = 3;
 
-/**
- * Output-ref pattern — mirrors the loader's `outputRefPattern` and the executor's
- * substitution regex. Matches `$<id>.output`; any `.field` suffix that follows is
- * left untouched (only the node-id segment is rewritten). Used for the eight text
- * surfaces that go through substituteNodeOutputRefs (prompt/bash/script/... ), which
- * only accept the canonical `.output[.field]` form.
- */
-const OUTPUT_REF_PATTERN = /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output/g;
+/** Matches the canonical current-output prefix; only the node-id segment is rewritten. */
+const OUTPUT_REF_PATTERN = new RegExp(OUTPUT_REF_SOURCE, 'g');
 
 /**
  * Cross-iteration body refs use the same executable node ids, under a distinct prefix.
@@ -424,7 +419,7 @@ function pushWorkflowScopeOntoNodes(
  * The removal is the load-bearing half, not a tidy-up. Push-down alone leaves a node
  * that declares nothing free to fall back to `workflowLevelOptions`, which after
  * inlining belongs to whichever file composed it — so a block declaring no provider at
- * all (the `archon-review-block` shape) still runs on the parent's. With the layer gone
+ * all still runs on the parent's. With the layer gone
  * such a node resolves from config, tier presets and user prefs at run time, exactly as
  * it would standalone.
  *
@@ -1112,6 +1107,8 @@ export function expandWorkflowIncludes(
     nodes: DagNode[];
     includedRequirements: WorkflowRequirement[];
     renameIncludeRef: (id: string) => string;
+    /** Rewritten `$<alias>.output` producer id → the include alias the author wrote. */
+    includeAliases: Map<string, string>;
   }
 
   /**
@@ -1127,6 +1124,7 @@ export function expandWorkflowIncludes(
     const expandedNodes: DagNode[] = [];
     const includesById = new Map<string, ExpandedInclude>();
     const includedRequirements: WorkflowRequirement[] = [];
+    const includeAliases = new Map<string, string>();
 
     for (const node of nodes) {
       // Runtime width stays deferred, while the complete body contract is proven now.
@@ -1194,6 +1192,7 @@ export function expandWorkflowIncludes(
         includedRequirements.push(...(child.requires ?? []));
         const inlined = instantiateResolvedInclude(node, child, commandContents ?? new Map());
         includesById.set(node.id, inlined);
+        includeAliases.set(inlined.primarySink, node.id);
         expandedNodes.push(...inlined.namespaced);
         continue;
       }
@@ -1201,6 +1200,7 @@ export function expandWorkflowIncludes(
       if (isLoopGroupNode(node)) {
         const body = expandNodeList(node.loop_group.nodes, workflowName, stack);
         includedRequirements.push(...body.includedRequirements);
+        for (const [sink, alias] of body.includeAliases) includeAliases.set(sink, alias);
         expandedNodes.push({
           ...node,
           loop_group: {
@@ -1243,7 +1243,7 @@ export function expandWorkflowIncludes(
       rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, id => id);
     }
 
-    return { nodes: expandedNodes, includedRequirements, renameIncludeRef };
+    return { nodes: expandedNodes, includedRequirements, renameIncludeRef, includeAliases };
   }
 
   function expandOne(name: string, stack: string[]): ResolvedWorkflow {
@@ -1301,7 +1301,7 @@ export function expandWorkflowIncludes(
     // `expandWorkflowIncludes — composed approval gates are stamped, not rejected
     // (#1764)` pins this down with a "non-interactive INTERMEDIATE block still expands"
     // case).
-    const structureError = validateDagStructure(expanded.nodes);
+    const structureError = validateDagStructure(expanded.nodes, undefined, expanded.includeAliases);
     if (structureError) {
       throw new IncludeExpansionError(structureError);
     }

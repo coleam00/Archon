@@ -150,6 +150,10 @@ type GitHubAdapterAuth =
     };
 
 export class GitHubAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   /**
    * PAT-mode Octokit: a singleton constructed at startup. Null in App mode —
    * App-mode callers use `resolveOctokit(owner, repo)` to get a per-installation

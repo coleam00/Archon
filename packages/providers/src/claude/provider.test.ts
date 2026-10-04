@@ -409,7 +409,7 @@ describe('ClaudeProvider', () => {
         resultFor('spend-unseen', 0.0356233, 103);
         expect(await costOf('spend-unseen')).toBeUndefined();
         expect(mockLogger.warn).toHaveBeenCalledWith(
-          { sessionId: 'spend-unseen', baseline: 'unknown' },
+          { sessionIdPreview: 'spend-un', baseline: 'unknown' },
           'claude.query_cost_unknown'
         );
       });
@@ -771,39 +771,6 @@ describe('ClaudeProvider', () => {
       });
     });
 
-    test('omits persistSession from SDK options by default', async () => {
-      mockQuery.mockImplementation(async function* () {
-        // Empty generator
-      });
-
-      for await (const _ of client.sendQuery('test', '/workspace')) {
-        // consume
-      }
-
-      expect(mockQuery).toHaveBeenCalledTimes(1);
-      const callArgs = mockQuery.mock.calls[0][0] as { options: Record<string, unknown> };
-      expect(callArgs.options).not.toHaveProperty('persistSession');
-    });
-
-    test('passes persistSession: true when explicitly requested', async () => {
-      mockQuery.mockImplementation(async function* () {
-        // Empty generator
-      });
-
-      for await (const _ of client.sendQuery('test', '/workspace', undefined, {
-        persistSession: true,
-      })) {
-        // consume
-      }
-
-      expect(mockQuery).toHaveBeenCalledWith({
-        prompt: 'test',
-        options: expect.objectContaining({
-          persistSession: true,
-        }),
-      });
-    });
-
     test('passes resume option when resumeSessionId provided', async () => {
       mockQuery.mockImplementation(async function* () {
         // Empty generator
@@ -1144,6 +1111,48 @@ describe('ClaudeProvider', () => {
       }
 
       expect(types).toEqual(['agent_message_chunk', 'result', 'settled']);
+    });
+
+    test('surfaces the SDK retrying a model call as a warning', async () => {
+      mockQuery.mockImplementation(async function* () {
+        yield {
+          type: 'system',
+          subtype: 'api_retry',
+          attempt: 3,
+          max_retries: 10,
+          retry_delay_ms: 8000,
+          error_status: 529,
+          error: 'overloaded',
+        };
+        yield {
+          type: 'system',
+          subtype: 'api_retry',
+          attempt: 1,
+          max_retries: 1,
+          retry_delay_ms: 450,
+          error_status: null,
+          error: 'unknown',
+        };
+      });
+
+      const chunks = [];
+      for await (const chunk of client.sendQuery('test', '/workspace')) {
+        if (!isTurnEnd(chunk)) chunks.push(chunk);
+      }
+
+      expect(chunks).toEqual([
+        {
+          type: 'warning',
+          code: 'claude.api_retry',
+          message:
+            'Claude is retrying the model call (attempt 3 of 10, waiting 8s, HTTP 529 overloaded)',
+        },
+        {
+          type: 'warning',
+          code: 'claude.api_retry',
+          message: 'Claude is retrying the model call (attempt 1 of 1, waiting 450ms, unknown)',
+        },
+      ]);
     });
 
     test('yields hook_started chunk from SDK system message', async () => {
@@ -2496,7 +2505,7 @@ describe('sendQuery decomposition behaviors', () => {
       failure: { class: 'unknown', evidence: 'max_turns' },
     });
     expect(mockLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'sid-err', errorSubtype: 'max_turns' }),
+      expect.objectContaining({ sessionIdPreview: 'sid-err', errorSubtype: 'max_turns' }),
       'claude.result_failed'
     );
   });
@@ -2534,7 +2543,7 @@ describe('sendQuery decomposition behaviors', () => {
     expect(chunks[0]).not.toHaveProperty('errors');
     expect(mockLogger.error).not.toHaveBeenCalledWith(expect.anything(), 'claude.result_is_error');
     expect(mockLogger.debug).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'sid-stop-seq', stopReason: 'stop_sequence' }),
+      expect.objectContaining({ sessionIdPreview: 'sid-stop', stopReason: 'stop_sequence' }),
       'claude.result_success_validated'
     );
   });
@@ -3662,7 +3671,7 @@ describe('typed failures (#1797, #3524)', () => {
     expect(result).not.toHaveProperty('isError');
     expect(result).not.toHaveProperty('failure');
     expect(mockLogger.debug).toHaveBeenCalledWith(
-      expect.objectContaining({ sessionId: 'sid-stop-seq' }),
+      expect.objectContaining({ sessionIdPreview: 'sid-stop' }),
       'claude.result_success_validated'
     );
   });
@@ -3724,6 +3733,7 @@ describe('typed failures (#1797, #3524)', () => {
       };
     }
     const violations = await runProviderConformance({
+      capabilities: client.getCapabilities(),
       turns: [
         {
           name: 'plain turn',
@@ -3744,6 +3754,21 @@ describe('typed failures (#1797, #3524)', () => {
             { type: 'system', subtype: 'background_tasks_changed', tasks: [] },
             { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
             { type: 'system', subtype: 'session_state_changed', state: 'idle' },
+          ]),
+        },
+        {
+          name: 'turn the SDK retried',
+          run: turn([
+            {
+              type: 'system',
+              subtype: 'api_retry',
+              attempt: 1,
+              max_retries: 10,
+              retry_delay_ms: 1000,
+              error_status: 429,
+              error: 'rate_limit',
+            },
+            { type: 'result', subtype: 'success', is_error: false, session_id: 's' },
           ]),
         },
         {

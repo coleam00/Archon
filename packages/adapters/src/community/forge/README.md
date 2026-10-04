@@ -10,6 +10,11 @@ Implement `IPlatformAdapter` from `@archon/core`:
 import type { IPlatformAdapter } from '@archon/core';
 
 export class MyForgeAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
+
   async handleWebhook(payload: string, signature: string): Promise<void> {
     // 1. Verify webhook signature
     // 2. Parse event (issue comment, PR review, etc.)
@@ -72,6 +77,10 @@ app.post('/webhooks/my-forge', async (c) => {
   return c.text('OK', 200);
 });
 ```
+
+Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
+
+Hosts set platform policies as described in the [chat adapter guide](../chat/README.md#registration).
 
 ## Testing
 

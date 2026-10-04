@@ -10,7 +10,7 @@
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { ChecksObservation } from '../../../packages/forge/src/operations';
@@ -235,6 +235,8 @@ export interface ScriptOptions {
   readonly inputs?: Readonly<Record<string, string>>;
   /** Files to write under the run's artifact directory, with the same substitution. */
   readonly artifacts?: Readonly<Record<string, string>>;
+  /** The script's working directory, for one that reads a git checkout. Defaults to a scratch directory. */
+  readonly cwd?: string;
 }
 
 /** Run one pack script the way the engine does: `<pack>/<relative>.ts`. */
@@ -253,6 +255,7 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   const resolveArtifacts = (value: string): string =>
     value.split('{ARTIFACTS}').join(artifactPath);
   for (const [name, content] of Object.entries(options.artifacts ?? {})) {
+    mkdirSync(dirname(join(artifacts, name)), { recursive: true });
     writeFileSync(join(artifacts, name), resolveArtifacts(content));
   }
   const preload = join(root, 'preload.ts');
@@ -310,7 +313,7 @@ else {
   }
 
   const result = spawnSync(process.execPath, ['--preload', preload, join(PACK, `${relative}.ts`)], {
-    cwd: root,
+    cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',
   });

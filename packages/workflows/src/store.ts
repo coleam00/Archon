@@ -1,3 +1,4 @@
+import type { DeclaredOutputPaths } from './output-ref';
 import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
@@ -32,15 +33,15 @@ export type { WorkflowNodeSession, WorkflowRunNodeSession } from './schemas';
  * `structuredOutput` is the logical value the node's `node_completed` event carried
  * under `structured_output`; absent for text-only nodes and rows persisted before
  * the key existed — those degrade to text re-parsing, the pre-#2637 behavior.
- * `declaredFields` is the field-access contract the node completed under, from the
- * event's `declared_fields` (#2453). Only a `workflow:` node writes it, because only
- * it can hold a contract the parent's own definition does not state — every other
- * producer's projection is re-derived from the loaded `output_format` on resume.
+ * `declaredOutputPaths` is the field-path contract the node completed under. Resume
+ * uses it only for a producer whose loaded definition states no contract, such as a
+ * `workflow:` node whose contract is the child's; a local producer's own schema wins.
+ * A row with only the legacy `declared_fields` reads as depth-1 paths.
  */
 export interface PersistedNodeOutput {
   output: string;
   structuredOutput?: unknown;
-  declaredFields?: readonly string[];
+  declaredOutputPaths?: DeclaredOutputPaths;
   /** Present only when resume recovered a preview rather than the full text.
    * Replay must retain this original provenance instead of certifying the preview. */
   outputTruncation?: { originalBytes: number | null; spillPath: string | null };
@@ -560,7 +561,6 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
 
   // Per-node provider sessions persisted across workflow re-runs (opt-in via
   // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
-  // Distinct from `AgentRequestOptions.persistSession` (Claude SDK on-disk transcript).
   // The executor lists a scope's rows once at run start, so a run continues the sessions
   // that existed when it started, never one a concurrent run wrote afterwards (#2667).
   listWorkflowNodeSessions(scope: {

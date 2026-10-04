@@ -69,6 +69,7 @@ describe('credentials/catalog', () => {
         factory: () => ({}) as never,
         credentials: {
           kind: 'static',
+          vendorFor: () => 'no-such-vendor',
           specs: [{ vendor: 'no-such-vendor', displayName: 'Nope', kinds: ['api_key'] }],
         },
       });

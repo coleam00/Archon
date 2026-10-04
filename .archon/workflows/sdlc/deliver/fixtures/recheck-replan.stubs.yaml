@@ -1,5 +1,6 @@
 # A correction can uncover that the remaining blocker needs a materially wider
-# work order. The loop stops on replan and gate-ready refuses the ready path.
+# work order. The loop stops on replan and gate-ready refuses the ready path;
+# the discoveries are still filed.
 impl__implement:
   done: true
   green: true
@@ -10,20 +11,23 @@ gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summar
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub"
     docs: "stub"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # accepted contract recorded
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 6 }
-review__code: "1 Important in-scope finding"
+review__code: "1 blocking in-scope finding"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__synthesize:
   ready: false
@@ -43,7 +47,7 @@ fix__implement:
   summary: "stub: correction exposed a scope conflict"
 fix__assert-changed: "1 file changed"
 gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
-recheck__mode: '{"continuation":true}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
 recheck__scope:
   # light review with original accepted contract
   docs: false
@@ -58,7 +62,9 @@ recheck__publish:
   action: replan
   findings_summary: "stub: remaining correction requires replanning"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+file-discoveries: '{"issues":["https://github.com/example/repo/issues/9"]}'
 fixture:
   expect: failed
   fail-node: gate-ready
+  reached: [file-discoveries]
 exec-code: true
