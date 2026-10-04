@@ -443,6 +443,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
  * Register an existing local repository in the database (no git clone).
  */
 export async function registerRepository(localPath: string): Promise<RegisterResult> {
+  localPath = await canonicalizeProjectPath(localPath);
   // Validate path exists and is a git repo
   try {
     await execFileAsync('git', ['-C', localPath, 'rev-parse', '--git-dir']);
