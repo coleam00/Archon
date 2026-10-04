@@ -130,7 +130,7 @@ describe('RunStream tool rendering', () => {
     skipExpr: null,
     outputPreview: null,
     costUsd: null,
-    costScope: 'own',
+    costScope: null,
     stopReason: null,
     numTurns: null,
   };
