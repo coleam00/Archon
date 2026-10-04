@@ -30,15 +30,24 @@ function attentionState(run: RunState): AttentionState | null {
   }
 }
 
+export interface RunPage {
+  runs: readonly Run[];
+  /** How many runs exist in all pages together. */
+  total: number;
+}
+
 export interface RunAttentionSource {
-  /** The runs as they stand when watching starts. None of them alert. */
-  listRuns(): Promise<readonly Run[]>;
+  /** One page of the runs as they stand, from `offset`. None of them alert. */
+  listRuns(offset: number): Promise<RunPage>;
   getRun(runId: string): Promise<Run>;
 }
 
 export interface RunAttentionHandlers {
   onAttention(run: Run): void;
+  /** Reading run state failed. The watcher retries on the next reported change. */
   onError(error: Error): void;
+  /** A read succeeded after {@link onError}. */
+  onRecovered(): void;
 }
 
 export interface RunAttentionWatcher {
@@ -53,16 +62,54 @@ export function watchRunAttention(
 ): RunAttentionWatcher {
   const known = new Map<string, AttentionState | null>();
   const dirty = new Set<string>();
-  let seeded = false;
+  let seed: 'pending' | 'loading' | 'done' = 'pending';
+  let failing = false;
   let pumping = false;
   let stopped = false;
+
+  function failed(e: unknown): void {
+    if (stopped) return;
+    failing = true;
+    handlers.onError(toError(e));
+  }
+
+  function succeeded(): void {
+    if (!failing) return;
+    failing = false;
+    handlers.onRecovered();
+  }
+
+  // Every run that exists at load is seeded, however many pages that takes: an
+  // unseeded run already waiting or finished would alert as new on its next event.
+  async function loadSeed(): Promise<void> {
+    seed = 'loading';
+    const loaded = new Map<string, AttentionState | null>();
+    try {
+      let offset = 0;
+      let page: RunPage;
+      do {
+        page = await source.listRuns(offset);
+        if (stopped) return;
+        for (const run of page.runs) loaded.set(run.id, attentionState(run));
+        offset += page.runs.length;
+      } while (page.runs.length > 0 && offset < page.total);
+    } catch (e) {
+      seed = 'pending';
+      failed(e);
+      return;
+    }
+    for (const [runId, state] of loaded) known.set(runId, state);
+    seed = 'done';
+    void pump();
+  }
 
   // One fetch at a time, so responses for the same run cannot land out of order.
   // Changes reported before the seed lands wait for it: the seed is what tells a
   // replayed event about an already-paused run apart from a new pause.
   async function pump(): Promise<void> {
-    if (pumping || !seeded) return;
+    if (pumping || seed !== 'done') return;
     pumping = true;
+    const unread: string[] = [];
     try {
       while (!stopped && dirty.size > 0) {
         const [runId] = dirty;
@@ -71,10 +118,12 @@ export function watchRunAttention(
         try {
           run = await source.getRun(runId);
         } catch (e) {
-          if (!stopped) handlers.onError(toError(e));
+          unread.push(runId);
+          failed(e);
           continue;
         }
         if (stopped) return;
+        succeeded();
         const next = attentionState(run);
         const previous = known.get(runId);
         known.set(runId, next);
@@ -82,26 +131,18 @@ export function watchRunAttention(
       }
     } finally {
       pumping = false;
+      for (const runId of unread) dirty.add(runId);
     }
   }
 
-  source.listRuns().then(
-    runs => {
-      if (stopped) return;
-      for (const run of runs) known.set(run.id, attentionState(run));
-      seeded = true;
-      void pump();
-    },
-    (e: unknown) => {
-      if (!stopped) handlers.onError(toError(e));
-    }
-  );
+  void loadSeed();
 
   return {
     runChanged(runId): void {
       if (stopped) return;
       dirty.add(runId);
-      void pump();
+      if (seed === 'pending') void loadSeed();
+      else void pump();
     },
     stop(): void {
       stopped = true;

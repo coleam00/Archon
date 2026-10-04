@@ -34,54 +34,71 @@ const gate: Run['approval'] = {
 
 const flush = (): Promise<void> => new Promise(resolve => setTimeout(resolve, 0));
 
-/** A fake server: `current` is what a fetch returns now; the seed resolves on `seed()`. */
-function harness(initial: Run[]): {
+/**
+ * A fake server: `current` is what a fetch returns now; the seed resolves on `seed()`.
+ * `failing` makes every read throw; `pageSize` splits the seed into pages.
+ */
+function harness(
+  initial: Run[],
+  pageSize = 100
+): {
   current: Map<string, Run>;
   alerted: string[];
   errors: string[];
+  recovered: number;
+  failing: { on: boolean };
   watcher: RunAttentionWatcher;
   seed: () => Promise<void>;
   change: (next: Run) => Promise<void>;
 } {
   const current = new Map(initial.map(r => [r.id, r]));
-  const alerted: string[] = [];
-  const errors: string[] = [];
+  const failing = { on: false };
+  const result = {
+    current,
+    alerted: [] as string[],
+    errors: [] as string[],
+    recovered: 0,
+    failing,
+  };
   let resolveSeed: (() => void) | undefined;
   const seedReady = new Promise<void>(resolve => {
     resolveSeed = resolve;
   });
   const watcher = watchRunAttention(
     {
-      listRuns: async () => {
+      listRuns: async offset => {
         await seedReady;
-        return [...current.values()];
+        if (failing.on) throw new Error('listing failed');
+        const all = [...current.values()];
+        return { runs: all.slice(offset, offset + pageSize), total: all.length };
       },
       getRun: async id => {
+        if (failing.on) throw new Error(`reading ${id} failed`);
         const found = current.get(id);
         if (found === undefined) throw new Error(`run ${id} not found`);
         return found;
       },
     },
     {
-      onAttention: r => alerted.push(`${r.id}:${r.status}`),
-      onError: e => errors.push(e.message),
+      onAttention: r => result.alerted.push(`${r.id}:${r.status}`),
+      onError: e => result.errors.push(e.message),
+      onRecovered: () => {
+        result.recovered++;
+      },
     }
   );
-  return {
-    current,
-    alerted,
-    errors,
+  return Object.assign(result, {
     watcher,
     seed: async () => {
       resolveSeed?.();
       await flush();
     },
-    change: async next => {
+    change: async (next: Run) => {
       current.set(next.id, next);
       watcher.runChanged(next.id);
       await flush();
     },
-  };
+  });
 }
 
 describe('watchRunAttention', () => {
@@ -212,6 +229,50 @@ describe('watchRunAttention', () => {
 
     expect(h.errors).toEqual(['run missing not found']);
     expect(h.alerted).toEqual(['r1:completed']);
+  });
+
+  test('seeds every run at load, across as many pages as the server returns', async () => {
+    const h = harness(
+      [run('c'), run('a', { status: 'completed' }), run('b', { status: 'failed' })],
+      2
+    );
+    await h.seed();
+
+    h.watcher.runChanged('b');
+    await h.change(run('c', { status: 'completed' }));
+
+    expect(h.alerted).toEqual(['c:completed']);
+  });
+
+  test('a failed seed is retried on the next change, and load-time runs still stay silent', async () => {
+    const h = harness([run('done', { status: 'completed' }), run('r1')]);
+    h.failing.on = true;
+    await h.seed();
+    expect(h.errors).toEqual(['listing failed']);
+
+    h.failing.on = false;
+    h.watcher.runChanged('done');
+    await flush();
+    await h.change(run('r1', { status: 'paused', approval: gate }));
+
+    expect(h.alerted).toEqual(['r1:paused']);
+    expect(h.recovered).toBe(1);
+  });
+
+  test('a run whose read failed is read again on the next change, so its alert is not lost', async () => {
+    const h = harness([run('r1'), run('r2')]);
+    await h.seed();
+
+    h.failing.on = true;
+    await h.change(run('r1', { status: 'completed' }));
+    expect(h.errors).toEqual(['reading r1 failed']);
+    expect(h.alerted).toEqual([]);
+
+    h.failing.on = false;
+    await h.change(run('r2'));
+
+    expect(h.alerted).toEqual(['r1:completed']);
+    expect(h.recovered).toBe(1);
   });
 
   test('a stopped watcher alerts nothing', async () => {

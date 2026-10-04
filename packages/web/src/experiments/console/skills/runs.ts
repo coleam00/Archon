@@ -8,6 +8,7 @@ export interface ListRunsOptions {
   codebaseId?: string;
   status?: RunStatus;
   limit?: number;
+  offset?: number;
 }
 
 export interface RunCounts {
@@ -45,6 +46,7 @@ export async function listRuns(
   if (opts.codebaseId !== undefined) qs.set('codebaseId', opts.codebaseId);
   if (opts.status !== undefined) qs.set('status', opts.status);
   if (opts.limit !== undefined) qs.set('limit', opts.limit.toString());
+  if (opts.offset !== undefined) qs.set('offset', opts.offset.toString());
   const url = `/api/dashboard/runs${qs.size > 0 ? `?${qs.toString()}` : ''}`;
   const res = await requestJson<DashboardRunsResponse>(url);
   return {

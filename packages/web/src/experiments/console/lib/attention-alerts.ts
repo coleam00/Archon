@@ -11,8 +11,6 @@ import { runStatusLabel } from './run-status';
 import { watchRunAttention, type RunAttentionWatcher } from './run-attention';
 
 const ENABLED_KEY = 'archon.console.attentionAlerts';
-/** Load-time runs that must not alert. The server's maximum page. */
-const SEED_LIMIT = 200;
 
 export type NotificationAccess = NotificationPermission | 'unsupported';
 
@@ -22,7 +20,7 @@ export interface AttentionAlertsState {
   /** Why the last alert sound did not play; cleared by the next one that does. */
   soundError: string | null;
   notificationError: string | null;
-  /** Why the console could not read run state for alerts. */
+  /** Why the console could not read run state for alerts; cleared by the next read that works. */
   watchError: string | null;
 }
 
@@ -155,7 +153,8 @@ export function useRunAttentionAlerts(): (runId: string) => void {
     if (!enabled) return;
     const w = watchRunAttention(
       {
-        listRuns: async () => (await skill.listRuns({ limit: SEED_LIMIT })).runs,
+        // The server caps the page size; the watcher pages on until `total`.
+        listRuns: offset => skill.listRuns({ offset, limit: 1000 }),
         getRun: async runId => (await skill.getRun(runId)).run,
       },
       {
@@ -163,6 +162,9 @@ export function useRunAttentionAlerts(): (runId: string) => void {
         onError: e => {
           console.warn('[console-attention] could not read run state', e);
           update({ watchError: e.message });
+        },
+        onRecovered: () => {
+          update({ watchError: null });
         },
       }
     );
