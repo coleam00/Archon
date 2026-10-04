@@ -157,8 +157,10 @@ describe('bundled-defaults', () => {
       expect(content).not.toContain('`tests`, `errors`, `comments`, `types`, `docs`');
     });
 
-    it('the SDLC implementation and every review lens own separate discovery records', () => {
+    it('the SDLC investigation, plan, implementation and every review lens own separate discovery records', () => {
       const expected = new Map([
+        ['__archon_pack__bundled:sdlc:investigate::investigate', 'discoveries/investigate.json'],
+        ['__archon_pack__bundled:sdlc:plan::plan', 'discoveries/plan.json'],
         ['__archon_pack__bundled:sdlc:implement::implement', 'discoveries/implement.json'],
         ['__archon_pack__bundled:sdlc:review::review-code', 'discoveries/review-code.json'],
         ['__archon_pack__bundled:sdlc:review::review-seams', 'discoveries/review-seams.json'],
