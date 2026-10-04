@@ -39,9 +39,19 @@ test(
           return new Response(script, {
             headers: { 'Content-Type': 'text/javascript' },
           });
-        return new Response('<html><body><script src="/test.js"></script></body></html>', {
-          headers: { 'Content-Type': 'text/html' },
-        });
+        return new Response(
+          `<!doctype html><html><body><script>
+          window.addEventListener('error', event => {
+            void fetch('/result', { method: 'POST', body: event.message });
+          });
+          window.addEventListener('unhandledrejection', event => {
+            void fetch('/result', { method: 'POST', body: String(event.reason) });
+          });
+        </script><script src="/test.js"></script></body></html>`,
+          {
+            headers: { 'Content-Type': 'text/html' },
+          }
+        );
       },
     });
     const child = Bun.spawn(
@@ -56,15 +66,23 @@ test(
         `--user-data-dir=${profile}`,
         server.url.href,
       ],
-      { stdout: 'ignore', stderr: 'ignore' }
+      { stdout: 'ignore', stderr: 'pipe' }
     );
+    const diagnostics = new Response(child.stderr).text();
     const timeout = setTimeout(() => {
       complete('browser did not report within 10 seconds');
     }, 10000);
     try {
-      expect(
-        await Promise.race([result, child.exited.then(code => `browser exited early: ${code}`)])
-      ).toBe('passed');
+      const outcome = await Promise.race([
+        result,
+        child.exited.then(code => `browser exited early: ${code}`),
+      ]);
+      if (outcome !== 'passed') {
+        child.kill();
+        await child.exited;
+        throw new Error(`${outcome}\n${await diagnostics}`);
+      }
+      expect(outcome).toBe('passed');
     } finally {
       clearTimeout(timeout);
       child.kill();
