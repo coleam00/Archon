@@ -5,9 +5,10 @@
  * per `workflow:` child whose node declares `isolation: 'worktree'`. Lives in
  * `@archon/core` — the layer that already depends on BOTH `@archon/workflows` (the
  * port TYPE) and `@archon/isolation` (`WorktreeProvider`) — so the port stays
- * isolation-free (`@archon/workflows` never imports `@archon/isolation`) AND the
- * five injection sites (CLI + orchestrator dispatch/resume/background) share one
- * implementation instead of duplicating the worktree-create wiring.
+ * isolation-free (`@archon/workflows` never imports `@archon/isolation`) AND every
+ * injection site (CLI, orchestrator, continuation and resource start) builds it
+ * through {@link createCodebaseChildResolver}, which owns the folder-project policy
+ * and the codebase-to-config mapping.
  *
  * Mirrors the top-level CLI worktree creation (`packages/cli/src/commands/workflow.ts`):
  * `WorktreeProvider.create({ workflowType: 'task', … })` for a fresh
@@ -31,6 +32,7 @@ import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
 import * as isolationDb from '../db/isolation-environments';
+import type { Codebase } from '../schemas/codebase';
 
 /**
  * How much of the node id goes into the branch name verbatim. `WorktreeProvider`
@@ -92,8 +94,8 @@ export function buildChildIdentifier(
     .join('-');
 }
 
-/** Codebase-scoped context captured when the caller builds the resolver. */
-export interface ChildWorktreeResolverConfig {
+/** Codebase-scoped context captured when the resolver is built. */
+interface ChildWorktreeResolverConfig {
   /** Codebase the child worktrees belong to (attribution + worktree pathing). */
   codebaseId: string;
   /** "owner/repo" name — lets the provider resolve the project-scoped worktree path. */
@@ -127,14 +129,37 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
+ * The child-isolation resolver for a run in `codebase`, or `undefined` for a folder
+ * project: it cannot make worktrees, so no resolver is injected and the engine fails
+ * a `workflow:` node requesting `isolation: 'worktree'` fast. The only construction
+ * path for the resolver, so a new config field is wired here once for every surface.
+ */
+export function createCodebaseChildResolver(
+  codebase: Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'kind'>,
+  surface: {
+    baseBranch: string | undefined;
+    createdByPlatform: string;
+    createdByUserId: string | undefined;
+  }
+): ChildIsolationResolver | undefined {
+  if (codebase.kind === 'folder') return undefined;
+  return createChildWorktreeResolver({
+    codebaseId: codebase.id,
+    codebaseName: codebase.name,
+    canonicalRepoPath: codebase.default_cwd,
+    baseBranch: surface.baseBranch,
+    createdByPlatform: surface.createdByPlatform,
+    createdByUserId: surface.createdByUserId,
+  });
+}
+
+/**
  * Build a {@link ChildIsolationResolver} bound to one codebase. `resolve()` creates
  * a per-child worktree + branch (`archon/task-<parent>-<node>-<hash>-child-<i>`) and registers it.
  * Throws (surfaced by the engine as a failed node outcome) when the worktree cannot
  * be created — never returns the shared checkout as a fallback.
  */
-export function createChildWorktreeResolver(
-  config: ChildWorktreeResolverConfig
-): ChildIsolationResolver {
+function createChildWorktreeResolver(config: ChildWorktreeResolverConfig): ChildIsolationResolver {
   // Configure the isolation provider HERE rather than relying on the caller.
   //
   // `configureIsolation` is what gives `WorktreeProvider` the repo-config loader;
@@ -149,7 +174,7 @@ export function createChildWorktreeResolver(
   // authoring guide explicitly endorses, "a parent started with --no-worktree can
   // still hand an isolated child its own worktree" — skips both and would create
   // the child's worktree unconfigured. Binding it to the resolver instead means
-  // every construction site is covered, including ones added later.
+  // every surface is covered, including ones added later.
   //
   // Idempotent and cheap: it swaps the loader and drops the provider singleton,
   // which is rebuilt lazily. Re-running it after the CLI/orchestrator already

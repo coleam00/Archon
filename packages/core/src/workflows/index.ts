@@ -3,5 +3,4 @@
  */
 
 export { createWorkflowStore, createWorkflowDeps } from './store-adapter';
-export { createChildWorktreeResolver } from './child-isolation-resolver';
-export type { ChildWorktreeResolverConfig } from './child-isolation-resolver';
+export { createCodebaseChildResolver } from './child-isolation-resolver';
