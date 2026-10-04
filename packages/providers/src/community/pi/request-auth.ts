@@ -214,6 +214,15 @@ export function getUserModelsPath(): string {
 }
 
 /**
+ * The user's Pi catalog store (`models-store.json`, beside `models.json`).
+ * The one place Archon derives it: the per-call runtime reads it, and
+ * error remedies name it.
+ */
+export function getUserModelsStorePath(): string {
+  return join(dirname(getUserModelsPath()), 'models-store.json');
+}
+
+/**
  * Build a per-call `models.json` with the targeted custom provider's
  * `${VAR}` references substituted against `requestEnv`. Returns the path to
  * the written file (suitable for `ModelRuntime.create({ modelsPath })`), or
@@ -347,9 +356,7 @@ export async function createRequestModelRuntime(
   try {
     const runtime = await create({
       authPath,
-      ...(modelsPath
-        ? { modelsPath, modelsStorePath: join(dirname(getUserModelsPath()), 'models-store.json') }
-        : {}),
+      ...(modelsPath ? { modelsPath, modelsStorePath: getUserModelsStorePath() } : {}),
     });
     return { runtime, release };
   } catch (err) {

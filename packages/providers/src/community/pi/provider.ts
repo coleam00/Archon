@@ -19,7 +19,11 @@ import type {
 import { PI_CAPABILITIES } from './capabilities';
 import { parsePiConfig, resolvePiExtensionSettings } from './config';
 import { parsePiModelRef } from './model-ref';
-import { createRequestModelRuntime, type RequestModelRuntime } from './request-auth';
+import {
+  createRequestModelRuntime,
+  getUserModelsStorePath,
+  type RequestModelRuntime,
+} from './request-auth';
 import { withResumedOutcome, resumedOutcome } from '../../shared/resumed';
 import { closeOpenToolCalls } from '../../shared/tool-calls';
 import { ClassifiedProviderError, failureClassOfThrown, failureResult } from '../../shared/failure';
@@ -935,7 +939,7 @@ export class PiProvider implements IAgentProvider {
             const remedy = catalogProvider
               ? 'The provider is configured, but this model id is not in the Pi model catalog. ' +
                 'If the model is newer than your catalog, refresh it with `pi update --models`; ' +
-                `Archon reads the refreshed store at ${join(piCodingAgent.getAgentDir(), 'models-store.json')}.`
+                `Archon reads the refreshed store at ${getUserModelsStorePath()}.`
               : extensionProvider
                 ? `Provider '${parsed.provider}' comes from an installed Pi extension, but that ` +
                   'extension did not register this model id. Check the extension configuration and model name.'
