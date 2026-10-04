@@ -389,7 +389,13 @@ export async function claimWorkflowGatePresentation(runId: string): Promise<Pend
       workflow_run_id: gate.runId,
       event_type: 'approval_requested',
       step_name: gate.context.execution?.path ?? gate.context.nodeId,
-      data: { message: gate.context.message, gate_id: gate.id, admission_owner_id: root.id },
+      data: {
+        message: gate.context.message,
+        iteration: gate.context.iteration,
+        completionSignaled: gate.context.completionSignaled,
+        gate_id: gate.id,
+        admission_owner_id: root.id,
+      },
     });
     await projectQueue(query, root, queue);
     return gate;

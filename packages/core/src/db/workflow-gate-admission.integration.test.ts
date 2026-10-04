@@ -115,7 +115,11 @@ describe('durable workflow gate admission', () => {
 
   test('contending admissions retain both gates; settlement and presentation are exact claims', async () => {
     const id = await seed();
-    const first = gate('first');
+    const first = gate('first', {
+      type: 'interactive_loop',
+      iteration: 2,
+      completionSignaled: true,
+    });
     const second = gate('second');
     const admissions = await Promise.all([
       registerWorkflowGate(id, first, { pending_writeback: { envId: 'overlay' } }),
@@ -163,12 +167,19 @@ describe('durable workflow gate admission', () => {
       gate: { id: first.gateId },
     });
     expect((await queue(id)).active).toBeNull();
-    const events = await getDatabase().query<{ event_type: string }>(
-      'SELECT event_type FROM remote_agent_workflow_events WHERE workflow_run_id = $1 ORDER BY id',
+    const events = await getDatabase().query<{ event_type: string; data: string }>(
+      'SELECT event_type, data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 ORDER BY id',
       [id]
     );
     expect(events.rows.filter(row => row.event_type === 'approval_received')).toHaveLength(2);
     expect(events.rows.filter(row => row.event_type === 'approval_requested')).toHaveLength(2);
+    expect(
+      JSON.parse(events.rows.find(row => row.event_type === 'approval_requested')!.data)
+    ).toMatchObject({
+      gate_id: first.gateId,
+      iteration: 2,
+      completionSignaled: true,
+    });
   });
 
   test('two ordinary gates survive a cold engine resume and record only their own decisions', async () => {
