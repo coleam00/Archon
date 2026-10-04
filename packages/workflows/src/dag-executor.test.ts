@@ -14194,6 +14194,69 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(errMsg).toContain('failed schema validation');
   });
 
+  it.each([
+    ['claude', 1],
+    ['pi', 4],
+  ] as const)(
+    '%s rejects a schema-echo and fails instead of completing the producer',
+    async (provider, attempts) => {
+      const echo = {
+        type: 'object',
+        properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+        verdict: '...',
+      };
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: JSON.stringify(echo) };
+        yield { type: 'result', sessionId: 's', structuredOutput: echo };
+      });
+      const store = createMockStore();
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(),
+          workflowProvider: provider,
+          config: { ...minimalConfig, assistant: provider },
+          workflow: {
+            name: 'schema-echo',
+            nodes: [
+              {
+                id: 'classify',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'classify it' },
+                provider,
+                output_format: {
+                  type: 'object',
+                  properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+                  required: ['verdict'],
+                },
+                retry: { max_attempts: 0 },
+              },
+              {
+                id: 'review',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'review it' },
+                depends_on: ['classify'],
+                when: "$classify.output.verdict == 'review'",
+              },
+            ],
+          },
+        })
+      );
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(attempts);
+      const events = persistedEvents(store);
+      expect(events.filter(event => event.event_type === 'node_completed')).toHaveLength(0);
+      expect(
+        events.find(event => event.event_type === 'node_failed' && event.step_name === 'classify')
+          ?.data?.error
+      ).toContain('failed schema validation');
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   it('output_format that ajv cannot compile → node_failed, never an unenforced pass (#2453)', async () => {
     // The provider returned a perfectly shaped object. It still fails: the schema
     // is uncompilable, so "valid" here would only mean nothing was checked. The

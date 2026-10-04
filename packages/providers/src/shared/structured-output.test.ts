@@ -159,6 +159,19 @@ describe('validateStructuredOutput', () => {
     expect(validateStructuredOutput({ kind: 'A' }, enumSchema).valid).toBe(true);
   });
 
+  test.each([
+    { type: 'object', properties: { verdict: { type: 'string' } } },
+    { type: 'object', properties: { verdict: { type: 'string' } }, verdict: '...' },
+  ])('rejects schema-echo payload %j against a tight contract', echo => {
+    const tightSchema = {
+      type: 'object',
+      properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+      required: ['verdict'],
+    };
+    expect(validateStructuredOutput(echo, tightSchema).valid).toBe(false);
+    expect(validateStructuredOutput({ verdict: 'review' }, tightSchema).valid).toBe(true);
+  });
+
   test('optional field absent is still valid (additionalProperties not required)', () => {
     expect(validateStructuredOutput({ summary: 'hi' }, schema).valid).toBe(true);
   });
