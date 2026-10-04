@@ -128,6 +128,58 @@ describe('toRunEvent — node transitions', () => {
   });
 });
 
+describe('toRunEvent — tokens', () => {
+  test.each([
+    { input: 12000, output: 300, cacheRead: 8000, cacheWrite: 1000, total: 12300, cost: 0.04 },
+    { input: 12000, output: 300 },
+    { input: 12000, output: 300, cacheRead: 0, cachePartial: true },
+    { input: 0, output: 0 },
+  ])('retains reported axes without inventing missing values: %j', tokens => {
+    const event = toRunEvent(raw({ event_type: 'node_completed', data: { tokens } }));
+    if (event.kind !== 'node_transition') throw new Error('unreachable');
+    expect(event.tokens).toEqual(tokens);
+  });
+
+  test.each([{}, { tokens: null }, { cost_usd: 0.04, num_turns: 2 }])(
+    'absent and pre-token payloads keep tokens null: %j',
+    data => {
+      expect(toRunEvent(raw({ event_type: 'node_completed', data }))).toMatchObject({
+        tokens: null,
+      });
+    }
+  );
+
+  test.each([
+    '12000',
+    {},
+    { input: 12000 },
+    { input: '12000', output: 300 },
+    { input: 12000, output: 300, cacheRead: '8000' },
+    { input: 12000, output: 300, cachePartial: false },
+  ])('malformed token payloads are not displayed: %j', tokens => {
+    expect(toRunEvent(raw({ event_type: 'node_completed', data: { tokens } }))).toMatchObject({
+      tokens: null,
+    });
+  });
+
+  test('only the latest completed transition owns displayed tokens', () => {
+    const old = toRunEvent(
+      raw({ event_type: 'node_completed', data: { tokens: { input: 900, output: 90 } } })
+    );
+    const tokens = { input: 12000, output: 300, cachePartial: true as const };
+    const completed = toRunEvent(raw({ event_type: 'node_completed', data: { tokens } }));
+    const skipped = toRunEvent(raw({ event_type: 'node_skipped_prior_success' }));
+    for (const state of ['pending', 'running', 'completed', 'failed', 'skipped'] as const) {
+      const [run] = foldNodeRuns([old, completed, skipped], [{ node_id: 'node-a', state }]);
+      expect(run?.tokens).toEqual(state === 'completed' ? tokens : null);
+    }
+    const legacy = toRunEvent(raw({ event_type: 'node_completed' }));
+    expect(
+      foldNodeRuns([old, legacy], [{ node_id: 'node-a', state: 'completed' }])[0]?.tokens
+    ).toBeNull();
+  });
+});
+
 describe('toRunEvent — tool calls (regression guard)', () => {
   test('integration operations retain target, producer and result without interpreting their policy', () => {
     const result = { ok: true, result: { observation: 'red' } };

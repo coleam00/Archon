@@ -133,6 +133,7 @@ describe('RunStream tool rendering', () => {
     costScope: null,
     stopReason: null,
     numTurns: null,
+    tokens: null,
   };
   const message: Message = {
     id: 'm1',
@@ -212,6 +213,29 @@ describe('RunStream tool rendering', () => {
 
     expect(html([nodeStarted], 'running')).not.toContain('no result recorded');
     expect(html([nodeStarted, finished], 'completed')).toContain('no result recorded');
+  });
+
+  test('passes persisted completion usage to the node divider', () => {
+    const completed: NodeTransitionEvent = {
+      ...nodeStarted,
+      id: 'n2',
+      transition: 'completed',
+      tokens: { input: 12000, output: 300 },
+    };
+    const html = renderToStaticMarkup(
+      <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
+        <RunStream
+          messages={[]}
+          events={[nodeStarted, completed]}
+          nodes={[{ node_id: 'implement', state: 'completed' }]}
+          providerEvents={new Map()}
+          showToolCalls={false}
+          showSystem={false}
+          selectedNodeId="all"
+        />
+      </StreamContextProvider>
+    );
+    expect(html).toContain('tokens 12K in / 300 out');
   });
 
   test('falls back to message-inline tools for a run that recorded no tool events', () => {

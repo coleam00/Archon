@@ -66,6 +66,7 @@ export interface NodeTransitionEvent extends RunEventBase {
   costScope: CostScope | null;
   stopReason: string | null;
   numTurns: number | null;
+  tokens: TokenUsage | null;
 }
 
 /**
@@ -113,6 +114,31 @@ export type RunEvent =
   | SystemEvent;
 
 type RawWorkflowEvent = components['schemas']['WorkflowEvent'];
+
+type Execution = NonNullable<components['schemas']['DagNodeSseEvent']['execution']>;
+type TokenUsage = Extract<Execution['spend']['tokens'], { source: 'provider' }>['value'];
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readTokens(value: unknown): TokenUsage | null {
+  if (!isRecord(value)) return null;
+  if (!('input' in value) || typeof value.input !== 'number') return null;
+  if (!('output' in value) || typeof value.output !== 'number') return null;
+  const tokens: TokenUsage = { input: value.input, output: value.output };
+  for (const key of ['cacheRead', 'cacheWrite', 'total', 'cost'] as const) {
+    if (!(key in value)) continue;
+    const axis = value[key];
+    if (typeof axis !== 'number') return null;
+    tokens[key] = axis;
+  }
+  if ('cachePartial' in value) {
+    if (value.cachePartial !== true) return null;
+    tokens.cachePartial = value.cachePartial;
+  }
+  return tokens;
+}
 
 function readString(obj: Record<string, unknown>, key: string): string {
   const v = obj[key];
@@ -184,6 +210,7 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       costScope: raw.cost_scope ?? null,
       stopReason: readStringOrNull(data, 'stop_reason'),
       numTurns: readNumberOrNull(data, 'num_turns'),
+      tokens: readTokens(data.tokens),
     };
   }
 
@@ -401,6 +428,7 @@ export interface NodeRun {
   costUsd: number | null;
   costScope: CostScope | null;
   numTurns: number | null;
+  tokens: TokenUsage | null;
   stopReason: string | null;
   skipReason: string | null;
   skipExpr: string | null;
@@ -465,6 +493,7 @@ export function foldNodeRuns(events: RunEvent[], nodes: readonly RunNodeState[])
       costUsd: completed?.costUsd ?? null,
       costScope: completed?.costScope ?? null,
       numTurns: completed?.numTurns ?? null,
+      tokens: completed?.tokens ?? null,
       stopReason: completed?.stopReason ?? null,
       // Only a `skipped` state's own transition carries these; a replay's are not shown.
       skipReason: ended?.skipReason ?? null,
