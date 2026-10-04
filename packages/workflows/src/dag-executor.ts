@@ -161,6 +161,7 @@ import { evaluateCondition } from './condition-evaluator';
 import {
   declaredOutputPathsFromSchema,
   rootOutputFields,
+  outputRefText,
   type DeclaredOutputPaths,
   resolveNodeOutputField,
   assertProducerNotFailed,
@@ -11296,7 +11297,7 @@ export async function executeDagWorkflow(
       selectedOutput,
       returns,
       field,
-      `$${returns}.output.${field}`
+      outputRefText(returns, field)
     );
     if (resolution.kind !== 'value' || typeof resolution.value !== 'boolean') {
       throw new Error(

@@ -41,6 +41,7 @@ import {
   OutputRefError,
   similarNodeIds,
   canonicalValueText,
+  outputRefText,
   type JsonValue,
 } from './output-ref';
 import {
@@ -123,7 +124,7 @@ function resolveOutputRef(
     const actualType = Array.isArray(resolution.value) ? 'array' : 'object';
     getLog().error({ nodeId, field, actualType, exprSnippet }, 'dag.condition_field_not_primitive');
     throw new Error(
-      `Condition reference '$${nodeId}.output.${field}' resolved to an ${actualType}. ` +
+      `Condition reference '${reference}' resolved to an ${actualType}. ` +
         "A 'when:' field must be a string, number, boolean, or null; emit a scalar routing field " +
         'or inspect structured data in a script node.'
     );
@@ -218,7 +219,7 @@ function resolveAtomRef(
     ref.field,
     ref.kind === 'loop_prev' ? (loopPrevOutputs ?? new Map()) : nodeOutputs,
     exprSnippet,
-    `$${ref.kind === 'loop_prev' ? 'LOOP_PREV.' : ''}${ref.nodeId}.output.${ref.field}`
+    outputRefText(ref.nodeId, ref.field, ref.kind === 'loop_prev' ? 'prior' : 'current')
   );
 }
 

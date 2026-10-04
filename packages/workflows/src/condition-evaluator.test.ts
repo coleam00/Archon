@@ -153,7 +153,7 @@ describe('evaluateCondition', () => {
       evaluateCondition("$LOOP_PREV.work.output.route == 'true'", new Map(), undefined, {
         loopPrevOutputs: priorOutputs,
       })
-    ).toThrow("Condition reference '$work.output.route' resolved to an object");
+    ).toThrow("Condition reference '$LOOP_PREV.work.output.route' resolved to an object");
     expect(mockLogFn).toHaveBeenCalledWith(
       {
         nodeId: 'work',

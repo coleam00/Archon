@@ -74,6 +74,7 @@ import {
   declaredFieldsFromSchema,
   assertDeclaredOutputPath,
   assertSupportedOutputRefs,
+  outputRefText,
   CURRENT_OUTPUT_PATH_SOURCE,
   PRIOR_OUTPUT_PATH_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
@@ -981,7 +982,7 @@ export function validateDagStructure(
             nodeId,
             field,
             prior,
-            reference: `$${prior ? 'LOOP_PREV.' : ''}${nodeId}.output.${field}`,
+            reference: outputRefText(nodeId, field, prior ? 'prior' : 'current'),
           });
         }
       } else {

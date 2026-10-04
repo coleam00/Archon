@@ -146,6 +146,20 @@ export const PRIOR_OUTPUT_PATH_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${
 // emphasis (`**$x.output.f**`), or a word suffix (`$x.outputs`).
 const UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE = String.raw`(?:\.(?=[\w.*\[])|[\[(+]|\?\.)`;
 
+/**
+ * The canonical text of an output reference, for messages about a reference that was
+ * parsed into parts (a `when:` atom, `outcome_field`). Template scanners already hold
+ * the matched text and use that instead.
+ */
+export function outputRefText(
+  nodeId: string,
+  field: string | undefined,
+  scope: 'current' | 'prior' = 'current'
+): string {
+  const prefix = scope === 'prior' ? '$LOOP_PREV.' : '$';
+  return `${prefix}${nodeId}.output${field !== undefined ? `.${field}` : ''}`;
+}
+
 /** Reject unsupported continuations before any valid prefix can be substituted. */
 export function assertSupportedOutputRefs(text: string): void {
   const refs = new RegExp(`${CURRENT_OUTPUT_PATH_SOURCE}|${PRIOR_OUTPUT_PATH_SOURCE}`, 'g');
