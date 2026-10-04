@@ -385,25 +385,76 @@ describe('foldNodeRuns', () => {
       startedAt: at('1'),
       endedAt: at('8'),
       durationMs: 10,
-      // Cost display keeps reading the node_completed transition.
-      costUsd: 0.05,
+      // The earlier completion's spend belongs to an attempt the state no longer reflects.
+      costUsd: null,
+      numTurns: null,
+      stopReason: null,
     });
   });
 
-  test('a completed node the engine reports pending shows pending, with no end', () => {
+  test('a completed node reset to pending shows no end and no earlier cost', () => {
     const runs = foldNodeRuns(
-      [node('prepare', 'node_completed', { data: { duration_ms: 900 } })],
+      [
+        node('prepare', 'node_completed', {
+          created_at: at('1'),
+          data: { duration_ms: 900, cost_usd: 0.12, num_turns: 4, stop_reason: 'end_turn' },
+        }),
+        node('prepare', 'node_always_run_reset', { created_at: at('4') }),
+      ],
       [state('prepare', 'pending')]
     );
-    expect(runs[0]).toMatchObject({ status: 'pending', endedAt: null, durationMs: null });
+    expect(runs[0]).toMatchObject({
+      status: 'pending',
+      endedAt: null,
+      durationMs: null,
+      costUsd: null,
+      numTurns: null,
+      stopReason: null,
+    });
   });
 
-  test('a node replayed from a prior success shows completed', () => {
+  test('a node replayed from a prior success keeps the completion it replays', () => {
     const runs = foldNodeRuns(
-      [node('plan', 'node_skipped_prior_success', { data: { reason: 'prior_success' } })],
+      [
+        node('plan', 'node_started', { created_at: at('0') }),
+        node('plan', 'node_completed', {
+          created_at: at('3'),
+          data: { duration_ms: 3000, cost_usd: 0.12, num_turns: 2 },
+        }),
+        node('plan', 'node_skipped_prior_success', {
+          created_at: at('7'),
+          data: { reason: 'prior_success' },
+        }),
+      ],
       [state('plan', 'completed')]
     );
-    expect(runs[0]?.status).toBe('completed');
+    expect(runs[0]).toMatchObject({
+      status: 'completed',
+      endedAt: at('3'),
+      durationMs: 3000,
+      costUsd: 0.12,
+      numTurns: 2,
+      skipReason: null,
+    });
+  });
+
+  test('a node completed only by a prior-success replay ends at the replay', () => {
+    const runs = foldNodeRuns(
+      [
+        node('plan', 'node_skipped_prior_success', {
+          created_at: at('7'),
+          data: { reason: 'prior_success' },
+        }),
+      ],
+      [state('plan', 'completed')]
+    );
+    expect(runs[0]).toMatchObject({
+      status: 'completed',
+      endedAt: at('7'),
+      durationMs: null,
+      costUsd: null,
+      skipReason: null,
+    });
   });
 
   test('a skipped node carries reason + expr and skipped status', () => {
