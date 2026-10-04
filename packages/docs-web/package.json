@@ -7,12 +7,18 @@
     "dev": "astro dev",
     "build": "astro build && bun run scripts/normalize-llms-txt.js",
     "preview": "astro preview",
-    "type-check": "astro sync && bun x tsc --noEmit"
+    "type-check": "astro sync && bun x tsc --noEmit",
+    "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
     "astro": "^6.1.0",
     "@astrojs/starlight": "^0.38.0",
     "sharp": "^0.35.0",
     "starlight-llms-txt": "^0.10.0"
-  }
+  },
+  "testGroups": [
+    [
+      "src/data/plugins.test.ts"
+    ]
+  ]
 }
