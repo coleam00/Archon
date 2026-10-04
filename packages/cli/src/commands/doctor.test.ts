@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import * as git from '@archon/git';
+import * as paths from '@archon/paths';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { copyArchonSkill } from './skill';
@@ -42,6 +43,14 @@ import {
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
+
+// doctor creates its logger on first use and keeps it; hand it one this file can observe.
+// Module scope, so the spy is in place before any test makes doctor log.
+const doctorLog = paths.createLogger('cli.doctor');
+const realCreateLogger = paths.createLogger;
+spyOn(paths, 'createLogger').mockImplementation(module =>
+  module === 'cli.doctor' ? doctorLog : realCreateLogger(module)
+);
 
 describe('checkClaudeBinary', () => {
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
@@ -650,6 +659,35 @@ describe('checkAssistantLogin', () => {
     } finally {
       native.mockRestore();
       rows.mockRestore();
+      user.mockRestore();
+      load.mockRestore();
+    }
+  });
+
+  it('logs the error when the connected-credential lookup fails', async () => {
+    const core = await import('@archon/core');
+    const userDb = await import('@archon/core/db/users');
+    const { PiProvider, registerBuiltinProviders, registerCommunityProviders } =
+      await import('@archon/providers');
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const lookupError = new Error('database unreachable');
+    const load = spyOn(core, 'loadConfig').mockResolvedValue({ ...config, assistant: 'pi' });
+    const user = spyOn(userDb, 'findOrCreateUserByPlatformIdentity').mockRejectedValue(lookupError);
+    const native = spyOn(PiProvider.prototype, 'checkCredential').mockResolvedValue({
+      state: 'not_connected',
+      source: 'native',
+    });
+    const debug = spyOn(doctorLog, 'debug');
+    try {
+      await checkAssistantLogin({ ARCHON_USER_ID: 'operator' });
+      expect(debug).toHaveBeenCalledWith(
+        { err: lookupError },
+        'doctor.assistant_login_credential_lookup_failed'
+      );
+    } finally {
+      debug.mockRestore();
+      native.mockRestore();
       user.mockRestore();
       load.mockRestore();
     }
