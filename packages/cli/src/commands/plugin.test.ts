@@ -5,12 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { discoverPlugins } from '@archon/forge/discovery';
 import { compileDiscoveryPlugin } from '@archon/forge/test-fixtures';
-import {
-  removeTempTree,
-  skipCompiledBinaryTests,
-  testTimeout,
-  trackTempRoots,
-} from '@archon/paths/test-utils';
+import { removeTempTree, skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
 import { pluginCommand, stagingName, type PluginEnvironment } from './plugin';
 
 // A local stand-in for GitHub: the repository is served over git's dumb HTTP
@@ -71,6 +66,8 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+// Compiles the same forge fixture as forge's discovery.test.ts, so it takes the same
+// compile-sized budget.
 beforeAll(async () => {
   if (skipCompiled) return;
   fixtureRoot = await mkdtemp(join(tmpdir(), 'plugin-install-fixture-'));
@@ -155,7 +152,7 @@ beforeAll(async () => {
     assets: { [hostAsset]: new Uint8Array([4, 4]) },
     checksums: checksumsFor({ [hostAsset]: new Uint8Array([4]) }),
   });
-}, testTimeout(20_000));
+}, 60_000);
 
 afterAll(async () => {
   if (skipCompiled) return;
