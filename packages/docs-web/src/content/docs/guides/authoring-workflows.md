@@ -495,8 +495,8 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
 
 - `$nodeId.output` references the full output string of a completed node
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
-- Field access stops at one top-level field. `$nodeId.output.a.b` is rejected at load time;
-  flatten the producer's schema or pass `$nodeId.output.a` to a script node and inspect it there.
+- `$nodeId.output.a.b` accesses nested object fields, checked against every declared schema
+  segment. Paths stop at arrays; indexing, wildcards, and expressions are unsupported.
 - A field used in a scalar condition must resolve to a string, number, boolean, or null. A present object or array fails the gated node; expose a scalar decision field or inspect structured data in a script node.
 - `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
   run's `--input`). A name this run does not carry **fails the node** — it never quietly

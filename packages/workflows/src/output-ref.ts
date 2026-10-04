@@ -143,11 +143,33 @@ export const OUTPUT_FIELD_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
 
 export const OUTPUT_PATH_SOURCE = `${OUTPUT_FIELD_SOURCE}(?:\\.${OUTPUT_FIELD_SOURCE})*`;
 
+// A sentence-ending dot and ordinary template suffixes remain literal punctuation.
+// Indexing, calls, wildcards, malformed segments, and attached arithmetic are not paths.
+const UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE = String.raw`(?:\w|\.(?=[\w.*\[])|[\[(*+]|\?\.)`;
+const OUTPUT_REF_BOUNDARY_SOURCE = `(?!${UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE})`;
+const CURRENT_OUTPUT_PATH_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
+const PRIOR_OUTPUT_PATH_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
+
 /** Supported current-output form, with capture 1 = node id and capture 2 = optional field path. */
-export const SUPPORTED_OUTPUT_REF_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
+export const SUPPORTED_OUTPUT_REF_SOURCE = `${CURRENT_OUTPUT_PATH_SOURCE}${OUTPUT_REF_BOUNDARY_SOURCE}`;
 
 /** Supported prior-iteration form, with capture 1 = node id and capture 2 = optional field path. */
-export const SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
+export const SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${PRIOR_OUTPUT_PATH_SOURCE}${OUTPUT_REF_BOUNDARY_SOURCE}`;
+
+/** Reject unsupported continuations before any valid prefix can be substituted. */
+export function assertSupportedOutputRefs(text: string): void {
+  const refs = new RegExp(`${CURRENT_OUTPUT_PATH_SOURCE}|${PRIOR_OUTPUT_PATH_SOURCE}`, 'g');
+  const continuation = new RegExp(`^${UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE}`);
+  for (const match of text.matchAll(refs)) {
+    if (match[1] === 'INPUTS') continue;
+    const end = match.index + match[0].length;
+    if (!continuation.test(text.slice(end))) continue;
+    const reference = text.slice(match.index).split(/\s/)[0];
+    throw new Error(
+      `Unsupported output reference '${reference}': use '$node.output[.a.b]' or '$LOOP_PREV.node.output[.a.b]' with object-field dots only; indexing, wildcards, and expressions are unsupported.`
+    );
+  }
+}
 
 /**
  * The one shape of a declared-input NAME — `with:` keys, `inputs:` keys, and the

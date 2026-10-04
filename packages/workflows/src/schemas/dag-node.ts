@@ -1420,7 +1420,7 @@ export const dagNodeSchema = z
           // check. Name the supported spelling instead of the generic grammar error.
           const message = parsed.data.from.trim().startsWith('$LOOP_PREV')
             ? `${kind} binding '${key}': 'from' cannot read '$LOOP_PREV' — it is not a node reference. Use the string form (e.g. '${key}: ${parsed.data.from.trim()}'), which substitutes the previous iteration's text each pass.`
-            : `${kind} binding '${key}': 'from' must be exactly one whole '$node.output' or '$node.output.field' reference, got '${parsed.data.from}'`;
+            : `${kind} binding '${key}': 'from' must be exactly one whole '$node.output[.a.b]' reference, got '${parsed.data.from}'`;
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             message,

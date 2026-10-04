@@ -173,6 +173,7 @@ import {
   substituteInputRefs,
   SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
   SUPPORTED_OUTPUT_REF_SOURCE,
+  assertSupportedOutputRefs,
   type JsonValue,
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
@@ -1316,6 +1317,7 @@ export function substituteNodeOutputRefs(
   artifactsDir?: string,
   requiredContext?: RequiredOutputRefContext
 ): string {
+  assertSupportedOutputRefs(prompt);
   return prompt.replace(
     new RegExp(SUPPORTED_OUTPUT_REF_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
@@ -1488,6 +1490,7 @@ export function substituteLoopPrevRefs(
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
   // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
+  assertSupportedOutputRefs(prompt);
   if (!prompt.includes('$LOOP_PREV.')) {
     return prompt;
   }

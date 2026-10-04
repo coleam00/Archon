@@ -45,6 +45,7 @@ import {
 } from './output-ref';
 import {
   findUnsupportedNestedWhenRef,
+  assertSupportedWhenOutputRefs,
   parseLoopPrevWhenAtom,
   parseWhenAtom,
   splitOutsideQuotes,
@@ -299,6 +300,7 @@ export function evaluateCondition(
   options?: { loopPrevOutputs?: ReadonlyMap<string, NodeOutput> }
 ): { result: boolean; parsed: boolean } {
   const trimmed = expr.trim();
+  assertSupportedWhenOutputRefs(trimmed);
   const nestedRef = findUnsupportedNestedWhenRef(trimmed);
   if (nestedRef)
     throw new Error(

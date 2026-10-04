@@ -1516,6 +1516,25 @@ describe('substituteNodeOutputRefs', () => {
     );
   });
 
+  for (const suffix of ['[0]', '.*', '..action', '.0', '(value)', '+1']) {
+    it(`rejects unsupported output suffix ${suffix} before current or prior substitution`, () => {
+      const outputs = new Map([
+        ['review', makeOutput('completed', '{"proposal":{"action":"add"}}')],
+      ]);
+      const current = `$review.output.proposal.action${suffix}`;
+      const prior = `$LOOP_PREV.review.output.proposal.action${suffix}`;
+      expect(() => substituteNodeOutputRefs(`Proposed: ${current}`, outputs)).toThrow(
+        'Unsupported output reference'
+      );
+      expect(() => substituteLoopPrevRefs(`Proposed: ${prior}`, outputs)).toThrow(
+        'Unsupported output reference'
+      );
+      expect(() => substituteLoopPrevRefs(prior, undefined)).toThrow(
+        'Unsupported output reference'
+      );
+    });
+  }
+
   it('retains the owning loop context when required substitution rejects a nested path', () => {
     expect(() =>
       substituteNodeOutputRefs(

@@ -8795,7 +8795,9 @@ nodes:
 `,
       'bind-bad-from.yaml'
     );
-    expect(badFrom.error?.error).toContain("'from' must be exactly one whole");
+    expect(badFrom.error?.error).toContain(
+      "'from' must be exactly one whole '$node.output[.a.b]' reference"
+    );
 
     const notUpstream = parseWorkflow(
       `
@@ -9163,13 +9165,35 @@ nodes:
       }
     });
   }
+  for (const suffix of ['[0]', '.*', '..action', '.0', '(value)', '+1']) {
+    it(`rejects unsupported suffix ${suffix} in current and prior templates and conditions`, () => {
+      for (const prefix of ['$review', '$LOOP_PREV.review']) {
+        for (const surface of ['message', 'when']) {
+          const reference = `${prefix}.output.proposal.action${suffix}`;
+          const result = parseWorkflow(workflow(reference, surface), 'nested.yaml');
+          expect(result.workflow).toBeNull();
+          expect(result.error?.error).toContain('Unsupported output reference');
+          expect(result.error?.error).toContain(reference);
+        }
+      }
+    });
+  }
+
   it('ignores reference-shaped RHS text', () => {
     const yaml = workflow('$review.output.proposal.action', 'when').replace(
       "== 'add'",
-      "== '$review.output.proposal.typo'"
+      "== '$review.output.proposal.typo[0]'"
     );
     expect(parseWorkflow(yaml, 'nested.yaml').workflow).not.toBeNull();
   });
+  it('preserves named input macros starting with output', () => {
+    const yaml = workflow('$INPUTS.outputMode').replace(
+      'nodes:',
+      'inputs:\n  outputMode: {required: true}\nnodes:'
+    );
+    expect(parseWorkflow(yaml, 'nested.yaml').error).toBeNull();
+  });
+
   it('does not authorize undeclared prior fields in the enclosing loop body', () => {
     const result = parseWorkflow(
       `

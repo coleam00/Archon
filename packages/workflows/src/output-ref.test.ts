@@ -3,6 +3,9 @@ import { describe, it, expect } from 'bun:test';
 
 import {
   assertProducerNotFailed,
+  assertSupportedOutputRefs,
+  SUPPORTED_OUTPUT_REF_SOURCE,
+  SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
   canonicalValueText,
   declaredFieldsFromSchema,
   outputContractFromSchema,
@@ -85,6 +88,33 @@ describe('parseWholeOutputRef', () => {
     expect(parseWholeOutputRef('literal')).toBeUndefined();
     expect(parseWholeOutputRef('')).toBeUndefined();
   });
+});
+
+describe('output reference token boundaries', () => {
+  it('leaves input macros with output-prefixed names to the input resolver', () => {
+    expect(() => assertSupportedOutputRefs('$INPUTS.outputMode')).not.toThrow();
+  });
+  for (const [prefix, source] of [
+    ['$review', SUPPORTED_OUTPUT_REF_SOURCE],
+    ['$LOOP_PREV.review', SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE],
+  ] as const) {
+    it(`never scans a valid prefix of unsupported ${prefix} syntax`, () => {
+      for (const suffix of ['[0]', '.*', '..action', '.0', '(value)', '+1', '?.action']) {
+        const reference = `${prefix}.output.proposal.action${suffix}`;
+        expect(new RegExp(source, 'g').exec(reference)).toBeNull();
+        expect(() => assertSupportedOutputRefs(reference)).toThrow(reference);
+      }
+    });
+
+    it(`preserves punctuation and literal suffixes around ${prefix} paths`, () => {
+      const reference = `${prefix}.output.proposal.action`;
+      for (const suffix of ['.', ', next', '!', '?', '-suffix', '/file', '-$INPUTS.item']) {
+        const template = `${reference}${suffix}`;
+        expect(() => assertSupportedOutputRefs(template)).not.toThrow();
+        expect(new RegExp(source, 'g').exec(template)?.[0]).toBe(reference);
+      }
+    });
+  }
 });
 
 describe('parseWholeInputsRef', () => {

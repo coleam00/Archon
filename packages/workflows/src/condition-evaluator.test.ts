@@ -94,6 +94,24 @@ describe('evaluateCondition', () => {
     });
   });
 
+  it('rejects indexed current and prior paths instead of silently skipping', () => {
+    for (const reference of [
+      '$review.output.proposal.action[0]',
+      '$LOOP_PREV.review.output.proposal.action[0]',
+    ]) {
+      expect(() => evaluateCondition(`${reference} == 'add'`, new Map())).toThrow(
+        'Unsupported output reference'
+      );
+    }
+  });
+
+  it('treats unsupported-looking output syntax inside a quoted RHS as literal text', () => {
+    const literal = '$review.output.proposal.action[0]';
+    expect(
+      evaluateCondition(`$a.output == '${literal}'`, new Map([['a', makeOutput(literal)]]))
+    ).toEqual({ result: true, parsed: true });
+  });
+
   it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
     mockLogFn.mockClear();
     const jsonOutput = JSON.stringify({ items: ['todo', 'fix'], count: 2 });

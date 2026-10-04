@@ -63,6 +63,7 @@ import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import {
   findUnsupportedNestedWhenRef,
+  assertSupportedWhenOutputRefs,
   parseLoopPrevWhenAtom,
   parseWhenAtom,
   whenAtoms,
@@ -72,6 +73,7 @@ import {
   declaredFieldsFromSchema,
   outputContractFromSchema,
   assertDeclaredOutputPath,
+  assertSupportedOutputRefs,
   SUPPORTED_OUTPUT_REF_SOURCE,
   SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
@@ -957,6 +959,12 @@ export function validateDagStructure(
       );
     }
     for (const source of sources) {
+      try {
+        if (source.surface === 'condition') assertSupportedWhenOutputRefs(source.text);
+        else assertSupportedOutputRefs(source.text);
+      } catch (error) {
+        return `Node '${node.id}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;
+      }
       if (source.surface === 'condition') {
         const unsupported = findUnsupportedNestedWhenRef(source.text);
         if (unsupported)

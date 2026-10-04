@@ -20,7 +20,12 @@
  *   <op> is == != <= >= < >, RHS is a single-quoted literal or a bare
  *   number/boolean.
  */
-import { INPUT_NAME_SOURCE, OUTPUT_FIELD_SOURCE, OUTPUT_PATH_SOURCE } from './output-ref';
+import {
+  assertSupportedOutputRefs,
+  INPUT_NAME_SOURCE,
+  OUTPUT_FIELD_SOURCE,
+  OUTPUT_PATH_SOURCE,
+} from './output-ref';
 
 /**
  * The reserved scope name for workflow inputs. `loader.ts` imports this rather than
@@ -148,6 +153,14 @@ export function splitOutsideQuotes(expr: string, sep: string): string[] {
  */
 export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
+}
+
+/** Quoted RHS values are literal data, even when they contain reference-shaped text. */
+export function assertSupportedWhenOutputRefs(expr: string): void {
+  for (const atom of whenAtoms(expr)) {
+    const quote = atom.indexOf("'");
+    assertSupportedOutputRefs(quote < 0 ? atom : atom.slice(0, quote));
+  }
 }
 
 /** Find unsupported nested shorthand on the left-hand side of a `when:` atom. */
