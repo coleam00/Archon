@@ -1,6 +1,7 @@
 /**
  * Zod schemas for workflow run state types.
  */
+import { declaredOutputPathsSchema, type DeclaredOutputPaths } from '../output-ref';
 import { z } from '@hono/zod-openapi';
 import {
   skipCauseSchema,
@@ -218,6 +219,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     sessionId: z.string().optional(),
     structuredOutput: z.unknown().optional(),
     declaredFields: z.array(z.string()).optional(),
+    declaredOutputPaths: declaredOutputPathsSchema.optional(),
     /** Session-resume outcome from the provider: false ⇒ a requested resume came
      *  back cold (fresh session). Drives the executor's cold-resume warning.
      *  Absent on 'failed' nodes — the retry path, not this signal, handles those. */
@@ -231,6 +233,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     error: z.string(),
     structuredOutput: z.unknown().optional(),
     declaredFields: z.array(z.string()).optional(),
+    declaredOutputPaths: declaredOutputPathsSchema.optional(),
     /** Set by a producer whose failure is a deterministic diagnosis of its own output
      *  (an exec node's stdout missing its declared `output_format`): re-running yields
      *  the same stdout, so the retry loop must not consult the error text, which quotes
@@ -372,6 +375,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
   summaryDeclaredFields: 'summary_declared_fields',
+  summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
 
 /** Typed view of the sub-run keys on a run's metadata; each is undefined when unset. */
@@ -382,6 +386,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   inputs: Record<string, JsonValue> | undefined;
   summaryValue: unknown;
   summaryDeclaredFields: string[] | undefined;
+  summaryDeclaredOutputPaths: DeclaredOutputPaths | undefined;
 } {
   const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
   const childIndex = metadata?.[SUBRUN_METADATA_KEYS.childIndex];
@@ -422,6 +427,10 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
         ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
         : undefined,
     summaryDeclaredFields,
+    summaryDeclaredOutputPaths:
+      metadata && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths)
+        ? declaredOutputPathsSchema.parse(metadata[SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths])
+        : undefined,
   };
 }
 

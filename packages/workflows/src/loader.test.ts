@@ -2825,7 +2825,7 @@ nodes:
   });
 
   describe('DAG output ref validation', () => {
-    it('rejects nested output paths in approval messages before execution', () => {
+    it('accepts nested output paths in approval messages before execution', () => {
       const result = parseWorkflow(
         `
 name: nested-approval-output
@@ -2853,13 +2853,11 @@ nodes:
         'nested-approval-output.yaml'
       );
 
-      expect(result.workflow).toBeNull();
-      expect(result.error?.error).toContain("Node 'gate' field 'approval.message'");
-      expect(result.error?.error).toContain('$review.output.proposal.action');
-      expect(result.error?.error).toContain("'$review.output' or '$review.output.field'");
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
     });
 
-    it('rejects nested canonical output paths in when conditions', () => {
+    it('accepts nested canonical output paths in when conditions', () => {
       const result = parseWorkflow(
         `
 name: nested-when-output
@@ -2875,13 +2873,11 @@ nodes:
         'nested-when-output.yaml'
       );
 
-      expect(result.workflow).toBeNull();
-      expect(result.error?.error).toContain("Node 'apply' field 'when'");
-      expect(result.error?.error).toContain('$review.output.proposal.action');
-      expect(result.error?.error).toContain("'$review.output.field'");
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
     });
 
-    it('rejects nested prior-iteration output paths in loop-group conditions', () => {
+    it('accepts nested prior-iteration output paths in loop-group conditions', () => {
       const result = parseWorkflow(
         `
 name: nested-loop-prev-output
@@ -2902,10 +2898,8 @@ nodes:
         'nested-loop-prev-output.yaml'
       );
 
-      expect(result.workflow).toBeNull();
-      expect(result.error?.error).toContain("Node 'guarded' field 'when'");
-      expect(result.error?.error).toContain('$LOOP_PREV.work.output.proposal.action');
-      expect(result.error?.error).toContain("'$LOOP_PREV.work.output.field'");
+      expect(result.error).toBeNull();
+      expect(result.workflow).not.toBeNull();
     });
 
     it('should reject a workflow where when: references an unknown node output', async () => {
@@ -9133,5 +9127,69 @@ nodes:
       'checkout-binding-child.yaml'
     );
     expect(result.error?.error).toContain('a workflow: node cannot pass to its child run');
+  });
+});
+
+describe('strict nested path validation', () => {
+  const workflow = (reference: string, field = 'message'): string => `
+name: nested-contract
+description: nested access
+nodes:
+  - id: review
+    bash: echo json
+    output_format:
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: {type: string}
+            items: {type: array, items: {type: object, properties: {value: {type: string}}}}
+  - id: read
+    depends_on: [review]
+    ${field === 'when' ? `bash: echo read\n    when: "${reference} == 'add'"` : `approval: {message: "${reference}"}`}
+`;
+  for (const [path, segment] of [
+    ['typo.action', 'typo'],
+    ['proposal.typo.action', 'typo'],
+    ['proposal.action.typo', 'typo'],
+    ['proposal.items.value', 'value'],
+  ] as const) {
+    it(`rejects undeclared segment of ${path} in templates and conditions`, () => {
+      for (const surface of ['message', 'when']) {
+        const result = parseWorkflow(workflow(`$review.output.${path}`, surface), 'nested.yaml');
+        expect(result.workflow).toBeNull();
+        expect(result.error?.error).toContain(`$review.output.${path}`);
+        expect(result.error?.error).toContain(`field '${segment}'`);
+      }
+    });
+  }
+  it('ignores reference-shaped RHS text', () => {
+    const yaml = workflow('$review.output.proposal.action', 'when').replace(
+      "== 'add'",
+      "== '$review.output.proposal.typo'"
+    );
+    expect(parseWorkflow(yaml, 'nested.yaml').workflow).not.toBeNull();
+  });
+  it('does not authorize undeclared prior fields in the enclosing loop body', () => {
+    const result = parseWorkflow(
+      `
+name: prior-contract
+description: prior access
+nodes:
+  - id: group
+    loop_group:
+      max_iterations: 2
+      until_bash: 'test $LOOP_PREV.work.output.proposal.typo = add'
+      nodes:
+        - id: work
+          bash: echo json
+          output_format:
+            properties:
+              proposal: {type: object, properties: {action: {type: string}}}
+`,
+      'prior.yaml'
+    );
+    expect(result.error?.error).toContain('$LOOP_PREV.work.output.proposal.typo');
+    expect(result.error?.error).toContain("field 'typo'");
   });
 });

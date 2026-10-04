@@ -118,6 +118,7 @@ import {
   isExecNode,
   isAgentNode,
   isLoopGroupNode,
+  isWorkflowNode,
   loopGroupBodySinks,
   loopGroupSoleTerminalSink,
   isGateNode,
@@ -158,12 +159,13 @@ import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal
 import { evaluateCondition } from './condition-evaluator';
 import {
   declaredFieldsFromSchema,
+  outputContractFromSchema,
+  type DeclaredOutputPaths,
   resolveNodeOutputField,
   assertProducerNotFailed,
   OutputRefError,
   similarNodeIds,
   canonicalValueText,
-  findUnsupportedNestedOutputRef,
   parseWholeOutputRef,
   parseWholeExecutionCheckoutRef,
   resolveExecutionCheckoutStart,
@@ -171,7 +173,6 @@ import {
   substituteInputRefs,
   SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
   SUPPORTED_OUTPUT_REF_SOURCE,
-  unsupportedNestedOutputRefMessage,
   type JsonValue,
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
@@ -381,8 +382,6 @@ function resolveWorkflowValue(
   strictWholeRef: boolean
 ): JsonValue {
   if (typeof rawValue !== 'string') return rawValue;
-  const nestedRef = findUnsupportedNestedOutputRef(rawValue);
-  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
   const inputsName = parseWholeInputsRef(rawValue);
   if (inputsName !== undefined) {
     const name = inputsName;
@@ -495,8 +494,6 @@ function resolveBindingDirective(
   directive: BindingDirective,
   ctx: ShellInputContext
 ): JsonValue {
-  const nestedRef = findUnsupportedNestedOutputRef(directive.from);
-  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
   const ref = parseWholeOutputRef(directive.from);
   if (ref === undefined) {
     throw new Error(
@@ -713,6 +710,7 @@ export interface ChildWorkflowOutcome {
    * carry no field contract at all.
    */
   declaredFields?: readonly string[];
+  declaredOutputPaths?: DeclaredOutputPaths;
   /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
   costUsd?: number;
   tokens?: TokenUsage;
@@ -818,7 +816,8 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
   // from "not stamped".
-  const { summaryValue, summaryDeclaredFields } = readSubrunMetadata(md);
+  const { summaryValue, summaryDeclaredFields, summaryDeclaredOutputPaths } =
+    readSubrunMetadata(md);
   return {
     childRunId: run.id,
     status: run.status,
@@ -828,6 +827,9 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     // path and the parent re-entry/resume path stay one source, exactly like the
     // summary and usage above.
     ...(summaryDeclaredFields !== undefined ? { declaredFields: summaryDeclaredFields } : {}),
+    ...(summaryDeclaredOutputPaths !== undefined
+      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
+      : {}),
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
     tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
@@ -1219,6 +1221,7 @@ async function assertCheckoutUntouched(
           text: result.output,
           structured: result.structuredOutput,
           declaredFields: result.declaredFields,
+          declaredOutputPaths: result.declaredOutputPaths,
         },
       }
     )
@@ -1313,13 +1316,6 @@ export function substituteNodeOutputRefs(
   artifactsDir?: string,
   requiredContext?: RequiredOutputRefContext
 ): string {
-  const nestedRef = findUnsupportedNestedOutputRef(prompt);
-  if (nestedRef) {
-    const detail = unsupportedNestedOutputRefMessage(nestedRef);
-    throw requiredContext
-      ? requiredOutputRefError(requiredContext, nestedRef.reference, detail)
-      : new Error(detail);
-  }
   return prompt.replace(
     new RegExp(SUPPORTED_OUTPUT_REF_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
@@ -1401,7 +1397,7 @@ export function substituteNodeOutputRefs(
       // value that resolves to empty is an author-declared-optional field.
       let resolution: ReturnType<typeof resolveNodeOutputField>;
       try {
-        resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+        resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
       } catch (error) {
         if (requiredContext && error instanceof OutputRefError) {
           throw requiredOutputRefError(requiredContext, match, error.message);
@@ -1489,10 +1485,6 @@ export function substituteLoopPrevRefs(
   knownBodyIds?: ReadonlySet<string>,
   directBodyIds?: ReadonlySet<string>
 ): string {
-  const nestedRef = findUnsupportedNestedOutputRef(prompt, 'loop_prev');
-  if (nestedRef) {
-    throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
-  }
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
   // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
@@ -1517,7 +1509,8 @@ export function substituteLoopPrevRefs(
                 nodeId,
                 field,
                 'unknown-node',
-                similarNodeIds(nodeId, knownBodyIds)
+                similarNodeIds(nodeId, knownBodyIds),
+                field.includes('.') ? { reference: match, segment: field.split('.')[0] } : undefined
               );
             }
           } else if (directBodyIds && !directBodyIds.has(nodeId)) {
@@ -1542,7 +1535,7 @@ export function substituteLoopPrevRefs(
           ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
           : nodeOutput.output;
       }
-      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
       if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
       const value = resolution.value;
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -2748,7 +2741,7 @@ async function executeNodeInternal(
     // Capture the producer's declared field set so downstream `$node.output.field`
     // refs can tell a declared-optional-absent field ('') from a typo (throws).
     // Only present when output_format declares an object with `properties`.
-    const declaredFields = declaredFieldsFromSchema(node.output_format);
+    const contract = outputContractFromSchema(node.output_format);
 
     return {
       state: 'completed',
@@ -2757,7 +2750,7 @@ async function executeNodeInternal(
       costUsd: nodeCostUsd,
       ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...contract,
       ...(nodeResumed !== undefined ? { resumed: nodeResumed } : {}),
     };
   };
@@ -2801,6 +2794,7 @@ async function executeNodeInternal(
           text: result.output,
           structured: result.structuredOutput,
           declaredFields: result.declaredFields,
+          declaredOutputPaths: result.declaredOutputPaths,
         },
         tokens: nodeTokens,
         costUsd: nodeCostUsd,
@@ -3261,7 +3255,12 @@ function certifyExecOutput(
   node: ExecNode,
   stdout: string,
   credentialValues: readonly string[]
-): { output: string; structuredOutput?: JsonValue; declaredFields?: string[] } {
+): {
+  output: string;
+  structuredOutput?: JsonValue;
+  declaredFields?: string[];
+  declaredOutputPaths?: DeclaredOutputPaths;
+} {
   if (node.output_format === undefined) return { output: stdout };
 
   const label = `${node.runtime === 'sh' ? 'Bash' : 'Script'} node '${node.id}'`;
@@ -3296,11 +3295,11 @@ function certifyExecOutput(
 
   // Same projection an AI producer captures: it lets a downstream `.field` ref tell a
   // declared-but-absent optional field ('') from a typo (throws).
-  const declaredFields = declaredFieldsFromSchema(node.output_format);
+  const contract = outputContractFromSchema(node.output_format);
   return {
     output: canonicalValueText(value),
     structuredOutput: value,
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...contract,
   };
 }
 
@@ -3544,6 +3543,7 @@ async function executeBashNode(
           text: output,
           structured: certified.structuredOutput,
           declaredFields: certified.declaredFields,
+          declaredOutputPaths: certified.declaredOutputPaths,
           persisted: {
             text: persistedOutput.nodeOutput,
             truncated: persistedOutput.truncated,
@@ -3893,6 +3893,7 @@ async function executeScriptNode(
           text: output,
           structured: certified.structuredOutput,
           declaredFields: certified.declaredFields,
+          declaredOutputPaths: certified.declaredOutputPaths,
           persisted: {
             text: persistedOutput.nodeOutput,
             truncated: persistedOutput.truncated,
@@ -4049,7 +4050,7 @@ async function finalizeLoopFromSignal(
   const output = {
     text: finalizeOutput,
     structured: finalizeStructuredOutput,
-    declaredFields: declaredFieldsFromSchema(node.output_format),
+    ...outputContractFromSchema(node.output_format),
   };
   if (execution !== undefined) {
     return recordNodeState(
@@ -4079,6 +4080,9 @@ async function finalizeLoopFromSignal(
         ? { structured_output: finalizeStructuredOutput }
         : {}),
       ...(output.declaredFields !== undefined ? { declared_fields: output.declaredFields } : {}),
+      ...(output.declaredOutputPaths !== undefined
+        ? { declared_output_paths: output.declaredOutputPaths }
+        : {}),
       ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
       ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     },
@@ -4092,6 +4096,9 @@ async function finalizeLoopFromSignal(
       ? { structuredOutput: finalizeStructuredOutput }
       : {}),
     ...(output.declaredFields !== undefined ? { declaredFields: output.declaredFields } : {}),
+    ...(output.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: output.declaredOutputPaths }
+      : {}),
     ...finalizeUsage,
     ...(sessionId !== undefined ? { sessionId } : {}),
   };
@@ -4371,9 +4378,15 @@ async function executeLoopGroupBody(
         (bodyNodeDef !== undefined && !isLoopGroupNode(bodyNodeDef)
           ? declaredFieldsFromSchema(bodyNodeDef.output_format)
           : undefined);
+      const declaredOutputPaths =
+        ('declaredOutputPaths' in prior ? prior.declaredOutputPaths : undefined) ??
+        (bodyNodeDef !== undefined && !isLoopGroupNode(bodyNodeDef) && !isWorkflowNode(bodyNodeDef)
+          ? outputContractFromSchema(bodyNodeDef.output_format).declaredOutputPaths
+          : undefined);
       restoredLoopPrevOutputs.set(id, {
         ...prior,
         ...(declaredFields !== undefined ? { declaredFields } : {}),
+        ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
       });
     }
     // Kept as an empty-map guard for clarity only — substituteLoopPrevRefs reads via
@@ -6523,7 +6536,7 @@ async function executeLoopNode(
             output: {
               text: lastIterationOutput,
               structured: lastIterationStructuredOutput,
-              declaredFields: declaredFieldsFromSchema(node.output_format),
+              ...outputContractFromSchema(node.output_format),
             },
             tokens: loopTotalTokens,
             costUsd: loopTotalCostUsd,
@@ -6916,7 +6929,7 @@ async function executeWaitNode(
             output: {
               text: output,
               structured: result,
-              declaredFields: declaredFieldsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
+              ...outputContractFromSchema(WAIT_NODE_OUTPUT_FORMAT),
             },
           }
         );
@@ -6943,7 +6956,7 @@ async function executeWaitNode(
     state: 'completed',
     output,
     structuredOutput: result,
-    declaredFields: declaredFieldsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
+    ...outputContractFromSchema(WAIT_NODE_OUTPUT_FORMAT),
   };
 }
 
@@ -7332,6 +7345,7 @@ async function executeWorkflowNode(
     // re-validated here — a `workflow:` node cannot declare a schema of its own (that is
     // a load error), so there is no caller side to check against.
     const declaredFields = outcome.declaredFields;
+    const declaredOutputPaths = outcome.declaredOutputPaths;
     // The same holds for an artifact pointer in the child's value (#2453): the child's
     // producer proved it against the child's own run, and this node relays it unchanged.
     if (outcome.output === undefined) {
@@ -7358,6 +7372,7 @@ async function executeWorkflowNode(
               ? { structured: outcome.structuredOutput }
               : {}),
             ...(declaredFields !== undefined ? { declaredFields: [...declaredFields] } : {}),
+            ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
           },
           costUsd: outcome.costUsd,
           tokens: outcome.tokens,
@@ -9539,6 +9554,11 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                           : {}),
                       }
                     : formatThisNodesPriorOutput(skipStepName);
+                  // Return the pre-populated output (already in nodeOutputs)
+                  const cachedOutput = ctx.nodeOutputs.get(node.id);
+                  if (cachedOutput === undefined) {
+                    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
+                  }
                   await recordNodeState(
                     { store: ctx.deps.store, logDir: ctx.logDir },
                     {
@@ -9549,20 +9569,22 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         action: 'replayed',
                         output: {
                           ...persistedExecutionOutput(priorSkipOutput, prior?.output ?? ''),
-                          structured: prior?.structuredOutput,
+                          structured:
+                            'structuredOutput' in cachedOutput
+                              ? cachedOutput.structuredOutput
+                              : undefined,
+                          declaredOutputPaths:
+                            'declaredOutputPaths' in cachedOutput
+                              ? cachedOutput.declaredOutputPaths
+                              : undefined,
                           declaredFields:
-                            prior?.declaredFields === undefined
-                              ? undefined
-                              : [...prior.declaredFields],
+                            'declaredFields' in cachedOutput
+                              ? cachedOutput.declaredFields
+                              : undefined,
                         },
                       },
                     }
                   );
-                  // Return the pre-populated output (already in nodeOutputs)
-                  const cachedOutput = ctx.nodeOutputs.get(node.id);
-                  if (cachedOutput === undefined) {
-                    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
-                  }
                   return {
                     nodeId: node.id,
                     output: cachedOutput,
@@ -11215,6 +11237,11 @@ export async function executeDagWorkflow(
         (node !== undefined && !isLoopGroupNode(node)
           ? declaredFieldsFromSchema(node.output_format)
           : undefined);
+      const declaredOutputPaths =
+        prior.declaredOutputPaths ??
+        (node !== undefined && !isLoopGroupNode(node) && !isWorkflowNode(node)
+          ? outputContractFromSchema(node.output_format).declaredOutputPaths
+          : undefined);
       nodeOutputs.set(nodeId, {
         state: 'completed',
         output: prior.output,
@@ -11225,6 +11252,7 @@ export async function executeDagWorkflow(
           ? { structuredOutput: prior.structuredOutput }
           : {}),
         ...(declaredFields !== undefined ? { declaredFields: [...declaredFields] } : {}),
+        ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
         ...(prior.execution !== undefined ? { execution: prior.execution } : {}),
       });
       prepopulatedCount++;
@@ -11813,6 +11841,7 @@ export async function executeDagWorkflow(
   // authorize `$<node>.output.field` from the CHILD's schema instead of requiring the
   // caller to repeat it. Only the projection travels; the schema stays in captured source.
   let terminalDeclaredFields: readonly string[] | undefined;
+  let terminalDeclaredOutputPaths: DeclaredOutputPaths | undefined;
   if (workflow.returns !== undefined && workflowRun.parent_run_id) {
     const returnsOutput = nodeOutputs.get(workflow.returns);
     const value = returnsOutput?.state === 'completed' ? returnsOutput.output : undefined;
@@ -11825,6 +11854,8 @@ export async function executeDagWorkflow(
       // Taken from the completed node rather than re-derived from the definition: the
       // node already resolved its own contract (a wait node's fixed schema, a resumed
       // node's persisted projection), and re-deriving here would silently disagree.
+      terminalDeclaredOutputPaths =
+        returnsOutput?.state === 'completed' ? returnsOutput.declaredOutputPaths : undefined;
       terminalDeclaredFields =
         returnsOutput !== undefined && 'declaredFields' in returnsOutput
           ? returnsOutput.declaredFields
@@ -11845,6 +11876,8 @@ export async function executeDagWorkflow(
     // it here too keeps the two channels together: a child without `returns:` has threaded
     // its terminal LOGICAL value to the parent since #2637, and a value whose field
     // authorization stayed behind would read as schemaless downstream.
+    terminalDeclaredOutputPaths =
+      terminalSink?.state === 'completed' ? terminalSink.declaredOutputPaths : undefined;
     terminalDeclaredFields =
       terminalSink !== undefined && 'declaredFields' in terminalSink
         ? terminalSink.declaredFields
@@ -11892,6 +11925,9 @@ export async function executeDagWorkflow(
         // `summary_declared_fields` (#2453) is the callee-owned field projection. Gated
         // on the same terminal output as the two keys above, so a blank/incomplete
         // `returns:` node stamps no contract at all rather than one nothing satisfies.
+        ...(workflowRun.parent_run_id && terminalOutput && terminalDeclaredOutputPaths !== undefined
+          ? { [SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths]: terminalDeclaredOutputPaths }
+          : {}),
         ...(workflowRun.parent_run_id && terminalOutput && terminalDeclaredFields !== undefined
           ? { [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: [...terminalDeclaredFields] }
           : {}),

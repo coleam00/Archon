@@ -5,7 +5,12 @@
  * in dag-executor) and `when:` evaluation (`resolveOutputRef` in condition-evaluator)
  * — so the contract is identical in both.
  *
- * Resolution table for a known producer:
+ * Nested paths authorize every prefix against `declaredOutputPaths` before reading
+ * values. Declared absent/null parents resolve empty; schemaless traversal requires
+ * own object properties at every segment. Root-only legacy contracts cannot authorize
+ * nested reads and require a producer rerun.
+ *
+ * Single-field resolution table for a known producer:
  *   0. Producer's `state` is `'failed'` → THROW ('producer-failed', #2713), before any
  *      of the branches below ever run — a failed producer's leftover output is never
  *      trusted, however JSON-shaped or non-empty it looks.
@@ -133,86 +138,16 @@ export const OUTPUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output`
  */
 export const LOOP_PREV_OUTPUT_REF_SOURCE = String.raw`\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output`;
 
-/** A top-level output field name. Nested field paths are not part of the reference grammar. */
+/** One object-field segment of an output path. */
 export const OUTPUT_FIELD_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
 
-/** Supported current-output form, with capture 1 = node id and capture 2 = optional field. */
-export const SUPPORTED_OUTPUT_REF_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_FIELD_SOURCE}))?`;
+export const OUTPUT_PATH_SOURCE = `${OUTPUT_FIELD_SOURCE}(?:\\.${OUTPUT_FIELD_SOURCE})*`;
 
-/** Supported prior-iteration form, with capture 1 = node id and capture 2 = optional field. */
-export const SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_FIELD_SOURCE}))?`;
+/** Supported current-output form, with capture 1 = node id and capture 2 = optional field path. */
+export const SUPPORTED_OUTPUT_REF_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
 
-export interface UnsupportedNestedOutputReference {
-  reference: string;
-  supportedForms: readonly string[];
-}
-
-const NESTED_OUTPUT_REF_SOURCE = `${OUTPUT_REF_SOURCE}\\.${OUTPUT_FIELD_SOURCE}(?:\\.${OUTPUT_FIELD_SOURCE})+`;
-const NESTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}\\.${OUTPUT_FIELD_SOURCE}(?:\\.${OUTPUT_FIELD_SOURCE})+`;
-
-function firstCurrentNestedOutputRef(
-  text: string
-): (UnsupportedNestedOutputReference & { index: number }) | undefined {
-  for (const match of text.matchAll(new RegExp(NESTED_OUTPUT_REF_SOURCE, 'g'))) {
-    const nodeId = match[1];
-    if (nodeId === undefined || nodeId === 'INPUTS') continue;
-    return {
-      reference: match[0],
-      supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`],
-      index: match.index,
-    };
-  }
-  return undefined;
-}
-
-function firstLoopPrevNestedOutputRef(
-  text: string
-): (UnsupportedNestedOutputReference & { index: number }) | undefined {
-  const match = new RegExp(NESTED_LOOP_PREV_OUTPUT_REF_SOURCE).exec(text);
-  const nodeId = match?.[1];
-  if (!match || nodeId === undefined) return undefined;
-  return {
-    reference: match[0],
-    supportedForms: [`$LOOP_PREV.${nodeId}.output`, `$LOOP_PREV.${nodeId}.output.field`],
-    index: match.index,
-  };
-}
-
-/** Find the first canonical output reference that tries to access more than one field. */
-export function findUnsupportedNestedOutputRef(
-  text: string,
-  kind?: 'current' | 'loop_prev'
-): UnsupportedNestedOutputReference | undefined {
-  const current = kind === 'loop_prev' ? undefined : firstCurrentNestedOutputRef(text);
-  const loopPrev = kind === 'current' ? undefined : firstLoopPrevNestedOutputRef(text);
-  const first = !current
-    ? loopPrev
-    : !loopPrev
-      ? current
-      : current.index <= loopPrev.index
-        ? current
-        : loopPrev;
-  if (!first) return undefined;
-  return {
-    reference: first.reference,
-    supportedForms: first.supportedForms,
-  };
-}
-
-/** Explain the supported zero-or-one-field forms for a rejected nested output reference. */
-export function unsupportedNestedOutputRefMessage(ref: UnsupportedNestedOutputReference): string {
-  const topLevelFieldForm =
-    ref.supportedForms.find(form => form.endsWith('.output.field')) ?? ref.supportedForms.at(-1);
-  const supported = ref.supportedForms
-    .map((form, index) => `${index === ref.supportedForms.length - 1 ? 'or ' : ''}'${form}'`)
-    .join(', ')
-    .replace(', or ', ' or ');
-  return (
-    `Reference '${ref.reference}' uses more than one output field segment, which is not supported. ` +
-    `Use ${supported}. Flatten the producer's output_format, or pass the top-level object ` +
-    `(${topLevelFieldForm ? `'${topLevelFieldForm}'` : 'as one field'}) to a script node and inspect it there.`
-  );
-}
+/** Supported prior-iteration form, with capture 1 = node id and capture 2 = optional field path. */
+export const SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
 
 /**
  * The one shape of a declared-input NAME — `with:` keys, `inputs:` keys, and the
@@ -255,11 +190,11 @@ export function substituteInputRefs(
   });
 }
 
-/** Anchored whole-value form: the ENTIRE (trimmed) string is one `$id.output[.field]` ref. */
+/** Anchored whole-value form: the ENTIRE (trimmed) string is one `$id.output[.path]` ref. */
 const WHOLE_OUTPUT_REF_PATTERN = new RegExp(`^${SUPPORTED_OUTPUT_REF_SOURCE}$`);
 
 /**
- * Parse a string that is exactly one whole `$node.output[.field]` reference
+ * Parse a string that is exactly one whole `$node.output[.path]` reference
  * (after trimming), or undefined when it is anything else — a literal, a
  * template with surrounding text, or not a ref at all. This is what lets a
  * binding value distinguish "pass the logical value through" from "splice text
@@ -319,10 +254,12 @@ export function resolveExecutionCheckoutStart(
  * sites run inside the dag-executor's per-node try/catch).
  */
 export type OutputRefErrorReason =
+  | 'contract-unavailable'
   | 'not-in-schema'
   | 'unparseable'
   | 'truncated'
   | 'array-aggregate'
+  | 'non-object-intermediate'
   | 'missing-key'
   | 'producer-not-run'
   | 'producer-failed'
@@ -334,9 +271,10 @@ export class OutputRefError extends Error {
     public readonly field: string,
     public readonly reason: OutputRefErrorReason,
     /** Nearby known node ids for a did-you-mean hint (only used by 'unknown-node'). */
-    public readonly candidates: readonly string[] = []
+    public readonly candidates: readonly string[] = [],
+    public readonly pathDetails?: { reference: string; segment: string }
   ) {
-    super(OutputRefError.messageFor(nodeId, field, reason, candidates));
+    super(OutputRefError.messageFor(nodeId, field, reason, candidates, pathDetails));
     this.name = 'OutputRefError';
   }
 
@@ -344,10 +282,14 @@ export class OutputRefError extends Error {
     nodeId: string,
     field: string,
     reason: OutputRefErrorReason,
-    candidates: readonly string[]
+    candidates: readonly string[],
+    pathDetails?: { reference: string; segment: string }
   ): string {
-    const ref = `$${nodeId}.output.${field}`;
+    const ref = pathDetails?.reference ?? `$${nodeId}.output.${field}`;
+    field = pathDetails?.segment ?? field;
     switch (reason) {
+      case 'contract-unavailable':
+        return `'${ref}' cannot authorize nested segment '${field}': node '${nodeId}' has only a legacy root-field contract. Rerun the producer with the current binary to record its nested contract.`;
       case 'not-in-schema':
         return `'${ref}' references field '${field}', which is not declared in node '${nodeId}'s output_format schema. Add '${field}' to the schema (and mark it optional if it can be absent), or fix the reference.`;
       case 'unparseable':
@@ -356,6 +298,8 @@ export class OutputRefError extends Error {
         return `'${ref}' references field '${field}', but node '${nodeId}' is a fan-out and its output is a JSON ARRAY of per-child results (each element the child's result value, single-encoded — never a JSON string to parse again), not an object — there is no '${field}' on it and no producer prompt to change, because the array shape is fixed by the engine. Reference '$${nodeId}.output' (the whole array) and read it in a script node, which is also where a failed child's marker ({ archon_failed: true, error, status }) can be handled. See the fan_out docs.`;
       case 'truncated':
         return `'${ref}' references field '${field}', but node '${nodeId}'s persisted output was clipped at the event size cap and no longer parses as JSON. The node very likely emitted '${field}' correctly — this surfaces on a resumed run, which reads the clipped copy rather than the original. Write the payload to a file under $ARTIFACTS_DIR and read it downstream, or shrink the node's output.`;
+      case 'non-object-intermediate':
+        return `'${ref}' cannot read segment '${field}' because its parent is not an object. Dot paths cannot traverse scalars or arrays.`;
       case 'missing-key':
         return `'${ref}' references field '${field}', but node '${nodeId}'s JSON output has no such key. Emit '${field}' in the output, or fix the reference.`;
       case 'producer-not-run':
@@ -395,10 +339,59 @@ export function similarNodeIds(nodeId: string, knownIds: Iterable<string>): stri
 export function declaredFieldsFromSchema(
   outputFormat: Record<string, unknown> | undefined
 ): string[] | undefined {
-  if (!outputFormat) return undefined;
-  const props = outputFormat.properties;
-  if (props === null || typeof props !== 'object' || Array.isArray(props)) return undefined;
-  return Object.keys(props as Record<string, unknown>);
+  return outputContractFromSchema(outputFormat).declaredFields;
+}
+
+export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
+export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
+
+export function outputContractFromSchema(outputFormat: Record<string, unknown> | undefined): {
+  declaredFields?: string[];
+  declaredOutputPaths?: DeclaredOutputPaths;
+} {
+  const props = asPlainObject(outputFormat?.properties);
+  if (props === undefined) return {};
+  const paths: DeclaredOutputPaths = [];
+  const visit = (properties: Record<string, unknown>, prefix: string[]): void => {
+    for (const [key, raw] of Object.entries(properties)) {
+      const path = [...prefix, key];
+      paths.push(path);
+      const schema = asPlainObject(raw);
+      const type = schema?.type;
+      const children = asPlainObject(schema?.properties);
+      if (
+        children &&
+        (type === undefined ||
+          type === 'object' ||
+          (Array.isArray(type) && type.includes('object')))
+      ) {
+        visit(children, path);
+      }
+    }
+  };
+  visit(props, []);
+  return { declaredFields: Object.keys(props), declaredOutputPaths: paths };
+}
+
+export function assertDeclaredOutputPath(
+  paths: DeclaredOutputPaths,
+  nodeId: string,
+  field: string,
+  reference = `$${nodeId}.output.${field}`
+): void {
+  const segments = field.split('.');
+  for (let depth = 1; depth <= segments.length; depth++) {
+    if (
+      !paths.some(
+        path => path.length === depth && path.every((segment, index) => segment === segments[index])
+      )
+    ) {
+      throw new OutputRefError(nodeId, field, 'not-in-schema', [], {
+        reference,
+        segment: segments[depth - 1],
+      });
+    }
+  }
 }
 
 /**
@@ -453,14 +446,21 @@ function parseOutputObject(text: string): Record<string, unknown> | undefined {
 export function resolveNodeOutputField(
   nodeOutput: NodeOutput,
   nodeId: string,
-  field: string
+  field: string,
+  reference = `$${nodeId}.output.${field}`
 ): FieldResolution {
   // A producer that did not run (skipped) or has not settled (pending) has no
   // output to read a field from. Surface that directly rather than letting it
   // fall through to the schemaless path and throw the misleading "not a JSON
   // object" error on its empty output.
   if (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
-    throw new OutputRefError(nodeId, field, 'producer-not-run');
+    throw new OutputRefError(
+      nodeId,
+      field,
+      'producer-not-run',
+      [],
+      field.includes('.') ? { reference, segment: field.split('.')[0] } : undefined
+    );
   }
 
   // A failed producer never resolves a field, however JSON-shaped its leftover
@@ -469,12 +469,52 @@ export function resolveNodeOutputField(
   // as if the group had succeeded — the same class of bug #2696/#2710 fixed for
   // the `{ from, if_skipped }` binding directive.
   if (nodeOutput.state === 'failed') {
-    throw new OutputRefError(nodeId, field, 'producer-failed');
+    throw new OutputRefError(
+      nodeId,
+      field,
+      'producer-failed',
+      [],
+      field.includes('.') ? { reference, segment: field.split('.')[0] } : undefined
+    );
   }
 
   const declaredFields = 'declaredFields' in nodeOutput ? nodeOutput.declaredFields : undefined;
   const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
   const structuredObj = asPlainObject(structured);
+
+  const segments = field.split('.');
+  if (segments.length > 1) {
+    const paths = nodeOutput.declaredOutputPaths;
+    if (paths !== undefined) assertDeclaredOutputPath(paths, nodeId, field, reference);
+    else if (declaredFields !== undefined) {
+      throw new OutputRefError(nodeId, field, 'contract-unavailable', [], {
+        reference,
+        segment: segments[1],
+      });
+    }
+    let value: unknown = structuredObj ?? parseOutputObject(nodeOutput.output);
+    if (value === undefined)
+      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), [], {
+        reference,
+        segment: segments[0],
+      });
+    for (const segment of segments) {
+      if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
+      const object = asPlainObject(value);
+      if (object === undefined)
+        throw new OutputRefError(nodeId, field, 'non-object-intermediate', [], {
+          reference,
+          segment,
+        });
+      if (!Object.hasOwn(object, segment)) {
+        if (paths !== undefined) return { kind: 'empty' };
+        throw new OutputRefError(nodeId, field, 'missing-key', [], { reference, segment });
+      }
+      value = object[segment];
+    }
+    if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
+    return { kind: 'value', value };
+  }
 
   // 1. Declared-schema producer — the declared property set IS the contract.
   if (declaredFields !== undefined) {

@@ -100,13 +100,31 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 | Pattern | Resolves to | Notes |
 |---------|-------------|-------|
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
-| `$nodeId.output.field` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
+| `$nodeId.output.field` / `$nodeId.output.a.b` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
 
-On output-reference surfaces, dot access supports exactly one top-level field. A deeper path
-such as `$nodeId.output.proposal.text` fails workflow validation. Flatten the producer's
-`output_format`, or pass `$nodeId.output.proposal` to a script node and inspect the object there.
+Dot paths read nested object fields: `$review.output.proposal.action` resolves the
+`action` inside `proposal`. The same paths work in templates, scalar `when:`
+comparisons, whole-value `with:` bindings, and `$LOOP_PREV.review.output.proposal.action`.
+A whole-value binding preserves the logical value, including objects and arrays;
+`when:` requires a scalar. Paths cannot index or traverse arrays, use wildcards, or
+compute expressions. Shorthand conditions (`$node.field`) remain single-field only.
 
-A `.field` reference **fails the consuming node** when the producer's output is not a JSON object — whether or not the producer declared an `output_format`. Declaring a schema buys you a stricter check on the field *name* (an undeclared field fails the consuming node with a named error rather than resolving to a silent empty), and lets a declared-but-absent field resolve to `''`; it never makes a broken producer quieter. For a `workflow:` sub-run node the contract is the child's own: the `output_format` on the child's `returns:` node certifies the value and its declared field names travel back with the result, so `$sub.output.field` is strict under the child's schema. Declaring `output_format` on the `workflow:` node itself is a load error — the result contract belongs to the child's `returns:` node.
+With `output_format`, each segment must be an explicit `properties` entry. Nested
+references to undeclared segments fail validation when the producer's schema is known
+locally; otherwise they fail the consuming node at runtime, naming the reference and
+segment. `additionalProperties`, array `items`, `$ref`, and schema combinators do not
+supply declarations. An object with nullable type can declare child properties.
+Authorization checks the entire path before reading values, so a typo fails even under
+an absent optional parent. A declared missing or null field or parent resolves to `''`.
+The root output must still be a JSON object. For schemaless `bash:`/`script:` producers,
+every nested key must exist and intermediate values must be objects; a missing key or
+non-object intermediate fails the consuming node.
+
+For `workflow:` results, the selected child producer owns the contract. Its declared
+paths travel with the result and survive resume; the parent cannot declare an
+`output_format` on the `workflow:` node. A historical child result carrying only a
+root-field contract requires rerunning the producer before nested reads can be
+certified. Whole-output and single-field references keep their existing behavior.
 
 During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful bash events retain only a 32 KiB UTF-8 audit preview, so after a process boundary a resumed run rehydrates that persisted preview rather than the full output. If a large gate verdict must survive a restart intact, store it through a deliberately managed artifact contract instead of relying on the event preview.
 

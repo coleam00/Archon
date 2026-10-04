@@ -41,7 +41,6 @@ import {
   OutputRefError,
   similarNodeIds,
   canonicalValueText,
-  unsupportedNestedOutputRefMessage,
   type JsonValue,
 } from './output-ref';
 import {
@@ -77,7 +76,8 @@ function resolveOutputRef(
   nodeId: string,
   field: string | undefined,
   nodeOutputs: ReadonlyMap<string, NodeOutput>,
-  exprSnippet: string
+  exprSnippet: string,
+  reference?: string
 ): string {
   const nodeOutput = nodeOutputs.get(nodeId);
   if (!nodeOutput) {
@@ -115,7 +115,7 @@ function resolveOutputRef(
     return nodeOutput.output;
   }
 
-  const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+  const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, reference);
   if (resolution.kind === 'empty') return '';
   if (
     Array.isArray(resolution.value) ||
@@ -218,7 +218,8 @@ function resolveAtomRef(
     ref.nodeId,
     ref.field,
     ref.kind === 'loop_prev' ? (loopPrevOutputs ?? new Map()) : nodeOutputs,
-    exprSnippet
+    exprSnippet,
+    `$${ref.kind === 'loop_prev' ? 'LOOP_PREV.' : ''}${ref.nodeId}.output.${ref.field}`
   );
 }
 
@@ -299,7 +300,10 @@ export function evaluateCondition(
 ): { result: boolean; parsed: boolean } {
   const trimmed = expr.trim();
   const nestedRef = findUnsupportedNestedWhenRef(trimmed);
-  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
+  if (nestedRef)
+    throw new Error(
+      `Reference '${nestedRef.reference}' uses nested shorthand; use canonical '.output' spelling for nested paths.`
+    );
 
   // Split on || — OR has lower precedence
   const orClauses = splitOutsideQuotes(trimmed, '||');

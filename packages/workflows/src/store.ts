@@ -1,3 +1,4 @@
+import type { DeclaredOutputPaths } from './output-ref';
 import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
 import type { CheckoutObservation } from './schemas/checkout-observation';
@@ -32,15 +33,16 @@ export type { WorkflowNodeSession, WorkflowRunNodeSession } from './schemas';
  * `structuredOutput` is the logical value the node's `node_completed` event carried
  * under `structured_output`; absent for text-only nodes and rows persisted before
  * the key existed — those degrade to text re-parsing, the pre-#2637 behavior.
- * `declaredFields` is the field-access contract the node completed under, from the
- * event's `declared_fields` (#2453). Only a `workflow:` node writes it, because only
- * it can hold a contract the parent's own definition does not state — every other
- * producer's projection is re-derived from the loaded `output_format` on resume.
+ * `declaredFields` preserves the root-field contract. `declaredOutputPaths` carries
+ * every declared object prefix for nested access, including child-owned contracts
+ * that cannot be recovered from the parent's loaded definition. Old events may
+ * omit these projections; local producers can recover them from their own schema.
  */
 export interface PersistedNodeOutput {
   output: string;
   structuredOutput?: unknown;
   declaredFields?: readonly string[];
+  declaredOutputPaths?: DeclaredOutputPaths;
   /** Present only when resume recovered a preview rather than the full text.
    * Replay must retain this original provenance instead of certifying the preview. */
   outputTruncation?: { originalBytes: number | null; spillPath: string | null };

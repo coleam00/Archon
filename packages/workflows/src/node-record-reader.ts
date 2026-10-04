@@ -48,6 +48,12 @@ function projectSerializedData(raw: Record<string, unknown>): SerializedNodeData
   const projected: Record<string, unknown> = {};
   for (const [key, schema] of Object.entries(serializedNodeDataSchema.shape)) {
     if (!Object.hasOwn(raw, key)) continue;
+    if (key === 'declared_output_paths') {
+      projected[key] = serializedNodeDataSchema.shape.declared_output_paths
+        .unwrap()
+        .parse(raw[key]);
+      continue;
+    }
     const parsed = schema.safeParse(raw[key]);
     if (parsed.success) projected[key] = parsed.data;
   }

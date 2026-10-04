@@ -70,12 +70,14 @@ import {
 } from './when-atom';
 import {
   declaredFieldsFromSchema,
+  outputContractFromSchema,
+  assertDeclaredOutputPath,
+  SUPPORTED_OUTPUT_REF_SOURCE,
+  SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
-  findUnsupportedNestedOutputRef,
   OUTPUT_REF_SOURCE,
   parseWholeExecutionCheckoutRef,
   parseWholeOutputRef,
-  unsupportedNestedOutputRefMessage,
 } from './output-ref';
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
@@ -955,12 +957,58 @@ export function validateDagStructure(
       );
     }
     for (const source of sources) {
-      const nestedRef =
-        source.surface === 'condition'
-          ? findUnsupportedNestedWhenRef(source.text)
-          : findUnsupportedNestedOutputRef(source.text);
-      if (nestedRef) {
-        return `Node '${node.id}' field '${source.field}' contains an unsupported output reference. ${unsupportedNestedOutputRefMessage(nestedRef)}`;
+      if (source.surface === 'condition') {
+        const unsupported = findUnsupportedNestedWhenRef(source.text);
+        if (unsupported)
+          return `Node '${node.id}' field '${source.field}' contains nested shorthand '${unsupported.reference}'; use canonical '.output' spelling.`;
+      }
+      const refs: { nodeId: string; field?: string; reference: string; prior: boolean }[] = [];
+      if (source.surface === 'condition') {
+        for (const text of whenAtoms(source.text)) {
+          const atom = parseLoopPrevWhenAtom(text);
+          if (!atom || atom.ref.kind === 'input') continue;
+          const { nodeId, field } = atom.ref;
+          const prior = atom.ref.kind === 'loop_prev';
+          refs.push({
+            nodeId,
+            field,
+            prior,
+            reference: `$${prior ? 'LOOP_PREV.' : ''}${nodeId}.output.${field}`,
+          });
+        }
+      } else {
+        for (const [pattern, prior] of [
+          [SUPPORTED_OUTPUT_REF_SOURCE, false],
+          [SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE, true],
+        ] as const) {
+          for (const match of source.text.matchAll(new RegExp(pattern, 'g'))) {
+            refs.push({ nodeId: match[1], field: match[2], reference: match[0], prior });
+          }
+        }
+      }
+      for (const ref of refs) {
+        if (ref.nodeId === WHEN_INPUTS_SCOPE || !ref.field?.includes('.')) continue;
+        const producer = ref.prior
+          ? (source.bodyNodes ?? (enclosingNodes ? nodes : undefined))?.find(
+              candidate => candidate.id === ref.nodeId
+            )
+          : (nodesById.get(ref.nodeId) ??
+            enclosingNodes?.get(ref.nodeId) ??
+            source.bodyNodes?.find(candidate => candidate.id === ref.nodeId));
+        if (
+          !producer ||
+          isIncludeDirective(producer) ||
+          isWorkflowNode(producer) ||
+          isLoopGroupNode(producer)
+        )
+          continue;
+        const paths = outputContractFromSchema(producer.output_format).declaredOutputPaths;
+        if (paths === undefined) continue;
+        try {
+          assertDeclaredOutputPath(paths, ref.nodeId, ref.field, ref.reference);
+        } catch (error) {
+          return `Node '${node.id}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;
+        }
       }
 
       let m: RegExpExecArray | null;

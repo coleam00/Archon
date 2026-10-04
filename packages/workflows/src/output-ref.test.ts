@@ -1,10 +1,12 @@
+import { readSubrunMetadata } from './schemas/workflow-run';
 import { describe, it, expect } from 'bun:test';
 
 import {
   assertProducerNotFailed,
   canonicalValueText,
   declaredFieldsFromSchema,
-  findUnsupportedNestedOutputRef,
+  outputContractFromSchema,
+  assertDeclaredOutputPath,
   jsonValueSchema,
   OutputRefError,
   parseWholeInputsRef,
@@ -82,32 +84,6 @@ describe('parseWholeOutputRef', () => {
     expect(parseWholeOutputRef('$INPUTS.name')).toBeUndefined();
     expect(parseWholeOutputRef('literal')).toBeUndefined();
     expect(parseWholeOutputRef('')).toBeUndefined();
-  });
-});
-
-describe('findUnsupportedNestedOutputRef', () => {
-  it('returns the complete nested current-output reference', () => {
-    expect(findUnsupportedNestedOutputRef('Use $review.output.proposal.action now')).toEqual({
-      reference: '$review.output.proposal.action',
-      supportedForms: ['$review.output', '$review.output.field'],
-    });
-  });
-
-  it('returns the complete nested prior-iteration reference', () => {
-    expect(findUnsupportedNestedOutputRef('$LOOP_PREV.work.output.result.status.value')).toEqual({
-      reference: '$LOOP_PREV.work.output.result.status.value',
-      supportedForms: ['$LOOP_PREV.work.output', '$LOOP_PREV.work.output.field'],
-    });
-  });
-
-  it('accepts whole-output and one-field references', () => {
-    expect(findUnsupportedNestedOutputRef('$review.output')).toBeUndefined();
-    expect(findUnsupportedNestedOutputRef('$review.output.proposal')).toBeUndefined();
-    expect(findUnsupportedNestedOutputRef('$LOOP_PREV.work.output.result')).toBeUndefined();
-  });
-
-  it('does not classify the reserved $INPUTS scope as a node output reference', () => {
-    expect(findUnsupportedNestedOutputRef('$INPUTS.output.proposal.action')).toBeUndefined();
   });
 });
 
@@ -486,4 +462,139 @@ describe('similarNodeIds', () => {
     const map = new Map<string, NodeOutput>([['analyze', completed('x')]]);
     expect(similarNodeIds('analze', map.keys())).toContain('analyze');
   });
+});
+
+describe('nested output acceptance', () => {
+  it('parses and resolves the complete proposal path', () => {
+    expect(parseWholeOutputRef('$review.output.proposal.action')).toEqual({
+      nodeId: 'review',
+      field: 'proposal.action',
+    });
+    expect(
+      resolveNodeOutputField(
+        { state: 'completed', output: '{"proposal":{"action":"add"}}' },
+        'review',
+        'proposal.action'
+      )
+    ).toEqual({ kind: 'value', value: 'add' });
+  });
+});
+
+describe('nested output contract', () => {
+  const schema = {
+    properties: {
+      proposal: {
+        type: ['object', 'null'],
+        properties: {
+          action: { type: 'string' },
+          details: { properties: { count: { type: 'number' } } },
+          items: { type: 'array', properties: { length: {} } },
+          scalar: { type: 'string', properties: { invalid: {} } },
+        },
+      },
+      'proposal.action': {},
+    },
+  };
+  const contract = outputContractFromSchema(schema);
+  const producer = (value: unknown): NodeOutput => ({
+    state: 'completed',
+    output: JSON.stringify(value),
+    ...contract,
+  });
+  it('projects explicit object properties without conflating dotted literal keys', () => {
+    expect(contract.declaredFields).toEqual(['proposal', 'proposal.action']);
+    expect(contract.declaredOutputPaths).toEqual([
+      ['proposal'],
+      ['proposal', 'action'],
+      ['proposal', 'details'],
+      ['proposal', 'details', 'count'],
+      ['proposal', 'items'],
+      ['proposal', 'scalar'],
+      ['proposal.action'],
+    ]);
+    expect(outputContractFromSchema({ properties: {} })).toEqual({
+      declaredFields: [],
+      declaredOutputPaths: [],
+    });
+    expect(outputContractFromSchema({ type: 'string' })).toEqual({});
+    expect(() => assertDeclaredOutputPath([['a.b']], 'p', 'a.b')).toThrow("field 'a'");
+  });
+  it('checks every prefix before accepting an absent or null optional parent', () => {
+    for (const value of [{}, { proposal: null }, { proposal: {} }]) {
+      expect(resolveNodeOutputField(producer(value), 'p', 'proposal.action')).toEqual({
+        kind: 'empty',
+      });
+      expect(() => resolveNodeOutputField(producer(value), 'p', 'proposal.typo')).toThrow(
+        "field 'typo'"
+      );
+    }
+    for (const path of [
+      'typo.action',
+      'proposal.details.typo',
+      'proposal.items.length',
+      'proposal.scalar.invalid',
+    ]) {
+      expect(() => resolveNodeOutputField(producer({}), 'p', path)).toThrow('not declared');
+    }
+  });
+  it('preserves scalar and aggregate logical values', () => {
+    expect(
+      resolveNodeOutputField(
+        producer({ proposal: { details: { count: 0 } } }),
+        'p',
+        'proposal.details.count'
+      )
+    ).toEqual({ kind: 'value', value: 0 });
+    for (const value of [false, { count: 0 }, [1, 2]]) {
+      expect(
+        resolveNodeOutputField(producer({ proposal: { details: value } }), 'p', 'proposal.details')
+      ).toEqual({ kind: 'value', value });
+    }
+  });
+  it('requires own object properties for schemaless nested paths, even on legacy structured payloads', () => {
+    for (const value of [
+      {},
+      { proposal: {} },
+      { proposal: null },
+      { proposal: [] },
+      { proposal: 'text' },
+      { 'proposal.action': 'add' },
+      { proposal: Object.create({ action: 'inherited' }) },
+    ]) {
+      const node: NodeOutput = {
+        state: 'completed',
+        output: JSON.stringify(value),
+        structuredOutput: value,
+      };
+      expect(() => resolveNodeOutputField(node, 'p', 'proposal.action')).toThrow(OutputRefError);
+    }
+    expect(
+      resolveNodeOutputField(
+        { state: 'completed', output: '{"proposal":{"action":null}}' },
+        'p',
+        'proposal.action'
+      )
+    ).toEqual({ kind: 'value', value: null });
+  });
+  it('fails old schema-owned results with rerun guidance while preserving single-field reads', () => {
+    const node: NodeOutput = {
+      state: 'completed',
+      output: '{"proposal":{"action":"add"}}',
+      declaredFields: ['proposal'],
+    };
+    expect(() =>
+      resolveNodeOutputField(node, 'p', 'proposal.action', '$LOOP_PREV.p.output.proposal.action')
+    ).toThrow("'$LOOP_PREV.p.output.proposal.action' cannot authorize nested segment 'action'");
+    expect(resolveNodeOutputField(node, 'p', 'proposal').kind).toBe('value');
+  });
+});
+
+it('accepts absent child path metadata and fails malformed present contracts', () => {
+  expect(readSubrunMetadata({}).summaryDeclaredOutputPaths).toBeUndefined();
+  expect(
+    readSubrunMetadata({ summary_declared_output_paths: [] }).summaryDeclaredOutputPaths
+  ).toEqual([]);
+  for (const bad of [null, undefined, [[]], ['proposal']]) {
+    expect(() => readSubrunMetadata({ summary_declared_output_paths: bad })).toThrow();
+  }
 });

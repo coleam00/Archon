@@ -83,14 +83,15 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$classify.output.type == 'FEATURE'", outputs).result).toBe(false);
   });
 
-  it('rejects a nested canonical output path loudly', () => {
+  it('resolves a nested canonical output path', () => {
     const outputs = new Map([
       ['review', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
     ]);
 
-    expect(() => evaluateCondition("$review.output.proposal.action == 'add'", outputs)).toThrow(
-      "Reference '$review.output.proposal.action'"
-    );
+    expect(evaluateCondition("$review.output.proposal.action == 'add'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
   });
 
   it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
@@ -142,16 +143,16 @@ describe('evaluateCondition', () => {
     );
   });
 
-  it('rejects a nested prior-iteration output path loudly', () => {
+  it('resolves a nested prior-iteration output path', () => {
     const priorOutputs = new Map([
       ['work', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
     ]);
 
-    expect(() =>
+    expect(
       evaluateCondition("$LOOP_PREV.work.output.proposal.action == 'add'", new Map(), undefined, {
         loopPrevOutputs: priorOutputs,
       })
-    ).toThrow("Reference '$LOOP_PREV.work.output.proposal.action'");
+    ).toEqual({ result: true, parsed: true });
   });
 
   it('dot notation: throws on a field ref when schemaless output is not JSON (no-silent-drop)', () => {
@@ -1002,4 +1003,15 @@ describe('structured $INPUTS values in when: (#2999)', () => {
       })
     ).toThrow("Condition reference '$INPUTS.config' resolved to an object");
   });
+});
+
+it('nested conditions still require a scalar', () => {
+  for (const action of [{ ready: true }, [true]]) {
+    expect(() =>
+      evaluateCondition(
+        '$p.output.proposal.action == true',
+        new Map([['p', makeOutput(JSON.stringify({ proposal: { action } }))]])
+      )
+    ).toThrow('resolved to an');
+  }
 });

@@ -21,7 +21,7 @@ import {
   type LoopWithCompiledCommand,
 } from './compiled-command';
 import {
-  declaredFieldsFromSchema,
+  outputContractFromSchema,
   canonicalValueText,
   parseWholeExecutionCheckoutRef,
   type JsonValue,
@@ -501,19 +501,19 @@ function nodeType(node: DagNode): z.infer<typeof dryRunNodeTypeSchema> {
 }
 
 function completedOutput(node: DagNode, stub: DryRunStubValue): NodeOutput {
-  const declaredFields = declaredFieldsFromSchema(node.output_format);
+  const contract = outputContractFromSchema(isLoopGroupNode(node) ? undefined : node.output_format);
   if (typeof stub === 'string') {
     return {
       state: 'completed',
       output: stub,
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...contract,
     };
   }
   return {
     state: 'completed',
     output: JSON.stringify(stub),
     structuredOutput: stub,
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...contract,
   };
 }
 

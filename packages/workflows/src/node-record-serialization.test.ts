@@ -267,3 +267,28 @@ describe('node record serializers', () => {
     expect(serializeNodeOutput(source)).not.toHaveProperty('costUsd');
   });
 });
+
+it('round-trips nested output authorization with both completion and prior-success replay', () => {
+  const source = record();
+  const paths = [['proposal'], ['proposal', 'action']];
+  source.output = {
+    text: '{"proposal":{"action":"add"}}',
+    declaredFields: ['proposal'],
+    declaredOutputPaths: paths,
+  };
+  expect(serializeNodeOutput(source)).toMatchObject({ declaredOutputPaths: paths });
+  for (const event of [
+    serializeNodeStateRecord(source),
+    serializeNodeStateRecord({
+      runId: source.runId,
+      path: source.path,
+      node: source.node,
+      cache: { action: 'replayed', output: source.output },
+    }),
+  ]) {
+    expect(
+      readNodeRecordEvent({ ...event, data: JSON.stringify(event.data) })?.data
+        .declared_output_paths
+    ).toEqual(paths);
+  }
+});

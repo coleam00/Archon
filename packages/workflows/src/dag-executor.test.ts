@@ -1498,7 +1498,7 @@ describe('substituteNodeOutputRefs', () => {
     expect(substituteNodeOutputRefs('Fix $a.output.type issue', outputs)).toBe('Fix BUG issue');
   });
 
-  it('rejects a nested output path instead of partially substituting it', () => {
+  it('substitutes the complete nested output path', () => {
     const outputs = new Map([
       [
         'review',
@@ -1506,14 +1506,14 @@ describe('substituteNodeOutputRefs', () => {
           'completed',
           JSON.stringify({ proposal: { action: 'add', text: 'rule' } }),
           { proposal: { action: 'add', text: 'rule' } },
-          ['proposal']
+          undefined
         ),
       ],
     ]);
 
-    expect(() =>
-      substituteNodeOutputRefs('Proposed: $review.output.proposal.action', outputs)
-    ).toThrow("Reference '$review.output.proposal.action'");
+    expect(substituteNodeOutputRefs('Proposed: $review.output.proposal.action', outputs)).toBe(
+      'Proposed: add'
+    );
   });
 
   it('retains the owning loop context when required substitution rejects a nested path', () => {
@@ -15889,6 +15889,134 @@ describe('executeDagWorkflow -- approval node', () => {
     expect(store.failWorkflowRun).toHaveBeenCalled();
   });
 
+  it('delivers the nested proposal action at the approval gate, including a legacy local resume', async () => {
+    for (const resume of [false, true]) {
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'nested-gate',
+            nodes: [
+              {
+                id: 'review',
+                kind: 'exec',
+                runtime: 'sh',
+                script: `printf '%s' '{"proposal":{"action":"add"}}'`,
+                output_format: {
+                  type: 'object',
+                  properties: {
+                    proposal: {
+                      type: 'object',
+                      properties: { action: { type: 'string' } },
+                      required: ['action'],
+                    },
+                  },
+                  required: ['proposal'],
+                },
+              },
+              {
+                id: 'gate',
+                kind: 'gate',
+                message: 'Proposed: $review.output.proposal.action',
+                depends_on: ['review'],
+                decisions: [{ id: 'approve' }, { id: 'reject' }],
+                captureResponse: false,
+                decisionsAuthored: false,
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(`nested-gate-${String(resume)}`),
+          ...(resume
+            ? {
+                priorCompletedNodes: new Map([
+                  ['review', { output: '{"proposal":{"action":"add"}}' }],
+                ]),
+              }
+            : {}),
+        })
+      );
+      expect(store.pauseWorkflowRun.mock.calls[0]?.[1].message).toBe('Proposed: add');
+      const producer = persistedEvents(store).find(
+        e =>
+          e.step_name === 'review' &&
+          ['node_completed', 'node_skipped_prior_success'].includes(e.event_type)
+      );
+      expect(producer?.data?.declared_output_paths).toEqual([['proposal'], ['proposal', 'action']]);
+    }
+  });
+
+  it('fails the consuming node for missing schemaless nested JSON', async () => {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'missing-nested',
+          nodes: [
+            { id: 'review', kind: 'exec', runtime: 'sh', script: `printf '%s' '{"proposal":{}}'` },
+            {
+              id: 'read',
+              kind: 'exec',
+              runtime: 'sh',
+              script: 'printf %s $review.output.proposal.action',
+              depends_on: ['review'],
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('missing-nested'),
+      })
+    );
+    const failed = persistedEvents(store).find(
+      e => e.step_name === 'read' && e.event_type === 'node_failed'
+    );
+    expect(failed?.data?.error).toContain('$review.output.proposal.action');
+    expect(failed?.data?.error).toContain("field 'action'");
+  });
+
+  it('nested bindings preserve objects and scalars through the logical input channel', async () => {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'nested-binding',
+          nodes: [
+            {
+              id: 'review',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"proposal":{"details":{"ready":false,"count":0}}}'`,
+            },
+            {
+              id: 'read',
+              kind: 'exec',
+              runtime: 'bun',
+              script:
+                "process.stdout.write([process.env.INPUTS_DETAILS, process.env.INPUTS_COUNT].join('|'))",
+              depends_on: ['review'],
+              with: {
+                details: { from: '$review.output.proposal.details', if_skipped: null },
+                count: '$review.output.proposal.details.count',
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('nested-binding'),
+      })
+    );
+    expect(
+      persistedEvents(store).find(e => e.step_name === 'read' && e.event_type === 'node_completed')
+        ?.data?.node_output
+    ).toBe('{"ready":false,"count":0}|0');
+  });
+
   it('approval node without capture_response stores empty node output', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
@@ -23711,14 +23839,14 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(substituteLoopPrevRefs('all=[$LOOP_PREV.work.output]', prev)).toBe('all=[]');
   });
 
-  it('EDGE F: rejects a nested prior-iteration path instead of partially substituting it', () => {
+  it('EDGE F: resolves the complete nested prior-iteration path', () => {
     const prev = new Map<string, NodeOutput>([
-      ['work', makeOutput('completed', '', { result: { status: { value: 'green' } } }, ['result'])],
+      ['work', makeOutput('completed', '', { result: { status: { value: 'green' } } })],
     ]);
 
-    expect(() =>
-      substituteLoopPrevRefs('$LOOP_PREV.work.output.result.status.value', prev)
-    ).toThrow("Reference '$LOOP_PREV.work.output.result.status.value'");
+    expect(substituteLoopPrevRefs('$LOOP_PREV.work.output.result.status.value', prev)).toBe(
+      'green'
+    );
   });
 
   it('EDGE F: $LOOP_PREV.<id>.output.<field> on a missing prior node resolves to empty', () => {
@@ -25302,95 +25430,91 @@ describe('executeDagWorkflow -- loop_group node', () => {
     expect(resumePrompt).toContain('USER=ok');
   });
 
-  it('INTERACTIVE resume: re-derives declaredFields so an undeclared $LOOP_PREV field fails the consumer (not-in-schema) (#2748 R1)', async () => {
-    // Mirrors the top-level 're-derives declaredFields on resume...' test (this file,
-    // ~line 5876) at the loop_group body level: a resumed body node's restored NodeOutput
-    // must keep the SAME schema-typo strictness a live in-process iteration has. Without
-    // re-deriving declaredFields from the body node's own current output_format, an
-    // undeclared field silently resolves to '' instead of throwing.
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
+  it.each(['extra', 'details.extra'])(
+    'INTERACTIVE resume: re-derives the body contract for undeclared $LOOP_PREV path %s',
+    async field => {
+      const store = createMockStore();
+      const mockDeps = createMockDeps(store);
 
-    // Prior iteration's persisted body output carries an `extra` key the schema does
-    // NOT declare.
-    const priorCompletedNodes = new Map([
-      ['refine.work', { output: '{"type":"BUG","extra":"x"}' }],
-    ]);
+      const priorCompletedNodes = new Map([
+        ['refine.work', { output: '{"type":"BUG","extra":"x","details":{"extra":"x"}}' }],
+      ]);
 
-    const workflow = {
-      name: 'lg-resume-declared-fields',
-      nodes: [
-        {
-          id: 'refine',
-          kind: 'loop_group',
-          loop_group: {
-            until: 'DONE',
-            max_iterations: 5,
-            fresh_context: false,
-            interactive: true,
-            gate_message: 'Review.',
-            nodes: [
-              {
-                id: 'work',
-                kind: 'agent',
-                source: { kind: 'inline', prompt: 'produce json' },
-                output_format: {
-                  type: 'object',
-                  properties: { type: { type: 'string' } },
-                  required: ['type'],
+      const workflow: { name: string; nodes: DagNode[] } = {
+        name: 'lg-resume-declared-fields',
+        nodes: [
+          {
+            id: 'refine',
+            kind: 'loop_group',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 5,
+              fresh_context: false,
+              interactive: true,
+              gate_message: 'Review.',
+              nodes: [
+                {
+                  id: 'work',
+                  kind: 'agent',
+                  source: { kind: 'inline', prompt: 'produce json' },
+                  output_format: {
+                    type: 'object',
+                    properties: {
+                      type: { type: 'string' },
+                      details: { type: 'object', properties: { type: { type: 'string' } } },
+                    },
+                    required: ['type'],
+                  },
+                  depends_on: [],
                 },
-                depends_on: [],
-              },
-              {
-                id: 'consumer',
-                kind: 'agent',
-                source: {
-                  kind: 'inline',
-                  prompt: 'extra=[$LOOP_PREV.work.output.extra]',
+                {
+                  id: 'consumer',
+                  kind: 'agent',
+                  source: {
+                    kind: 'inline',
+                    prompt: `extra=[$LOOP_PREV.work.output.${field}]`,
+                  },
+                  depends_on: ['work'],
                 },
-                depends_on: ['work'],
-              },
-            ],
-          },
-          depends_on: [],
-        },
-      ] as DagNode[],
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        conversationId: 'conv-lg-declared-fields',
-        cwd: testDir,
-        workflow,
-        workflowRun: makeWorkflowRun('lg-resume-declared-fields', {
-          metadata: {
-            approval: {
-              type: 'interactive_loop',
-              nodeId: 'refine',
-              iteration: 1,
-              message: 'Review.',
+              ],
             },
-            loop_user_input: '',
+            depends_on: [],
           },
-        }),
-        priorCompletedNodes,
-      })
-    );
+        ],
+      };
 
-    // The undeclared `extra` field must fail loudly (not-in-schema) on the resumed
-    // iteration — exactly as it would fail an in-process iteration — instead of
-    // silently resolving to '' the way a genuinely schemaless body node's absent
-    // field would.
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const failedEvent = eventCalls.find((call: unknown[]) => {
-      const event = call[0] as { event_type: string; data?: { error?: string } };
-      return (
-        event.event_type === 'node_failed' && event.data?.error?.includes('is not declared in node')
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          conversationId: 'conv-lg-declared-fields',
+          cwd: testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('lg-resume-declared-fields', {
+            metadata: {
+              approval: {
+                type: 'interactive_loop',
+                nodeId: 'refine',
+                iteration: 1,
+                message: 'Review.',
+              },
+              loop_user_input: '',
+            },
+          }),
+          priorCompletedNodes,
+        })
       );
-    });
-    expect(failedEvent).toBeDefined();
-  });
+
+      expect(
+        persistedEvents(store).some(
+          event =>
+            event.event_type === 'node_failed' &&
+            String(event.data?.error).includes(
+              `$${field.includes('.') ? 'LOOP_PREV.' : ''}work.output.${field}`
+            )
+        )
+      ).toBe(true);
+    }
+  );
 
   it('INTERACTIVE resume: $LOOP_PREV resolves an oversized (>32KB) prior body output via the spill path (#2748)', async () => {
     // Mirrors 'reads oversized $LOOP_PREV output from the run-owned spill directory'
