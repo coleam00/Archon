@@ -46,6 +46,24 @@ afterEach(() => {
     else process.env[key] = previous[key];
   }
 });
+/**
+ * Makes openai's auth check throw. That fails Pi's whole availability pass, which leaves
+ * its snapshot of stored providers empty.
+ */
+const failUnrelatedProviderCheck = (): ReturnType<typeof spyOn<typeof ModelRuntime, 'create'>> => {
+  const realCreate = ModelRuntime.create.bind(ModelRuntime);
+  return spyOn(ModelRuntime, 'create').mockImplementation(async options => {
+    const runtime = await realCreate({ ...options, refreshOnCreate: false });
+    const models = Reflect.get(runtime, 'models') as Pick<ModelRuntime, 'checkAuth'>;
+    const checkAuth = models.checkAuth.bind(models);
+    models.checkAuth = async (providerId, checkOptions) =>
+      providerId === 'openai'
+        ? Promise.reject(new Error('unrelated check failed'))
+        : checkAuth(providerId, checkOptions);
+    await runtime.refresh();
+    return runtime;
+  });
+};
 const check = (model = 'anthropic/claude-sonnet-4-6', env: Record<string, string> = {}) =>
   new PiProvider().checkCredential({ model, env, signal: AbortSignal.timeout(2000) });
 
@@ -303,20 +321,7 @@ describe('Pi native credentials', () => {
       join(root, 'auth.json'),
       JSON.stringify({ anthropic: { type: 'api_key', key: '!exit 1' } })
     );
-    // A throwing check for an unrelated provider fails Pi's whole availability pass, which
-    // leaves its snapshot of stored providers empty.
-    const realCreate = ModelRuntime.create.bind(ModelRuntime);
-    const create = spyOn(ModelRuntime, 'create').mockImplementation(async options => {
-      const runtime = await realCreate({ ...options, refreshOnCreate: false });
-      const models = Reflect.get(runtime, 'models') as Pick<ModelRuntime, 'checkAuth'>;
-      const checkAuth = models.checkAuth.bind(models);
-      models.checkAuth = async (providerId, checkOptions) =>
-        providerId === 'openai'
-          ? Promise.reject(new Error('unrelated check failed'))
-          : checkAuth(providerId, checkOptions);
-      await runtime.refresh();
-      return runtime;
-    });
+    const create = failUnrelatedProviderCheck();
     try {
       expect(await check()).toMatchObject({
         state: 'unusable',
@@ -401,6 +406,21 @@ describe('Pi native credentials', () => {
       expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
       expect(runCount()).toBe(2);
       expect(pin).toHaveBeenCalledTimes(1);
+    });
+    test('a stored auth.json key is not pinned when another provider check throws', async () => {
+      localProvider(`!printf '${secret}-from-command'`);
+      writeFileSync(
+        join(root, 'auth.json'),
+        JSON.stringify({ local: { type: 'api_key', key: secret } })
+      );
+      const create = failUnrelatedProviderCheck();
+      try {
+        await runTurn();
+      } finally {
+        create.mockRestore();
+      }
+      expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
+      expect(pin).not.toHaveBeenCalled();
     });
     test('a stored auth.json key is not pinned, so Pi keeps resolving it', async () => {
       localProvider();

@@ -747,9 +747,15 @@ export class PiProvider implements IAgentProvider {
         // can expire before a long node ends. Only a catalogued model (or Anthropic) reaches
         // here; an extension provider's model is not_checked, so Pi keeps running its key
         // command on each request.
+        // A stored auth.json credential wins over models.json and may be an OAuth grant Pi
+        // refreshes in session, so it is never pinned. The store is read directly: Pi's
+        // auth status falls back to models.json when another provider's check throws.
         if (
           apiKey &&
-          modelRuntime.getProviderAuthStatus(parsed.provider).source === 'models_json_command'
+          modelRuntime.getProviderAuthStatus(parsed.provider).source === 'models_json_command' &&
+          !(await modelRuntime.listCredentials()).some(
+            credential => credential.providerId === parsed.provider
+          )
         ) {
           try {
             await modelRuntime.setRuntimeApiKey(parsed.provider, apiKey);
