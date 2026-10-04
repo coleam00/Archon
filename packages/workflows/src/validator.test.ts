@@ -1856,6 +1856,8 @@ describe('validateWorkflowResources — loose output schemas', () => {
   );
 
   test.each([
+    ['object-or-null', { ...looseSchema, type: ['object', 'null'] }, 1],
+    ['properties without type', { properties: looseSchema.properties }, 1],
     ['empty required', { ...looseSchema, required: [] }, 1],
     ['explicitly open', { ...looseSchema, additionalProperties: true }, 1],
     ['open record', { ...looseSchema, additionalProperties: { type: 'string' } }, 1],

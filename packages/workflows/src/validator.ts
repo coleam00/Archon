@@ -29,6 +29,7 @@ import {
   findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
+  isObjectSchemaNode,
   skillSearchRoots,
 } from '@archon/providers';
 
@@ -521,7 +522,8 @@ export async function validateWorkflowResources(
       !isWaitNode(node) &&
       compileError === null &&
       strictSchemaIssues.length === 0 &&
-      outputSchema?.type === 'object' &&
+      outputSchema !== undefined &&
+      isObjectSchemaNode(outputSchema) &&
       outputSchema.properties !== undefined &&
       !(Array.isArray(outputSchema.required) && outputSchema.required.length > 0) &&
       outputSchema.additionalProperties !== false
