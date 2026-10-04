@@ -301,8 +301,7 @@ describe('Pi native credentials', () => {
       errors: ['Connection error.'],
     });
     expect(runCount()).toBe(2);
-    // Windows refuses a connection to an unbound port only after its connect retries.
-  }, 15_000);
+  });
   test('checks only the selected provider command-backed key', async () => {
     const selected = join(root, 'selected');
     const unrelated = join(root, 'unrelated');
