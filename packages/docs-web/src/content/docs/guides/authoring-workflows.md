@@ -632,6 +632,15 @@ status=$emit.output.status
 
 Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex, the schema is sent as the turn's `outputSchema` and the agent's final JSON message is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
 
+`archon validate workflows` warns when an enforced object schema declares `properties`
+but has neither a non-empty `required` array nor `additionalProperties: false`. Such a
+schema can accept missing fields or a schema-echo response, leaving downstream field
+references empty and skipping gated work. Require the fields downstream nodes need;
+use `additionalProperties: false` to reject undeclared fields, and string `enum` values
+to constrain decisions. The warning leaves runtime semantics unchanged: intentionally
+optional fields and open-record maps remain supported. Codex strict-mode errors take
+precedence over this warning.
+
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
 >
 > **Codex strict-mode object schemas.** OpenAI's Structured Outputs validator rejects an object schema that omits `properties`, or where a key declared in `properties` is absent from `required`. Unlike `additionalProperties`, Archon does NOT normalize these cases for you: it cannot infer a bare object's intended shape, and filling `required` would silently change an optional field into a required one. Instead, the launch preflight and `archon validate workflows` report the node and exact schema path before any run starts. Declare every object's properties and include every property key in `required`. To express an *optional* value, give its type an absent-value form: a `["string","null"]` or `["object","null"]` union, or an enum with a sentinel like `"none"` — the field is then always "present" in the output, carrying the absent value when not applicable.

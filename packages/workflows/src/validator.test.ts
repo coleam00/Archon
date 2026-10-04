@@ -19,6 +19,9 @@ import {
   discoverAvailableCommands,
 } from './validator';
 import type { WorkflowDefinition, DagNode } from './schemas';
+import { dagNodeSchema } from './schemas';
+import { parseWorkflow } from './loader';
+import { BUNDLED_WORKFLOWS, BUNDLED_WORKFLOW_OWNERS } from './defaults/bundled-defaults';
 import { makeTestWorkflow } from './test-utils';
 import { formatPackagedResourceReference } from './packaged-workflow';
 
@@ -49,7 +52,11 @@ afterEach(async () => {
   else process.env.ARCHON_DOCKER = originalArchonDocker;
 });
 
-function makeWorkflow(name: string, nodes: DagNode[], provider?: string): WorkflowDefinition {
+function makeWorkflow(
+  name: string,
+  nodes: WorkflowDefinition['nodes'],
+  provider?: string
+): WorkflowDefinition {
   return {
     name,
     description: 'test workflow',
@@ -1819,5 +1826,104 @@ describe('validateWorkflowResources — strict-schema compatibility', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
     const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
     expect(errs).toHaveLength(0);
+  });
+});
+
+describe('validateWorkflowResources — loose output schemas', () => {
+  const looseSchema = {
+    type: 'object',
+    properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+  };
+
+  test.each(['claude', 'pi', undefined])(
+    'warns once with provider %s and remains valid',
+    async provider => {
+      const workflow = makeWorkflow('loose', [
+        dagNodeSchema.parse({ id: 'classify', prompt: 'decide', output_format: looseSchema }),
+      ]);
+      const issues = await validateWorkflowResources(workflow, tmpDir, {}, provider);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({
+        level: 'warning',
+        nodeId: 'classify',
+        field: 'output_format',
+      });
+      expect(issues[0].message).toContain("Node 'classify'");
+      expect(issues[0].message).toContain('required');
+      expect(issues[0].message).toContain('additionalProperties: false');
+      expect(makeWorkflowResult(workflow.name, issues).valid).toBe(true);
+    }
+  );
+
+  test.each([
+    ['empty required', { ...looseSchema, required: [] }, 1],
+    ['explicitly open', { ...looseSchema, additionalProperties: true }, 1],
+    ['open record', { ...looseSchema, additionalProperties: { type: 'string' } }, 1],
+    ['tight', { ...looseSchema, required: ['verdict'], additionalProperties: false }, 0],
+    ['required only', { ...looseSchema, required: ['verdict'] }, 0],
+    ['additionalProperties only', { ...looseSchema, additionalProperties: false }, 0],
+    ['non-object', { type: 'string' }, 0],
+    ['bare object', { type: 'object' }, 0],
+  ])('%s schema warning count', async (_name, schema, count) => {
+    const workflow = makeWorkflow('test', [
+      dagNodeSchema.parse({ id: 'classify', prompt: 'decide', output_format: schema }),
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+    expect(issues.filter(i => i.field === 'output_format')).toHaveLength(count);
+  });
+
+  test('Codex strict-schema error suppresses the warning', async () => {
+    const workflow = makeWorkflow('test', [
+      dagNodeSchema.parse({ id: 'classify', prompt: 'decide', output_format: looseSchema }),
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    expect(issues.filter(i => i.field === 'output_format')).toEqual([
+      expect.objectContaining({ level: 'error', nodeId: 'classify' }),
+    ]);
+  });
+
+  test('checks enforced exec and loop schemas and body nodes, skipping inert kinds and wait', async () => {
+    const nodes = [
+      { id: 'bash', bash: 'echo {}' },
+      { id: 'script', script: 'console.log("{}")', runtime: 'bun' },
+      { id: 'loop', loop: { prompt: 'decide', until_bash: 'exit 0', max_iterations: 1 } },
+      { id: 'gate', approval: { message: 'approve' } },
+      { id: 'halt', cancel: 'stop' },
+      {
+        id: 'group',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'decide', output_format: looseSchema }],
+        },
+      },
+    ].map(node => dagNodeSchema.parse({ ...node, output_format: looseSchema }));
+    nodes.push(dagNodeSchema.parse({ id: 'wait', wait: { duration_ms: 1 } }));
+    const issues = await validateWorkflowResources(
+      makeWorkflow('test', nodes),
+      tmpDir,
+      {},
+      'claude'
+    );
+    expect(issues.filter(i => i.field === 'output_format').map(i => i.nodeId)).toEqual([
+      'bash',
+      'script',
+      'loop',
+      'body',
+    ]);
+  });
+
+  test('bundled SDLC workflows have no loose output schema warnings', async () => {
+    const names = Object.keys(BUNDLED_WORKFLOWS).filter(
+      name => BUNDLED_WORKFLOW_OWNERS[name]?.pack === 'sdlc'
+    );
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      const { workflow, error } = parseWorkflow(BUNDLED_WORKFLOWS[name], name);
+      expect(error).toBeNull();
+      if (!workflow) throw new Error(`Could not parse bundled workflow ${name}`);
+      const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+      expect(issues.filter(i => i.field === 'output_format' && i.level === 'warning')).toEqual([]);
+    }
   });
 });
