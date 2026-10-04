@@ -4,7 +4,7 @@ import {
   isPluginPathSegment,
   pluginManifestSchema,
   type PluginManifest,
-} from '../../../plugin-manifest/src/index';
+} from '@archon/plugin-manifest';
 import denylist from '../../plugin-denylist.json';
 
 const repositorySchema = z.object({

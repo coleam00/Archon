@@ -11,6 +11,7 @@
     "test": "bun run ../../scripts/package-tests.ts"
   },
   "dependencies": {
+    "@archon/plugin-manifest": "workspace:*",
     "astro": "^6.1.0",
     "@astrojs/starlight": "^0.38.0",
     "sharp": "^0.35.0",
