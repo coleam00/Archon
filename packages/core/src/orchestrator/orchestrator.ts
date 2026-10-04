@@ -381,7 +381,7 @@ async function dispatchBackgroundWorkflowOwned(
   const workerConv = await db.getOrCreateConversation(
     ctx.platform.getPlatformType(),
     workerPlatformId,
-    undefined,
+    ctx.codebaseId,
     undefined,
     ctx.userId
   );

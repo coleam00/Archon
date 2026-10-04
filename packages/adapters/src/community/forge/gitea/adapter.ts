@@ -836,10 +836,6 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // 7. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number, isPR);
 
-    // 8. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('gitea', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
-
     // 9. Get/create codebase (checks for existing first!)
     const {
       codebase,
@@ -847,8 +843,16 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
 
-    // 9b. Link conversation to codebase
-    if (isNewConversation) {
+    // 10. Get default branch from repository info
+    const defaultBranch = event.repository.default_branch;
+
+    // 11. Ensure repo ready (clone if needed, sync if new conversation)
+    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+
+    const existingConv = await db.getOrCreateConversation('gitea', conversationId, codebase.id);
+    const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+    if (needsProjectContext) {
       try {
         await db.updateConversation(existingConv.id, {
           codebase_id: codebase.id,
@@ -866,12 +870,6 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         throw updateError;
       }
     }
-
-    // 10. Get default branch from repository info
-    const defaultBranch = event.repository.default_branch;
-
-    // 11. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
     // 12. Auto-load commands if new codebase
     if (isNewCodebase) {

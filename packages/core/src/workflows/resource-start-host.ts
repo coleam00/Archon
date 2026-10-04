@@ -191,7 +191,11 @@ async function prepareBinding(
     });
     owner.hold(source);
     const conversationId = `trigger-${randomUUID()}`;
-    const conversation = await conversationDb.getOrCreateConversation('cli', conversationId);
+    const conversation = await conversationDb.getOrCreateConversation(
+      'cli',
+      conversationId,
+      codebase.id
+    );
     const origin: ResourceStartRunMetadata = {
       receiptId: identity.receiptId,
       bindingId: identity.bindingId,

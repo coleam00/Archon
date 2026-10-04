@@ -2361,7 +2361,8 @@ async function runWorkflowWithOwnedSource(
       try {
         detachedConversation = await conversationDb.getOrCreateConversation(
           'cli',
-          childConversationId
+          childConversationId,
+          detachCodebase?.id
         );
       } catch (error) {
         const err = error as Error;
@@ -2541,17 +2542,6 @@ async function runWorkflowWithOwnedSource(
   // The caller's thread, the continued run's own thread, or a new one — in that order.
   const conversationId = await resolveRunConversationId(options, continuationRun);
 
-  // Get or create conversation in database
-  let conversation;
-  try {
-    conversation = await conversationDb.getOrCreateConversation('cli', conversationId);
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(
-      `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
-    );
-  }
-
   const {
     codebase,
     lookupError: codebaseLookupError,
@@ -2571,6 +2561,21 @@ async function runWorkflowWithOwnedSource(
   // project.
   if (options.folder && !codebase && codebaseRegistrationError) {
     throw buildFolderRegistrationFailureError(codebaseRegistrationError);
+  }
+
+  // Get or create conversation in database
+  let conversation;
+  try {
+    conversation = await conversationDb.getOrCreateConversation(
+      'cli',
+      conversationId,
+      codebase?.id
+    );
+  } catch (error) {
+    const err = error as Error;
+    throw new Error(
+      `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
+    );
   }
 
   // Handle isolation (worktree creation)

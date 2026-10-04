@@ -10202,7 +10202,11 @@ describe('workflowApproveCommand', () => {
 
     // Verify the original platform conversation ID was passed through
     expect(conversationsDb.getConversationById).toHaveBeenCalledWith('db-uuid-original');
-    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith('cli', 'cli-original-123');
+    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith(
+      'cli',
+      'cli-original-123',
+      undefined
+    );
   });
 
   it('should discover workflows from codebase.default_cwd, not working_path', async () => {
@@ -11023,7 +11027,11 @@ describe('workflowRejectCommand', () => {
 
     // Verify the original platform conversation ID was passed through
     expect(conversationsDb.getConversationById).toHaveBeenCalledWith('db-uuid-reject');
-    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith('cli', 'cli-reject-456');
+    expect(conversationsDb.getOrCreateConversation).toHaveBeenCalledWith(
+      'cli',
+      'cli-reject-456',
+      undefined
+    );
   });
 
   it('cancels when max attempts reached', async () => {
@@ -13978,6 +13986,8 @@ const codebases = await import('@archon/core/db/codebases');
 const core = await import('@archon/core');
 const executor = await import('@archon/workflows/executor');
 
+const runConversationDb = await import('@archon/core/db/conversations');
+
 describe('run codebase resolution', () => {
   const childRoot = '/parent/projects/child';
   const child = { id: 'cb-child', name: 'owner/child', default_cwd: childRoot, kind: 'repo' };
@@ -14007,6 +14017,7 @@ describe('run codebase resolution', () => {
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     resetLookups();
+    (runConversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockClear();
     mockCreateWorkflowRun.mockClear();
     (executor.executeWorkflow as ReturnType<typeof mock>).mockClear();
     mockDiscoverWorkflowsWithConfig.mockReset().mockResolvedValue({
@@ -14035,6 +14046,11 @@ describe('run codebase resolution', () => {
   });
 
   function expectChildExecution(): void {
+    expect(runConversationDb.getOrCreateConversation).toHaveBeenCalledWith(
+      'cli',
+      expect.any(String),
+      child.id
+    );
     expect(
       (executor.executeWorkflow as ReturnType<typeof mock>).mock.calls.at(-1)?.[7]
     ).toMatchObject({ codebaseId: child.id });
@@ -14066,6 +14082,11 @@ describe('run codebase resolution', () => {
         noWorktree: true,
       });
       await finishStartupWindow(command, spawnSpy);
+      expect(runConversationDb.getOrCreateConversation).toHaveBeenCalledWith(
+        'cli',
+        expect.any(String),
+        child.id
+      );
       expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
         expect.objectContaining({ codebase_id: child.id })
       );

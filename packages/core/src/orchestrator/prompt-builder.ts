@@ -3,7 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
-import { loadConfig } from '../config/config-loader';
+import { resolveProjectAssistant } from '../config/project-assistant';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import {
@@ -28,7 +28,7 @@ export async function formatProjectSection(codebase: Codebase): Promise<string> 
     section += `- Repository: ${codebase.repository_url}\n`;
   }
   section += `- Directory: ${codebase.default_cwd}\n`;
-  section += `- AI Provider: ${codebase.ai_assistant_type ?? (await loadConfig(codebase.default_cwd)).assistant}\n`;
+  section += `- AI Provider: ${await resolveProjectAssistant(codebase)}\n`;
   return section;
 }
 

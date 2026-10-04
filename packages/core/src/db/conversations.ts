@@ -6,6 +6,7 @@ import type { Codebase, Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
+import { resolveProjectAssistant } from '../config/project-assistant';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -98,8 +99,6 @@ export async function getOrCreateConversation(
   // Use provided codebase or inherited codebase
   const finalCodebaseId = codebaseId ?? inheritedCodebaseId;
 
-  let projectCwd: string | undefined;
-
   // An explicitly scoped project overrides the parent conversation provider.
   if (codebaseId) {
     const codebase = await pool.query<Pick<Codebase, 'ai_assistant_type' | 'default_cwd'>>(
@@ -107,8 +106,7 @@ export async function getOrCreateConversation(
       [codebaseId]
     );
     if (codebase.rows[0]) {
-      assistantType = codebase.rows[0].ai_assistant_type ?? undefined;
-      projectCwd = codebase.rows[0].default_cwd;
+      assistantType = await resolveProjectAssistant(codebase.rows[0]);
     }
   }
 
@@ -116,7 +114,7 @@ export async function getOrCreateConversation(
   // the project choice or configured default. Configuration errors must surface
   // rather than recording a different provider that could spend on later turns.
   if (assistantType === undefined) {
-    assistantType = (await loadConfig(projectCwd)).assistant;
+    assistantType = (await loadConfig()).assistant;
   }
 
   const created = await pool.query<Conversation>(

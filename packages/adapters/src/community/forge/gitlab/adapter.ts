@@ -697,8 +697,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     try {
       // 8. Conversation + codebase setup
       const conversationId = this.buildConversationId(projectPath, iid, isMR);
-      const existingConv = await db.getOrCreateConversation('gitlab', conversationId);
-      const isNewConversation = !existingConv.codebase_id;
 
       const {
         codebase,
@@ -706,7 +704,16 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         isNew: isNewCodebase,
       } = await this.getOrCreateCodebaseForRepo(projectPath);
 
-      if (isNewConversation) {
+      // 9. Get default branch
+      const defaultBranch = event.project.default_branch;
+
+      // 10. Ensure repo ready
+      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
+
+      const existingConv = await db.getOrCreateConversation('gitlab', conversationId, codebase.id);
+      const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+      if (needsProjectContext) {
         try {
           await db.updateConversation(existingConv.id, {
             codebase_id: codebase.id,
@@ -723,12 +730,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
           throw updateError;
         }
       }
-
-      // 9. Get default branch
-      const defaultBranch = event.project.default_branch;
-
-      // 10. Ensure repo ready
-      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
 
       // 11. Auto-load commands
       if (isNewCodebase) {

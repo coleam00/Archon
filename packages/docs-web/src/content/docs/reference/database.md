@@ -75,7 +75,7 @@ The database has 18 tables, all prefixed with `remote_agent_`:
 
 1. **`remote_agent_codebases`** - Repository metadata
    - Commands stored as JSONB: `{command_name: {path, description}}`
-   - AI assistant type per codebase
+   - Optional explicit AI assistant choice; `NULL` follows project configuration for new conversations
    - Default working directory
    - `kind` (`'repo'` | `'folder'`, default `'repo'`) discriminates git-repo projects from non-git folder projects (which run in place, no worktree)
    - Nullable detected default branch, used as branch context for workspace sync when available
