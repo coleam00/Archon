@@ -495,12 +495,11 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
         ...new Set(rows.map(row => normalizeCredentialVendor(row.provider))),
       ].filter(vendor => usableVendors.includes(vendor));
     } catch (err) {
-      // Best-effort, like the Codex binary check: the database check reports a broken
-      // database, and the native login check still runs as if nothing were connected.
-      getLog().debug(
-        { error: err instanceof Error ? err.name : typeof err },
-        'doctor.assistant_login_credential_lookup_failed'
-      );
+      // Best-effort, as in the Codex credential lookup: a lookup that fails (no database,
+      // or one not yet provisioned) must not hide the native login check, which runs as if
+      // nothing were connected. The lookup reads only credential metadata, never key
+      // material, so its error is safe to log.
+      getLog().debug({ err }, 'doctor.assistant_login_credential_lookup_failed');
     }
   }
   return {
