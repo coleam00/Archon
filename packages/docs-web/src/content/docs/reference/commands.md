@@ -21,7 +21,7 @@ These commands are handled deterministically by the orchestrator — they always
 
 | Command | Description |
 |---------|-------------|
-| `/register-project <path>` | Register a local directory as a project |
+| `/register-project <name> <path>` | Register a local directory as a project |
 | `/update-project <name> <path>` | Update a project's directory path |
 | `/remove-project <name>` | Remove a project registration |
 | `/setproject <name>` | Bind this conversation to a registered project. Clears any working-directory/worktree override and starts a fresh AI session on the next message (chat history stays visible) |

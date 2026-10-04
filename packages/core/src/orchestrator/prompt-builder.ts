@@ -12,6 +12,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { getArchonWorkspacesPath } from '@archon/paths';
 
 type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
   readonly nodes: readonly unknown[];
@@ -246,6 +247,7 @@ export function buildRoutingRulesWithProject(projectName?: string): string {
   const rule4 = projectName
     ? `4. If ambiguous which project → use **${projectName}** (the active project)`
     : '4. If ambiguous which project → ask the user';
+  const workspaces = getArchonWorkspacesPath();
 
   return `## Routing Rules
 
@@ -285,13 +287,13 @@ Response: "Adding dark mode would involve... [answer the question]. If you'd lik
 ## Project Setup
 
 When a user asks to add a new project:
-1. Clone the repository into ~/.archon/workspaces/:
-   git clone https://github.com/{owner}/{repo} ~/.archon/workspaces/{owner}/{repo}/source
+1. Clone the repository into ${workspaces}/:
+   git clone https://github.com/{owner}/{repo} ${workspaces}/{owner}/{repo}/source
 2. Register it by emitting this command on its own line:
    /register-project {project-name} {path-to-source}
 
 Example:
-   /register-project my-new-app /home/user/.archon/workspaces/user/my-new-app/source
+   /register-project my-new-app ${workspaces}/user/my-new-app/source
 
 To update a project's path:
    /update-project {project-name} {new-path}
@@ -299,7 +301,7 @@ To update a project's path:
 To remove a registered project:
    /remove-project {project-name}
 
-IMPORTANT: Always clone into ~/.archon/workspaces/{owner}/{repo}/source unless the user specifies a different location.`;
+IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user specifies a different location.`;
 }
 
 /**
@@ -313,7 +315,7 @@ export function buildOrchestratorPrompt(
   let prompt = `# Archon Orchestrator
 
 You are Archon, an intelligent coding assistant that manages multiple projects.
-Your working directory is ~/.archon/workspaces/ where all projects live.
+Your working directory is ${getArchonWorkspacesPath()}/ where all projects live.
 You can answer questions directly or invoke workflows for structured development tasks.
 
 ## Registered Projects
@@ -353,7 +355,7 @@ export function buildProjectScopedPrompt(
   let prompt = `# Archon Orchestrator
 
 You are Archon, an intelligent coding assistant that manages multiple projects.
-Your working directory is ~/.archon/workspaces/ where all projects live.
+Your working directory is ${getArchonWorkspacesPath()}/ where all projects live.
 You can answer questions directly or invoke workflows for structured development tasks.
 
 This conversation is scoped to **${scopedCodebase.name}**. Use this project for all workflow invocations unless the user explicitly mentions a different project.
@@ -397,7 +399,7 @@ export function buildRunManagementSection(): string {
 
 You can inspect and control this project's workflow runs directly via the \`archon\` CLI (bash) — you do NOT need to invoke a workflow for run management. Add \`--json\` to any command for a single clean, machine-readable line.
 
-Run these from within the project's git repo (any subdirectory works — they resolve to the repo root, which also scopes \`runs\` and \`status\` to this project). In an unregistered git checkout, \`workflow status\` falls back to install-wide active runs and reports \`scopeFallback: true\` in JSON. A non-repo path such as \`~/.archon/workspaces/\` still fails with "Not in a git repository".
+Run these from within the project's git repo (any subdirectory works — they resolve to the repo root, which also scopes \`runs\` and \`status\` to this project). In an unregistered git checkout, \`workflow status\` falls back to install-wide active runs and reports \`scopeFallback: true\` in JSON. A non-repo path such as \`${getArchonWorkspacesPath()}/\` still fails with "Not in a git repository".
 
 - \`archon workflow runs [--json]\` — recent runs of ALL statuses for this project
 - \`archon workflow get <run-id> [--json]\` — one run's status/error (add \`--verbose\` for per-node detail)

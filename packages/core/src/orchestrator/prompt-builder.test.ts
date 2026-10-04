@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, afterEach } from 'bun:test';
 import {
   buildRoutingRulesWithProject,
   formatWorkflowContextSection,
@@ -6,6 +6,7 @@ import {
   buildRunManagementSection,
   formatPausedGateSection,
 } from './prompt-builder';
+import { join } from 'node:path';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
@@ -182,6 +183,81 @@ describe('buildOrchestratorSystemAppend', () => {
     const unscoped = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
     expect(scoped).not.toContain('## Managing Workflow Runs');
     expect(unscoped).not.toContain('## Managing Workflow Runs');
+  });
+});
+
+describe('workspaces root in the prompt', () => {
+  const envKeys = ['ARCHON_HOME', 'ARCHON_DOCKER', 'WORKSPACE_PATH'] as const;
+  const savedEnv = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+
+  afterEach(() => {
+    for (const key of envKeys) {
+      const value = savedEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  const codebase: Codebase = {
+    id: 'cb-1',
+    name: 'my-project',
+    default_cwd: '/path/to/project',
+    ai_assistant_type: 'claude',
+    repository_url: null,
+    default_branch: 'main',
+    kind: 'repo',
+    commands: {},
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+  const conversation = (codebaseId: string | null): Conversation => ({
+    id: 'conv-1',
+    platform_type: 'web',
+    platform_conversation_id: 'web-1',
+    codebase_id: codebaseId,
+    cwd: null,
+    isolation_env_id: null,
+    ai_assistant_type: 'pi',
+    title: null,
+    hidden: false,
+    deleted_at: null,
+    user_id: null,
+    last_activity_at: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  });
+
+  const promptsFor = (): string[] => [
+    buildOrchestratorSystemAppend(conversation(null), [codebase], []),
+    buildOrchestratorSystemAppend(conversation('cb-1'), [codebase], []),
+    buildRunManagementSection(),
+  ];
+
+  test.each([
+    {
+      install: 'custom ARCHON_HOME',
+      env: { ARCHON_HOME: join('/srv', 'archon-data') },
+      root: join('/srv', 'archon-data', 'workspaces'),
+    },
+    { install: 'Docker', env: { ARCHON_DOCKER: 'true' }, root: '/.archon/workspaces' },
+  ])('$install: every prompt names the runtime root', ({ env, root }) => {
+    for (const key of envKeys) delete process.env[key];
+    Object.assign(process.env, env);
+
+    const [unscoped, scoped, runManagement] = promptsFor();
+    for (const prompt of [unscoped, scoped, runManagement]) {
+      expect(prompt).toContain(`${root}/`);
+      expect(prompt).not.toContain('~/.archon/workspaces');
+      expect(prompt).not.toContain('/home/user/.archon');
+    }
+    for (const prompt of [unscoped, scoped]) {
+      expect(prompt).toContain(`Your working directory is ${root}/`);
+      expect(prompt).toContain(
+        `git clone https://github.com/{owner}/{repo} ${root}/{owner}/{repo}/source`
+      );
+      expect(prompt).toContain(`/register-project my-new-app ${root}/user/my-new-app/source`);
+      expect(prompt).toContain('/register-project {project-name} {path-to-source}');
+    }
   });
 });
 
