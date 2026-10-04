@@ -29,11 +29,17 @@ test('topic search includes tagged forks and lists root and nested plugins at a 
     'test-author/archived-forge',
     'test-author/test-pack',
     'test-author/test-pack/packs/second',
+    'test-author/untagged-pack',
   ]);
   expect(plugins[0]).toMatchObject({
     archived: true,
     latestTag: 'v1.0.0',
     manifest: { kind: 'forge' },
+  });
+  expect(plugins.find(plugin => plugin.id === 'test-author/untagged-pack')).toMatchObject({
+    latestTag: null,
+    manifest: { kind: 'workflow-pack' },
+    installCommand: 'archon plugin install test-author/untagged-pack',
   });
   expect(plugins[2]).toMatchObject({
     commit,
@@ -55,7 +61,10 @@ test('denylist excludes repositories before reading their manifests, ignoring ca
     ...options,
     deniedRepositories: ['TEST-AUTHOR/TEST-PACK'],
   });
-  expect(plugins.map(plugin => plugin.id)).toEqual(['test-author/archived-forge']);
+  expect(plugins.map(plugin => plugin.id)).toEqual([
+    'test-author/archived-forge',
+    'test-author/untagged-pack',
+  ]);
   expect(requests.some(url => url.includes('/repos/test-author/test-pack/'))).toBe(false);
   expect(messages).toContain('[plugins] Skipping test-author/test-pack: denylisted repository');
 });
@@ -74,7 +83,7 @@ test('malformed JSON is skipped with a reason', async () => {
     },
   });
   expect(plugins).toEqual([]);
-  expect(messages.length).toBe(4);
+  expect(messages.length).toBe(5);
   expect(messages.every(message => message.includes('invalid manifest'))).toBe(true);
 });
 
@@ -148,7 +157,7 @@ test('symlink manifests and paths unsupported by the installer are skipped', asy
     },
   });
   expect(plugins).toEqual([]);
-  expect(messages.length).toBe(6);
+  expect(messages.length).toBe(8);
   expect(
     messages.every(message => message.includes('unsupported install path or non-regular manifest'))
   ).toBe(true);

@@ -7,12 +7,13 @@ for (const id of [
   'test-author/test-pack',
   'test-author/test-pack/packs/second',
   'test-author/archived-forge',
+  'test-author/untagged-pack',
 ]) {
   const page = readFileSync(new URL(`${id}/index.html`, root), 'utf8');
   for (const html of [index, page]) {
     assert.ok(html.includes(`archon plugin install ${id}`));
     assert.ok(html.includes(commit));
-    assert.ok(html.includes('v1.0.0'));
+    assert.ok(html.includes(id.endsWith('/untagged-pack') ? 'No tags published' : 'v1.0.0'));
     assert.ok(html.includes('Read on GitHub'));
   }
 }
