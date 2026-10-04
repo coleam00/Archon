@@ -175,7 +175,9 @@ mock.module('@archon/core', () => ({
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   generateAndSetTitle: mockGenerateAndSetTitle,
   resolveTitleRequest: mockResolveTitleRequest,
-  createWorkflowDeps: mock(() => ({ store: {} })),
+  createWorkflowDeps: mock(() => ({
+    store: { getWorkflowGateState: async (id: string) => ({ ownerId: id }) },
+  })),
   createChildWorktreeResolver: mockCreateChildWorktreeResolver,
   createLogger: () => ({
     fatal: mock(() => undefined),
@@ -3081,7 +3083,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           data: { decision: 'rejected', reason: 'needs work' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
@@ -3175,7 +3178,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           data: { decision: 'rejected', reason: 'still bad' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
@@ -3679,7 +3683,8 @@ describe('approve/reject auto-resume', () => {
           data: { decision: 'rejected', reason: 'no' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
   });
 });

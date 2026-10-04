@@ -3572,7 +3572,8 @@ describe('CommandHandler', () => {
               data: { decision: 'rejected', reason: 'bad' },
             },
           ],
-          { step_name: 'review', reason: 'approval_rejected' }
+          { step_name: 'review', reason: 'approval_rejected' },
+          undefined
         );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
@@ -3614,7 +3615,8 @@ describe('CommandHandler', () => {
               data: { decision: 'rejected', reason: 'reason' },
             },
           ],
-          { step_name: 'gate', reason: 'approval_rejected' }
+          { step_name: 'gate', reason: 'approval_rejected' },
+          undefined
         );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });

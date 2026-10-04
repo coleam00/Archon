@@ -1,3 +1,4 @@
+import { LEGACY_VENDOR_ALIASES } from '@archon/providers';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { DagResumeSnapshot, IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
@@ -25,12 +26,6 @@ const mockPauseWorkflowRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockFailPausedAttentionWait = mock(() => Promise.resolve({ failed: true }));
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
-// Backs createWorkflowStore()'s rewriteApprovalContext (#2707 step 3 pause
-// escalation) — per AGENTS.md's mock.module rule, an export the factory omits
-// keeps its REAL implementation, so this must be listed even though no test
-// here calls rewriteApprovalContext yet.
-const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
-
 mock.module('../db/workflows', () => ({
   createWorkflowRun: mockCreateWorkflowRun,
   getWorkflowRun: mockGetWorkflowRun,
@@ -51,9 +46,18 @@ mock.module('../db/workflows', () => ({
   pauseWorkflowRunForWait: mockPauseWorkflowRunForWait,
   failPausedAttentionWait: mockFailPausedAttentionWait,
   clearWorkflowWaitContext: mockClearWorkflowWaitContext,
-  resolveApprovalGate: mockResolveApprovalGate,
   claimWriteback: mock(() => Promise.resolve({ claimed: true })),
   releaseWritebackClaim: mock(() => Promise.resolve()),
+}));
+
+mock.module('../db/workflow-gate-admission', () => ({
+  getWorkflowGateState: mock(async (id: string) => ({ ownerId: id })),
+  settleWorkflowGates: mock(async (id: string) => id),
+  claimWorkflowGatePresentation: mock(async () => null),
+  confirmWorkflowGatePresentation: mock(async () => ({ active: true })),
+  failWorkflowGatePresentation: mock(async () => ({ failed: true })),
+  consumeWorkflowGateContinuation: mock(async () => undefined),
+  reconcileWorkflowGateChild: mock(async () => undefined),
 }));
 
 const mockCreateWorkflowEvent = mock(() => Promise.resolve());
@@ -82,6 +86,7 @@ mock.module('../db/codebases', () => ({
 }));
 
 mock.module('@archon/providers', () => ({
+  LEGACY_VENDOR_ALIASES,
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
   getRegistration: mock(
@@ -186,7 +191,13 @@ describe('createWorkflowStore', () => {
       'pauseWorkflowRunForWait',
       'failPausedAttentionWait',
       'clearWorkflowWaitContext',
-      'rewriteApprovalContext',
+      'reconcileWorkflowGateChild',
+      'getWorkflowGateState',
+      'settleWorkflowGates',
+      'claimWorkflowGatePresentation',
+      'confirmWorkflowGatePresentation',
+      'failWorkflowGatePresentation',
+      'consumeWorkflowGateContinuation',
       'claimWriteback',
       'releaseWritebackClaim',
       'cancelWorkflowRun',

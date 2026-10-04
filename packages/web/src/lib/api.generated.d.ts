@@ -4541,13 +4541,16 @@ export interface components {
     };
     ApproveWorkflowRunBody: {
       comment?: string;
+      gateId?: string;
     };
     RejectWorkflowRunBody: {
       reason?: string;
+      gateId?: string;
     };
     RespondWorkflowRunBody: {
       decision: string;
       text?: string;
+      gateId?: string;
     };
     ResetWorkflowNodeSessionsResponse: {
       success: boolean;

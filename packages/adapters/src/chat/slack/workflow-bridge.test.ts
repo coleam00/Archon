@@ -184,13 +184,13 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
     reactionsRemoved,
     triggerMap,
     actions: () => registeredActions,
-    dispatchAction: async (actionId: string, body: Record<string, unknown>) => {
+    dispatchAction: async (actionId: string, body: Record<string, unknown>, value?: string) => {
       for (const { pattern, handler } of registeredActions) {
         if (pattern.test(actionId)) {
           await handler({
             ack: async () => undefined,
             body,
-            action: { action_id: actionId },
+            action: { action_id: actionId, ...(value === undefined ? {} : { value }) },
           });
         }
       }
@@ -576,13 +576,17 @@ describe('SlackWorkflowBridge', () => {
 
     new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
 
-    await dispatchAction('approve:r1:review', {
-      user: { id: 'U123' },
-      channel: { id: 'C1' },
-      message: { ts: '2.000' },
-    });
+    await dispatchAction(
+      'approve:r1:review',
+      {
+        user: { id: 'U123' },
+        channel: { id: 'C1' },
+        message: { ts: '2.000' },
+      },
+      'displayed-gate'
+    );
 
-    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1');
+    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1', undefined, 'displayed-gate');
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
     const resolution = updated.find(message => message.ts === '2.000');
     const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;

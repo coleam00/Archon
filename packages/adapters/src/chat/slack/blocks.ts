@@ -104,7 +104,12 @@ function formatTokenCount(n: number): string {
  * Block Kit message for an approval gate. Includes Approve / Reject buttons
  * whose action_ids encode the run + node so handlers stay stateless.
  */
-export function buildApprovalBlocks(input: { runId: string; nodeId: string; message: string }): {
+export function buildApprovalBlocks(input: {
+  runId: string;
+  nodeId: string;
+  message: string;
+  gateId?: string;
+}): {
   blocks: KnownBlock[];
   fallbackText: string;
 } {
@@ -125,12 +130,14 @@ export function buildApprovalBlocks(input: { runId: string; nodeId: string; mess
           style: 'primary',
           text: { type: 'plain_text', text: 'Approve', emoji: true },
           action_id: `approve:${input.runId}:${input.nodeId}`,
+          ...(input.gateId ? { value: input.gateId } : {}),
         },
         {
           type: 'button',
           style: 'danger',
           text: { type: 'plain_text', text: 'Reject', emoji: true },
           action_id: `reject:${input.runId}:${input.nodeId}`,
+          ...(input.gateId ? { value: input.gateId } : {}),
         },
       ],
     },

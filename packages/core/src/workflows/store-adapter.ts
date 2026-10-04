@@ -6,6 +6,7 @@ import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
+import * as gateDb from '../db/workflow-gate-admission';
 import * as workflowDb from '../db/workflows';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
@@ -80,11 +81,17 @@ export function createWorkflowStore(): IWorkflowStore {
     completeWorkflowRun: workflowDb.completeWorkflowRun,
     failWorkflowRun: workflowDb.failWorkflowRun,
     pauseWorkflowRun: workflowDb.pauseWorkflowRun,
+    reconcileWorkflowGateChild: gateDb.reconcileWorkflowGateChild,
+    getWorkflowGateState: gateDb.getWorkflowGateState,
+    settleWorkflowGates: gateDb.settleWorkflowGates,
+    claimWorkflowGatePresentation: gateDb.claimWorkflowGatePresentation,
+    confirmWorkflowGatePresentation: gateDb.confirmWorkflowGatePresentation,
+    failWorkflowGatePresentation: gateDb.failWorkflowGatePresentation,
+    consumeWorkflowGateContinuation: gateDb.consumeWorkflowGateContinuation,
+
     pauseWorkflowRunForWait: workflowDb.pauseWorkflowRunForWait,
     failPausedAttentionWait: workflowDb.failPausedAttentionWait,
     clearWorkflowWaitContext: workflowDb.clearWorkflowWaitContext,
-    rewriteApprovalContext: (id, approvalContext) =>
-      workflowDb.resolveApprovalGate(id, { approval: approvalContext }, []),
     claimWriteback: workflowDb.claimWriteback,
     releaseWritebackClaim: workflowDb.releaseWritebackClaim,
     cancelWorkflowRun: workflowDb.cancelWorkflowRun,

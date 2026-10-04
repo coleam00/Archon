@@ -22,6 +22,12 @@ import {
 } from '@archon/workflows/schemas/terminal-record';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import type { TokenUsage } from '@archon/providers/types';
+import {
+  settleWorkflowGates,
+  claimWorkflowGatePresentation,
+  confirmWorkflowGatePresentation,
+} from './workflow-gate-admission';
+import { readGateQueue } from '@archon/workflows/schemas/workflow-run';
 import { isWorkflowWaitContext, readRunStopReason } from '@archon/workflows/schemas/workflow-run';
 import type { GateResolutionEvent } from './workflows';
 
@@ -68,7 +74,7 @@ const {
   recoverCancelledFanOutRun,
   cancelWorkflowRun,
   cancelFanOutRun,
-  pauseWorkflowRun,
+  pauseWorkflowRun: registerGate,
   pauseWorkflowRunForWait,
   failPausedAttentionWait,
   clearWorkflowWaitContext,
@@ -458,6 +464,20 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
 // can catch this; the mock suite runs the Postgres dialect, where `||` already
 // replaced the object.
 // ---------------------------------------------------------------------------
+async function pauseWorkflowRun(...args: Parameters<typeof registerGate>) {
+  const result = await registerGate(...args);
+  await settleWorkflowGates(args[0]);
+  const gate = await claimWorkflowGatePresentation(args[0]);
+  if (gate) await confirmWorkflowGatePresentation(args[0], gate.id);
+  return result;
+}
+
+async function resumeGateRun(id: string) {
+  const row = await getWorkflowRun(id);
+  if (row && readGateQueue(row.metadata)?.active) await approveWorkflow(id);
+  return resumeWorkflowRun(id);
+}
+
 describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () => {
   /** Pause `runId` on a gate carrying `signaledTokens` and read the stored object back. */
   async function pauseWithTokens(
@@ -481,7 +501,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
     await seedPausedRun('usage-cache', 'wf-usage-cache', { nodeId: 'seed', message: 'seed' });
 
     // Gate 1: a provider that reports cache telemetry.
-    await resumeWorkflowRun('usage-cache');
+    await resumeGateRun('usage-cache');
     const first = await pauseWithTokens('usage-cache', 'gate-1', {
       input: 40,
       output: 4,
@@ -491,7 +511,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
     expect(first).toEqual({ input: 40, output: 4, cacheRead: 20, cacheWrite: 3 });
 
     // Gate 2: a provider with no cache telemetry at all.
-    await resumeWorkflowRun('usage-cache');
+    await resumeGateRun('usage-cache');
     const second = await pauseWithTokens('usage-cache', 'gate-2', { input: 90, output: 9 });
 
     // Exactly the second gate's usage — no fabricated cache counts.
@@ -502,7 +522,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
     await seedPausedRun('usage-partial', 'wf-usage-partial', { nodeId: 'seed', message: 'seed' });
 
     // Gate 1 paused on a FLOOR (#2671): its cache totals are known-incomplete.
-    await resumeWorkflowRun('usage-partial');
+    await resumeGateRun('usage-partial');
     await pauseWithTokens('usage-partial', 'gate-1', {
       input: 10,
       output: 1,
@@ -512,7 +532,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
     });
 
     // Gate 2 knows its complete usage, so it declares no cachePartial.
-    await resumeWorkflowRun('usage-partial');
+    await resumeGateRun('usage-partial');
     const second = await pauseWithTokens('usage-partial', 'gate-2', {
       input: 90,
       output: 9,
@@ -528,7 +548,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
     await seedPausedRun('usage-reset', 'wf-usage-reset', { nodeId: 'seed', message: 'seed' });
 
     // A loop gate with the full optional payload.
-    await resumeWorkflowRun('usage-reset');
+    await resumeGateRun('usage-reset');
     await pauseWorkflowRun('usage-reset', {
       nodeId: 'loop-gate',
       message: 'Review?',
@@ -546,7 +566,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
     });
 
     // A plain approval gate that declares none of them.
-    await resumeWorkflowRun('usage-reset');
+    await resumeGateRun('usage-reset');
     await pauseWorkflowRun('usage-reset', {
       nodeId: 'plain-gate',
       message: 'Approve?',
@@ -554,7 +574,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
     });
 
     const run = await getWorkflowRun('usage-reset');
-    expect(run?.metadata.approval).toEqual({
+    expect(run && readGateQueue(run.metadata)?.active?.context).toEqual({
       nodeId: 'plain-gate',
       message: 'Approve?',
       type: 'approval',
@@ -569,7 +589,7 @@ describe('fresh gate usage is its own — real SQLite end-to-end (#2673)', () =>
       { rejection_count: 2 }
     );
 
-    await resumeWorkflowRun('usage-extra');
+    await resumeGateRun('usage-extra');
     await pauseWorkflowRun(
       'usage-extra',
       { nodeId: 'writeback', message: 'Apply changes?', type: 'writeback' },

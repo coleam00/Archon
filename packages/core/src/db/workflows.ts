@@ -16,13 +16,17 @@ import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-event
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { normalizeWorkflowRun } from './workflow-run-normalization';
-import { resolveWorkflowGate, type GateResolutionResult } from './workflow-gate-admission';
+import {
+  resolveWorkflowGate,
+  registerWorkflowGate,
+  claimWorkflowGateContinuation,
+  type GateResolutionResult,
+} from './workflow-gate-admission';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
   WorkflowRunOutcome,
   WorkflowRunStatus,
-  ApprovalContext,
   WorkflowAttentionWaitContext,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
@@ -179,32 +183,6 @@ function unresolvedGateClause(): string {
   return `status = 'paused' AND ${resolvedExpr} IS NULL AND ${legacyClause}`;
 }
 
-/**
- * SQL expression writing a fresh approval gate: merge the caller's run-level
- * metadata into the column at the TOP level, then set `metadata.approval` to the
- * bound value WHOLESALE. Dialect-aware and kept in ONE place beside
- * unresolvedGateClause so the two forms cannot drift.
- *
- * Deliberately NOT dialect.jsonMerge, because the two merge operators disagree
- * one level down: Postgres `||` is shallow, so `approval` is replaced; SQLite's
- * json_patch is RFC 7396 and RECURSES, so a nested object like
- * `approval.signaledTokens` was merged key by key and interior keys the new gate
- * omitted survived from the previous gate — fabricating cache-token counts no
- * provider reported (#2673). Replacing the whole object makes "this gate's
- * context, and only this gate's" structural on both dialects instead of a list
- * of resets that every new nested field re-arms.
- *
- * @param mergeParamIndex - param holding top-level run metadata (may be `{}`)
- * @param approvalParamIndex - param holding the complete ApprovalContext
- */
-function writeApprovalMetadata(mergeParamIndex: number, approvalParamIndex: number): string {
-  const merge = `$${String(mergeParamIndex)}`;
-  const approval = `$${String(approvalParamIndex)}`;
-  return getDatabaseType() === 'postgresql'
-    ? `jsonb_set((metadata - 'wait') || ${merge}::jsonb, '{approval}', ${approval}::jsonb, true)`
-    : `json_set(json_patch(json_remove(metadata, '$.wait'), ${merge}), '$.approval', json(${approval}))`;
-}
-
 /** Replace the engine-owned wait object and remove any stale human approval. */
 function replaceWaitMetadata(paramIndex: number): string {
   const value = `$${String(paramIndex)}`;
@@ -331,7 +309,10 @@ export async function resolveAndCancelApprovalGate(
   if (expectedGateId !== undefined) {
     const admission = await resolveWorkflowGate(id, expectedGateId, {}, events, cancellation);
     if (admission !== null) {
-      if (admission.resolved) await reportRunTerminal(id);
+      if (admission.resolved) {
+        for (const terminalId of admission.terminalRunIds ?? [id])
+          await reportRunTerminal(terminalId);
+      }
       return admission;
     }
   }
@@ -1030,12 +1011,8 @@ export async function resumeWorkflowRun(
     // Read-then-UPDATE rather than UPDATE…RETURNING because the SQLite adapter
     // rejects RETURNING on UPDATE and points at exactly this pattern.
     updateResult = await getDatabase().withTransaction(async query => {
-      // Acquire the SQLite writer lock before taking a snapshot. Without this,
-      // another process can commit between the SELECT and our first UPDATE and
-      // make the deferred transaction fail its read-to-write upgrade.
-      if (getDatabaseType() === 'sqlite') {
-        await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
-      }
+      if (!(await claimWorkflowGateContinuation(query, id)))
+        throw new WorkflowNotResumableError(id, 'pending gate');
       const priorRows = await query<{
         status: string;
         metadata: unknown;
@@ -1572,53 +1549,7 @@ export async function cancelFanOutRun(
   return { cancelled };
 }
 
-/**
- * Pause a running workflow run for human approval.
- * Sets status to 'paused' and stores approval context in metadata.
- * Does NOT set completed_at — the run is not finished.
- *
- * The stored `metadata.approval` is REPLACED with `approvalContext` wholesale
- * (writeApprovalMetadata), never merged into. So a fresh pause stores exactly
- * the keys the caller set — at every depth — and nothing a prior gate of the
- * same run left behind can survive, on either dialect (#2673). Readers treat an
- * absent key exactly like a JSON null (`!= null`, `=== true`, `?? ''`), and
- * unresolvedGateClause's `IS NULL` matches both, so omission is the reset.
- *
- * `extraMetadata` still merges at the TOP level, so run-level keys the pause
- * does not own (e.g. `pending_writeback`, `rejection_count`) are preserved.
- */
-export async function pauseWorkflowRun(
-  id: string,
-  approvalContext: ApprovalContext,
-  extraMetadata?: Record<string, unknown>
-): Promise<void> {
-  try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
-       SET status = 'paused', metadata = ${writeApprovalMetadata(2, 3)}
-       WHERE id = $1 AND status = 'running'`,
-      [
-        id,
-        // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
-        // atomic write so there is no window where the run is paused without it (M3).
-        JSON.stringify(extraMetadata ?? {}),
-        // The complete gate context. JSON.stringify drops undefined, and the write
-        // replaces rather than merges, so an optional field the caller left unset is
-        // simply absent — no explicit-null reset list to keep in sync.
-        JSON.stringify(approvalContext),
-      ]
-    );
-    if (result.rowCount === 0) {
-      getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
-      throw new Error(`Workflow run not found or not in running state (id: ${id})`);
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Workflow run not found')) throw error;
-    const err = error as Error;
-    getLog().error({ err, workflowRunId: id }, 'db.workflow_run_pause_failed');
-    throw new Error(`Failed to pause workflow run: ${err.message}`);
-  }
-}
+export const pauseWorkflowRun = registerWorkflowGate;
 
 /** Pause a running run on a persisted wait condition. */
 export async function pauseWorkflowRunForWait(

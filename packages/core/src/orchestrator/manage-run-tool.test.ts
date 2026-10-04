@@ -697,6 +697,7 @@ describe('manage_run — gate continuation', () => {
         ...deps,
         store: {
           ...deps.store,
+          getWorkflowGateState: async (id: string) => ({ ownerId: id }),
           getDagResumeSnapshot: async () => ({
             completedNodeOutputs: new Map(),
             fanOutSnapshots: new Map(),

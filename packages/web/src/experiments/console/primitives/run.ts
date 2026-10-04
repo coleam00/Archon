@@ -62,6 +62,7 @@ export interface Run {
    * beyond the default pair.
    */
   approval?: {
+    gateId?: string;
     nodeId: string;
     message: string;
     completionSignaled: boolean;
@@ -221,9 +222,16 @@ export function toRun(raw: RawWorkflowRun): Run {
       ...(typeof d.label === 'string' ? { label: d.label } : {}),
     }));
   const parsedApproval =
-    isApprovalShape && gateResolved === null
+    isApprovalShape &&
+    gateResolved === null &&
+    !('type' in approval && approval.type === 'child_workflow') &&
+    !('admission' in approval && approval.admission !== 'active') &&
+    !('presentation' in approval && approval.presentation === 'unclaimed')
       ? {
           nodeId: (approval as { nodeId: string }).nodeId,
+          ...('gateId' in approval && typeof approval.gateId === 'string'
+            ? { gateId: approval.gateId }
+            : {}),
           message:
             'message' in approval && typeof (approval as { message: unknown }).message === 'string'
               ? (approval as { message: string }).message

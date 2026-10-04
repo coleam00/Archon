@@ -241,12 +241,12 @@ export const workflowRunActionResponseSchema = z
 
 /** POST /api/workflows/runs/:runId/approve request body. */
 export const approveWorkflowRunBodySchema = z
-  .object({ comment: z.string().optional() })
+  .object({ comment: z.string().optional(), gateId: z.string().min(1).optional() })
   .openapi('ApproveWorkflowRunBody');
 
 /** POST /api/workflows/runs/:runId/reject request body. */
 export const rejectWorkflowRunBodySchema = z
-  .object({ reason: z.string().optional() })
+  .object({ reason: z.string().optional(), gateId: z.string().min(1).optional() })
   .openapi('RejectWorkflowRunBody');
 
 /**
@@ -255,7 +255,11 @@ export const rejectWorkflowRunBodySchema = z
  * outcome the dedicated routes above produce.
  */
 export const respondWorkflowRunBodySchema = z
-  .object({ decision: z.string().min(1), text: z.string().optional() })
+  .object({
+    decision: z.string().min(1),
+    text: z.string().optional(),
+    gateId: z.string().min(1).optional(),
+  })
   .openapi('RespondWorkflowRunBody');
 
 /** DELETE /api/workflows/:name/node-sessions path params. */

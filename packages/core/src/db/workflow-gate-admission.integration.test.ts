@@ -1,5 +1,11 @@
+import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
+import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
+import { registerBuiltinProviders } from '@archon/providers';
+import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
+import { createWorkflowStore } from '../workflows/store-adapter';
+import { approveWorkflow } from '../operations/workflow-operations';
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -10,12 +16,17 @@ import {
   getWorkflowRun,
   resolveApprovalGate,
   resolveAndCancelApprovalGate,
+  resumeWorkflowRun,
 } from './workflows';
 import {
   registerWorkflowGate,
+  getWorkflowGateState,
   settleWorkflowGates,
   claimWorkflowGatePresentation,
   confirmWorkflowGatePresentation,
+  failWorkflowGatePresentation,
+  reconcileWorkflowGateChild,
+  consumeWorkflowGateContinuation,
 } from './workflow-gate-admission';
 
 const originalHome = process.env.ARCHON_HOME;
@@ -88,6 +99,20 @@ async function resolve(runId: string, context: ApprovalContext) {
 }
 
 describe('durable workflow gate admission', () => {
+  test('refuses presentation and resume when a modern root queue is missing', async () => {
+    const id = await seed();
+    await registerWorkflowGate(id, gate('lost'));
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET metadata = json_remove(metadata, '$.gate_queue') WHERE id = $1",
+      [id]
+    );
+    await expect(getWorkflowGateState(id)).rejects.toThrow(
+      'Gate projection has no admission queue'
+    );
+    await expect(resumeWorkflowRun(id)).rejects.toThrow('Gate projection has no admission queue');
+    expect((await getWorkflowRun(id))?.status).toBe('paused');
+  });
+
   test('contending admissions retain both gates; settlement and presentation are exact claims', async () => {
     const id = await seed();
     const first = gate('first');
@@ -126,7 +151,10 @@ describe('durable workflow gate admission', () => {
     expect(await resolve(id, second)).toEqual({ resolved: false });
     expect((await claimWorkflowGatePresentation(id))?.id).toBe(second.gateId);
     await confirmWorkflowGatePresentation(id, second.gateId!);
-    expect(await resolve(id, second)).toEqual({ resolved: true, admissionOwnerId: id });
+    expect(await resolve(id, second)).toEqual({
+      resolved: true,
+      admissionOwnerId: id,
+    });
     const final = await queue(id);
     expect(final.active).toBeNull();
     expect(final.resolved.map(record => record.context.nodeId)).toEqual(['first', 'second']);
@@ -141,6 +169,186 @@ describe('durable workflow gate admission', () => {
     );
     expect(events.rows.filter(row => row.event_type === 'approval_received')).toHaveLength(2);
     expect(events.rows.filter(row => row.event_type === 'approval_requested')).toHaveLength(2);
+  });
+
+  test('two ordinary gates survive a cold engine resume and record only their own decisions', async () => {
+    registerBuiltinProviders();
+    const cwd = join(root, 'project');
+    await mkdir(cwd);
+    const messages: string[] = [];
+    const platform: IWorkflowPlatform = {
+      sendMessage: async (_id, message) => {
+        messages.push(message);
+      },
+      getPlatformType: () => 'test',
+      getStreamingMode: () => 'batch',
+    };
+    const deps: WorkflowDeps = {
+      store: createWorkflowStore(),
+      getAgentProvider: () => {
+        throw new Error('An approval must not start a provider');
+      },
+      loadConfig: async () => ({
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {} },
+        commands: {},
+        defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
+      }),
+    };
+    const workflow = makeTestResolvedWorkflow({
+      name: 'gates',
+      nodes: ['first', 'second'].map(id => ({
+        id,
+        approval: { message: `Review ${id}`, decisions: [{ id: 'approve' }, { id: 'reject' }] },
+      })),
+    });
+    const result = await new InProcessWorkflowEngine(deps).submit({
+      platform,
+      conversationId,
+      conversationDbId: conversationId,
+      cwd,
+      workflow,
+      userMessage: 'goal',
+    });
+    expect(result.success).toBe(true);
+    const id = result.workflowRunId!;
+    const initial = await queue(id);
+    const first = initial.active!;
+    const second = initial.pending[0];
+    const resume = async (): Promise<void> => {
+      const admission = await new InProcessWorkflowEngine(deps).resume({
+        run: (await getWorkflowRun(id))!,
+        platform,
+        conversationId,
+        conversationDbId: conversationId,
+        cwd,
+        legacyWorkflow: workflow,
+        userMessage: 'goal',
+      });
+      expect(admission.accepted).toBe(true);
+      if (admission.accepted) await admission.settled;
+    };
+    await approveWorkflow(id, 'first decision', first.id);
+    await resume();
+    await resume();
+    expect(messages.filter(message => message.includes('**Approval required**'))).toHaveLength(2);
+    expect((await queue(id)).active?.id).toBe(second.id);
+    await expect(approveWorkflow(id, 'stale click', first.id)).rejects.toThrow('gate has changed');
+    await approveWorkflow(id, 'second decision', second.id);
+    await resume();
+    expect((await getWorkflowRun(id))?.status).toBe('completed');
+    const audit = await getDatabase().query<{ step_name: string; data: string }>(
+      "SELECT step_name, data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'approval_received' ORDER BY event_order",
+      [id]
+    );
+    expect(
+      audit.rows.map(row => ({ node: row.step_name, comment: JSON.parse(row.data).comment }))
+    ).toEqual([
+      { node: first.context.nodeId, comment: 'first decision' },
+      { node: second.context.nodeId, comment: 'second decision' },
+    ]);
+  });
+
+  test('a presentation failure cannot fail the sibling promoted while the send was in flight', async () => {
+    const id = await seed();
+    const first = gate('first');
+    const second = gate('second');
+    await registerWorkflowGate(id, first);
+    await registerWorkflowGate(id, second);
+    await settleWorkflowGates(id);
+    await claimWorkflowGatePresentation(id);
+    await resolve(id, first);
+    expect(await failWorkflowGatePresentation(id, first.gateId!, 'send failed')).toEqual({
+      failed: false,
+    });
+    expect((await queue(id)).active?.id).toBe(second.gateId);
+    await claimWorkflowGatePresentation(id);
+    expect(await failWorkflowGatePresentation(id, second.gateId!, 'send failed')).toEqual({
+      failed: true,
+    });
+    expect((await getWorkflowRun(id))?.status).toBe('failed');
+  });
+
+  test('resume cannot replay a parked layer; consuming a resolved gate leaves its sibling intact', async () => {
+    const id = await seed();
+    const first = gate('first');
+    const second = gate('second');
+    await registerWorkflowGate(id, first);
+    await registerWorkflowGate(id, second);
+    await settleWorkflowGates(id);
+    await claimWorkflowGatePresentation(id);
+    await resolve(id, first);
+    await expect(resumeWorkflowRun(id)).rejects.toThrow('not resumable');
+    await consumeWorkflowGateContinuation(id, first.gateId!);
+    const state = await queue(id);
+    expect(state.resolved).toEqual([]);
+    expect(state.active?.id).toBe(second.gateId);
+    expect(state.active?.presentation).toBe('unclaimed');
+  });
+
+  test('a completed resolved child cannot clear the active sibling; a terminal unresolved child ends the parent', async () => {
+    const parent = await seed();
+    const child1 = await seed(parent, 'first');
+    const child2 = await seed(parent, 'second');
+    const first = gate('review');
+    const second = gate('review');
+    await registerWorkflowGate(child1, first);
+    await registerWorkflowGate(child2, second);
+    await settleWorkflowGates(child1);
+    await settleWorkflowGates(child2);
+    await settleWorkflowGates(parent);
+    await claimWorkflowGatePresentation(parent);
+    await resolve(child1, first);
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [child1]
+    );
+    await reconcileWorkflowGateChild(child1);
+    expect((await queue(parent)).active?.id).toBe(second.gateId);
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'failed' WHERE id = $1",
+      [child2]
+    );
+    await reconcileWorkflowGateChild(child2);
+    expect((await getWorkflowRun(parent))?.status).toBe('failed');
+  });
+
+  test('a parent blocked on a child wait can admit a human gate without inventing a wait decision', async () => {
+    const parent = await seed();
+    const child = await seed(parent, 'child');
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $2 WHERE id = $1",
+      [
+        child,
+        JSON.stringify({
+          parent_node_id: 'child',
+          wait: {
+            owner: 'node',
+            nodeId: 'deadline',
+            kind: 'time',
+            waitingSince: '2026-10-04T12:00:00Z',
+            resumeAt: '2026-10-05T12:00:00Z',
+          },
+        }),
+      ]
+    );
+    expect(
+      await registerWorkflowGate(parent, {
+        nodeId: 'child',
+        type: 'child_workflow',
+        childRunId: child,
+        message: 'Waiting for child',
+      })
+    ).toEqual({ status: 'blocked_on_child', ownerId: parent });
+    await registerWorkflowGate(parent, gate('review'));
+    const state = await queue(parent);
+    expect(state.active?.context.nodeId).toBe('review');
+    expect(state.pending).toEqual([]);
+    expect(state.resolved).toEqual([]);
+    expect((await getWorkflowRun(child))?.metadata.wait).toMatchObject({
+      kind: 'time',
+      nodeId: 'deadline',
+    });
   });
 
   test('a separate SQLite writer commits before admission reads and preserves both requests', async () => {
@@ -282,7 +490,7 @@ describe('durable workflow gate admission', () => {
         { step_name: 'first', reason: 'Reject first' },
         first.gateId
       )
-    ).toEqual({ resolved: true, admissionOwnerId: id });
+    ).toEqual({ resolved: true, admissionOwnerId: id, terminalRunIds: [id] });
     const row = await getWorkflowRun(id);
     expect(row?.status).toBe('cancelled');
     expect(readGateQueue(row!.metadata)?.pending.map(record => record.id)).toEqual([

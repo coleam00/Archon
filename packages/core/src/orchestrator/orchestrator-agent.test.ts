@@ -390,7 +390,9 @@ mock.module('../utils/error', () => ({
 }));
 
 mock.module('../workflows/store-adapter', () => ({
-  createWorkflowDeps: mock(() => ({})),
+  createWorkflowDeps: mock(() => ({
+    store: { getWorkflowGateState: async (id: string) => ({ ownerId: id }) },
+  })),
 }));
 
 const mockGetPausedWorkflowRun = mock<typeof WorkflowDb.getPausedWorkflowRun>(() =>

@@ -2125,11 +2125,16 @@ statement about the children:
 | write to the repo | `isolation: worktree` on each **`workflow:` node** |
 | must not overlap at all | sequence them with `depends_on` |
 
-One constraint applies however the checkouts are arranged: **one blocking child gate at a
-time.** Two children in the same layer that both pause for approval contend for the parent
-run's single approval slot — the second pause is silently dropped, and that child stays
-unmentioned until a later resume re-pauses on it. Sequence gated sub-runs with `depends_on`
-until a later slice adds real concurrent gating.
+Concurrent gates are retained in a durable queue for the run tree. Ordinary approvals,
+interactive loops, and 1:1 children can reach their gates in the same layer. Archon waits
+for that layer to settle, then presents one decision at a time. Each response belongs
+only to the presented gate; child decisions use the child's run id. Resolving a gate
+promotes the next request, and a cold resume presents an undelivered request without
+restarting the parked layer.
+
+A presentation claimed by an interrupted process is not sent again automatically.
+Inspect the run before recovering it. A layer whose execution owner disappeared before
+settlement likewise requires explicit recovery; resume does not replay ambiguous work.
 
 ### Fanning out over a list with `fan_out:`
 
@@ -2332,9 +2337,9 @@ can guarantee is that you find out before any child exists and before any money 
 
 #### Gates: around a fan-out, never inside one
 
-A fan-out is an **autonomous** stretch of a run. A parent run has a single approval slot, so
-N children cannot each hold it — a child that pauses at a gate fails the fan-out node
-instead of pausing the tree ([#2438](https://github.com/coleam00/Archon/issues/2438)).
+A fan-out is an **autonomous** stretch of a run. Gate-capable fan-out children are rejected
+before spawn. If a child unexpectedly pauses at a gate, the fan-out node fails instead
+of pausing the tree ([#2438](https://github.com/coleam00/Archon/issues/2438)).
 
 That is the intended shape, not a missing feature: gates **bracket** the autonomous middle.
 

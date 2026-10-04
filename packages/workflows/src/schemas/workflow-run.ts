@@ -691,6 +691,7 @@ export const approvalContextSchema = z.object({
   captureResponse: z.boolean().optional(),
   onRejectPrompt: z.string().optional(),
   onRejectMaxAttempts: z.number().int().optional(),
+  rejectionCount: z.number().int().nonnegative().optional(),
   decisions: z.array(z.object({ id: z.string(), label: z.string().optional() })).optional(),
   // Only authored decisions opt into structured output and resumable rejection.
   decisionsAuthored: z.boolean().optional(),
@@ -763,6 +764,7 @@ export type PendingGate = z.infer<typeof pendingGateSchema>;
 export type ResolvedGate = z.infer<typeof resolvedGateSchema>;
 export type GateQueue = z.infer<typeof gateQueueSchema>;
 export type GateAdmission =
+  | { status: 'blocked_on_child'; ownerId: string }
   | { status: 'already_resolved'; ownerId: string; gate: ResolvedGate }
   | { status: 'registered'; ownerId: string; gateId: string; position: 'active' | 'queued' }
   | { status: 'externally_stopped'; runId: string; runStatus: WorkflowRunStatus | null };
@@ -1178,3 +1180,16 @@ type AssertNodeOutputCoversNodeState = NodeOutput['state'] extends NodeState
   : never;
 const nodeOutputStateCoverage: AssertNodeOutputCoversNodeState = true;
 void nodeOutputStateCoverage; // suppress unused-variable lint warning
+
+export function gateNodeMetadata(
+  metadata: Record<string, unknown>,
+  queue: GateQueue,
+  runId: string,
+  nodeId: string
+): Record<string, unknown> {
+  const ownedKeys = new Set(['approval', ...Object.keys(gateResponseSchema.shape)]);
+  return {
+    ...Object.fromEntries(Object.entries(metadata).filter(([key]) => !ownedKeys.has(key))),
+    ...gateContinuationMetadata(queue, runId, nodeId),
+  };
+}

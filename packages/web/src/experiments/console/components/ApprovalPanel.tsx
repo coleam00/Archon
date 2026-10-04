@@ -47,7 +47,7 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isDemo = run.id.startsWith('demo-');
-  const gateNodeId = run.approval?.nodeId;
+  const gateId = run.approval?.gateId ?? run.approval?.nodeId;
 
   // Reset local state when the paused gate's identity changes — a re-pause of the
   // same run (resolved by another surface, or by a second browser tab) must not
@@ -63,7 +63,7 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
     setError(null);
     // Deliberately keyed on gate identity ONLY — this must fire when the paused
     // node changes, not on every busy/error state change mid-submit.
-  }, [gateNodeId]);
+  }, [gateId]);
   // Signal-bearing interactive-loop gate (#2074): a bare approve finalizes the
   // node from the already-computed output (no re-run); a comment runs another
   // iteration. Same respond call either way — the backend derives
@@ -85,7 +85,12 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
       if (isDemo) {
         await new Promise<void>(r => setTimeout(r, 300));
       } else {
-        await skill.respondRun(run.id, decisionId, trimmed.length > 0 ? trimmed : undefined);
+        await skill.respondRun(
+          run.id,
+          decisionId,
+          trimmed.length > 0 ? trimmed : undefined,
+          run.approval?.gateId
+        );
       }
       invalidate('runs');
       invalidate(`run:${run.id}`);

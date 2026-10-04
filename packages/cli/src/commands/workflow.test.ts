@@ -287,6 +287,7 @@ mock.module('@archon/core', () => ({
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
   createWorkflowStore: mock(() => ({
+    getWorkflowGateState: mock(async (id: string) => ({ ownerId: id })),
     createWorkflowEvent: mockCreateWorkflowEvent,
     persistWorkflowEvent: mockPersistWorkflowEvent,
   })),
@@ -10801,7 +10802,8 @@ describe('workflowRejectCommand', () => {
           data: { decision: 'rejected', reason: 'not good' },
         },
       ],
-      { step_name: 'gate', reason: 'approval_rejected' }
+      { step_name: 'gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
@@ -11065,7 +11067,8 @@ describe('workflowRejectCommand', () => {
           data: { decision: 'rejected', reason: 'still bad' },
         },
       ],
-      { step_name: 'gate', reason: 'approval_rejected' }
+      { step_name: 'gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });

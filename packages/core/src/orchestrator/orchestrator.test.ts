@@ -244,7 +244,7 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: {},
+    store: { getWorkflowGateState: async (id: string) => ({ ownerId: id }) },
     getAgentProvider: () => ({}),
     loadConfig: async () => ({}),
   })),

@@ -1075,12 +1075,16 @@ export async function inspectResumableRun(
   // Do not treat an arbitrary unresolved node_started row as resumable: ordinary nodes
   // have no ambiguity guard and replaying one could duplicate its side effects.
   const hasFanOutRecoveryState = snapshot.fanOutSnapshots.size > 0;
+  const gateState = await deps.store.getWorkflowGateState(candidate.id);
+  const hasGateContinuation =
+    gateState.queue?.resolved.some(gate => gate.runId === candidate.id) === true;
   if (
     priorCompletedNodes.size === 0 &&
     !hasReRunGateState &&
     !hasWaitState &&
     !hasScheduledResume &&
-    !hasFanOutRecoveryState
+    !hasFanOutRecoveryState &&
+    !hasGateContinuation
   ) {
     getLog().info(
       { resumableRunId: candidate.id },
@@ -1616,6 +1620,7 @@ async function maybeResumeParentRun(
 ): Promise<void> {
   const parentRunId = childRun.parent_run_id;
   if (!parentRunId) return;
+  await deps.store.reconcileWorkflowGateChild(childRun.id);
 
   // Surface a reconciliation failure to the user with a manual-recovery pointer
   // (per the repo's surface-ambiguous-state principle): the child terminated but the
@@ -1645,10 +1650,27 @@ async function maybeResumeParentRun(
     return;
   }
   if (parent?.status !== 'paused') return; // synchronous no-op, or already resumed
+  const gateState = await deps.store.getWorkflowGateState(parent.id);
+  if (gateState.queue) {
+    if (
+      gateState.queue.phase === 'collecting' ||
+      gateState.queue.active ||
+      gateState.queue.pending.length > 0
+    )
+      return;
+    const children = await deps.store.findChildRuns(parent.id);
+    if (
+      children.some(
+        child =>
+          child.status === 'running' || child.status === 'paused' || child.status === 'pending'
+      )
+    )
+      return;
+  }
 
   // The core "parent blocked on THIS child" invariant lives in one shared predicate
   // (isRunBlockedOnChild) so this hook and the abandon-strand detector can't drift.
-  if (!isRunBlockedOnChild(parent, childRun.id)) {
+  if (!gateState.queue && !isRunBlockedOnChild(parent, childRun.id)) {
     // Paused but not blocked on this child. Distinguish a MALFORMED child_workflow
     // gate (missing childRunId — an invariant violation that would wedge the parent
     // forever; make it loud) from a normal different-child / non-child gate (silent).

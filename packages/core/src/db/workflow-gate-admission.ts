@@ -6,6 +6,7 @@ import {
   gateResponseSchema,
   isApprovalContext,
   isGateResolved,
+  isWorkflowWaitContext,
   readGateQueue,
   readSubrunMetadata,
   type ApprovalContext,
@@ -15,6 +16,8 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
+import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import type { GateResolutionEvent } from './workflows';
 import type { WorkflowCancellationEventDetails } from '@archon/workflows/store';
@@ -85,11 +88,22 @@ function snapshot(context: ApprovalContext): PendingGate['context'] {
   return pendingGateSchema.shape.context.strip().parse(context);
 }
 
+function readRootQueue(root: WorkflowRun): GateQueue | undefined {
+  const queue = readGateQueue(root.metadata);
+  if (
+    !queue &&
+    isApprovalContext(root.metadata.approval) &&
+    root.metadata.approval.admissionOwnerId !== undefined
+  )
+    throw new Error('Gate projection has no admission queue');
+  return queue;
+}
+
 async function normalizeLegacyQueue(
   query: TransactionQuery,
   root: WorkflowRun
 ): Promise<GateQueue> {
-  const existing = readGateQueue(root.metadata);
+  const existing = readRootQueue(root);
   if (existing) return existing;
   const queue: GateQueue = {
     version: 1,
@@ -98,7 +112,12 @@ async function normalizeLegacyQueue(
     pending: [],
     resolved: [],
   };
-  if (root.status !== 'paused') return queue;
+  if (
+    root.metadata.approval === undefined ||
+    (root.status !== 'paused' &&
+      !(isApprovalContext(root.metadata.approval) && isGateResolved(root.metadata.approval)))
+  )
+    return queue;
   let leaf = root;
   const seen = new Set<string>();
   while (
@@ -114,7 +133,14 @@ async function normalizeLegacyQueue(
     leaf = child;
   }
   const context = leaf.metadata.approval;
-  if (!isApprovalContext(context)) throw new Error('Paused admission owner has no readable gate');
+  if (
+    context === undefined &&
+    leaf.id !== root.id &&
+    (leaf.status === 'running' ||
+      (leaf.status === 'paused' && isWorkflowWaitContext(leaf.metadata.wait)))
+  )
+    return queue;
+  if (!isApprovalContext(context)) throw new Error('Admission owner has no readable gate');
   const record: PendingGate = {
     id: context.gateId ?? randomUUID(),
     runId: leaf.id,
@@ -122,7 +148,7 @@ async function normalizeLegacyQueue(
     readyForPresentation: true,
     presentation: 'delivered',
   };
-  queue.phase = 'parked';
+  queue.phase = root.status === 'paused' ? 'parked' : 'collecting';
   if (isGateResolved(context)) {
     queue.resolved.push({
       ...record,
@@ -252,7 +278,13 @@ export async function registerWorkflowGate(
             };
           }
         }
-        throw new Error('Child block has no registered human gate');
+        const child = context.childRunId ? await readRun(query, context.childRunId, true) : null;
+        if (child?.parent_run_id !== runId || !['running', 'paused'].includes(child.status))
+          throw new Error('Child block does not identify governed non-terminal work');
+        owner.status = 'paused';
+        owner.metadata = { ...owner.metadata, ...extraMetadata, approval: snapshot(context) };
+        await writeRun(query, owner);
+        return { status: 'blocked_on_child', ownerId: root.id };
       }
       const unresolved = [...(queue.active ? [queue.active] : []), ...queue.pending];
       const prior = unresolved.find(
@@ -280,6 +312,20 @@ export async function registerWorkflowGate(
         if ([...unresolved, ...queue.resolved].some(gate => gate.id === context.gateId)) {
           throw new Error('Gate identity belongs to a different run');
         }
+      }
+      const predecessor = queue.resolved
+        .slice()
+        .reverse()
+        .find(gate => gate.runId === runId && gate.context.nodeId === context.nodeId);
+      if (predecessor) {
+        context = {
+          ...context,
+          rejectionCount:
+            predecessor.response.rejection_count ?? predecessor.context.rejectionCount,
+        };
+        queue.resolved = queue.resolved.filter(
+          gate => gate.runId !== runId || gate.context.nodeId !== context.nodeId
+        );
       }
       const record: PendingGate = {
         id: context.gateId ?? randomUUID(),
@@ -312,7 +358,7 @@ export async function settleWorkflowGates(runId: string): Promise<string> {
     const chain = await lockTree(query, runId);
     const root = chain[0];
     if (stopped(chain)) return root.id;
-    const queue = readGateQueue(root.metadata);
+    const queue = readRootQueue(root);
     if (!queue) return root.id;
     for (const gate of [...(queue.active ? [queue.active] : []), ...queue.pending]) {
       if (gate.runId === runId) gate.readyForPresentation = true;
@@ -328,7 +374,7 @@ export async function claimWorkflowGatePresentation(runId: string): Promise<Pend
     const chain = await lockTree(query, runId);
     const root = chain[0];
     if (stopped(chain)) return null;
-    const queue = readGateQueue(root.metadata);
+    const queue = readRootQueue(root);
     const gate = queue?.active;
     if (
       queue?.phase !== 'parked' ||
@@ -353,11 +399,11 @@ export async function claimWorkflowGatePresentation(runId: string): Promise<Pend
 export async function confirmWorkflowGatePresentation(
   runId: string,
   gateId: string
-): Promise<void> {
+): Promise<{ active: boolean }> {
   return getDatabase().withTransaction(async query => {
     const chain = await lockTree(query, runId);
     const root = chain[0];
-    const queue = readGateQueue(root.metadata);
+    const queue = readRootQueue(root);
     if (!queue) throw new Error('Presentation confirmation has no admission queue');
     const gate = [queue.active, ...queue.resolved].find(gate => gate?.id === gateId);
     if (gate?.presentation !== 'claimed')
@@ -369,6 +415,7 @@ export async function confirmWorkflowGatePresentation(
     } else {
       await projectQueue(query, root, queue);
     }
+    return { active: queue.active?.id === gateId && !stopped(chain) };
   });
 }
 
@@ -376,6 +423,7 @@ export interface GateResolutionResult {
   resolved: boolean;
   admissionOwnerId?: string;
   promotedGateId?: string;
+  terminalRunIds?: string[];
 }
 
 /** null means legacy singular metadata; false means an exact modern gate lost its CAS. */
@@ -390,7 +438,7 @@ export async function resolveWorkflowGate(
     const chain = await lockTree(query, runId);
     const root = chain[0];
     const owner = chain[chain.length - 1];
-    const queue = readGateQueue(root.metadata);
+    const queue = readRootQueue(root);
     if (!queue) return null;
     const gate = queue.active;
     if (
@@ -404,7 +452,11 @@ export async function resolveWorkflowGate(
     )
       return { resolved: false };
     for (const event of events) {
-      await insertWorkflowEvent(query, { workflow_run_id: runId, ...event });
+      await insertWorkflowEvent(query, {
+        workflow_run_id: runId,
+        ...event,
+        data: { ...event.data, gate_id: gate.id, admission_owner_id: root.id },
+      });
     }
     if (cancellation) {
       await query(
@@ -420,8 +472,24 @@ export async function resolveWorkflowGate(
           ...(cancellation.reason ? { reason: cancellation.reason } : {}),
         },
       });
+      for (const ancestor of chain.slice(0, -1)) {
+        const error = `Child ${runId} was cancelled at gate ${gate.id}`;
+        await query(
+          `UPDATE remote_agent_workflow_runs SET status = 'failed', metadata = $2, completed_at = ${getDialect().now()} WHERE id = $1`,
+          [ancestor.id, JSON.stringify({ ...ancestor.metadata, error })]
+        );
+        await insertTerminalWorkflowEvent(query, {
+          workflow_run_id: ancestor.id,
+          event_type: 'workflow_failed',
+          data: { error, gate_id: gate.id, exit_reason: 'unknown' },
+        });
+      }
       // A terminal decision does not manufacture decisions for the queued requests.
-      return { resolved: true, admissionOwnerId: root.id };
+      return {
+        resolved: true,
+        admissionOwnerId: root.id,
+        terminalRunIds: chain.map(row => row.id),
+      };
     }
     const context = approvalContextSchema.parse(metadata.approval);
     const response = gateResponseSchema.parse({ ...metadata, resolved: context.resolved });
@@ -439,4 +507,133 @@ export async function resolveWorkflowGate(
       ...(queue.active ? { promotedGateId: queue.active.id } : {}),
     };
   });
+}
+
+export async function getWorkflowGateState(
+  runId: string
+): Promise<{ ownerId: string; queue?: GateQueue }> {
+  return getDatabase().withTransaction(async query => {
+    const chain = await ancestry(query, runId);
+    const root = chain[0];
+    return { ownerId: root.id, queue: readRootQueue(root) };
+  });
+}
+
+/** Guard continuation under the same root lock as admission and decisions. */
+export async function claimWorkflowGateContinuation(
+  query: TransactionQuery,
+  runId: string
+): Promise<boolean> {
+  if (getDatabaseType() === 'sqlite')
+    await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [runId]);
+  const found = await readRun(query, runId);
+  if (!found) return true;
+  const chain = await lockTree(query, runId);
+  const root = chain[0];
+  const queue = readRootQueue(root);
+  if (!queue) return true;
+  const unresolved = [...(queue.active ? [queue.active] : []), ...queue.pending];
+  if (unresolved.some(gate => gate.runId === runId) || (root.id === runId && unresolved.length > 0))
+    return false;
+  if (queue.phase === 'collecting' && unresolved.length > 0) return false;
+  if (root.id === runId) {
+    queue.phase = 'collecting';
+    root.metadata = { ...root.metadata, gate_queue: queue };
+    await writeRun(query, root);
+  }
+  return true;
+}
+
+export async function consumeWorkflowGateContinuation(
+  runId: string,
+  gateId: string
+): Promise<void> {
+  await getDatabase().withTransaction(async query => {
+    const chain = await lockTree(query, runId);
+    const root = chain[0];
+    const owner = chain[chain.length - 1];
+    const queue = readRootQueue(root);
+    if (!queue) throw new Error('Gate continuation has no admission queue');
+    queue.resolved = queue.resolved.filter(gate => gate.runId !== runId || gate.id !== gateId);
+    if (isApprovalContext(owner.metadata.approval) && owner.metadata.approval.gateId === gateId) {
+      delete owner.metadata.approval;
+      await writeRun(query, owner);
+    }
+    root.metadata = { ...root.metadata, gate_queue: queue };
+    if (root.id === owner.id) root.metadata = { ...owner.metadata, gate_queue: queue };
+    await writeRun(query, root);
+  });
+}
+
+export async function failWorkflowGatePresentation(
+  runId: string,
+  gateId: string,
+  error: string
+): Promise<{ failed: boolean }> {
+  const failedIds = await getDatabase().withTransaction(async query => {
+    const chain = await lockTree(query, runId);
+    const root = chain[0];
+    const queue = readRootQueue(root);
+    const gate = queue?.active;
+    if (stopped(chain) || gate?.id !== gateId || gate.presentation !== 'claimed') return [];
+    const leaf = await readRun(query, gate.runId, true);
+    if (leaf?.status !== 'paused') return [];
+    if (gate.context.execution) {
+      await insertWorkflowEvent(
+        query,
+        serializeNodeStateRecord({
+          ...gate.context.execution,
+          lifecycle: { status: 'failed', error, failureKind: 'unknown' },
+        })
+      );
+    }
+    const ids = root.id === leaf.id ? [root.id] : [leaf.id, root.id];
+    for (const id of ids) {
+      const row = id === root.id ? root : leaf;
+      await query(
+        `UPDATE remote_agent_workflow_runs SET status = 'failed', metadata = $2, completed_at = ${getDialect().now()} WHERE id = $1`,
+        [id, JSON.stringify({ ...row.metadata, error })]
+      );
+      await insertTerminalWorkflowEvent(query, {
+        workflow_run_id: id,
+        event_type: 'workflow_failed',
+        data: { error, gate_id: gateId, exit_reason: 'unknown' },
+      });
+    }
+    return ids;
+  });
+  for (const id of failedIds) await reportRunTerminal(id);
+  return { failed: failedIds.length > 0 };
+}
+
+export async function reconcileWorkflowGateChild(childId: string): Promise<void> {
+  const terminal = await getDatabase().withTransaction(async query => {
+    const chain = await lockTree(query, childId);
+    const root = chain[0];
+    const child = chain[chain.length - 1];
+    if (
+      root.id === child.id ||
+      !['running', 'paused'].includes(root.status) ||
+      ['running', 'paused', 'pending'].includes(child.status)
+    )
+      return null;
+    const queue = readRootQueue(root);
+    if (!queue) return null;
+    for (const gate of [...(queue.active ? [queue.active] : []), ...queue.pending]) {
+      if (!(await ancestry(query, gate.runId)).some(row => row.id === childId)) continue;
+      const error = `Child ${childId} ended with an unresolved gate (${gate.id}, status ${child.status})`;
+      await query(
+        `UPDATE remote_agent_workflow_runs SET status = 'failed', metadata = $2, completed_at = ${getDialect().now()} WHERE id = $1`,
+        [root.id, JSON.stringify({ ...root.metadata, error })]
+      );
+      await insertTerminalWorkflowEvent(query, {
+        workflow_run_id: root.id,
+        event_type: 'workflow_failed',
+        data: { error, gate_id: gate.id, exit_reason: 'unknown' },
+      });
+      return root.id;
+    }
+    return null;
+  });
+  if (terminal) await reportRunTerminal(terminal);
 }

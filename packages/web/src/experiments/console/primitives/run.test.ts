@@ -248,6 +248,31 @@ describe('toRun — cost', () => {
 });
 
 describe('toRun — approval parsing', () => {
+  test('exposes only the displayed modern gate identity', () => {
+    const approval = {
+      nodeId: 'review',
+      message: 'Review?',
+      gateId: 'displayed-gate',
+      admission: 'active',
+      presentation: 'delivered',
+      type: 'approval',
+    };
+    const mapApproval = (fields: Record<string, unknown>) =>
+      toRun(
+        raw({
+          id: 'r1',
+          workflow_name: 'review',
+          status: 'paused',
+          metadata: { approval: { ...approval, ...fields } },
+        })
+      ).approval;
+    expect(mapApproval({})?.gateId).toBe('displayed-gate');
+    expect(mapApproval({ admission: 'queued' })).toBeNull();
+    expect(mapApproval({ admission: 'collecting' })).toBeNull();
+    expect(mapApproval({ presentation: 'unclaimed' })).toBeNull();
+    expect(mapApproval({ type: 'child_workflow', childRunId: 'child' })).toBeNull();
+  });
+
   test('parses a well-formed approval from metadata', () => {
     const r = toRun(
       raw({

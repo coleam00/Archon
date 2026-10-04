@@ -1,3 +1,4 @@
+import { createGateStoreTestMethods } from './gate-store-test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
@@ -118,7 +119,7 @@ function createMockStore(): IWorkflowStore {
     getWorkflowRunStatus: mock(() => Promise.resolve('running' as const)),
     completeWorkflowRun: mock(() => Promise.resolve()),
     failWorkflowRun: mock(() => Promise.resolve()),
-    pauseWorkflowRun: mock(() => Promise.resolve()),
+    ...createGateStoreTestMethods(),
     pauseWorkflowRunForWait: mock(() => Promise.resolve()),
     failPausedAttentionWait: mock(() => Promise.resolve({ failed: true })),
     clearWorkflowWaitContext: mock((id: string, _wait: unknown, completion: { stepName: string }) =>
@@ -132,7 +133,6 @@ function createMockStore(): IWorkflowStore {
         },
       })
     ),
-    rewriteApprovalContext: mock(() => Promise.resolve({ resolved: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: false })),

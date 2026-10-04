@@ -62,6 +62,7 @@ describe('buildApprovalBlocks', () => {
       runId: 'a1b2c3d4-deadbeef',
       nodeId: 'review-step',
       message: 'Approve the migration?',
+      gateId: 'displayed-gate',
     });
 
     expect(fallbackText).toBe('Approval needed for run a1b2c3d4');
@@ -87,6 +88,10 @@ describe('buildApprovalBlocks', () => {
     expect(actions.elements[0]?.style).toBe('primary');
     expect(actions.elements[1]?.action_id).toBe('reject:a1b2c3d4-deadbeef:review-step');
     expect(actions.elements[1]?.style).toBe('danger');
+    expect(actions.elements).toMatchObject([
+      { value: 'displayed-gate' },
+      { value: 'displayed-gate' },
+    ]);
   });
 });
 

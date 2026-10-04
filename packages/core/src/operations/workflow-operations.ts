@@ -1009,21 +1009,30 @@ export async function abandonResumableRunsForConversation(
   };
 }
 
-/**
- * Approve a paused workflow run.
- *
- * Handles both interactive_loop and standard approval gate paths.
- * The run STAYS 'paused' — the resolution is recorded on the approval context
- * (`metadata.approval.resolved`, #2075) and the resume machinery already picks
- * up paused runs (resumableStatusClause / findResumableRunByParentConversation).
- * Does NOT auto-resume — callers decide whether to execute.
- */
+export class WorkflowGateChangedError extends Error {
+  constructor() {
+    super('The presented gate has changed; refresh the run before responding.');
+    this.name = 'WorkflowGateChangedError';
+  }
+}
+
+function assertExpectedGate(
+  approval: ApprovalContext | undefined,
+  expectedGateId: string | undefined
+): void {
+  if (expectedGateId !== undefined && approval?.gateId !== expectedGateId)
+    throw new WorkflowGateChangedError();
+}
+
+/** Record this gate's decision while leaving continuation to the caller. */
 export async function approveWorkflow(
   runId: string,
-  comment?: string
+  comment?: string,
+  expectedGateId?: string
 ): Promise<ApprovalOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
   const approval = assertApprovable(run);
+  assertExpectedGate(approval, expectedGateId);
 
   // Whitespace-only comments count as absent (mirrors feedbackProvided below):
   // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would
@@ -1153,6 +1162,7 @@ export async function approveWorkflow(
   // guarded independently by resumeWorkflowRun's CAS.
   const { resolved: won } = await workflowDb.resolveApprovalGate(runId, metadataPayload, events);
   if (!won) {
+    if (approval?.gateId !== undefined) throw new WorkflowGateChangedError();
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
 
@@ -1181,10 +1191,12 @@ export async function approveWorkflow(
  */
 export async function rejectWorkflow(
   runId: string,
-  reason?: string
+  reason?: string,
+  expectedGateId?: string
 ): Promise<RejectionOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
   const approval = assertRejectable(run);
+  assertExpectedGate(approval, expectedGateId);
 
   // Exhaustively switched on the suspend reason (#2489) so a future reason value
   // fails loudly here instead of silently taking the generic rework/cancel path
@@ -1248,7 +1260,10 @@ export async function rejectWorkflow(
   }
 
   const rejectReason = reason && reason.length > 0 ? reason : 'Rejected';
-  const currentCount = (run.metadata.rejection_count as number | undefined) ?? 0;
+  const currentCount =
+    approval?.gateId === undefined
+      ? ((run.metadata.rejection_count as number | undefined) ?? 0)
+      : (approval.rejectionCount ?? 0);
   const maxAttempts = approval?.onRejectMaxAttempts ?? 3;
   // `!= null` (not `!== undefined`): "no on_reject" reaches this read in two stored
   // shapes. Absent — every pause since #2673 (the approval object is replaced
@@ -1330,12 +1345,18 @@ export async function rejectWorkflow(
     // ended the run. A stable token, not the user's rejection prose — that is
     // already on the approval_received event above and does not belong on two
     // rows (#2906).
-    ({ resolved: won } = await workflowDb.resolveAndCancelApprovalGate(runId, [rejectionEvent], {
-      step_name: approval?.nodeId ?? 'unknown',
-      reason: 'approval_rejected',
-    }));
+    ({ resolved: won } = await workflowDb.resolveAndCancelApprovalGate(
+      runId,
+      [rejectionEvent],
+      {
+        step_name: approval?.nodeId ?? 'unknown',
+        reason: 'approval_rejected',
+      },
+      approval?.gateId
+    ));
   }
   if (!won) {
+    if (approval?.gateId !== undefined) throw new WorkflowGateChangedError();
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
 
@@ -1413,10 +1434,12 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
 async function respondToWorkflowWithDeclaredDecision(
   runId: string,
   decision: string,
-  text?: string
+  text?: string,
+  expectedGateId?: string
 ): Promise<ApprovalOperationResult> {
   const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
   const approval = assertRespondable(run, decision);
+  assertExpectedGate(approval, expectedGateId);
 
   const structuredOutput = { decision, text: text ?? '' };
   const events: workflowDb.GateResolutionEvent[] = [
@@ -1439,6 +1462,7 @@ async function respondToWorkflowWithDeclaredDecision(
     events
   );
   if (!won) {
+    if (approval?.gateId !== undefined) throw new WorkflowGateChangedError();
     throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
   }
 
@@ -1473,11 +1497,12 @@ async function respondToWorkflowWithDeclaredDecision(
 export async function respondToWorkflow(
   runId: string,
   decision: string,
-  text?: string
+  text?: string,
+  expectedGateId?: string
 ): Promise<ApprovalOperationResult | RejectionOperationResult> {
-  if (decision === 'approve') return approveWorkflow(runId, text);
-  if (decision === 'reject') return rejectWorkflow(runId, text);
-  return respondToWorkflowWithDeclaredDecision(runId, decision, text);
+  if (decision === 'approve') return approveWorkflow(runId, text, expectedGateId);
+  if (decision === 'reject') return rejectWorkflow(runId, text, expectedGateId);
+  return respondToWorkflowWithDeclaredDecision(runId, decision, text, expectedGateId);
 }
 
 /**

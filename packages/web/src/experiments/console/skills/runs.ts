@@ -104,10 +104,19 @@ export async function rejectRun(id: string, reason: string): Promise<void> {
  * the server delegates those two ids to the same functions — so callers can use this
  * uniformly instead of branching on decision id.
  */
-export async function respondRun(id: string, decision: string, text?: string): Promise<void> {
+export async function respondRun(
+  id: string,
+  decision: string,
+  text?: string,
+  gateId?: string
+): Promise<void> {
   await requestJson(`/api/workflows/runs/${encodeURIComponent(id)}/respond`, {
     method: 'POST',
-    body: JSON.stringify(text !== undefined ? { decision, text } : { decision }),
+    body: JSON.stringify({
+      decision,
+      ...(text !== undefined ? { text } : {}),
+      ...(gateId !== undefined ? { gateId } : {}),
+    }),
   });
 }
 

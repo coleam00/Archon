@@ -150,7 +150,11 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() => Promise.resolve());
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: { createWorkflowRun: mockCreateWorkflowRun, failWorkflowRun: mockFailWorkflowRun },
+    store: {
+      getWorkflowGateState: async (id: string) => ({ ownerId: id }),
+      createWorkflowRun: mockCreateWorkflowRun,
+      failWorkflowRun: mockFailWorkflowRun,
+    },
     getAgentProvider: () => ({}),
     loadConfig: async () => ({}),
   })),

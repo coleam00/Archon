@@ -1,3 +1,5 @@
+import { presentWorkflowGate } from './gate-presentation';
+import { createGateStoreTestMethods } from './gate-store-test-utils';
 import { settlingProvider } from './test-settling-provider';
 import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
 import { TerminalStatusWriteError } from './terminal-status-write';
@@ -252,9 +254,7 @@ function createMockStore(): MockWorkflowStore {
       async (_id, _completion, _metadata) => {}
     ),
     failWorkflowRun: mock<IWorkflowStore['failWorkflowRun']>(async (_id, _error) => {}),
-    pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
-      async (_id, _approvalContext, _extraMetadata) => {}
-    ),
+    ...createGateStoreTestMethods(undefined, createWorkflowEvent),
     pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
       async (_id, _waitContext) => {}
     ),
@@ -266,9 +266,6 @@ function createMockStore(): MockWorkflowStore {
         cleared: true,
         nodeEvent: waitCompletionEvents(id, completion).node,
       })
-    ),
-    rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
-      async (_id, _approvalContext) => ({ resolved: true })
     ),
     claimWriteback: mock<IWorkflowStore['claimWriteback']>(async _id => ({ claimed: true })),
     releaseWritebackClaim: mock<IWorkflowStore['releaseWritebackClaim']>(async _id => {}),
@@ -16093,43 +16090,44 @@ describe('executeDagWorkflow -- approval node', () => {
     });
   });
 
-  it('fails the approval node instead of pausing when its prompt cannot be delivered', async () => {
+  it('fails the admitted gate when its prompt cannot be delivered', async () => {
     const store = createMockStore();
     const platform = createMockPlatform();
     platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
       if (message.includes('Approval required')) throw new Error('401 unauthorized');
     });
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: createMockDeps(store),
-        platform,
-        conversationId: 'conv-approval',
-        cwd: testDir,
-        workflow: {
-          name: 'approval-undelivered',
-          nodes: [
-            {
-              id: 'review',
-              kind: 'gate',
-              message: 'Approve?',
-              decisions: [{ id: 'approve' }, { id: 'reject' }],
-              captureResponse: false,
-              decisionsAuthored: false,
-            },
-          ],
-        },
-        workflowRun: makeWorkflowRun(),
-      })
-    );
+    await expect(
+      executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          conversationId: 'conv-approval',
+          cwd: testDir,
+          workflow: {
+            name: 'approval-undelivered',
+            nodes: [
+              {
+                id: 'review',
+                kind: 'gate',
+                message: 'Approve?',
+                decisions: [{ id: 'approve' }, { id: 'reject' }],
+                captureResponse: false,
+                decisionsAuthored: false,
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun(),
+        })
+      )
+    ).rejects.toThrow('Gate message failed to deliver');
 
-    // Nobody was told how to approve, so the run must not wait for an approval.
-    expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
-    const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
-    expect(failed?.data?.error).toBe(
-      "Approval message failed to deliver for node 'review' — cannot pause safely"
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowGatePresentation).toHaveBeenCalledWith(
+      'dag-test-run-id',
+      expect.any(String),
+      "Gate message failed to deliver for node 'review'"
     );
-    expect(store.failWorkflowRun).toHaveBeenCalled();
   });
 
   it('delivers the nested proposal action at the approval gate, including legacy local resumes', async () => {
@@ -18251,9 +18249,10 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
 
     const store = createMockStore();
     let paused = false;
-    store.pauseWorkflowRun = mock(() => {
+    const admission = store.pauseWorkflowRun;
+    store.pauseWorkflowRun = mock((...args) => {
       paused = true;
-      return Promise.resolve();
+      return admission(...args);
     });
     store.getWorkflowRunStatus = mock(() =>
       Promise.resolve(paused ? ('paused' as const) : ('running' as const))
@@ -20164,8 +20163,10 @@ describe('executeDagWorkflow -- authored run outcome (#2618)', () => {
     mockStructuredVerdict(true);
     const store = createMockStore();
     let status: WorkflowRun['status'] = 'running';
-    store.pauseWorkflowRun.mockImplementation(async () => {
+    const admission = store.pauseWorkflowRun.getMockImplementation()!;
+    store.pauseWorkflowRun.mockImplementation(async (...args) => {
       status = 'paused';
+      return admission(...args);
     });
     store.getWorkflowRunStatus.mockImplementation(async () => status);
 
@@ -26176,7 +26177,11 @@ describe('executeDagWorkflow -- loop_group node', () => {
 
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(store),
+        deps: createMockDeps({
+          ...createMockStore(),
+          createWorkflowEvent: store.createWorkflowEvent,
+          persistWorkflowEvent: store.persistWorkflowEvent,
+        }),
         conversationId: 'conv-lg',
         cwd: testDir,
         workflow,
@@ -30514,14 +30519,13 @@ describe('executeDagWorkflow -- concurrent gate admission (#2180)', () => {
     const trace: string[] = [];
     store.getWorkflowRun = mock(async () => ({ ...run, metadata: { ...run.metadata } }));
     store.getWorkflowRunStatus = mock(async () => run.status);
-    store.pauseWorkflowRun = mock(async (_id, approval, extraMetadata) => {
-      trace.push(`pause:${approval.nodeId}:${run.status}`);
-      if (run.status !== 'running') {
-        throw new Error(`Workflow run not found or not in running state (id: ${run.id})`);
-      }
-      run.status = 'paused';
-      run.metadata = { ...run.metadata, ...extraMetadata, approval: { ...approval } };
-    });
+    Object.assign(
+      store,
+      createGateStoreTestMethods(
+        () => run,
+        event => store.createWorkflowEvent(event)
+      )
+    );
     const platform = createMockPlatform();
     platform.sendMessage = mock(async (_conversationId, message) => {
       trace.push(`message:${run.status}:${message}`);
@@ -30554,14 +30558,101 @@ describe('executeDagWorkflow -- concurrent gate admission (#2180)', () => {
         .filter(event => event.event_type === 'node_suspended')
         .map(event => event.step_name);
       // Both decisions must remain recoverable even though just one is actionable.
-      expect({ suspended, admitted, trace, metadata: run.metadata }).toMatchObject({
-        suspended: ['first', 'second'],
-        admitted: ['first'],
-      });
+      expect(suspended.sort()).toEqual(['first', 'second']);
+      expect(admitted).toHaveLength(1);
+      expect(['first', 'second']).toContain(admitted[0]);
+      expect(
+        store.claimWorkflowGatePresentation.mock.results.filter(result => result.type === 'return')
+      ).toHaveLength(1);
       expect(trace.some(entry => entry.startsWith('message:running:⏸'))).toBe(false);
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
+      await removeTempTree(testDir);
+    }
+  });
+});
+
+describe('executeDagWorkflow -- concurrent interactive gates (#2180)', () => {
+  it('keeps feedback and completion snapshots on their own loop invocation', async () => {
+    const testDir = join(tmpdir(), `dag-loop-gates-${crypto.randomUUID()}`);
+    await mkdir(testDir, { recursive: true });
+    const run = makeWorkflowRun();
+    const store = createMockStore();
+    const gates = createGateStoreTestMethods(() => run, store.persistWorkflowEvent);
+    Object.assign(store, gates);
+    store.getWorkflowRunStatus.mockImplementation(async () => run.status);
+    const platform = createMockPlatform();
+    mockSendQueryDag.mockClear();
+    let invocation = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      const current = ++invocation;
+      yield { type: 'agent_message_chunk', text: `Result ${String(current)}\nCOMPLETE` };
+      yield { type: 'result', sessionId: `session-${String(current)}` };
+    });
+    const workflow = {
+      name: 'concurrent-loop-gates',
+      nodes: ['first', 'second'].map(id =>
+        dagNodeSchema.parse({
+          id,
+          loop: {
+            prompt: `Work on ${id}. Feedback: $LOOP_USER_INPUT`,
+            until: 'COMPLETE',
+            interactive: true,
+            gate_message: `Review ${id}`,
+            max_iterations: 3,
+          },
+        })
+      ),
+    };
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflowRun: run,
+          workflow,
+        })
+      );
+      expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(2);
+      expect(
+        deliveredMessages(platform).filter(message => message.includes('**Input required**'))
+      ).toHaveLength(1);
+      const state = await store.getWorkflowGateState(run.id);
+      const active = state.queue!.active!;
+      const pending = state.queue!.pending[0];
+      expect(active.context.sessionId).not.toBe(pending.context.sessionId);
+      gates.resolveGate(run.id, {
+        resolved: 'approved',
+        loop_user_input: 'revise only this loop',
+        loop_feedback_given: true,
+      });
+      await presentWorkflowGate(store, platform, 'conv-dag', run.id);
+      gates.resolveGate(run.id, {
+        resolved: 'approved',
+        loop_user_input: '',
+        loop_feedback_given: false,
+      });
+      run.status = 'running';
+      run.metadata.loop_user_input = 'stale run-wide feedback';
+      run.metadata.loop_feedback_given = true;
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          cwd: testDir,
+          workflowRun: run,
+          workflow,
+        })
+      );
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(3);
+      const resumedPrompt = mockSendQueryDag.mock.calls[2][0];
+      expect(resumedPrompt).toContain(active.context.nodeId);
+      expect(resumedPrompt).toContain('revise only this loop');
+      expect(resumedPrompt).not.toContain('stale run-wide feedback');
+      expect((await store.getWorkflowGateState(run.id)).queue!.resolved).toEqual([]);
+    } finally {
       await removeTempTree(testDir);
     }
   });
@@ -33886,14 +33977,6 @@ nodes:
 
 // ─── #2707 step 3: gate-terminated loop_group pause escalation ─────────────
 
-/**
- * A stateful (not static) IWorkflowStore for exercising the pause-escalation /
- * resume-completion-recheck round trip: `pauseWorkflowRun`/`rewriteApprovalContext`
- * actually mutate an in-memory status/metadata pair that `getWorkflowRunStatus`/
- * `getWorkflowRun` subsequently observe — required because the escalation code
- * under test reads status/metadata BACK after the body gate's own generic pause,
- * which the file's default static mocks (always 'running') can never satisfy.
- */
 function createEscalationStore(
   runId: string,
   onWaitPaused?: (wait: WorkflowWaitContext) => WorkflowWaitContext
@@ -33911,11 +33994,24 @@ function createEscalationStore(
       status,
       metadata,
     })),
-    pauseWorkflowRun: mock<IWorkflowStore['pauseWorkflowRun']>(
-      async (_id, approvalContext, extraMetadata) => {
-        status = 'paused';
-        metadata = { ...metadata, ...(extraMetadata ?? {}), approval: { ...approvalContext } };
-      }
+    ...createGateStoreTestMethods(
+      () => ({
+        id: runId,
+        parent_run_id: null,
+        get status() {
+          return status;
+        },
+        set status(value) {
+          status = value;
+        },
+        get metadata() {
+          return metadata;
+        },
+        set metadata(value) {
+          metadata = value;
+        },
+      }),
+      base.persistWorkflowEvent
     ),
     pauseWorkflowRunForWait: mock<NonNullable<IWorkflowStore['pauseWorkflowRunForWait']>>(
       async (_id, waitContext) => {
@@ -33946,16 +34042,6 @@ function createEscalationStore(
         status = 'failed';
         metadata = { ...metadata, error };
         return { failed: true };
-      }
-    ),
-    rewriteApprovalContext: mock<IWorkflowStore['rewriteApprovalContext']>(
-      async (_id, approvalContext) => {
-        const currentApproval = metadata.approval as { resolved?: string } | undefined;
-        if (status !== 'paused' || currentApproval?.resolved != null) {
-          return { resolved: false };
-        }
-        metadata = { ...metadata, approval: { ...approvalContext } };
-        return { resolved: true };
       }
     ),
     getState: () => ({ status, metadata }),
@@ -34179,13 +34265,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
     expect(store.getState().status).toBe('paused');
 
-    // The escalation rewrote the pause to point at the enclosing group, carrying
-    // the body gate's own id.
-    const rewriteCalls = (
-      store.rewriteApprovalContext as Mock<IWorkflowStore['rewriteApprovalContext']>
-    ).mock.calls;
-    expect(rewriteCalls.length).toBe(1);
-    expect(rewriteCalls[0][1]).toMatchObject({
+    expect(store.pauseWorkflowRun.mock.calls[0][1]).toMatchObject({
       nodeId: 'grp',
       bodyGateId: 'check',
       type: 'approval',
@@ -35102,81 +35182,6 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(probeRows[0].stdout_tail).toBe('resume probe ran');
     expect(probeRows[0].stderr_tail).toBe('recheck note');
     expect(probeRows[0].exit_code).toBe(0);
-  });
-
-  it('falls through without erroring when a human resolves the original pause before the rewrite lands (CAS loss)', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'work done' };
-      yield { type: 'result', sessionId: 'work-session' };
-    });
-
-    const store = createEscalationStore('run-escalation-4');
-    // Simulate an astronomically narrow race: a human resolved the ORIGINAL
-    // bare-gate-id pause in the window between its own write and the
-    // escalation's rewrite attempt — resolveApprovalGate's real CAS guard
-    // (unresolvedGateClause) would report exactly this outcome.
-    (
-      store.rewriteApprovalContext as Mock<IWorkflowStore['rewriteApprovalContext']>
-    ).mockResolvedValue({ resolved: false });
-    const platform = createMockPlatform();
-
-    // max_iterations: 1 makes the fallthrough's outcome deterministic and
-    // assertable: without the escalation applying, the group's own terminal-
-    // sink selection finds no non-empty output (a gate's own output is always
-    // ''), so it never detects completion and exhausts max_iterations — a
-    // clean, expected failure, not a hang, crash, or corrupted state.
-    const singleIterationWorkflow: WorkflowDefinition = {
-      ...gateTerminatedLoopGroupWorkflow(),
-      nodes: [
-        dagNodeSchema.parse({
-          id: 'grp',
-          loop_group: {
-            until_bash: '[ $check.output.decision = "approve" ]',
-            max_iterations: 1,
-            nodes: [
-              { id: 'work', prompt: 'do work' },
-              {
-                id: 'check',
-                depends_on: ['work'],
-                approval: {
-                  message: 'Continue?',
-                  decisions: [{ id: 'approve' }, { id: 'revise' }],
-                },
-              },
-            ],
-          },
-        }),
-      ],
-    };
-
-    // Must not throw — the fallthrough path is a normal, tolerated outcome.
-    await expect(
-      executeDagWorkflow(
-        dagOptions({
-          deps: createMockDeps(store),
-          platform,
-          cwd: testDir,
-          workflow: ready(singleIterationWorkflow),
-          workflowRun: makeWorkflowRun('run-escalation-4'),
-        })
-      )
-    ).resolves.toBeUndefined();
-
-    // The escalation was attempted and correctly observed the lost race.
-    expect(
-      (store.rewriteApprovalContext as Mock<IWorkflowStore['rewriteApprovalContext']>).mock.calls
-        .length
-    ).toBe(1);
-    // No corrupted state: the run stays exactly as the human's own resolution
-    // left it — 'paused' — never force-completed by the loop_group's own
-    // "max iterations exceeded" failure (the run being non-'running' by the
-    // time that failure is reported is what stops the top-level executor from
-    // clobbering the human's already-in-flight resolution with a 'failed'
-    // status).
-    expect(store.getState().status).toBe('paused');
-    expect(
-      (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>).mock.calls.length
-    ).toBe(0);
   });
 });
 

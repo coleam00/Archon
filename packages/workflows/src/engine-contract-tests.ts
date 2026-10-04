@@ -1,3 +1,4 @@
+import { createGateStoreTestMethods } from './gate-store-test-utils';
 import { describe, expect, it } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -118,7 +119,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getCodebaseEnvVars: async () => ({}),
     updateWorkflowActivity: noop,
     completeWorkflowRun: noop,
-    pauseWorkflowRun: noop,
+    ...createGateStoreTestMethods(),
     pauseWorkflowRunForWait: noop,
     failPausedAttentionWait: async () => ({ failed: true }),
     clearWorkflowWaitContext: async (id, _wait, completion) => ({
@@ -129,7 +130,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         step_name: completion.stepName,
       },
     }),
-    rewriteApprovalContext: async () => ({ resolved: true }),
     claimWriteback: async () => ({ claimed: true }),
     releaseWritebackClaim: noop,
     cancelWorkflowRun: async () => ({ cancelled: false }),

@@ -284,6 +284,7 @@ import {
   CancelRefusedError,
   describeAbandonOwner,
   approveWorkflow,
+  WorkflowGateChangedError,
   rejectWorkflow,
   respondToWorkflow,
   assertRespondable,
@@ -3959,10 +3960,10 @@ export function registerApiRoutes(
       // signal-bearing loop gate, so silently coercing a malformed body to {}
       // would discard intended feedback and finalize undiagnosed — reject it.
       const rawBody = await c.req.text();
-      let body: { comment?: string } = {};
+      let body: z.infer<typeof approveWorkflowRunBodySchema> = {};
       if (rawBody.trim().length > 0) {
         try {
-          body = JSON.parse(rawBody) as { comment?: string };
+          body = approveWorkflowRunBodySchema.parse(JSON.parse(rawBody));
         } catch (parseError) {
           getLog().warn({ err: parseError, runId }, 'api.approve_body_parse_failed');
           return apiError(
@@ -3980,7 +3981,8 @@ export function registerApiRoutes(
       // defaults the recorded comment internally, but "no feedback" must survive
       // so a signal-bearing interactive-loop gate finalizes instead of re-running
       // (#2074, loop_feedback_given).
-      await approveWorkflow(runId, body.comment);
+      if (body.gateId === undefined) await approveWorkflow(runId, body.comment);
+      else await approveWorkflow(runId, body.comment, body.gateId);
 
       // Auto-resume: dispatch to the orchestrator so the workflow continues
       // without requiring the user to re-run the workflow command. Mirrors
@@ -3997,6 +3999,7 @@ export function registerApiRoutes(
           : `Workflow approved: ${run.workflow_name}. Run \`archon workflow resume ${runId}\` from the CLI to continue, or resume it from the originating conversation.`,
       });
     } catch (error) {
+      if (error instanceof WorkflowGateChangedError) return apiError(c, 400, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_approve_failed');
       return apiError(c, 500, 'Failed to approve workflow run');
     }
@@ -4024,10 +4027,10 @@ export function registerApiRoutes(
       // Mirror of the approve route's malformed-body guard: a swallowed parse
       // failure would silently drop the reviewer's reason.
       const rawBody = await c.req.text();
-      let body: { reason?: string } = {};
+      let body: z.infer<typeof rejectWorkflowRunBodySchema> = {};
       if (rawBody.trim().length > 0) {
         try {
-          body = JSON.parse(rawBody) as { reason?: string };
+          body = rejectWorkflowRunBodySchema.parse(JSON.parse(rawBody));
         } catch (parseError) {
           getLog().warn({ err: parseError, runId }, 'api.reject_body_parse_failed');
           return apiError(
@@ -4041,7 +4044,10 @@ export function registerApiRoutes(
       // Shared gate logic (events, telemetry, staging/cancel decision). When an
       // on_reject rework is staged the run stays 'paused' with
       // metadata.approval.resolved = 'rejected' (#2075).
-      const result = await rejectWorkflow(runId, reason);
+      const result =
+        body.gateId === undefined
+          ? await rejectWorkflow(runId, reason)
+          : await rejectWorkflow(runId, reason, body.gateId);
 
       if (result.cancelled) {
         return c.json({
@@ -4071,6 +4077,7 @@ export function registerApiRoutes(
             : `Workflow rejected: ${run.workflow_name}. On-reject prompt will run when the run resumes — ${resumeHint}.`,
       });
     } catch (error) {
+      if (error instanceof WorkflowGateChangedError) return apiError(c, 400, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_reject_failed');
       return apiError(c, 500, 'Failed to reject workflow run');
     }
@@ -4099,10 +4106,10 @@ export function registerApiRoutes(
         return c.json(respondBlocker, 400);
       }
       const rawBody = await c.req.text();
-      let body: { decision?: string; text?: string } = {};
+      let body: z.infer<typeof respondWorkflowRunBodySchema> | undefined;
       if (rawBody.trim().length > 0) {
         try {
-          body = JSON.parse(rawBody) as { decision?: string; text?: string };
+          body = respondWorkflowRunBodySchema.parse(JSON.parse(rawBody));
         } catch (parseError) {
           getLog().warn({ err: parseError, runId }, 'api.respond_body_parse_failed');
           return apiError(
@@ -4112,7 +4119,7 @@ export function registerApiRoutes(
           );
         }
       }
-      if (!body.decision) {
+      if (!body?.decision) {
         return apiError(c, 400, 'Request body must include a non-empty "decision"');
       }
       const decision = body.decision;
@@ -4136,7 +4143,10 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text);
+      const result =
+        body.gateId === undefined
+          ? await respondToWorkflow(runId, decision, text)
+          : await respondToWorkflow(runId, decision, text, body.gateId);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({
@@ -4160,6 +4170,7 @@ export function registerApiRoutes(
           : `Workflow responded '${decision}': ${run.workflow_name}. The run will continue when it resumes — ${resumeHint}.`,
       });
     } catch (error) {
+      if (error instanceof WorkflowGateChangedError) return apiError(c, 400, error.message);
       getLog().error({ err: error, runId }, 'api.workflow_run_respond_failed');
       return apiError(c, 500, 'Failed to respond to workflow run');
     }

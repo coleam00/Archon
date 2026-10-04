@@ -55,6 +55,9 @@
   },
   "testGroups": [
     [
+      "src/db/workflow-gate-admission.postgres.integration.test.ts"
+    ],
+    [
       "src/db/workflow-gate-admission.integration.test.ts"
     ],
     [

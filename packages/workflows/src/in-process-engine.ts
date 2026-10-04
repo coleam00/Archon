@@ -1,3 +1,4 @@
+import { presentWorkflowGate } from './gate-presentation';
 import { executeWorkflow, hydrateResumableRun, resolveContinuationWorkflow } from './executor';
 import type { ExecuteWorkflowOptions } from './executor';
 import {
@@ -46,6 +47,37 @@ export class InProcessWorkflowEngine implements IWorkflowEngine {
 
   async resume(input: WorkflowResumeInput): Promise<WorkflowResumeAdmission> {
     rejectOptions(input.options, RESUME_FORBIDDEN_OPTIONS, 'resume');
+    const gateState = await this.deps.store.getWorkflowGateState(input.run.id);
+    const queue = gateState.queue;
+    if (queue && (queue.active || queue.pending.length > 0)) {
+      for (const gate of [...(queue.active ? [queue.active] : []), ...queue.pending]) {
+        if (gate.runId !== gateState.ownerId)
+          await this.deps.store.reconcileWorkflowGateChild(gate.runId);
+      }
+      if ((await this.deps.store.getWorkflowRunStatus(gateState.ownerId)) !== 'paused')
+        throw new Error(
+          `Run ${gateState.ownerId} has unresolved gates and is no longer paused; inspect its terminal state before recovery.`
+        );
+      if (queue.phase === 'collecting')
+        throw new Error(
+          `Run ${gateState.ownerId} has an unsettled gate layer; recover its execution owner before resuming.`
+        );
+      await presentWorkflowGate(
+        this.deps.store,
+        input.platform,
+        input.conversationId,
+        gateState.ownerId
+      );
+      const blocked =
+        gateState.ownerId === input.run.id ||
+        [queue.active, ...queue.pending].some(gate => gate?.runId === input.run.id);
+      if (blocked)
+        return {
+          accepted: true,
+          runId: input.run.id,
+          settled: Promise.resolve({ success: true, paused: true, workflowRunId: input.run.id }),
+        };
+    }
     const continuation = await resolveContinuationWorkflow(this.deps, input.run, input.cwd);
     let workflow = continuation?.workflow;
     if (!workflow) {

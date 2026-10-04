@@ -157,6 +157,7 @@ export type ProviderEventEmitterEvent = {
 } & ProviderEventEnvelope;
 
 interface ApprovalPendingEvent {
+  gateId?: string;
   type: 'approval_pending';
   runId: string;
   nodeId: string;

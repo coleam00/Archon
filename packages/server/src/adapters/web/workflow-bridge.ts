@@ -147,6 +147,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         approval: {
           nodeId: event.nodeId,
           message: event.message,
+          ...(event.gateId ? { gateId: event.gateId } : {}),
         },
       });
 

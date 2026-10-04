@@ -1,3 +1,5 @@
+import { InProcessWorkflowEngine } from './in-process-engine';
+import { createGateStoreTestMethods } from './gate-store-test-utils';
 import type { DeclaredOutputPaths } from './output-ref';
 import { readNodeRecordEvent } from './node-record-reader';
 import { settlingProvider } from './test-settling-provider';
@@ -186,6 +188,7 @@ import type { IWorkflowStore } from './store';
 import { waitCompletionEvents } from './store';
 import {
   readRunDispatchMetadata,
+  readGateQueue,
   type WorkflowRun,
   type WorkflowWaitContext,
 } from './schemas/workflow-run';
@@ -371,22 +374,18 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
-  pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (id, approvalContext, extraMetadata) => {
-    const r = this.runs.get(id);
-    if (r) {
-      r.status = 'paused';
-      // Mirrors the real store's write ORDER: run-level metadata is folded in first,
-      // then `approval` is set wholesale — so nothing from a prior gate survives and
-      // the gate context wins over a same-named extra key. Only the order; a JS
-      // spread cannot model both dialects' merge depth for `extraMetadata`.
-      r.metadata = {
-        ...r.metadata,
-        ...(extraMetadata ?? {}),
-        approval: { ...approvalContext },
-      };
-    }
-    return Promise.resolve();
-  };
+  private readonly gateStore = createGateStoreTestMethods(
+    id => this.runs.get(id),
+    event => this.persistWorkflowEvent(event)
+  );
+  pauseWorkflowRun = this.gateStore.pauseWorkflowRun;
+  reconcileWorkflowGateChild = this.gateStore.reconcileWorkflowGateChild;
+  getWorkflowGateState = this.gateStore.getWorkflowGateState;
+  settleWorkflowGates = this.gateStore.settleWorkflowGates;
+  claimWorkflowGatePresentation = this.gateStore.claimWorkflowGatePresentation;
+  confirmWorkflowGatePresentation = this.gateStore.confirmWorkflowGatePresentation;
+  failWorkflowGatePresentation = this.gateStore.failWorkflowGatePresentation;
+  consumeWorkflowGateContinuation = this.gateStore.consumeWorkflowGateContinuation;
 
   pauseWorkflowRunForWait: IWorkflowStore['pauseWorkflowRunForWait'] = (id, waitContext) => {
     const r = this.runs.get(id);
@@ -443,18 +442,6 @@ class InMemoryStore implements IWorkflowStore {
       return Promise.resolve({ cleared: true, nodeEvent: rows.node });
     }
     return Promise.resolve({ cleared: false });
-  };
-
-  rewriteApprovalContext: IWorkflowStore['rewriteApprovalContext'] = (id, approvalContext) => {
-    const r = this.runs.get(id);
-    // Mirrors the real store's CAS guard (unresolvedGateClause): only while still
-    // paused and unresolved — a human resolving the gate first wins the race.
-    const approval = r?.metadata?.approval as { resolved?: string } | undefined;
-    if (r && r.status === 'paused' && approval?.resolved == null) {
-      r.metadata = { ...r.metadata, approval: { ...approvalContext } };
-      return Promise.resolve({ resolved: true });
-    }
-    return Promise.resolve({ resolved: false });
   };
 
   claimWriteback = (): Promise<{ claimed: boolean }> => Promise.resolve({ claimed: true });
@@ -591,7 +578,7 @@ class InMemoryStore implements IWorkflowStore {
       step_name: nodeId,
       data: { node_output: '', approval_decision: 'approved' },
     });
-    r.metadata = { ...r.metadata, approval: { ...(approval ?? {}), resolved: 'approved' } };
+    this.gateStore.resolveGate(runId, { resolved: 'approved' });
   }
 }
 
@@ -778,23 +765,13 @@ nodes:
     );
     const store = new InMemoryStore();
     const trace: string[] = [];
-    const pause = store.pauseWorkflowRun;
-    store.pauseWorkflowRun = (id, context, extraMetadata) => {
-      const row = store.runs.get(id);
-      trace.push(`pause:${id}:${context.nodeId}:${row?.status}`);
-      if (row?.status !== 'running') {
-        return Promise.reject(
-          new Error(`Workflow run not found or not in running state (id: ${id})`)
-        );
-      }
-      return pause(id, context, extraMetadata);
-    };
+    const deps = makeDeps(store);
     const platform = makePlatform();
     platform.sendMessage = mock(async (_conversationId, message) => {
       trace.push(`message:${message}`);
     });
     const result = await executeWorkflow(
-      makeDeps(store),
+      deps,
       platform,
       'conv-plat',
       cwd,
@@ -811,10 +788,42 @@ nodes:
         event => event.workflow_run_id === parent?.id && event.event_type === 'node_suspended'
       )
       .map(event => event.step_name);
-    expect({ suspended, trace, metadata: parent?.metadata }).toMatchObject({
-      suspended: ['first', 'second'],
-    });
+    expect(suspended.sort()).toEqual(['first', 'second']);
     expect(store.events.filter(event => event.event_type === 'approval_requested')).toHaveLength(1);
+    const first = readGateQueue(parent!.metadata)!.active!;
+    const second = readGateQueue(parent!.metadata)!.pending[0];
+    expect(first.runId).not.toBe(second.runId);
+    store.approveGate(first.runId);
+    const resume = async (runId: string): Promise<void> => {
+      const admission = await new InProcessWorkflowEngine(deps).resume({
+        run: (await store.getWorkflowRun(runId))!,
+        platform,
+        conversationId: 'conv-plat',
+        conversationDbId: 'conv-db',
+        cwd,
+        userMessage: 'goal',
+        legacyWorkflow: await discover('concurrent-gated-child'),
+      });
+      expect(admission.accepted).toBe(true);
+      if (admission.accepted) await admission.settled;
+    };
+    await resume(first.runId);
+    expect(store.runs.get(first.runId)?.status).toBe('completed');
+    expect(store.runs.get(second.runId)?.status).toBe('paused');
+    expect(parent!.status).toBe('paused');
+    expect(store.events.filter(event => event.event_type === 'approval_requested')).toHaveLength(2);
+    // A new engine instance must not send the already-delivered second prompt again.
+    await resume(second.runId);
+    expect(store.events.filter(event => event.event_type === 'approval_requested')).toHaveLength(2);
+    store.approveGate(second.runId);
+    await resume(second.runId);
+    expect(children.map(child => child.status)).toEqual(['completed', 'completed']);
+    expect(parent!.status).toBe('completed');
+    expect(readGateQueue(parent!.metadata)?.resolved).toEqual([]);
+    const prompts = trace.filter(message => message.includes('**Approval required**'));
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain(first.runId);
+    expect(prompts[1]).toContain(second.runId);
   });
 
   it("pins a pre-change run's source settings on its row at the first resume", async () => {
@@ -1296,7 +1305,7 @@ nodes:
     });
   });
 
-  it('blocked-on-child notice spells the approve command for the surface; the persisted gate stays neutral', async () => {
+  it('child gate spells the approve command for the surface and presents once', async () => {
     await writeWorkflow(
       'child-gated-spelling',
       `
@@ -1344,11 +1353,10 @@ nodes:
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(call => (call as unknown[])[1] as string)
       .join('\n');
-    expect(sent).toContain(`Approve it by run id: \`/archon-workflow approve ${child!.id}\``);
+    expect(sent).toContain(`Approve: \`/archon-workflow approve ${child!.id}\``);
     expect(sent.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
-    // The persisted gate message is read on every surface, so it keeps the chat grammar.
-    expect((parentRun?.metadata.approval as { message: string }).message).toContain(
-      `\`/workflow approve ${child!.id}\``
+    expect((parentRun?.metadata.approval as { message: string }).message).toBe(
+      'review the sub-run'
     );
   });
 

@@ -71,6 +71,11 @@ const NOT_IN_VALIDATE: readonly { command: string; reason: string }[] = [
       'Proves provider-attempt admission contention and holder-kind convergence against a live PostgreSQL service.',
   },
   {
+    command: 'bun test packages/core/src/db/workflow-gate-admission.postgres.integration.test.ts',
+    reason:
+      'Proves root gate locking, cold presentation claims, and exact promotion against a live PostgreSQL service.',
+  },
+  {
     command: 'bun test packages/core/src/db/workflows.metadata-merge.postgres.integration.test.ts',
     reason:
       'Proves a null in a Postgres metadata merge removes the key, against a live PostgreSQL service.',

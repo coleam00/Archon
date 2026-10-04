@@ -86,6 +86,9 @@ test('a second resume recomputes output invalidated before a rejected node start
   };
   const store: IWorkflowStore = {
     ...createWorkflowStore(),
+    getWorkflowGateState: async () => ({ ownerId: run.id }),
+    settleWorkflowGates: async () => run.id,
+    claimWorkflowGatePresentation: async () => null,
     getWorkflowRun: async () => run,
     getWorkflowRunStatus: async () => 'running',
     updateWorkflowRun: async () => {},

@@ -883,7 +883,8 @@ describe('rejectWorkflow', () => {
           data: { decision: 'rejected', reason: 'still broken' },
         },
       ],
-      { step_name: 'review', reason: 'approval_rejected' }
+      { step_name: 'review', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -907,7 +908,8 @@ describe('rejectWorkflow', () => {
           data: { decision: 'rejected', reason: 'no good' },
         },
       ],
-      { step_name: 'review', reason: 'approval_rejected' }
+      { step_name: 'review', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });

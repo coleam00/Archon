@@ -47,6 +47,7 @@ const mockGetWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(
 );
 const mockWorkflowDeps = {
   store: {
+    getWorkflowGateState: async (id: string) => ({ ownerId: id }),
     failWorkflowRun: mockStoreFailWorkflowRun,
     getWorkflowRunStatus: mockGetWorkflowRunStatus,
   },

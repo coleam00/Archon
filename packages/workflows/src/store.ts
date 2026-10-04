@@ -16,6 +16,9 @@ import type {
   WorkflowRunOutcome,
   WorkflowRunStatus,
   ApprovalContext,
+  GateAdmission,
+  GateQueue,
+  PendingGate,
   WorkflowAttentionWaitContext,
   WorkflowWaitContext,
   WorkflowWaitResult,
@@ -300,7 +303,27 @@ export interface IWorkflowRunNodeSessionStore {
   }): Promise<void>;
 }
 
-export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionStore {
+export interface WorkflowGateStore {
+  pauseWorkflowRun(
+    id: string,
+    approvalContext: ApprovalContext,
+    extraMetadata?: Record<string, unknown>
+  ): Promise<GateAdmission>;
+  reconcileWorkflowGateChild(childId: string): Promise<void>;
+  getWorkflowGateState(id: string): Promise<{ ownerId: string; queue?: GateQueue }>;
+  settleWorkflowGates(id: string): Promise<string>;
+  claimWorkflowGatePresentation(id: string): Promise<PendingGate | null>;
+  confirmWorkflowGatePresentation(id: string, gateId: string): Promise<{ active: boolean }>;
+  failWorkflowGatePresentation(
+    id: string,
+    gateId: string,
+    error: string
+  ): Promise<{ failed: boolean }>;
+  consumeWorkflowGateContinuation(id: string, gateId: string): Promise<void>;
+}
+
+export interface IWorkflowStore
+  extends IRunTreeStore, IWorkflowRunNodeSessionStore, WorkflowGateStore {
   // Run lifecycle
   createWorkflowRun(data: {
     /**
@@ -422,17 +445,6 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
       signal?: RunStopSignal;
     }
   ): Promise<void>;
-  /**
-   * Pause a running run for human review, stamping the approval context. Optional
-   * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
-   * container write-back gate's `pending_writeback` marker) so there is never a
-   * paused-without-marker window.
-   */
-  pauseWorkflowRun(
-    id: string,
-    approvalContext: ApprovalContext,
-    extraMetadata?: Record<string, unknown>
-  ): Promise<void>;
   /** Pause a running run and record its engine-owned wait start atomically. */
   pauseWorkflowRunForWait(
     id: string,
@@ -459,26 +471,6 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowWaitContext,
     completion: WorkflowWaitCompletion
   ): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }>;
-  /**
-   * Rewrite the approval context of an ALREADY-paused, still-open gate — unlike
-   * `pauseWorkflowRun`, which requires the run to currently be `'running'` and so
-   * cannot be used once a pause has already landed. CAS-guarded on the gate still
-   * being unresolved: a human who resolves the gate first wins the race, and this
-   * returns `resolved: false` instead of clobbering their resolution.
-   *
-   * Built for #2707 step 3's pause escalation: a `loop_group` body gate pauses
-   * generically (via `pauseWorkflowRun`, `nodeId` = the gate's own bare id), and
-   * this then rewrites `nodeId` to the enclosing loop_group's id (so the
-   * top-level DAG's resume walk finds it) and adds `bodyGateId` (the gate's
-   * original id, otherwise lost). Pass the COMPLETE rewritten `ApprovalContext`,
-   * not a partial one — the write merges into stored metadata, and an omitted
-   * field can survive from the prior context on one dialect and not the other.
-   */
-  rewriteApprovalContext(
-    id: string,
-    approvalContext: ApprovalContext
-  ): Promise<{ resolved: boolean }>;
-
   /**
    * Atomically CLAIM the container write-back apply before the live root is mutated
    * (retry-safe apply). Sets `metadata.writeback_apply_claimed` only while unset;

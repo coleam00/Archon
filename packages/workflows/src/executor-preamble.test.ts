@@ -1,3 +1,4 @@
+import { createGateStoreTestMethods } from './gate-store-test-utils';
 /**
  * Tests for the executeWorkflow() preamble: concurrent-run guard, staleness
  * detection, and resume logic.  These run before DAG dispatch and are exercised
@@ -124,7 +125,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     getCodebaseEnvVars: mock(async () => ({})),
     updateWorkflowActivity: mock(async () => {}),
     completeWorkflowRun: mock(async () => {}),
-    pauseWorkflowRun: mock(async () => {}),
+    ...createGateStoreTestMethods(),
     pauseWorkflowRunForWait: mock(async () => {}),
     failPausedAttentionWait: mock(async () => ({ failed: true })),
     clearWorkflowWaitContext: mock(
@@ -138,7 +139,6 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         },
       })
     ),
-    rewriteApprovalContext: mock(async () => ({ resolved: true })),
     claimWriteback: mock(async () => ({ claimed: true })),
     releaseWritebackClaim: mock(async () => {}),
     cancelWorkflowRun: mock(async () => ({ cancelled: false })),

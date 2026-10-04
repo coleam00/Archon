@@ -267,6 +267,7 @@ export class SlackWorkflowBridge {
       runId: event.runId,
       nodeId: event.nodeId,
       message: event.message,
+      gateId: event.gateId,
     });
     const postResult = this.adapter
       .getApp()
@@ -553,7 +554,10 @@ export class SlackWorkflowBridge {
     try {
       try {
         if (decision === 'approved') {
-          const result = await workflowOperations.approveWorkflow(runId);
+          const result =
+            action.value === undefined
+              ? await workflowOperations.approveWorkflow(runId)
+              : await workflowOperations.approveWorkflow(runId, undefined, action.value);
           const resumed = await this.tryResumeWorkflow(runId, actorId);
           // Interactive-loop approves are outcome-ambiguous from here: a gate that
           // paused after a completion condition was met finalizes on resume (no re-run, #2074);
@@ -565,7 +569,10 @@ export class SlackWorkflowBridge {
               : 'workflow resumed'
             : RESUME_NOT_ACCEPTED_NOTE;
         } else {
-          const result = await workflowOperations.rejectWorkflow(runId, 'Rejected');
+          const result =
+            action.value === undefined
+              ? await workflowOperations.rejectWorkflow(runId, 'Rejected')
+              : await workflowOperations.rejectWorkflow(runId, 'Rejected', action.value);
           outcomeNote = result.cancelled
             ? result.maxAttemptsReached
               ? 'cancelled — max reject attempts reached'

@@ -1,3 +1,5 @@
+import { gateNodeMetadata } from './schemas/workflow-run';
+import { presentWorkflowGate } from './gate-presentation';
 import { nodeInvocationKey } from './node-record-reader';
 import {
   startNodeExecution,
@@ -55,12 +57,7 @@ import {
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { resolveWorkflowName } from './router';
-import type {
-  IWorkflowPlatform,
-  WorkflowConfig,
-  WorkflowDeps,
-  WorkflowCommandSurface,
-} from './deps';
+import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import { spellWorkflowCommand } from './deps';
 import type {
   SendQueryOptions,
@@ -4246,10 +4243,8 @@ async function executeLoopGroupBody(
 
   // Detect loop resume (mirrors executeLoopNode). Two shapes recognized:
   //  - the ORIGINAL interactive_loop gate (group.interactive + gate_message).
-  //  - the #2707 step 3 ESCALATED shape — a gate node that is the body's sole
-  //    terminal sink paused generically as an ordinary 'approval' gate, then
-  //    rewritten (see the post-runLayers escalation below) so nodeId points at
-  //    THIS group and bodyGateId carries the gate's own id. `$LOOP_USER_INPUT`
+  //  - a body terminal gate admitted under THIS group, with bodyGateId naming
+  //    the leaf gate. `$LOOP_USER_INPUT`
   //    does not apply to this shape — the human's text flows via the ordinary
   //    $LOOP_PREV.<gateId>.output.text channel instead, like any other body
   //    node's output — so `loopUserInput` below stays scoped to the legacy shape.
@@ -4619,7 +4614,12 @@ async function executeLoopGroupBody(
     // needed (the body is sealed against depends_on, but prompt refs remain valid).
     const scopedNodeOutputs = new Map<string, NodeOutput>(outerNodeOutputs);
 
+    const terminalBodyGate = findLoopGroupTerminalSuspendNode(iterBodyNodes);
     const iterCtx: RunLayersContext = {
+      bodyGateOwner:
+        terminalBodyGate && isGateNode(terminalBodyGate)
+          ? { nodeId: node.id, bodyGateId: terminalBodyGate.id, iteration: i }
+          : undefined,
       unfinishedInvocations: ctx.unfinishedInvocations,
       deps: ctx.deps,
       platform: ctx.platform,
@@ -4731,59 +4731,21 @@ async function executeLoopGroupBody(
     // that iteration's turns (#3532).
     loopLastSequentialSession = iterCtx.lastSequentialSession;
 
-    // #2707 step 3: pause escalation. A gate node that is the body's sole terminal
-    // sink pauses generically via executeApprovalNode (called through runLayers,
-    // like any other body node) — that pause alone does NOT stop this loop: the
-    // `paused` tolerance above (needed for a genuinely unrelated sibling gate
-    // pausing in the same layer) would otherwise let the loop barrel straight into
-    // the next iteration, immediately re-pausing and burning cost every time. This
-    // detects THAT specific pause and escalates it: rewrite the ApprovalContext so
-    // it points at THIS group (the top-level DAG only knows top-level node ids,
-    // never a nested body id — mirrors exactly how the interactive_loop gate below
-    // already works) and return the same "paused" shape that path uses. Placed
-    // AFTER the usage accumulation above (not right after runLayers) so this
-    // iteration's own spend — the 'work' node plus the gate check that just ran —
-    // is already folded into loopTotalCostUsd/loopTotalTokens by the time the
-    // escalation return reads them; reading them any earlier would silently drop
-    // this iteration's cost from the run's live totals for the whole pause window.
     const terminalSuspendNode = findLoopGroupTerminalSuspendNode(iterBodyNodes);
     if (terminalSuspendNode && postBodyStatus === 'paused') {
-      // Fresh read — workflowRun is this call's stale snapshot from before
-      // runLayers ran; the gate's own pause just wrote metadata.approval.
       const freshRun = await deps.store.getWorkflowRun(workflowRun.id);
-      const freshApproval = isApprovalContext(freshRun?.metadata?.approval)
-        ? freshRun.metadata.approval
-        : undefined;
-      if (isGateNode(terminalSuspendNode) && freshApproval?.nodeId === terminalSuspendNode.id) {
-        const rewritten: ApprovalContext = {
-          ...freshApproval,
-          nodeId: node.id,
-          bodyGateId: terminalSuspendNode.id,
-          iteration: i,
-          sessionId: loopLastSequentialSession?.sessionId ?? null,
-          sessionProvider: loopLastSequentialSession?.provider ?? null,
+      if (
+        isGateNode(terminalSuspendNode) &&
+        scopedNodeOutputs.get(terminalSuspendNode.id)?.execution?.lifecycle.status === 'suspended'
+      ) {
+        return {
+          state: 'running',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          suspensionPoint: 'approval',
         };
-        const { resolved } = await deps.store.rewriteApprovalContext(workflowRun.id, rewritten);
-        if (resolved) {
-          return {
-            state: 'running',
-            output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-            loopIterations: i,
-            suspensionPoint: 'approval',
-          };
-        }
-        // A human resolved the ORIGINAL bare-gate pause before the rewrite landed
-        // (an astronomically narrow race) — fall through rather than error or
-        // corrupt state. This does NOT behave the same as a normal resolved gate,
-        // though: the resolution was written under the bare gate id, with
-        // bodyGateId still unset, so it's unreachable by the namespaced restore
-        // path this mechanism depends on — the loop proceeds toward
-        // max_iterations instead of honoring the human's answer. Accepted for
-        // this race's vanishingly narrow window rather than built out further.
-        // (The postBodyStatus tolerance above already let a 'paused' status
-        // through; nothing here re-checks it.)
       }
       const freshWait = isWorkflowWaitContext(freshRun?.metadata?.wait)
         ? freshRun.metadata.wait
@@ -5056,38 +5018,8 @@ async function executeLoopGroupBody(
         lastIterationOutput,
         group.gate_message
       );
-      const gateMsg =
-        `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
-        `Run ID: \`${workflowRun.id}\`\n` +
-        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
-        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
-        workflowId: workflowRun.id,
-        nodeName: node.id,
-      });
-      if (!gateSent) {
-        getLog().error(
-          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
-          'loop_group_node.gate_message_send_failed'
-        );
-        return {
-          state: 'failed',
-          output: lastIterationOutput,
-          failureKind: 'unknown',
-          error: undeliveredGatePromptError('Loop-group gate', node.id),
-        };
-      }
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'approval_requested',
-          step_name: stepName,
-          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-        })
-        .catch((err: Error) => {
-          logEventStoreError(err, i);
-        });
       const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
+        ...(ctx.currentExecution ? { execution: executionMetadata(ctx.currentExecution) } : {}),
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -6544,41 +6476,6 @@ async function executeLoopNode(
         lastIterationOutput,
         loop.gate_message
       );
-      const gateMsg =
-        `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
-        `Run ID: \`${workflowRun.id}\`\n` +
-        `Respond: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id} <your feedback>`)}\` | ` +
-        `Cancel: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-      const gateSent = await safeSendMessage(platform, conversationId, gateMsg, {
-        workflowId: workflowRun.id,
-        nodeName: node.id,
-      });
-      if (!gateSent) {
-        // Gate message failed to deliver — do not pause; fail the node so the user
-        // sees a clear error rather than a silently orphaned paused run.
-        getLog().error(
-          { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
-          'loop_node.gate_message_send_failed'
-        );
-        return failLoopNode(undeliveredGatePromptError('Loop gate', node.id), {
-          failureKind: 'unknown',
-          output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-          loopIterations: i,
-          data: { iteration: i },
-        });
-      }
-      deps.store
-        .createWorkflowEvent({
-          workflow_run_id: workflowRun.id,
-          event_type: 'approval_requested',
-          step_name: stepName,
-          data: { message: honestMessage, iteration: i, completionSignaled: completionDetected },
-        })
-        .catch((err: Error) => {
-          logEventStoreError(err, i);
-        });
       const suspended = finishNodeExecution(
         execution,
         { status: 'suspended', point: 'interactive_loop' },
@@ -6641,78 +6538,32 @@ async function executeLoopNode(
   });
 }
 
-/**
- * The failure of a gate whose prompt could not be delivered. The prompt is the only place
- * a human learns how to resume, so a gate that cannot send it fails its node instead of
- * pausing a run nobody was told about.
- */
-function undeliveredGatePromptError(
-  gate: 'Approval' | 'Loop gate' | 'Loop-group gate',
-  nodeId: string
-): string {
-  return `${gate} message failed to deliver for node '${nodeId}' — cannot pause safely`;
-}
-
-/**
- * Pause the run for a human/system gate — the single persist path for all five
- * suspend sites (`loop_group`, `loop`, `approval`, `workflow:` child, and the
- * container write-back gate). By default, tolerates a lost CAS when the run
- * was externally transitioned while the gate was being raised — e.g. a killed
- * CLI's signal cleanup marked the run failed mid-pause (#1123), or an operator
- * cancelled it from another surface. `pauseWorkflowRun`'s UPDATE only matches
- * status='running'; when it misses, re-read the status: any non-running status
- * means the pause lost a legitimate external race — log, skip the
- * approval_pending emit, and return `false` so the caller's normal
- * completed-shaped output lets the between-layer status check halt the DAG
- * cleanly (the same path a successful pause takes). On a successful pause, the
- * approval_pending live signal is emitted HERE (from the ApprovalContext's own
- * nodeId/message) so no call site can accidentally emit it after a lost CAS. A
- * store error while the run is still 'running' is a genuine pause failure and
- * rethrows.
- *
- * `options.failClosed` inverts the CAS-tolerance for a caller that must never
- * treat a lost pause as anything but a genuine failure — used by the container
- * write-back gate, where a lost pause must never fall through toward the
- * apply/teardown path (throwing is the safe behavior; the H2 teardown-preserve
- * logic keeps the overlay volume for a retry). `options.extraMetadata` is
- * forwarded verbatim to `pauseWorkflowRun`'s third argument (the write-back
- * gate's `pending_writeback` marker, folded into the same atomic write).
- *
- * Returns whether the pause actually persisted (`true`) or was skipped due to
- * a tolerated lost CAS (`false`) — callers with a post-pause side effect (e.g.
- * notifying a user) should gate it on this so a skipped pause stays silent.
- */
 async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
   runId: string,
   approvalContext: ApprovalContext,
   options: { extraMetadata?: Record<string, unknown>; failClosed?: boolean } = {}
 ): Promise<boolean> {
-  const { extraMetadata, failClosed = false } = options;
+  let admission;
   try {
-    await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata);
-  } catch (pauseErr) {
-    if (failClosed) throw pauseErr;
-    let status: WorkflowRunStatus | null;
-    try {
-      status = await deps.store.getWorkflowRunStatus(runId);
-    } catch {
-      // Status unknowable — surface the original pause failure.
-      throw pauseErr;
-    }
-    if (status === 'running') throw pauseErr;
+    admission = await deps.store.pauseWorkflowRun(runId, approvalContext, options.extraMetadata);
+  } catch (error) {
+    if (options.failClosed) throw error;
+    const status = await deps.store.getWorkflowRunStatus(runId);
+    if (status === 'running' || status === 'paused' || status === 'pending') throw error;
     getLog().warn(
-      { workflowRunId: runId, status, err: pauseErr as Error },
+      { err: error, workflowRunId: runId, status },
       'dag.gate_pause_skipped_external_transition'
     );
     return false;
   }
-  getWorkflowEventEmitter().emit({
-    type: 'approval_pending',
-    runId,
-    nodeId: approvalContext.nodeId,
-    message: approvalContext.message,
-  });
+  if (admission.status === 'externally_stopped') {
+    if (options.failClosed)
+      throw new Error(`Gate admission stopped: ${admission.runStatus ?? 'deleted'}`);
+    return false;
+  }
+  if (admission.status === 'already_resolved')
+    throw new Error('Resolved gate was registered again');
   return true;
 }
 
@@ -7108,48 +6959,7 @@ async function executeApprovalNode(
     // Fall through to re-pause at the approval gate
   }
 
-  // Standard approval gate — send message and pause.
-  // Resolve $nodeId.output[.field] references so the human sees concrete values
-  // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
   const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs);
-  const approvalMsg =
-    `⏸ **Approval required**: ${renderedMessage}\n\n` +
-    `Run ID: \`${workflowRun.id}\`\n` +
-    `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
-    `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
-    getLog().error(
-      { nodeId: node.id, workflowRunId: workflowRun.id },
-      'approval_node.gate_message_send_failed'
-    );
-    return recordNodeState(
-      { store: deps.store, logDir: ctx.logDir },
-      finishNodeExecution(
-        execution,
-        {
-          status: 'failed',
-          error: undeliveredGatePromptError('Approval', node.id),
-          failureKind: 'unknown',
-        },
-        { output: { text: '' }, diagnostics: { iteration } }
-      )
-    );
-  }
-
-  deps.store
-    .createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'approval_requested',
-      step_name: stepName,
-      data: { message: renderedMessage },
-    })
-    .catch((err: Error) => {
-      getLog().error(
-        { err, workflowRunId: workflowRun.id, eventType: 'approval_requested' },
-        'workflow.event_persist_failed'
-      );
-    });
-
   const suspended = finishNodeExecution(
     execution,
     { status: 'suspended', point: 'approval' },
@@ -7161,7 +6971,15 @@ async function executeApprovalNode(
   const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
     execution: executionMetadata(suspended),
     message: renderedMessage,
-    nodeId: node.id,
+    nodeId: ctx.bodyGateOwner?.nodeId ?? node.id,
+    ...(ctx.bodyGateOwner
+      ? {
+          bodyGateId: ctx.bodyGateOwner.bodyGateId,
+          iteration: ctx.bodyGateOwner.iteration,
+          sessionId: ctx.lastSequentialSession?.sessionId ?? null,
+          sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+        }
+      : {}),
     type: 'approval',
     captureResponse: node.captureResponse,
     onRejectPrompt: rework?.prompt,
@@ -7209,8 +7027,7 @@ async function executeWorkflowNode(
   node: WorkflowNode,
   ctx: RunLayersContext
 ): Promise<NodeExecutionResult> {
-  const { deps, platform, conversationId, cwd, workflowRun: parentRun } = ctx;
-  const msgContext = { workflowId: parentRun.id, nodeName: node.id };
+  const { deps, conversationId, cwd, workflowRun: parentRun } = ctx;
   const executionNodeId = ctx.stepNamePrefix + node.id;
   const execution = beginExecution(ctx, node);
   await recordNodeState({ store: deps.store, logDir: ctx.logDir }, execution);
@@ -7358,47 +7175,14 @@ async function executeWorkflowNode(
     );
   };
 
-  // Pause the PARENT "blocked on child" via the shared pause primitive — mirrors
-  // executeApprovalNode's PAUSE primitives: pause, emit, return {completed, ''}
-  // WITHOUT node_completed so the node re-runs on the parent's resume (the
-  // resume snapshot reads only node_completed). The RESUME side deliberately
-  // differs: an approval gate is resolved externally by the approve handler,
-  // while this node re-runs and re-inspects its child. Also unlike the
-  // approval node, no approval_requested workflow_event row is persisted here
-  // — the block reason lives on the run itself (metadata.approval), and there
-  // is no human decision to audit for a gate that resolves automatically on
-  // child completion.
   const pauseParentOnChild = async (childRunId: string): Promise<NodeExecutionResult> => {
-    // KNOWN LIMITATION (#2180): the run has a SINGLE approval-gate slot. If two
-    // gate-pausing nodes (two `workflow:` children, or a `workflow:` + an `approval:`)
-    // land in the SAME topological layer, the second pause attempt loses the CAS
-    // (the first already flipped running→paused) — the shared helper tolerates this
-    // the same way it does for every other gate type: skip silently, no message, no
-    // node failure. The loser's child is real but unmentioned until a later resume
-    // re-pauses on it. A retry can't fix this (there is nowhere to record a second
-    // simultaneous block); the real fix is a gate queue or a load-time reject of
-    // multiple gate-pausing nodes per layer — tracked in #2180.
-    const blocked = `Sub-run \`${node.workflow}\` (run \`${childRunId.slice(0, 8)}\`) is paused awaiting review. `;
-    // The persisted gate message is read on every surface (web, CLI status, chat), so it
-    // keeps the surface-neutral chat grammar; the notice below goes to this platform only.
-    const approveChild = (surface: WorkflowCommandSurface): string =>
-      `${blocked}Approve it by run id: \`${spellWorkflowCommand(surface, `approve ${childRunId}`)}\``;
     const paused = await pauseGateRespectingExternalTransition(deps, parentRun.id, {
-      message: approveChild({}),
+      message: `Waiting for sub-run '${node.workflow}' (${childRunId})`,
       nodeId: executionNodeId,
       type: 'child_workflow',
       childRunId,
     });
-    if (paused) {
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `⏸ **Blocked on sub-run** \`${node.workflow}\`: ${approveChild(platform)}`,
-        msgContext
-      );
-    } else {
-      return serializeNodeOutput(execution);
-    }
+    if (!paused) return serializeNodeOutput(execution);
     return recordNodeState(
       { store: deps.store, logDir: ctx.logDir },
       finishNodeExecution(
@@ -9092,6 +8876,7 @@ interface RunDerived {
  * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
  */
 interface RunLayersContext extends RunInputs, RunDerived {
+  bodyGateOwner?: { nodeId: string; bodyGateId: string; iteration: number };
   /** One node dispatch, shared by its inner retry attempts. Never mutate the parent context. */
   nodeInvocation?: NodeInvocation;
   /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
@@ -9338,6 +9123,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 
   for (let layerIdx = 0; layerIdx < ctx.layers.length; layerIdx++) {
     const layer = ctx.layers[layerIdx];
+    const gateState = await ctx.deps.store.getWorkflowGateState(ctx.workflowRun.id);
     const isParallelLayer = layer.length > 1;
 
     if (isParallelLayer) {
@@ -9368,6 +9154,17 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                 nodeInvocationKey(parentCtx.stepNamePrefix + node.id, parentCtx.loopGroupPath)
               )?.invocation ?? newNodeInvocation(parentCtx.loopGroupPath),
           };
+          if (gateState.queue && ctx.loopGroupPath.length === 0) {
+            ctx.workflowRun = {
+              ...ctx.workflowRun,
+              metadata: gateNodeMetadata(
+                ctx.workflowRun.metadata,
+                gateState.queue,
+                ctx.workflowRun.id,
+                node.id
+              ),
+            };
+          }
           try {
             const checkpointSessionForProvider = (
               provider: string
@@ -10313,6 +10110,13 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
           );
         }
         ctx.nodeOutputs.set(nodeId, output);
+        if (output.state === 'completed' && gateState.queue && ctx.loopGroupPath.length === 0) {
+          for (const gate of gateState.queue.resolved) {
+            if (gate.runId === ctx.workflowRun.id && gate.context.nodeId === nodeId) {
+              await ctx.deps.store.consumeWorkflowGateContinuation(ctx.workflowRun.id, gate.id);
+            }
+          }
+        }
         if (
           ctx.nodeSessionHandles !== undefined &&
           ctx.namedResumeSourceIds?.has(nodeId) === true &&
@@ -10390,6 +10194,15 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
     }
 
     await ctx.afterLayer?.();
+    if (ctx.loopGroupPath.length === 0) {
+      await ctx.deps.store.settleWorkflowGates(ctx.workflowRun.id);
+      await presentWorkflowGate(
+        ctx.deps.store,
+        ctx.platform,
+        ctx.conversationId,
+        ctx.workflowRun.id
+      );
+    }
 
     // Check for non-running status between DAG layers (cancellation, deletion, pause)
     try {
@@ -10415,7 +10228,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
           },
           'dag.stop_detected_between_layers'
         );
-        // Paused is intentional (approval gate) — the approval message was already sent
         if (effectiveStatus !== 'paused') {
           await safeSendMessage(
             ctx.platform,
@@ -10961,17 +10773,8 @@ async function raiseWriteBackGate(
   const message = summary
     ? renderWriteBackSummary(summary)
     : 'Container run finished — review before applying to the live folder.';
-  // Fold `pending_writeback` into the SAME pause write so there is no window where the
-  // run is paused-for-writeback without the resume marker (M3): pass it via the shared
-  // pause helper's `extraMetadata`, one merged write. `failClosed: true` preserves this
-  // gate's existing fail-closed contract — a lost pause here must never fall through
-  // toward the apply/teardown path (throwing is the safe behavior, and the H2
-  // teardown-preserve logic keeps the overlay volume for a retry), so it rethrows
-  // instead of tolerating the CAS miss the way the other four gate types do. This also
-  // emits the `approval_pending` live pause signal on success (same event the approval
-  // node emits, so the existing pause UI shows approve/reject) — the lifecycle event
-  // below now fires just after it instead of just before; both are best-effort,
-  // fire-and-forget emits with no ordering contract.
+  // The overlay marker and admission must commit together. Losing admission must
+  // never authorize the write-back path; retain the overlay for explicit recovery.
   await pauseGateRespectingExternalTransition(
     deps,
     runId,
@@ -10994,7 +10797,8 @@ async function raiseWriteBackGate(
     }
   );
   await suspendContainerForPause(deps, platform, conversationId, containerCtx, execContext, runId);
-  await safeSendMessage(platform, conversationId, message, { workflowId: runId });
+  await deps.store.settleWorkflowGates(runId);
+  await presentWorkflowGate(deps.store, platform, conversationId, runId);
 }
 
 /** Inputs accepted by {@link executeDagWorkflow}. */
