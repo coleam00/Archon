@@ -20,12 +20,7 @@ import {
   readComposedBindings,
   type LoopWithCompiledCommand,
 } from './compiled-command';
-import {
-  declaredFieldsFromSchema,
-  canonicalValueText,
-  parseWholeExecutionCheckoutRef,
-  type JsonValue,
-} from './output-ref';
+import { canonicalValueText, parseWholeExecutionCheckoutRef, type JsonValue } from './output-ref';
 import { discoverScriptsForCwd } from './script-discovery';
 import {
   describeUnmetCompletion,
@@ -61,6 +56,7 @@ import {
   isAgentNode,
   isComposeFanOutNode,
   isLoopGroupNode,
+  definedOutputPaths,
   isLoopNode,
   isWaitNode,
   isWorkflowNode,
@@ -501,19 +497,20 @@ function nodeType(node: DagNode): z.infer<typeof dryRunNodeTypeSchema> {
 }
 
 function completedOutput(node: DagNode, stub: DryRunStubValue): NodeOutput {
-  const declaredFields = declaredFieldsFromSchema(node.output_format);
+  const declaredOutputPaths = definedOutputPaths(node);
+  const contract = declaredOutputPaths !== undefined ? { declaredOutputPaths } : {};
   if (typeof stub === 'string') {
     return {
       state: 'completed',
       output: stub,
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...contract,
     };
   }
   return {
     state: 'completed',
     output: JSON.stringify(stub),
     structuredOutput: stub,
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...contract,
   };
 }
 

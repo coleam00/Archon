@@ -37,6 +37,8 @@ const ROOTS = [
   'v2/TurnStartResponse',
   'v2/TurnInterruptResponse',
   'v2/LoginAccountResponse',
+  'v2/GetAccountResponse',
+  'v2/Account',
   // Workflow-node capability scoping reads these.
   'v2/ConfigReadResponse',
   'v2/PluginInstalledResponse',

@@ -6,6 +6,7 @@
  * Every frame it sends is typed with the protocol generated from the pinned Codex, so a
  * regeneration that renames or adds a field fails type-check here.
  */
+import type { GetAccountResponse } from '../codex/protocol/v2/GetAccountResponse';
 import { EventEmitter } from 'events';
 import { PassThrough } from 'stream';
 import type { ChildProcessWithoutNullStreams } from 'child_process';
@@ -42,6 +43,13 @@ type CommandExecution = Extract<ThreadItem, { type: 'commandExecution' }>;
 type McpToolCall = Extract<ThreadItem, { type: 'mcpToolCall' }>;
 
 export interface FakeTurnScript {
+  account?: GetAccountResponse['account'];
+  /** `requiresOpenaiAuth` in the default `account/read` answer (default true). */
+  requiresOpenaiAuth?: boolean;
+  accountResponse?: unknown;
+  /** Never answer `initialize`, as a Codex that hangs on startup would not. */
+  ignoreInitialize?: boolean;
+  ignoreAccountRead?: boolean;
   /** Notifications sent after `turn/start` answers, in order. */
   notifications?: ServerNotification[];
   /** End the turn with this `turn/completed` status (default `completed`); `null` sends none. */
@@ -205,7 +213,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
         }
         switch (method) {
           case 'initialize':
-            send({ id, result: initializeResponse() });
+            if (!turn.ignoreInitialize) send({ id, result: initializeResponse() });
             break;
           case 'thread/start':
             send({ id, result: threadStartResponse(THREAD_ID) });
@@ -230,6 +238,19 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
             if (turn.ignoreInterrupt) break;
             send({ id, result: {} satisfies TurnInterruptResponse });
             completeTurn('interrupted');
+            break;
+          case 'account/read':
+            if (!turn.ignoreAccountRead)
+              send({
+                id,
+                result:
+                  'accountResponse' in turn
+                    ? turn.accountResponse
+                    : ({
+                        account: turn.account ?? null,
+                        requiresOpenaiAuth: turn.requiresOpenaiAuth ?? true,
+                      } satisfies GetAccountResponse),
+              });
             break;
           case 'account/login/start':
             send({ id, result: { type: 'apiKey' } satisfies LoginAccountResponse });

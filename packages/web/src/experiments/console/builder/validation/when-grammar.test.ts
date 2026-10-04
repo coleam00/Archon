@@ -254,3 +254,19 @@ describe('when-grammar toDnf', () => {
     ]);
   });
 });
+
+test('round-trips canonical nested paths while keeping shorthand and inputs single-field', () => {
+  const expr = "$review.output.proposal.action == 'add'";
+  const parsed = parse(expr);
+  expect(parsed.ok).toBe(true);
+  if (parsed.ok) {
+    expect(parsed.ast.or[0][0]).toMatchObject({
+      kind: 'node',
+      nodeId: 'review',
+      field: 'proposal.action',
+    });
+    expect(format(parsed.ast)).toBe(expr);
+  }
+  expect(parse("$review.proposal.action == 'add'").ok).toBe(false);
+  expect(parse("$INPUTS.proposal.action == 'add'").ok).toBe(false);
+});

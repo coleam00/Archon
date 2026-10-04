@@ -7,6 +7,7 @@
  * Bootstrap: callers must call registerBuiltinProviders() at process entrypoints
  * (server startup, CLI init) before any provider lookups.
  */
+import { singleVendorCatalog } from './credential-catalog';
 import type {
   IAgentProvider,
   ProviderCapabilities,
@@ -136,16 +137,11 @@ export function registerBuiltinProviders(): void {
       capabilities: CLAUDE_CAPABILITIES,
       builtIn: true,
       parseConfig: parseClaudeConfigStrict,
-      credentials: {
-        kind: 'static',
-        specs: [
-          {
-            vendor: 'anthropic',
-            displayName: 'Anthropic',
-            kinds: ['api_key', 'subscription'],
-          },
-        ],
-      },
+      credentials: singleVendorCatalog({
+        vendor: 'anthropic',
+        displayName: 'Anthropic',
+        kinds: ['api_key', 'subscription'],
+      }),
     },
     {
       id: 'codex',
@@ -154,18 +150,13 @@ export function registerBuiltinProviders(): void {
       capabilities: CODEX_CAPABILITIES,
       builtIn: true,
       parseConfig: parseCodexConfigStrict,
-      credentials: {
-        kind: 'static',
-        specs: [
-          {
-            // Subscription (ChatGPT) login runs Archon's own PKCE flow —
-            // see @archon/core credentials/openai-oauth.ts (#1924).
-            vendor: 'openai',
-            displayName: 'OpenAI',
-            kinds: ['api_key', 'subscription'],
-          },
-        ],
-      },
+      credentials: singleVendorCatalog({
+        // Subscription (ChatGPT) login runs Archon's own PKCE flow —
+        // see @archon/core credentials/openai-oauth.ts (#1924).
+        vendor: 'openai',
+        displayName: 'OpenAI',
+        kinds: ['api_key', 'subscription'],
+      }),
     },
   ];
 

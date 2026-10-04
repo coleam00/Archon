@@ -1,3 +1,4 @@
+import type { CredentialStatus } from '@archon/provider-contract';
 import { join } from 'node:path';
 
 import { createLogger } from '@archon/paths';
@@ -36,6 +37,10 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 export class OpencodeProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   /**
    * One call is one attempt; the engine owns retry. A failure, including one thrown
    * while setting the turn up, ends in a `result` carrying a typed `failure`, then

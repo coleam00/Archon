@@ -10,21 +10,10 @@ Archon's provider registry (Phase 2, [#1195](https://github.com/coleam00/Archon/
 
 ## The contract
 
-Every provider implements `IAgentProvider` from `@archon/providers/types`:
+Every provider implements `IAgentProvider`, defined in [`packages/providers/src/types.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/types.ts); read the interface there rather than a copy. A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`, where Pi and Codex read their model and env), the caller's `env`, and an abort `signal`.
 
-```typescript
-export interface IAgentProvider {
-  sendQuery(
-    prompt: string,
-    cwd: string,
-    resumeSessionId?: string,
-    options?: SendQueryOptions,
-  ): AsyncGenerator<MessageChunk>;
 
-  getType(): string;
-  getCapabilities(): ProviderCapabilities;
-}
-```
+`checkCredential` checks the native credential used when Archon delivers none, through the provider's runtime. Return `not_checked` when the runtime cannot check without a model session. Derive failure states from structured fields or typed errors; carry vendor text only as evidence and never expose credential values. Test it with `checkCredentialStatuses` from `@archon/provider-contract/conformance`.
 
 The provider yields a stream of `MessageChunk`s, which is `ProviderChunk` from `@archon/provider-contract`: its events, then a `result`, then `settled`. Archon normalizes every backend to this shape so platform adapters, the DAG executor, and the orchestrator don't need to know whether they're talking to Claude, Codex, Pi, or your provider. The [contract README](https://github.com/coleam00/Archon/blob/dev/packages/provider-contract/README.md) lists the rules a stream must follow, and `@archon/provider-contract/conformance` checks them against fixtures your provider supplies.
 
@@ -68,6 +57,7 @@ Implement `IAgentProvider`. Pattern:
 ```typescript
 // provider.ts
 import { createLogger } from '@archon/paths';
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../../types';
 import { YOUR_CAPABILITIES } from './capabilities';
 
@@ -78,6 +68,10 @@ function getLog() {
 }
 
 export class YourProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   async *sendQuery(prompt, cwd, resumeSessionId, options): AsyncGenerator<MessageChunk> {
     // 1. Parse assistantConfig (user-level defaults from .archon/config.yaml)
     // 2. Resolve model (options.model || config default)
@@ -113,6 +107,8 @@ Each community provider exports a `register*Provider()` function. Idempotent —
 ```typescript
 // registration.ts
 import { isRegisteredProvider, registerProvider } from '../../registry';
+import { singleVendorCatalog } from '../../credential-catalog';
+import { parseYourConfigStrict } from './config';
 import { YOUR_CAPABILITIES } from './capabilities';
 import { YourProvider } from './provider';
 
@@ -124,9 +120,15 @@ export function registerYourProvider(): void {
     factory: () => new YourProvider(),
     capabilities: YOUR_CAPABILITIES,
     builtIn: false, // ← important: community providers are NOT built-in
+    parseConfig: parseYourConfigStrict,
+    credentials: singleVendorCatalog({
+      vendor: 'anthropic', displayName: 'Anthropic', kinds: ['api_key'],
+    }),
   });
 }
 ```
+
+Use `singleVendorCatalog` for one stored-credential vendor. A multi-vendor static catalog supplies `specs` and `vendorFor(model)`, returning only vendors it lists. A provider without a stored-credential mapping declares `{ kind: 'dynamic', vendorFor: () => undefined }`.
 
 Then add one line to the aggregator at `packages/providers/src/registry.ts`:
 

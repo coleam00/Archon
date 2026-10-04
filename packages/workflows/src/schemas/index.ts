@@ -121,6 +121,7 @@ export {
   isWaitNode,
   isLoopNode,
   isLoopGroupNode,
+  definedOutputPaths,
   loopGroupBodySinks,
   loopGroupSoleTerminalSink,
   isWorkflowNode,

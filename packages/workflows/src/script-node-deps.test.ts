@@ -186,6 +186,7 @@ const mockSendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQue
 
 const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider => ({
   sendQuery: mockSendQuery,
+  checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: () => 'claude',
   getCapabilities: () => ({
     sessionResume: true,

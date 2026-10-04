@@ -1107,6 +1107,8 @@ export function expandWorkflowIncludes(
     nodes: DagNode[];
     includedRequirements: WorkflowRequirement[];
     renameIncludeRef: (id: string) => string;
+    /** Rewritten `$<alias>.output` producer id → the include alias the author wrote. */
+    includeAliases: Map<string, string>;
   }
 
   /**
@@ -1122,6 +1124,7 @@ export function expandWorkflowIncludes(
     const expandedNodes: DagNode[] = [];
     const includesById = new Map<string, ExpandedInclude>();
     const includedRequirements: WorkflowRequirement[] = [];
+    const includeAliases = new Map<string, string>();
 
     for (const node of nodes) {
       // Runtime width stays deferred, while the complete body contract is proven now.
@@ -1189,6 +1192,7 @@ export function expandWorkflowIncludes(
         includedRequirements.push(...(child.requires ?? []));
         const inlined = instantiateResolvedInclude(node, child, commandContents ?? new Map());
         includesById.set(node.id, inlined);
+        includeAliases.set(inlined.primarySink, node.id);
         expandedNodes.push(...inlined.namespaced);
         continue;
       }
@@ -1196,6 +1200,7 @@ export function expandWorkflowIncludes(
       if (isLoopGroupNode(node)) {
         const body = expandNodeList(node.loop_group.nodes, workflowName, stack);
         includedRequirements.push(...body.includedRequirements);
+        for (const [sink, alias] of body.includeAliases) includeAliases.set(sink, alias);
         expandedNodes.push({
           ...node,
           loop_group: {
@@ -1238,7 +1243,7 @@ export function expandWorkflowIncludes(
       rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, id => id);
     }
 
-    return { nodes: expandedNodes, includedRequirements, renameIncludeRef };
+    return { nodes: expandedNodes, includedRequirements, renameIncludeRef, includeAliases };
   }
 
   function expandOne(name: string, stack: string[]): ResolvedWorkflow {
@@ -1296,7 +1301,7 @@ export function expandWorkflowIncludes(
     // `expandWorkflowIncludes — composed approval gates are stamped, not rejected
     // (#1764)` pins this down with a "non-interactive INTERMEDIATE block still expands"
     // case).
-    const structureError = validateDagStructure(expanded.nodes);
+    const structureError = validateDagStructure(expanded.nodes, undefined, expanded.includeAliases);
     if (structureError) {
       throw new IncludeExpansionError(structureError);
     }

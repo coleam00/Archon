@@ -84,10 +84,10 @@ describe('AppServerConnection', () => {
     expect(a).toMatchObject({ id: 1, method: 'thread/start' });
     expect(b).toMatchObject({ id: 2, method: 'account/read' });
 
-    fake.reply({ id: 2, result: 'second' });
+    fake.reply({ id: 2, result: { account: null, requiresOpenaiAuth: true } });
     fake.reply({ id: 1, result: 'first' });
     expect(await first).toBe('first');
-    expect(await second).toBe('second');
+    expect(await second).toEqual({ account: null, requiresOpenaiAuth: true });
   });
 
   test('frames split across reads, or sharing one, are each read whole', async () => {
@@ -97,9 +97,9 @@ describe('AppServerConnection', () => {
     const second = connection.request('account/read', {});
     fake.stdout.write('{"id":1,"result":"fi');
     await tick();
-    fake.stdout.write('rst"}\n{"id":2,"result":"second"}\n');
+    fake.stdout.write('rst"}\n{"id":2,"result":{"account":null,"requiresOpenaiAuth":true}}\n');
     expect(await first).toBe('first');
-    expect(await second).toBe('second');
+    expect(await second).toEqual({ account: null, requiresOpenaiAuth: true });
   });
 
   test('a JSON-RPC error rejects with its code and the method', async () => {
@@ -205,5 +205,201 @@ describe('AppServerConnection', () => {
     });
     await AppServerConnection.start(BINARY, [], {}, hangs.spawner).shutdown(20);
     expect(signals).toEqual(['SIGTERM']);
+  });
+});
+
+describe('Codex native credential check', () => {
+  const env = { CODEX_API_KEY: '', TEST_SECRET: 'planted-codex-secret' };
+  const check = async (script: import('../test/codex-app-server-fake').FakeTurnScript) => {
+    const { CodexProvider } = await import('./provider');
+    const { createFakeAppServer } = await import('../test/codex-app-server-fake');
+    const server = createFakeAppServer(() => script);
+    const status = await new CodexProvider(server, 1).checkCredential({
+      env,
+      signal: AbortSignal.timeout(1000),
+    });
+    expect(server.processes[0]?.methods).toEqual(['initialize', 'account/read']);
+    expect(server.processes[0]?.requests[1]?.params).toEqual({ refreshToken: true });
+    expect(server.processes[0]?.stdinEnded).toBe(true);
+    return status;
+  };
+
+  for (const account of [
+    { type: 'apiKey' },
+    { type: 'chatgpt', email: null, planType: 'plus' },
+    { type: 'amazonBedrock', usesCodexManagedCredentials: false },
+  ] as const) {
+    test(`${account.type} account is usable`, async () => {
+      expect(await check({ account })).toEqual({ state: 'usable', source: 'native' });
+    });
+  }
+  for (const account of [
+    { type: 'chatgpt', planType: 'a-plan-this-codex-does-not-know' },
+    { type: 'amazonBedrock' },
+    { type: 'apiKey', aFieldThisCodexDoesNotKnow: true },
+    { type: 'aKindThisCodexDoesNotKnow' },
+  ]) {
+    test(`fields the check does not read do not matter: ${JSON.stringify(account)}`, async () => {
+      expect(await check({ accountResponse: { account, requiresOpenaiAuth: true } })).toEqual({
+        state: 'usable',
+        source: 'native',
+      });
+    });
+  }
+  for (const accountResponse of [
+    {},
+    null,
+    { account: 'chatgpt', requiresOpenaiAuth: true },
+    { account: null },
+  ]) {
+    test(`malformed account response ${JSON.stringify(accountResponse)} is check_failed`, async () => {
+      expect(await check({ accountResponse })).toMatchObject({
+        state: 'check_failed',
+        evidence: expect.stringContaining('account/read'),
+      });
+    });
+  }
+  test('no account is unusable', async () => {
+    expect(await check({ account: null })).toMatchObject({
+      state: 'unusable',
+      evidence: expect.stringContaining('codex login'),
+    });
+  });
+  test('no account is not_checked when Codex needs no OpenAI login', async () => {
+    expect(await check({ account: null, requiresOpenaiAuth: false })).toEqual({
+      state: 'not_checked',
+      source: 'native',
+    });
+  });
+  test('JSON-RPC errors are check_failed and redact secrets', async () => {
+    const { checkCredentialStatuses } = await import('@archon/provider-contract/conformance');
+    expect(
+      await checkCredentialStatuses([
+        {
+          name: 'Codex error',
+          expected: 'check_failed',
+          secret: env.TEST_SECRET,
+          check: () =>
+            check({
+              errors: {
+                'account/read': { code: -32600, message: `cannot verify ${env.TEST_SECRET}` },
+              },
+            }),
+        },
+      ])
+    ).toEqual([]);
+  });
+  test('an abort stops an unanswered account read', async () => {
+    expect(await check({ ignoreAccountRead: true })).toMatchObject({ state: 'check_failed' });
+  });
+  test('starts the binary a turn starts, from assistant config', async () => {
+    const { CodexProvider } = await import('./provider');
+    const { createFakeAppServer } = await import('../test/codex-app-server-fake');
+    const { mkdtempSync, writeFileSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { removeTempTree } = await import('@archon/paths/test-utils');
+    const dir = mkdtempSync(join(tmpdir(), 'codex-check-binary-'));
+    const binary = join(dir, 'codex');
+    writeFileSync(binary, '');
+    const server = createFakeAppServer(() => ({ account: { type: 'apiKey' } }));
+    try {
+      expect(
+        await new CodexProvider(server, 1).checkCredential({
+          assistantConfig: { codexBinaryPath: binary },
+          env: { CODEX_API_KEY: '' },
+          signal: AbortSignal.timeout(1000),
+        })
+      ).toEqual({ state: 'usable', source: 'native' });
+      expect(server.processes[0]?.binary).toBe(binary);
+    } finally {
+      await removeTempTree(dir);
+    }
+  });
+  describe('a process that fails', () => {
+    const run = async (
+      spawner: import('./app-server').Spawner,
+      signal: AbortSignal = AbortSignal.timeout(1000)
+    ) => {
+      const { CodexProvider } = await import('./provider');
+      return new CodexProvider(spawner, 1).checkCredential({ env, signal });
+    };
+    const conforms = async (name: string, check: () => Promise<unknown>) => {
+      const { checkCredentialStatuses } = await import('@archon/provider-contract/conformance');
+      expect(
+        await checkCredentialStatuses([
+          {
+            name,
+            expected: 'check_failed',
+            secret: env.TEST_SECRET,
+            check: check as () => Promise<import('@archon/provider-contract').CredentialStatus>,
+          },
+        ])
+      ).toEqual([]);
+    };
+    test('to spawn is check_failed', async () => {
+      const { createFakeAppServer } = await import('../test/codex-app-server-fake');
+      await conforms('spawn error', () =>
+        run(createFakeAppServer(() => ({ spawnError: 'ENOENT' })))
+      );
+    });
+    test('to spawn synchronously is check_failed and redacted', async () => {
+      await conforms('sync spawn throw', () =>
+        run((() => {
+          throw new Error(`cannot start with ${env.TEST_SECRET}`);
+        }) as import('./app-server').Spawner)
+      );
+    });
+    test('at startup is check_failed with its stderr redacted', async () => {
+      const { createFakeAppServer } = await import('../test/codex-app-server-fake');
+      const fails = () =>
+        run(
+          createFakeAppServer(() => ({
+            startupFailure: { code: 1, stderr: `bad config near ${env.TEST_SECRET}` },
+          }))
+        );
+      await conforms('startup failure', fails);
+      expect(await fails()).toMatchObject({
+        evidence: expect.stringContaining('bad config near [REDACTED]'),
+      });
+    });
+    test('to answer initialize is bounded by the signal', async () => {
+      const { createFakeAppServer } = await import('../test/codex-app-server-fake');
+      const server = createFakeAppServer(() => ({ ignoreInitialize: true }));
+      expect(await run(server, AbortSignal.timeout(50))).toMatchObject({ state: 'check_failed' });
+      expect(server.processes[0]?.methods).toEqual(['initialize']);
+      expect(server.processes[0]?.stdinEnded).toBe(true);
+    });
+    test('is never started for a caller that already aborted', async () => {
+      const spawner = mock(() => {
+        throw new Error('must not spawn');
+      });
+      expect(
+        await run(spawner as unknown as import('./app-server').Spawner, AbortSignal.abort())
+      ).toMatchObject({ state: 'check_failed' });
+      expect(spawner).not.toHaveBeenCalled();
+    });
+  });
+  test('CODEX_API_KEY is usable without starting a process', async () => {
+    const { CodexProvider } = await import('./provider');
+    const spawner = mock(() => {
+      throw new Error('must not spawn');
+    });
+    const { checkCredentialStatuses } = await import('@archon/provider-contract/conformance');
+    expect(
+      await checkCredentialStatuses([
+        {
+          name: 'Codex API key',
+          expected: 'usable',
+          secret: 'planted-key',
+          check: () =>
+            new CodexProvider(spawner).checkCredential({
+              env: { CODEX_API_KEY: 'planted-key' },
+              signal: new AbortController().signal,
+            }),
+        },
+      ])
+    ).toEqual([]);
+    expect(spawner).not.toHaveBeenCalled();
   });
 });

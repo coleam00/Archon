@@ -2801,3 +2801,25 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     expect(second.errors.find(e => e.filename === 'parent')?.error).toContain("binding 'mode'");
   });
 });
+
+test('include aliases and prior-iteration namespaces retain complete nested suffixes', () => {
+  const block = wf('nested-block', [
+    { id: 'work', bash: 'echo json' },
+    {
+      id: 'read',
+      prompt: '$work.output.proposal.action $LOOP_PREV.work.output.proposal.details.count',
+      depends_on: ['work'],
+    },
+  ]);
+  const parent = wf('nested-parent', [
+    { id: 'sub', include: 'nested-block' },
+    { id: 'summary', prompt: '$sub.output.proposal.action', depends_on: ['sub'] },
+  ]);
+  const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+  expect(errors).toEqual([]);
+  const expanded = workflows.get('nested-parent')!;
+  expect(inlinePrompt(nodeById(expanded, 'sub__read'))).toBe(
+    '$sub__work.output.proposal.action $LOOP_PREV.sub__work.output.proposal.details.count'
+  );
+  expect(inlinePrompt(nodeById(expanded, 'summary'))).toBe('$sub__read.output.proposal.action');
+});

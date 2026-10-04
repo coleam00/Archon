@@ -67,9 +67,7 @@ function getLog(): ReturnType<typeof createLogger> {
 // Types
 // =============================================================================
 
-// Pi backends offered by the setup wizard. Keep `envVar` names in sync with
-// `PI_API_KEY_VARS` in doctor.ts — the doctor check uses them to detect
-// configured Pi auth.
+// Pi backends offered by the setup wizard.
 const PI_BACKENDS = [
   {
     id: 'anthropic',
@@ -454,9 +452,9 @@ export function checkExistingConfig(envPath?: string): ExistingConfig | null {
       hasEnvValue(content, 'CLAUDE_USE_GLOBAL_AUTH'),
     hasCodex: Boolean(codex.idToken && codex.accessToken && codex.refreshToken && codex.accountId),
     // Detection is intentionally API-key-only (no DEFAULT_AI_ASSISTANT=pi check)
-    // so that re-runs after partial configs still surface Pi. Doctor's checkPi
-    // uses the stricter DEFAULT_AI_ASSISTANT=pi gate to avoid false passes for
-    // Claude users who share the same key env vars.
+    // so that re-runs after partial configs still surface Pi. Doctor checks only
+    // the configured default assistant, so Claude users who share the same key
+    // env vars never get a Pi login check.
     hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
     platforms: {
       github: hasEnvValue(content, 'GITHUB_TOKEN') || hasEnvValue(content, 'GH_TOKEN'),

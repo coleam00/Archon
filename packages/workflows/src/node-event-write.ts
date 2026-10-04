@@ -30,7 +30,7 @@ export class NodeEventWriteError extends Error {
 }
 
 export async function persistNodeEvent(
-  store: WorkflowDeps['store'],
+  store: Pick<WorkflowDeps['store'], 'persistWorkflowEvent'>,
   event: NodeStateEventInput
 ): Promise<void> {
   try {
@@ -54,7 +54,7 @@ export interface DerivedNodeStateSinks {
 }
 
 export interface NodeStateSinks extends DerivedNodeStateSinks {
-  store: WorkflowDeps['store'];
+  store: Pick<WorkflowDeps['store'], 'persistWorkflowEvent'>;
 }
 
 function transcriptContent(node: NodeStateSubject, record: ReadNodeRecordEvent): string {
@@ -244,6 +244,8 @@ export async function recordNodeState(
     state: 'completed',
     output: output.text,
     ...(output.structured !== undefined ? { structuredOutput: output.structured } : {}),
-    ...(output.declaredFields !== undefined ? { declaredFields: output.declaredFields } : {}),
+    ...(output.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: output.declaredOutputPaths }
+      : {}),
   };
 }

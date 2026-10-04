@@ -13,6 +13,7 @@
  * so a future SDK update that reads the filesystem at module load can't
  * break compiled-binary bootstrap.
  */
+import type { CredentialStatus } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 import { sessionPreview } from '@archon/provider-contract';
 import type {
@@ -400,6 +401,10 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
  * per-request env vars are honored.
  */
 export class CopilotProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   getType(): string {
     return 'copilot';
   }
