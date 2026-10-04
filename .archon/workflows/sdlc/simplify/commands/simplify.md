@@ -25,6 +25,7 @@ Look first for decisions that add coordination or prematurely close options:
 - **Coherent capability:** Does the change deepen one useful abstraction, or spread special-case coordination across callers, layers, and schemas?
 - **Concurrency:** If another actor changes shared state concurrently, is the answer safely "nothing"? If not, should the state be isolated instead of synchronized?
 - **Foundations:** Would one smaller primitive make the downstream logic obvious? Remove dead weight before adding scaffold; add scaffold early only when every later phase benefits from it.
+- **Existing primitives:** For each helper, type, gate, state, or wrapper the change adds, search the repository for an existing primitive or helper that already implements it — search by what it does, not only by its name. A reimplemented primitive is a finding even when the machinery itself is needed.
 - **Premature machinery:** Which real supported variation requires each new state, lifecycle, wrapper, configuration surface, fallback, or extension point?
 
 Apply the laziness test:
