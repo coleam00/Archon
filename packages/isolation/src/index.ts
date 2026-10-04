@@ -55,7 +55,11 @@ export type { DockerRunner, DockerExecOptions, DockerExecResult } from './contai
 export type { IIsolationStore } from './store';
 
 // --- Errors ---
-export { IsolationBlockedError, classifyIsolationError } from './errors';
+export {
+  IsolationBlockedError,
+  MissingProjectDirectoryError,
+  classifyIsolationError,
+} from './errors';
 
 // --- Factory ---
 export { getIsolationProvider, configureIsolation, resetIsolationProvider } from './factory';

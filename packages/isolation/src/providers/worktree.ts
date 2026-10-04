@@ -5,7 +5,7 @@
  */
 
 import { createHash } from 'crypto';
-import { access, rm } from 'fs/promises';
+import { access, rm, stat } from 'fs/promises';
 import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
@@ -34,7 +34,7 @@ import {
 import type { WorktreeBaseOverride } from '@archon/git';
 import { isInsideArchonWorkspaces, isPathInside } from '@archon/paths';
 import type { BranchName, RepoPath, WorktreeInfo } from '@archon/git';
-import { recordCleanupFailure } from '../errors';
+import { MissingProjectDirectoryError, recordCleanupFailure } from '../errors';
 import { copyWorktreeFiles } from '../worktree-copy';
 import type {
   DestroyResult,
@@ -185,6 +185,13 @@ export class WorktreeProvider implements IIsolationProvider {
    * object or `null`, never a second chance to reload.
    */
   async create(request: IsolationRequest): Promise<IsolatedEnvironment> {
+    if (!(await this.projectDirectoryExists(request.canonicalRepoPath))) {
+      throw new MissingProjectDirectoryError(
+        request.canonicalRepoPath,
+        request.codebaseName ?? request.codebaseId
+      );
+    }
+
     let repoConfig: WorktreeCreateConfig | null;
     try {
       repoConfig = await this.loadConfig(request.canonicalRepoPath);
@@ -1654,6 +1661,22 @@ export class WorktreeProvider implements IIsolationProvider {
       getLog().error({ err, worktreePath }, 'worktree.submodule_init_failed');
       const detail = err.stderr?.trim() || err.message;
       throw new Error(`Submodule initialization failed: ${detail}`);
+    }
+  }
+
+  /**
+   * Whether the registered project path is a directory. An absent path, a
+   * non-directory, and a path under a regular file (ENOTDIR) all count as
+   * missing, so create() can raise MissingProjectDirectoryError. Other
+   * filesystem errors propagate.
+   */
+  private async projectDirectoryExists(path: string): Promise<boolean> {
+    try {
+      return (await stat(path)).isDirectory();
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw error;
     }
   }
 

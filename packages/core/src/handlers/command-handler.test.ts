@@ -14,7 +14,12 @@ import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
+import {
+  MissingProjectDirectoryError,
+  type IsolationEnvironmentRow,
+  type IsolationRequest,
+  type IsolatedEnvironment,
+} from '@archon/isolation';
 import { join } from 'path';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
@@ -355,15 +360,15 @@ mock.module('../db/isolation-environments', () => ({
 }));
 
 // Mock isolation provider
-const mockIsolationCreate = mock(() =>
+const mockIsolationCreate = mock<(request: IsolationRequest) => Promise<IsolatedEnvironment>>(() =>
   Promise.resolve({
     id: '/workspace/my-repo/worktrees/task-feat-auth',
     provider: 'worktree',
     workingPath: '/workspace/my-repo/worktrees/task-feat-auth',
-    branchName: 'task-feat-auth',
+    branchName: gitUtils.toBranchName('task-feat-auth'),
     status: 'active',
     createdAt: new Date(),
-    metadata: {},
+    metadata: { adopted: false },
   })
 );
 const mockIsolationDestroy = mock(() => Promise.resolve());
@@ -1409,6 +1414,29 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('classified:');
+        });
+
+        test('names the registered project when its directory is missing', async () => {
+          mockIsolationCreate.mockImplementationOnce(async request => {
+            throw new MissingProjectDirectoryError(
+              request.canonicalRepoPath,
+              request.codebaseName ?? request.codebaseId
+            );
+          });
+
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree create feat-auth'
+          );
+
+          expect(result.success).toBe(false);
+          expect(result.message).toContain("Project 'my-repo'");
+          expect(result.message).toContain('/workspace/my-repo');
+          expect(result.message).toContain('Restore');
+          expect(result.message).toContain('re-register');
+          expect(result.message).not.toContain('codebase-123');
+          expect(mockIsolationEnvDbCreate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
 
         test('should reject if already using a worktree (shows working path, not UUID)', async () => {
