@@ -27,6 +27,7 @@ test(
       complete = resolve;
     });
     const requests: string[] = [];
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
@@ -37,10 +38,15 @@ test(
           complete(await request.text());
           return new Response('ok');
         }
-        if (path === '/test.js')
+        if (path === '/test.js') {
+          // Browser startup uses the runner's platform budget, not the fixture's deadline.
+          timeout = setTimeout(() => {
+            complete('browser fixture did not report within 10 seconds of script delivery');
+          }, 10000);
           return new Response(script, {
             headers: { 'Content-Type': 'text/javascript' },
           });
+        }
         return new Response(
           `<!doctype html><html><body><script>
           window.addEventListener('error', event => {
@@ -79,9 +85,6 @@ test(
         },
       })
     );
-    const timeout = setTimeout(() => {
-      complete('browser did not report within 10 seconds');
-    }, 10000);
     try {
       const outcome = await Promise.race([
         result,
