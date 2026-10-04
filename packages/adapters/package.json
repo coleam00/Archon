@@ -83,6 +83,9 @@
     ],
     [
       "src/platform-policies.test.ts"
+    ],
+    [
+      "src/test/no-archon-home-writes.test.ts"
     ]
   ]
 }
