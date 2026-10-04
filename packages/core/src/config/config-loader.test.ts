@@ -1,6 +1,5 @@
 import { platformStreamingSchema } from './config-types';
 import { registerPlatformPolicy, clearPlatformPolicies } from '../platforms/registry';
-import { registerTestPlatformPolicies } from '../test/mocks/platform-policies';
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -45,9 +44,7 @@ describe('config-loader', () => {
   const originalEnv: Record<string, string | undefined> = {};
   const envVars = [
     'DEFAULT_AI_ASSISTANT',
-    'TELEGRAM_STREAMING_MODE',
-    'DISCORD_STREAMING_MODE',
-    'SLACK_STREAMING_MODE',
+    'STREAMTEST_STREAMING_MODE',
     'MATRIX_STREAMING_MODE',
     'MAX_CONCURRENT_CONVERSATIONS',
     'WORKSPACE_PATH',
@@ -57,7 +54,11 @@ describe('config-loader', () => {
 
   beforeEach(() => {
     clearPlatformPolicies();
-    registerTestPlatformPolicies();
+    registerPlatformPolicy({
+      id: 'streamtest',
+      workspaceRetention: 'age-based',
+      streaming: { defaultMode: 'stream', envVar: 'STREAMTEST_STREAMING_MODE' },
+    });
     clearConfigCache();
     mockFsReadFile.mockReset();
     mockFsWriteFile.mockReset();
@@ -97,9 +98,7 @@ describe('config-loader', () => {
     });
     const config = await loadConfig();
     expect(toSafeConfig(config).streaming).toEqual({
-      telegram: 'stream',
-      discord: 'batch',
-      slack: 'batch',
+      streamtest: 'stream',
       'matrix-chat': 'batch',
       'other-chat': 'stream',
     });
@@ -432,7 +431,7 @@ recommendedWorkflows: "archon-plan"
       // explicitly rather than asserting an exhaustive shape.
       expect(config.assistants.claude).toEqual({});
       expect(config.assistants.codex).toEqual({});
-      expect(config.streaming.telegram).toBe('stream');
+      expect(config.streaming.streamtest).toBe('stream');
       expect(config.concurrency.maxConversations).toBe(10);
       expect(config.workflows).toEqual({
         autoResumeOnQuotaReset: false,
@@ -467,23 +466,23 @@ workflows:
       mockFsReadFile.mockResolvedValue(`
 defaultAssistant: claude
 streaming:
-  telegram: stream
+  streamtest: stream
 `);
 
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
-      process.env.TELEGRAM_STREAMING_MODE = 'batch';
+      process.env.STREAMTEST_STREAMING_MODE = 'batch';
 
       const config = await loadConfig();
 
       // Config file explicitly set 'claude' — env var must NOT override it
       expect(config.assistant).toBe('claude');
       // Streaming env var still overrides (no config-file guard needed there)
-      expect(config.streaming.telegram).toBe('batch');
+      expect(config.streaming.streamtest).toBe('batch');
     });
 
     test('env var DEFAULT_AI_ASSISTANT applies when no config file sets the assistant', async () => {
       // Global config exists but does not set defaultAssistant
-      mockFsReadFile.mockResolvedValue('streaming:\n  telegram: stream\n');
+      mockFsReadFile.mockResolvedValue('streaming:\n  streamtest: stream\n');
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
 
       const config = await loadConfig();

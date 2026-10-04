@@ -44,10 +44,10 @@ async function seed(platform: string | null, age: number) {
 }
 
 test('bound retention exclusions work alongside activity and creation thresholds', async () => {
-  registerPlatformPolicy({ id: 'telegram', workspaceRetention: 'retain' });
+  registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
   registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
   registerPlatformPolicy({ id: 'new-forge', workspaceRetention: 'age-based' });
-  await seed('telegram', 30);
+  await seed('retain-test', 30);
   await seed('matrix-chat', 30);
   const stale = await seed('new-forge', 30);
   await seed(null, 30);
@@ -66,7 +66,7 @@ test('bound retention exclusions work alongside activity and creation thresholds
 });
 
 test('empty registry has valid SQL and preserves NULL exclusion', async () => {
-  const stale = await seed('telegram', 30);
+  const stale = await seed('retain-test', 30);
   await seed(null, 30);
   expect((await findStaleEnvironments()).map(row => row.id)).toEqual([stale.id]);
 });

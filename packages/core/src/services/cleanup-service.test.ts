@@ -1,5 +1,4 @@
-import { registerPlatformPolicy } from '../platforms/registry';
-import { registerTestPlatformPolicies } from '../test/mocks/platform-policies';
+import { clearPlatformPolicies, registerPlatformPolicy } from '../platforms/registry';
 import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { toBranchName } from '@archon/git';
@@ -17,6 +16,8 @@ import type * as ConversationDb from '../db/conversations';
 import type * as SessionDb from '../db/sessions';
 import type * as CodebaseDb from '../db/codebases';
 import type * as ConfigLoader from '../config/config-loader';
+
+beforeEach(clearPlatformPolicies);
 
 const NO_PR: Isolation.PrLookup = { state: 'NONE' };
 const PR_HEAD_SHA = 'pr-head-sha';
@@ -307,7 +308,6 @@ describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () =
     days_since_created: 30,
   });
   beforeEach(() => {
-    registerTestPlatformPolicies();
     mockListActiveContainerEnvironments.mockReset();
     mockGetLiveRunOwningEnv.mockReset();
     mockGetLiveRunOwningEnv.mockImplementation(() => Promise.resolve(null));
@@ -360,7 +360,6 @@ describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () =
 
 describe('cleanup-service', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
@@ -768,7 +767,7 @@ describe('cleanup-service', () => {
 
 describe('runScheduledCleanup', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
+    registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
     mockExecFileAsync.mockClear();
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
@@ -1099,14 +1098,14 @@ describe('runScheduledCleanup', () => {
     expect(mockUpdateStatus).not.toHaveBeenCalled();
   });
 
-  test('skips telegram environments', async () => {
+  test('skips environments with a retain policy', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([
       makeEnvironmentWithCodebase({
-        id: 'env-telegram',
+        id: 'env-retain-test',
         working_path: '/workspace/repo/worktrees/thread-abc',
         branch_name: 'thread-abc',
         status: 'active',
-        created_by_platform: 'telegram',
+        created_by_platform: 'retain-test',
         created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days ago
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
@@ -1123,7 +1122,7 @@ describe('runScheduledCleanup', () => {
 
     const report = await runScheduledCleanup();
 
-    // Should not be in removed (Telegram is persistent)
+    // Age alone does not remove retained environments.
     expect(report.removed).toHaveLength(0);
   });
 
@@ -1631,7 +1630,6 @@ describe('SESSION_RETENTION_DAYS', () => {
 
 describe('scheduler lifecycle', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
     stopCleanupScheduler(); // Ensure clean state
     mockListAllActiveWithCodebase.mockClear();
     mockListAllActiveWithCodebase.mockResolvedValue([]); // Prevent actual cleanup during tests
@@ -1668,7 +1666,7 @@ describe('scheduler lifecycle', () => {
 
 describe('getWorktreeStatusBreakdown', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
+    registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
     mockExecFileAsync.mockClear();
     mockGetDefaultBranch.mockClear();
     mockIsBranchMerged.mockClear();
@@ -1710,8 +1708,8 @@ describe('getWorktreeStatusBreakdown', () => {
       }),
       makeEnvironmentWithAge({
         id: 'env-4',
-        branch_name: 'telegram-branch',
-        created_by_platform: 'telegram',
+        branch_name: 'retain-test-branch',
+        created_by_platform: 'retain-test',
         days_since_activity: 60,
         working_path: '/path4',
         status: 'active',
@@ -1730,8 +1728,8 @@ describe('getWorktreeStatusBreakdown', () => {
     // No worktree.remote configured — default-branch detection gets
     // 'origin' (the remote default).
     expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/repo', 'origin');
-    expect(breakdown.stale).toBe(1); // env-2 is stale (30 days), env-4 is Telegram so not counted as stale
-    expect(breakdown.active).toBe(2); // env-3 active, env-4 Telegram (counted as active, not stale)
+    expect(breakdown.stale).toBe(1); // env-2 is stale (30 days), env-4 is retained so not counted as stale
+    expect(breakdown.active).toBe(2); // env-3 active, env-4 retained (counted as active, not stale)
     // Verify the remote-qualified ref is threaded through to isBranchMerged.
     expect(mockIsBranchMerged).toHaveBeenCalledWith(
       '/workspace/repo',
@@ -1740,14 +1738,14 @@ describe('getWorktreeStatusBreakdown', () => {
     );
   });
 
-  test.each(['telegram', 'matrix-chat'])(
-    'excludes telegram from stale count (%s)',
+  test.each(['retain-test', 'matrix-chat'])(
+    'excludes retain-policy environments from stale count (%s)',
     async platformId => {
       registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
       mockListByCodebaseWithAge.mockResolvedValueOnce([
         makeEnvironmentWithAge({
-          id: 'env-telegram',
-          branch_name: 'telegram-branch',
+          id: 'env-retain-test',
+          branch_name: 'retain-test-branch',
           created_by_platform: platformId,
           days_since_activity: 100,
           working_path: '/path',
@@ -1843,7 +1841,6 @@ describe('getWorktreeStatusBreakdown', () => {
 
 describe('cleanupMergedWorktrees', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2431,7 +2428,6 @@ describe('cleanupMergedWorktrees', () => {
 
 describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
     mockListAllActiveWithCodebase.mockClear();
     mockWorktreeExists.mockClear();
     mockGetDefaultBranch.mockClear();
@@ -2580,7 +2576,6 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
 
 describe('onConversationClosed', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockUpdateStatus.mockClear();
@@ -2866,7 +2861,7 @@ describe('onConversationClosed', () => {
 
 describe('cleanupStaleWorktrees', () => {
   beforeEach(() => {
-    registerTestPlatformPolicies();
+    registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2912,15 +2907,15 @@ describe('cleanupStaleWorktrees', () => {
     expect(result.removed).toContain('stale-branch');
   });
 
-  test.each(['telegram', 'matrix-chat'])(
-    'skips telegram worktrees even if old (%s)',
+  test.each(['retain-test', 'matrix-chat'])(
+    'skips retain-policy worktrees even if old (%s)',
     async platformId => {
       registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
       mockListByCodebaseWithAge.mockResolvedValueOnce([
         makeEnvironmentWithAge({
-          id: 'env-telegram',
-          branch_name: 'telegram-branch',
-          working_path: '/workspace/repo/worktrees/telegram-branch',
+          id: 'env-retain-test',
+          branch_name: 'retain-test-branch',
+          working_path: '/workspace/repo/worktrees/retain-test-branch',
           created_by_platform: platformId,
           days_since_activity: 100,
           status: 'active',
