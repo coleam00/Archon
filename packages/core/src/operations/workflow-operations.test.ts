@@ -1201,7 +1201,13 @@ describe('gate decisions in the run transcript', () => {
     return (await readFile(path, 'utf-8'))
       .trim()
       .split('\n')
-      .map(line => JSON.parse(line) as Record<string, unknown>);
+      .map((line): Record<string, unknown> => {
+        const row: unknown = JSON.parse(line);
+        if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+          throw new Error(`transcript line is not a JSON object: ${line}`);
+        }
+        return Object.fromEntries(Object.entries(row));
+      });
   }
 
   async function decisionRows(): Promise<Record<string, unknown>[]> {
