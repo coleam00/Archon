@@ -108,7 +108,7 @@ describe('CodexProvider', () => {
   test('getCapabilities returns the Codex capability set', () => {
     expect(new CodexProvider().getCapabilities()).toEqual({
       sessionResume: true,
-      sessionFork: false,
+      sessionFork: true,
       mcp: true,
       hooks: false,
       skills: false,
@@ -286,6 +286,63 @@ describe('CodexProvider', () => {
       });
       expect(started).toBeDefined();
       expect(resumed).toEqual(started ?? {});
+    });
+
+    test('a fork continues the thread in a new one with the settings a new thread gets', async () => {
+      const dir = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-provider-fork-')));
+      await writeFile(join(dir, 'mcp.json'), JSON.stringify({ local: { command: 'mcp-server' } }));
+      const options: SendQueryOptions = {
+        model: 'gpt-request',
+        assistantConfig: { webSearchMode: 'live', additionalDirectories: ['/extra'] },
+        nodeConfig: { nodeId: 'implement', mcp: 'mcp.json' },
+      };
+      const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+      for await (const _ of provider.sendQuery('p', dir, undefined, options)) {
+        // consume
+      }
+      const started = paramsOf(server, 'thread/start');
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', dir, 'existing-thread', {
+        ...options,
+        forkSession: true,
+      })) {
+        chunks.push(chunk);
+      }
+      expect(server.processes.at(-1)?.methods).not.toContain('thread/resume');
+      const { threadId, excludeTurns, ...forked } = paramsOf(server, 'thread/fork') ?? {};
+      expect({ threadId, excludeTurns }).toEqual({
+        threadId: 'existing-thread',
+        excludeTurns: true,
+      });
+      // The scoped config is not stored with the source thread; without it the fork would
+      // load the user's MCP servers and plugins again.
+      expect(started?.config).toMatchObject({ mcp_servers: { posthog: { enabled: false } } });
+      expect(forked).toEqual(started ?? {});
+      expect(resultOf(chunks)).toMatchObject({
+        sessionId: 'existing-thread-fork-1',
+        resumed: true,
+      });
+    });
+
+    test('two runs continuing one thread at once each get their own fork', async () => {
+      const { provider } = providerWith();
+      const runs = await Promise.all(
+        [1, 2].map(() => run(provider, { forkSession: true }, 'existing-thread'))
+      );
+      const ids = runs.map(chunks => resultOf(chunks).sessionId);
+      expect(new Set(['existing-thread', ...ids]).size).toBe(3);
+    });
+
+    test('a thread that cannot be forked fails the turn without trying another way', async () => {
+      const { provider, server } = providerWith({
+        errors: { 'thread/fork': { code: -32600, message: 'no rollout found for thread id x' } },
+      });
+      const result = resultOf(await run(provider, { forkSession: true }, 'x'));
+      expect(result.failure).toEqual({
+        class: 'unknown',
+        evidence: 'thread/fork failed (JSON-RPC -32600): no rollout found for thread id x',
+      });
+      expect(server.processes[0].methods).toEqual(['initialize', 'thread/fork']);
     });
 
     test('a thread that cannot be resumed fails the turn with Codex’s words', async () => {
@@ -728,12 +785,15 @@ describe('CodexProvider', () => {
   describe('workflow node scope', () => {
     const node = { nodeConfig: { nodeId: 'implement' } } satisfies SendQueryOptions;
 
-    test('a fresh or resumed thread loads no ambient plugin, app or server, and is checked before its turn', async () => {
+    test('a fresh, resumed or forked thread loads no ambient plugin, app or server, and is checked before its turn', async () => {
       const { provider, server } = providerWith({ configuredServers: ['posthog'] });
-      for (const resumeId of [undefined, 'existing-thread']) {
-        const result = resultOf(await run(provider, node, resumeId));
+      for (const [resumeId, forkSession, threadMethod] of [
+        [undefined, false, 'thread/start'],
+        ['existing-thread', false, 'thread/resume'],
+        ['existing-thread', true, 'thread/fork'],
+      ] as const) {
+        const result = resultOf(await run(provider, { ...node, forkSession }, resumeId));
         expect(result.failure).toBeUndefined();
-        const threadMethod = resumeId ? 'thread/resume' : 'thread/start';
         expect(server.processes.at(-1)?.methods).toEqual([
           'initialize',
           'config/read',
@@ -1085,6 +1145,14 @@ describe('CodexProvider', () => {
             run: turn({ spawnError: 'ENOENT' }),
           },
         ],
+        forkTurn: {
+          name: 'forked thread',
+          source: 'existing-thread',
+          run: () =>
+            providerWith().provider.sendQuery('p', '/workspace', 'existing-thread', {
+              forkSession: true,
+            }),
+        },
         toolTurn: {
           name: 'tool turn',
           // The turn completes while a second command still runs: the provider closes it.
