@@ -65,7 +65,7 @@ Same-named legacy/shared files at a higher scope win. Packaged commands and scri
 
 A workflow pack published on GitHub installs for every project on this Archon with [`archon plugin install`](/reference/cli/#plugin). Installed packs are a fourth source next to bundled, global and project, outside the precedence above.
 
-A pack repository holds one pack in the packaged layout, with an `archon-plugin.json` at its root (the repository root, or a subdirectory named in the install id):
+A plugin root is a directory containing `archon-plugin.json` and one pack in the packaged layout. A repository can contain one or more plugin roots, at the repository root or in subdirectories. Each root installs independently using `owner/repo[/path]`. This example shows a single plugin root:
 
 ```text
 review-kit/                     # plugin root: owner/repo or owner/repo/<path>
