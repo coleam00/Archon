@@ -996,7 +996,7 @@ export function validateDagStructure(
         }
       }
       for (const ref of refs) {
-        if (ref.nodeId === WHEN_INPUTS_SCOPE || !ref.field?.includes('.')) continue;
+        if (ref.nodeId === WHEN_INPUTS_SCOPE || ref.field === undefined) continue;
         const producer = ref.prior
           ? (source.bodyNodes ?? (enclosingNodes ? nodes : undefined))?.find(
               candidate => candidate.id === ref.nodeId

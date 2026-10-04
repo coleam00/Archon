@@ -33520,7 +33520,7 @@ nodes:
     expect(replayed?.data?.structured_output).toEqual(PLAN_RESULT);
   });
 
-  it('fails the consuming node when the fan-out reads a field the contract never declared', async () => {
+  it('rejects at load a fan-out that reads a field the contract never declared', async () => {
     await writeFile(
       join(testDir, '.archon', 'workflows', 'composed-parent.yaml'),
       `
@@ -33541,15 +33541,10 @@ nodes:
 `
     );
 
-    const { events } = await runComposed();
-
-    const failed = events.find(e => e.event_type === 'node_failed' && e.step_name === 'work');
-    const error = String((failed?.data as { error?: string } | undefined)?.error);
-    expect(error).toContain("fan_out.items on 'work' could not be resolved to a JSON array");
-    expect(error).toContain("references field 'tasks'");
-    expect(events.some(e => (e.step_name ?? '').startsWith(`${composeScope('work')}__`))).toBe(
-      false
-    );
+    const discovered = await discoverWorkflows(testDir, { loadDefaults: false });
+    expect(discovered.errors.map(e => e.error)).toEqual([
+      expect.stringContaining("'$plan__build.output.tasks' references field 'tasks'"),
+    ]);
   });
 });
 

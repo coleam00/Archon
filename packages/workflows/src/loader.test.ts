@@ -9151,6 +9151,7 @@ nodes:
     ${field === 'when' ? `bash: echo read\n    when: "${reference} == 'add'"` : `approval: {message: "${reference}"}`}
 `;
   for (const [path, segment] of [
+    ['typo', 'typo'],
     ['typo.action', 'typo'],
     ['proposal.typo.action', 'typo'],
     ['proposal.action.typo', 'typo'],
