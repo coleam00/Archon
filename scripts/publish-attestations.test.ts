@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
@@ -38,6 +39,7 @@ function runVerification(
   exitCode: number;
   output: string;
 } {
+  const digest = `sha256:${randomBytes(32).toString('hex')}`;
   const result = Bun.spawnSync(
     [
       'bash',
@@ -48,7 +50,7 @@ function runVerification(
       `
 docker() {
   test "$1 $2 $3" = 'buildx imagetools inspect' || return 90
-  test "$4" = 'ghcr.io/coleam00/archon@sha256:test-digest' || return 91
+  test "$4" = "$TEST_EXPECTED_IMAGE" || return 91
   test "$5" = '--format' || return 92
   if [ "$TEST_INSPECT_EXIT" != '0' ]; then
     echo 'registry inspection failed' >&2
@@ -67,7 +69,9 @@ ${script}`,
         ...process.env,
         REGISTRY: 'ghcr.io',
         IMAGE_NAME: 'coleam00/Archon',
-        DIGEST: 'sha256:test-digest',
+        DIGEST: digest,
+        PLATFORMS: String(record(build.with).platforms),
+        TEST_EXPECTED_IMAGE: `ghcr.io/coleam00/archon@${digest}`,
         TEST_PROVENANCE: provenanceOutput,
         TEST_SBOM: sbomOutput,
         TEST_INSPECT_EXIT: String(inspectExit),
@@ -84,6 +88,7 @@ test('publish checks the pushed digest after producing provenance and SBOM', () 
   expect(record(build.with).provenance).toBe('mode=max');
   expect(record(build.with).sbom).toBe(true);
   expect(record(verify.env).DIGEST).toBe('${{ steps.build.outputs.digest }}');
+  expect(record(verify.env).PLATFORMS).toBe(record(build.with).platforms);
   expect(verify.shell).toBe('bash');
   expect(steps.indexOf(verify)).toBeGreaterThan(steps.indexOf(build));
   expect(runVerification(provenance, sbom).exitCode).toBe(0);
@@ -93,6 +98,14 @@ test.each([
   ['no output', ''],
   ['null', 'null'],
   ['no attestations', '{}'],
+  [
+    'missing arm64',
+    '{"linux/amd64":{"SLSA":{"buildType":"buildkit"},"SPDX":{"spdxVersion":"SPDX-2.3"}}}',
+  ],
+  [
+    'missing amd64',
+    '{"linux/arm64":{"SLSA":{"buildType":"buildkit"},"SPDX":{"spdxVersion":"SPDX-2.3"}}}',
+  ],
   ['empty platform record', '{"linux/amd64":{}}'],
   ['empty predicates', '{"linux/amd64":{"SLSA":{},"SPDX":{}}}'],
   [

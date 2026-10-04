@@ -58,7 +58,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: &publish-platforms linux/amd64,linux/arm64
           push: true
           # Build arguments are published in the attestation; secrets must use secrets:, whose values are excluded.
           provenance: mode=max
@@ -72,15 +72,16 @@ jobs:
         shell: bash
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
+          PLATFORMS: *publish-platforms
         run: |
           image="${REGISTRY}/$(printf '%s' "$IMAGE_NAME" | tr '[:upper:]' '[:lower:]')@${DIGEST}"
           provenance=$(docker buildx imagetools inspect "$image" --format '{{ json .Provenance }}')
           sbom=$(docker buildx imagetools inspect "$image" --format '{{ json .SBOM }}')
-          if ! jq -e 'type == "object" and length > 0 and all(.[]; .SLSA | type == "object" and length > 0)' <<< "$provenance"; then
+          if ! jq -e --arg platforms "$PLATFORMS" '. as $records | all($platforms | split(",")[]; $records[.].SLSA | type == "object" and length > 0)' <<< "$provenance"; then
             echo "::error::Missing or empty provenance attestation on $image"
             exit 1
           fi
-          if ! jq -e 'type == "object" and length > 0 and all(.[]; .SPDX | type == "object" and length > 0)' <<< "$sbom"; then
+          if ! jq -e --arg platforms "$PLATFORMS" '. as $records | all($platforms | split(",")[]; $records[.].SPDX | type == "object" and length > 0)' <<< "$sbom"; then
             echo "::error::Missing or empty SBOM attestation on $image"
             exit 1
           fi
