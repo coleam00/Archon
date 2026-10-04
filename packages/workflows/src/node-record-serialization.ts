@@ -15,6 +15,7 @@ import {
   executionSpendSchema,
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
+  type NodeCostScope,
   type NodeDescriptor,
   type NodeExecutionRecord,
   type NodeStateRecord,
@@ -148,7 +149,7 @@ export function persistedOutputContract(
 }
 
 /**
- * Whether this record's spend is its own, or a restatement of spend rows the same run
+ * Whether a node row's spend is its own, or a restatement of spend rows the same run
  * already carries. `accounting` is the seam: a `loop_group` roll-up sums its body rows, a
  * composed fan-out wrapper sums its instances, an instance terminal sums its own leaves,
  * and an amendment re-states the attempt it amends. `serializeNodeStateRecord` marks every
@@ -156,12 +157,19 @@ export function persistedOutputContract(
  * own rows already carry that spend — except for a composed-instance terminal, which the
  * fold keeps as the authoritative source for its scope because its inner rows are
  * observability writes that can be missing after a crash. So the durable row, the
- * transcript and the emitter all report spend on the same terms (#3508).
+ * transcript, the emitter and the run-detail API all report spend on the same terms (#3508).
+ * Rows written before `accounting` existed carry only the `aggregate` marker.
  * `serializeNodeOutput` is deliberately not gated: the run total is fed by exactly one
  * aggregation point, and the scope totals it reads are already this record's own.
  */
+export function nodeCostScope(data: Readonly<Record<string, unknown>>): NodeCostScope {
+  const accounting = nodeExecutionMetadataSchema.shape.accounting.safeParse(data.accounting);
+  if (accounting.success) return accounting.data === 'node' ? 'own' : 'total';
+  return data.aggregate === true ? 'total' : 'own';
+}
+
 function reportsOwnSpend(record: NodeExecutionRecord): boolean {
-  return record.accounting === 'node';
+  return nodeCostScope(record) === 'own';
 }
 
 export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {

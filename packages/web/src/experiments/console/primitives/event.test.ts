@@ -3,6 +3,7 @@ import {
   toRunEvent,
   countTerminalNodes,
   foldNodeRuns,
+  type CostScope,
   type RunEvent,
   type RunNodeState,
 } from './event';
@@ -533,8 +534,15 @@ describe('foldNodeRuns', () => {
 });
 
 describe('foldNodeRuns — cost scope', () => {
-  const completed = (stepName: string, data: Record<string, unknown>) =>
-    toRunEvent(raw({ event_type: 'node_completed', step_name: stepName, data }));
+  const completed = (stepName: string, costUsd: number, scope: CostScope) =>
+    toRunEvent(
+      raw({
+        event_type: 'node_completed',
+        step_name: stepName,
+        data: { cost_usd: costUsd },
+        cost_scope: scope,
+      })
+    );
   // Each row is its node's only completion, so the engine reports every node completed.
   const foldCompleted = (events: RunEvent[]) =>
     foldNodeRuns(
@@ -543,15 +551,15 @@ describe('foldNodeRuns — cost scope', () => {
     );
 
   test('a composed fan-out: only own-scope costs count, and they sum to the run total', () => {
-    // Shape of the durable rows a two-item compose_fan_out writes at $0.02 per call
-    // (#3657): leaves own their spend, instance terminals and the wrapper restate it.
+    // A two-item compose_fan_out at $0.02 per call (#3657): the server serves the leaves
+    // as own spend, the instance terminals and the wrapper as totals restating them.
     const runTotal = 0.04;
     const runs = foldCompleted([
-      completed('fan__0__leaf', { cost_usd: 0.02, accounting: 'node' }),
-      completed('fan__1__leaf', { cost_usd: 0.02, accounting: 'node' }),
-      completed('fan__0', { cost_usd: 0.02, accounting: 'instance', aggregate: true }),
-      completed('fan__1', { cost_usd: 0.02, accounting: 'instance', aggregate: true }),
-      completed('fan', { cost_usd: 0.04, accounting: 'aggregate', aggregate: true }),
+      completed('fan__0__leaf', 0.02, 'own'),
+      completed('fan__1__leaf', 0.02, 'own'),
+      completed('fan__0', 0.02, 'total'),
+      completed('fan__1', 0.02, 'total'),
+      completed('fan', 0.04, 'total'),
     ]);
     const scopeOf = Object.fromEntries(runs.map(r => [r.nodeId, r.costScope]));
     expect(scopeOf).toEqual({
@@ -567,19 +575,17 @@ describe('foldNodeRuns — cost scope', () => {
     expect(ownSum).toBeCloseTo(runTotal, 10);
   });
 
-  test('an amendment row restates its attempts', () => {
-    const [run] = foldCompleted([completed('build', { cost_usd: 0.05, accounting: 'amendment' })]);
-    expect(run?.costScope).toBe('total');
-  });
-
-  test('a row recorded before `accounting` existed reads as own spend', () => {
-    const [run] = foldCompleted([completed('plan', { cost_usd: 0.1 })]);
-    expect(run).toMatchObject({ costUsd: 0.1, costScope: 'own' });
-  });
-
-  test('a row with only the older `aggregate` marker still reads as a total', () => {
-    const [run] = foldCompleted([completed('loop', { cost_usd: 0.3, aggregate: true })]);
-    expect(run?.costScope).toBe('total');
+  test('the scope is only what the server serves, never read from the row data', () => {
+    const [run] = foldCompleted([
+      toRunEvent(
+        raw({
+          event_type: 'node_completed',
+          step_name: 'build',
+          data: { cost_usd: 0.05, accounting: 'amendment', aggregate: true },
+        })
+      ),
+    ]);
+    expect(run).toMatchObject({ costUsd: 0.05, costScope: null });
   });
 });
 

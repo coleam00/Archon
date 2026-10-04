@@ -62,7 +62,8 @@ export interface NodeTransitionEvent extends RunEventBase {
    */
   outputPreview: string | null;
   costUsd: number | null;
-  costScope: CostScope;
+  /** The server's scope for `costUsd`; null when the row carries no cost. */
+  costScope: CostScope | null;
   stopReason: string | null;
   numTurns: number | null;
 }
@@ -71,9 +72,9 @@ export interface NodeTransitionEvent extends RunEventBase {
  * What a node row's `cost_usd` measures. `own` is the node's own spend; `total` is a
  * restatement of spend other rows of the same run already carry (a `loop_group` roll-up,
  * a composed fan-out wrapper or instance terminal, a retry amendment). Summing only `own`
- * costs lands on the run total.
+ * costs lands on the run total. The server decides it by the engine's rule.
  */
-export type CostScope = 'own' | 'total';
+export type CostScope = NonNullable<RawWorkflowEvent['cost_scope']>;
 
 export interface ApprovalEvent extends RunEventBase {
   kind: 'approval';
@@ -111,16 +112,7 @@ export type RunEvent =
   | ErrorEvent
   | SystemEvent;
 
-// Server row shape (workflow_events table).
-interface RawWorkflowEvent {
-  id: string;
-  workflow_run_id: string;
-  event_type: string;
-  step_index: number | null;
-  step_name: string | null;
-  data: Record<string, unknown>;
-  created_at: string;
-}
+type RawWorkflowEvent = components['schemas']['WorkflowEvent'];
 
 function readString(obj: Record<string, unknown>, key: string): string {
   const v = obj[key];
@@ -135,17 +127,6 @@ function readStringOrNull(obj: Record<string, unknown>, key: string): string | n
 function readNumberOrNull(obj: Record<string, unknown>, key: string): number | null {
   const v = obj[key];
   return typeof v === 'number' ? v : null;
-}
-
-/**
- * Rows written before `accounting` existed read as `own`, except the `aggregate: true`
- * marker the engine wrote on restatement rows before `accounting` replaced it as the
- * disambiguator; current rows carry both and they agree.
- */
-function readCostScope(data: Record<string, unknown>): CostScope {
-  const accounting = data.accounting;
-  if (typeof accounting === 'string') return accounting === 'node' ? 'own' : 'total';
-  return data.aggregate === true ? 'total' : 'own';
 }
 
 /**
@@ -200,7 +181,7 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       skipExpr: transition === 'skipped' ? readStringOrNull(data, 'expr') : null,
       outputPreview: output === null ? null : output.slice(0, 300),
       costUsd: readNumberOrNull(data, 'cost_usd'),
-      costScope: readCostScope(data),
+      costScope: raw.cost_scope ?? null,
       stopReason: readStringOrNull(data, 'stop_reason'),
       numTurns: readNumberOrNull(data, 'num_turns'),
     };
@@ -418,7 +399,7 @@ export interface NodeRun {
   durationMs: number | null;
   /** From the `node_completed` behind a `completed` state; null for non-AI nodes and every other state. */
   costUsd: number | null;
-  costScope: CostScope;
+  costScope: CostScope | null;
   numTurns: number | null;
   stopReason: string | null;
   skipReason: string | null;
@@ -482,7 +463,7 @@ export function foldNodeRuns(events: RunEvent[], nodes: readonly RunNodeState[])
       endedAt: end?.timestamp ?? null,
       durationMs: end?.durationMs ?? null,
       costUsd: completed?.costUsd ?? null,
-      costScope: completed?.costScope ?? 'own',
+      costScope: completed?.costScope ?? null,
       numTurns: completed?.numTurns ?? null,
       stopReason: completed?.stopReason ?? null,
       // Only a `skipped` state's own transition carries these; a replay's are not shown.

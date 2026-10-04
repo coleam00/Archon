@@ -4793,6 +4793,11 @@ export interface components {
       /** Format: date-time */
       created_at: string;
       event_order?: number | null;
+      /**
+       * @description What `data.cost_usd` measures, by the engine's rule: `own` is the node's own spend; `total` restates spend other rows of the run carry. Present only on rows with a `cost_usd`.
+       * @enum {string}
+       */
+      cost_scope?: 'own' | 'total';
     };
     ProviderEventsResponse: {
       events: components['schemas']['ProviderEventRecord'][];

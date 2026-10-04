@@ -18,6 +18,7 @@ import {
   RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import { runStopReasonSchema as engineRunStopReasonSchema } from '@archon/workflows/schemas/run-terminal-reason';
+import { nodeCostScopeSchema } from '@archon/workflows/schemas/node-execution';
 import { workflowEventRowSchema } from '@archon/core/schemas/workflow-event';
 import { dashboardWorkflowRunSchema as coreDashboardWorkflowRunSchema } from '@archon/core/schemas/workflow-run';
 
@@ -165,6 +166,10 @@ export const workflowRunListResponseSchema = z
 export const workflowEventSchema = workflowEventRowSchema
   .extend({
     created_at: z.string().datetime(),
+    cost_scope: nodeCostScopeSchema.optional().openapi({
+      description:
+        "What `data.cost_usd` measures, by the engine's rule: `own` is the node's own spend; `total` restates spend other rows of the run carry. Present only on rows with a `cost_usd`.",
+    }),
   })
   .openapi('WorkflowEvent');
 

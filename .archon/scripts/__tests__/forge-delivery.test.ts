@@ -27,8 +27,8 @@ const MARKER = '<!-- archon-review-report -->';
 const HEAD_SHA = 'feedface00000000000000000000000000000000';
 const OPENING_BODY = 'Opening body: the change adds a guard.';
 const RESYNCED_BODY = 'Resynced body: the change adds a guard and its test.';
-const ROUND_ONE = 'Round one: one finding still open.';
-const ROUND_TWO = 'Round two: every finding resolved.';
+const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
+const ROUND_TWO = `Round two at ${HEAD_SHA}: every finding resolved.`;
 
 /** A host with the GitHub plugin configured for the fake host and a host command. */
 function forgeHost(): { argv: string[]; statePath: string; auditLog: string } {
@@ -121,6 +121,10 @@ describe('the forge opt-in delivers through audited plugin operations', () => {
           inputs: {
             INPUTS_PR: JSON.stringify(PR),
             INPUTS_REPORT: '{ARTIFACTS}/report.md',
+            INPUTS_HEAD: HEAD_SHA,
+            ARCHON_NODE_EXECUTION: JSON.stringify({
+              attempt: { checkoutStart: { kind: 'git', commit: HEAD_SHA } },
+            }),
             INPUTS_READY: String(ready),
             INPUTS_ACTION: ready ? 'none' : 'correct',
             INPUTS_SUMMARY: 'summary',
@@ -203,9 +207,11 @@ describe('the forge opt-in delivers through audited plugin operations', () => {
       expect(operations).toEqual([
         'pr.view',
         'pr.create',
+        'pr.view',
         'comment.upsert',
         'pr.view',
         'pr.edit-body',
+        'pr.view',
         'comment.upsert',
         'checks.state',
         'pr.view',

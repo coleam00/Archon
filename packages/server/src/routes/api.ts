@@ -4,6 +4,7 @@
  */
 
 import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
+import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
@@ -4325,7 +4326,12 @@ export function registerApiRoutes(
           // The console reads node state from here and keeps no fold of its own.
           nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
         },
-        events,
+        // The console renders each cost's scope from here and keeps no copy of the rule.
+        events: events.map(event =>
+          typeof event.data.cost_usd === 'number'
+            ? { ...event, cost_scope: nodeCostScope(event.data) }
+            : event
+        ),
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

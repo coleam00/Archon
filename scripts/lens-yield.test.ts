@@ -34,11 +34,21 @@ test('tallies lens attribution across runs', async () => {
     JSON.stringify([
       { id: 'R1', severity: 'Critical', sources: ['seams'], claim: 'c', status: 'fixed' },
       { id: 'R2', severity: 'Important', sources: ['docs'], claim: 'd', status: 'disproved' },
+      { id: 'R3', severity: 'Important', sources: ['errors'], claim: 'e', status: 'declined' },
+    ])
+  );
+  // The current label set, beside the earlier one the older runs carry.
+  writeRun(
+    root,
+    'run-3',
+    JSON.stringify([
+      { id: 'R1', severity: 'blocking', sources: ['code'], claim: 'f', status: 'fixed' },
+      { id: 'R2', severity: 'note', sources: ['code'], claim: 'g', status: 'open' },
     ])
   );
 
   const { files, unreadable } = await collectFindings([root]);
-  expect(files).toHaveLength(2);
+  expect(files).toHaveLength(3);
   expect(unreadable).toEqual([]);
 
   const tallies = tallyLenses(files);
@@ -50,14 +60,18 @@ test('tallies lens attribution across runs', async () => {
     disproved: 0,
   });
   // The measure that retires a lens: sourced a finding, never on its own.
-  expect(tallies.find(t => t.lens === 'code')).toMatchObject({ findings: 1, sole: 0 });
+  expect(tallies.find(t => t.lens === 'code')).toMatchObject({ findings: 3, sole: 2 });
+  // `blocking` counts like `Important`; `note` counts like `Suggestion`.
+  expect(tallies.find(t => t.lens === 'code')).toMatchObject({ blocking: 2 });
   // A disproved finding is yield the lens does not get credit for.
   expect(tallies.find(t => t.lens === 'docs')).toMatchObject({
     findings: 1,
     blocking: 0,
     disproved: 1,
   });
-  expect(formatReport(files, tallies, unreadable)).toContain('2 review(s), 4 finding(s)');
+  // So is one the owner declined with a reason synthesis accepted.
+  expect(tallies.find(t => t.lens === 'errors')).toMatchObject({ blocking: 0, disproved: 1 });
+  expect(formatReport(files, tallies, unreadable)).toContain('3 review(s), 7 finding(s)');
 });
 
 test('reports an unreadable findings file instead of dropping it', async () => {

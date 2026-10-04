@@ -3,6 +3,17 @@ import {
   terminalRecordSchema,
 } from '@archon/workflows/schemas/terminal-record';
 import { buildTerminalRecord } from '@archon/workflows/terminal-record';
+import {
+  nodeExecutionMetadataSchema,
+  type NodeCostScope,
+  type NodeExecutionMetadata,
+} from '@archon/workflows/schemas/node-execution';
+import {
+  finishNodeExecution,
+  newNodeInvocation,
+  startNodeExecution,
+} from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import { describe, test, expect, mock, beforeAll, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
@@ -1700,6 +1711,57 @@ describe('GET /api/workflows/runs/:runId', () => {
       expect(run.terminal_record).toBeNull();
       expect(run.nodes).toEqual([{ node_id: 'build', state: 'completed' }]);
     });
+  });
+
+  test("serves each cost row with the engine's cost scope", async () => {
+    const expected = {
+      node: 'own',
+      aggregate: 'total',
+      instance: 'total',
+      amendment: 'total',
+    } satisfies Record<NodeExecutionMetadata['accounting'], NodeCostScope>;
+    const rows: { data: Record<string, unknown>; scope: NodeCostScope | undefined }[] = [
+      ...nodeExecutionMetadataSchema.shape.accounting.options.map(accounting => ({
+        data: serializeNodeStateRecord(
+          finishNodeExecution(
+            startNodeExecution({
+              runId: MOCK_FAILED_RUN.id,
+              path: accounting,
+              node: { id: accounting, kind: 'agent', source: { kind: 'inline', prompt: 'work' } },
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+              accounting,
+            }),
+            { status: 'completed' },
+            { costUsd: 0.01 }
+          )
+        ).data,
+        scope: expected[accounting],
+      })),
+      // Rows written before `accounting` existed.
+      { data: { cost_usd: 0.01, aggregate: true }, scope: 'total' },
+      { data: { cost_usd: 0.01 }, scope: 'own' },
+      // No cost, so no scope.
+      { data: {}, scope: undefined },
+    ];
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_FAILED_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () =>
+      rows.map(({ data }, index) => ({
+        id: `event-${index}`,
+        workflow_run_id: MOCK_FAILED_RUN.id,
+        event_type: 'cost_usd' in data ? 'node_completed' : 'node_started',
+        step_index: null,
+        step_name: `node-${index}`,
+        data,
+        created_at: NOW_DATE.toISOString(),
+      }))
+    );
+    const { app } = makeApp();
+    const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { events: { cost_scope?: NodeCostScope }[] };
+    expect(body.events.map(event => event.cost_scope)).toEqual(rows.map(row => row.scope));
+    expect(body.events.at(-1)).not.toHaveProperty('cost_scope');
   });
 
   test('does not disguise an event query failure as an absent terminal record', async () => {

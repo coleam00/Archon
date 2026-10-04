@@ -1,0 +1,68 @@
+# Dry-run fixture: the pre-PR simplify pass finds a smaller shape, so the owner
+# adopts it before the pull request opens. The full-tier review still runs the
+# simplify lens over the published diff: the second, independent structure look.
+# The corrections loop is skipped and gate-ready binds the review verdict directly (the corrections
+# binding takes its if_skipped default). The pull request's head is in its own
+# repository, so the final local validation is skipped: its nodes carry no stub,
+# and running them would fail this fixture.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
+review__code: "0 findings"
+review__simplify__simplify: { findings: false }
+review__seams: "0 findings"
+shape__simplify: { findings: true }
+reshape__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: adopted the smaller shape; declined one taste finding with its reason"
+reshape__assert-changed: "1 file changed"
+gate-reshape: '{"gate":"green","red_cause":"","stage":"The structure correction","summary":""}'
+review__tests: "0 findings"
+review__review-complete: "settled"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+gate-ready: '{"ready":"true"}'
+ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
+ci-attention-route: '{"attention":false,"red_cause":""}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
+classify:
+  tier: full
+  errors: false
+  docs: false
+  reasons:
+    tier: "stub: touches persisted state"
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":false}'
+fixture:
+  expect: completed
+  # The review round is handed the verified PR record, not a bare number: the
+  # comment its publish node writes must land on that exact pull request.
+  reached: [reshape__implement, gate-reshape, pr__publish, review__simplify__simplify]
+  resolved-text-contains:
+    review__scope: '"path":"example/repo"'

@@ -14,7 +14,7 @@ interface NodeDividerProps {
   timestamp: string;
   /** From `node_completed` — surfaced inline so per-node spend is visible. */
   costUsd?: number | null;
-  costScope?: CostScope;
+  costScope?: CostScope | null;
   numTurns?: number | null;
   /** From `node_completed` — surfaced under the System detail toggle. */
   stopReason?: string | null;
@@ -57,7 +57,7 @@ export function NodeDivider({
   durationMs,
   timestamp,
   costUsd,
-  costScope = 'own',
+  costScope,
   numTurns,
   stopReason,
   skipReason,

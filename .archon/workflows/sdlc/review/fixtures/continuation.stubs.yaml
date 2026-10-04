@@ -10,7 +10,7 @@
 # fails this fixture instead of passing quietly. The judgment itself — which
 # surface earns a re-evaluation, and whether the finding resolves as a follow-up —
 # is model reasoning that no fixture can assert.
-mode: '{"continuation":true}'
+mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
 scope:
   docs: true
   # A standalone review of the working diff: no pull request to publish to.
