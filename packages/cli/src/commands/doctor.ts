@@ -77,8 +77,7 @@ export async function checkConfigFiles(
  */
 export async function checkProviderDeprecation(
   cwd: string = process.cwd(),
-  load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig,
-  noticeFor: (provider: string) => Promise<string | undefined> = defaultDeprecationNoticeFor
+  load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig
 ): Promise<CheckResult> {
   const label = 'Provider support';
   let assistant: string;
@@ -87,15 +86,11 @@ export async function checkProviderDeprecation(
   } catch {
     return { label, status: 'skip', message: 'config did not load' };
   }
-  const notice = await noticeFor(assistant);
+  const { getRegistration } = await import('@archon/providers');
+  const notice = getRegistration(assistant).deprecationNotice;
   return notice
     ? { label, status: 'warn', message: notice }
     : { label, status: 'pass', message: `${assistant} is supported` };
-}
-
-async function defaultDeprecationNoticeFor(provider: string): Promise<string | undefined> {
-  const { getRegistration } = await import('@archon/providers');
-  return getRegistration(provider).deprecationNotice;
 }
 
 async function defaultLoadMergedConfig(cwd: string): Promise<MergedConfig> {

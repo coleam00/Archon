@@ -776,11 +776,8 @@ describe('checkProviderDeprecation', () => {
   });
 
   it('passes when the default assistant carries no notice', async () => {
-    const result = await checkProviderDeprecation(
-      '/repo',
-      async () => ({ assistant: 'claude' }),
-      async () => undefined
-    );
+    registerBuiltinProviders();
+    const result = await checkProviderDeprecation('/repo', async () => ({ assistant: 'claude' }));
     expect(result.status).toBe('pass');
   });
 

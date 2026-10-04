@@ -33,6 +33,7 @@ import {
   registerBuiltinProviders,
   registerCommunityProviders,
   getRegisteredProviders,
+  DEPRECATED_PROVIDERS_DOCS_PATH,
 } from '@archon/providers';
 import type { ProviderCapabilities, ProviderRegistration } from '@archon/providers';
 
@@ -193,9 +194,7 @@ function resolveCaveats(providers: ProviderRegistration[]): ResolvedCaveat[] {
 function providerTags(p: ProviderRegistration): string {
   const tags = [
     ...(p.builtIn ? [] : ['community provider']),
-    ...(p.deprecationNotice
-      ? ['[deprecated](/getting-started/ai-assistants/#deprecated-providers)']
-      : []),
+    ...(p.deprecationNotice ? [`[deprecated](${DEPRECATED_PROVIDERS_DOCS_PATH})`] : []),
   ];
   return tags.length > 0 ? ` *(${tags.join(', ')})*` : '';
 }
