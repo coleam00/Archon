@@ -1058,6 +1058,8 @@ describe('validateWorkflowResources — bash output-ref lint', () => {
     'export first=ok value=$emit.output',
     'first="two words" value=$emit.output',
     'local first="two words" value=$emit.output',
+    'value=$emit.output>result',
+    'value=$LOOP_PREV.emit.output.status<input',
   ])('accepts complete assignment RHS: %s', async script => {
     const workflow = makeWorkflow('test', [{ id: 'check', kind: 'exec', runtime: 'sh', script }]);
     const issues = await validateWorkflowResources(workflow, tmpDir);
@@ -1065,13 +1067,20 @@ describe('validateWorkflowResources — bash output-ref lint', () => {
   });
 
   test.each([
-    'cat <<EOF\n$emit.output\nEOF\necho $emit.output',
-    'cat <<\'EOF\'\n"$emit.output"\nEOF\necho $emit.output',
-    'cat <<-EOF\n\t$emit.output\n\tEOF\necho $emit.output',
+    'cat <<EOF\n$emit.output\nEOF',
+    'cat <<\'EOF\'\n"$emit.output"\nEOF',
+    'cat <<-EOF\n\t$emit.output\n\tEOF',
+    'cat <<\\EOF\n$emit.output\nEOF',
   ])('ignores heredoc contents and resumes checking after the delimiter', async script => {
     const workflow = makeWorkflow('test', [{ id: 'check', kind: 'exec', runtime: 'sh', script }]);
     const issues = await validateWorkflowResources(workflow, tmpDir);
-    const warnings = issues.filter(i => i.field === 'bash');
+    expect(issues.filter(i => i.field === 'bash')).toHaveLength(0);
+
+    const continued = makeWorkflow('test', [
+      { id: 'check', kind: 'exec', runtime: 'sh', script: `${script}\necho $emit.output` },
+    ]);
+    const continuedIssues = await validateWorkflowResources(continued, tmpDir);
+    const warnings = continuedIssues.filter(i => i.field === 'bash');
     expect(warnings).toHaveLength(1);
     expect(warnings[0].message).toContain('bare');
   });

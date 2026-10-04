@@ -999,7 +999,7 @@ function shellOutputRefWarnings(body: string): { quoted: boolean; bare: boolean 
         line[index - 1] !== '<' &&
         (quote === undefined || (quote === '"' && commandSubstitutions > 0))
       ) {
-        const opener = /^<<(-?)[ \t]*(?:'([^']+)'|"([^"\n]+)"|([a-zA-Z_][a-zA-Z0-9_]*))/.exec(
+        const opener = /^<<(-?)[ \t]*(?:'([^']+)'|"([^"\n]+)"|\\?([a-zA-Z_][a-zA-Z0-9_]*))/.exec(
           line.slice(index)
         );
         if (opener !== null) {
@@ -1019,7 +1019,7 @@ function shellOutputRefWarnings(body: string): { quoted: boolean; bare: boolean 
             /^[a-zA-Z_][a-zA-Z0-9_]*=$/.test(line.slice(wordStart, index)) &&
             precedingAssignments.every(word => /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(word));
           const next = line[index + ref.length];
-          if (!assignment || (next !== undefined && !/[\s;&|)]/.test(next))) bare = true;
+          if (!assignment || (next !== undefined && !/[\s;&|)<>]/.test(next))) bare = true;
         }
       }
       if (!escaped && quote === undefined) {
