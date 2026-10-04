@@ -3880,6 +3880,8 @@ export function registerApiRoutes(
     const approvalRaw = run.metadata.approval;
     const approval = isApprovalContext(approvalRaw) ? approvalRaw : undefined;
     switch (attention?.kind) {
+      case 'admission_pending':
+        return { error: `Gate is awaiting admission on run ${attention.ownerId}.` };
       case 'action_required':
         return {
           error:

@@ -451,6 +451,10 @@ export function assertApprovable(run: WorkflowRun): ApprovalContext {
   // decisions, session, and iteration the attention value deliberately omits.
   const attention = runAttention(run);
   switch (attention?.kind) {
+    case 'admission_pending':
+      throw new Error(
+        `Gate ${attention.gateId} is awaiting admission on run ${attention.ownerId}.`
+      );
     case 'awaiting_response':
       // Reported only for a well-formed, unresolved gate, so the context read above
       // is present; the check keeps that provable to the compiler.
@@ -515,6 +519,10 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
     : undefined;
   const attention = runAttention(run);
   switch (attention?.kind) {
+    case 'admission_pending':
+      throw new Error(
+        `Gate ${attention.gateId} is awaiting admission on run ${attention.ownerId}.`
+      );
     case 'action_required':
       throw new Error(
         `Run ${run.id} is paused for an outside action. Complete it, then resume the run; ` +

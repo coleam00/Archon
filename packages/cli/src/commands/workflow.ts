@@ -4195,6 +4195,8 @@ function formatWaitOutcome(watchedRunId: string, result: RunWaitResult): string 
   }
   const attention = result.attention;
   switch (attention.kind) {
+    case 'admission_pending':
+      return `Run ${watchedRunId} is waiting for gate admission on run ${attention.ownerId}.`;
     case 'terminal':
       return `Run ${watchedRunId} ${attention.status}.`;
     case 'awaiting_response':

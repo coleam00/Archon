@@ -16,6 +16,7 @@ import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-event
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { normalizeWorkflowRun } from './workflow-run-normalization';
+import { resolveWorkflowGate, type GateResolutionResult } from './workflow-gate-admission';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -27,6 +28,7 @@ import type {
   ScheduledWorkflowResume,
 } from '@archon/workflows/schemas/workflow-run';
 import {
+  isApprovalContext,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
   scheduledWorkflowResumeSchema,
@@ -164,12 +166,17 @@ function readScheduledResume(raw: unknown): ScheduledWorkflowResume | null {
  * This is the compare-and-swap guard resolveApprovalGate uses to serialize
  * concurrent approve/reject.
  */
+// Queue-aware gates resolve under the root lock; the singular CAS accepts only legacy metadata.
 function unresolvedGateClause(): string {
   const resolvedExpr =
     getDatabaseType() === 'postgresql'
       ? "metadata->'approval'->>'resolved'"
       : "json_extract(metadata, '$.approval.resolved')";
-  return `status = 'paused' AND ${resolvedExpr} IS NULL`;
+  const legacyClause =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'gate_queue' IS NULL AND metadata->'approval'->>'gateId' IS NULL AND metadata->'approval'->>'admissionOwnerId' IS NULL"
+      : "json_extract(metadata, '$.gate_queue') IS NULL AND json_extract(metadata, '$.approval.gateId') IS NULL AND json_extract(metadata, '$.approval.admissionOwnerId') IS NULL";
+  return `status = 'paused' AND ${resolvedExpr} IS NULL AND ${legacyClause}`;
 }
 
 /**
@@ -257,7 +264,14 @@ export async function resolveApprovalGate(
   id: string,
   metadata: Record<string, unknown>,
   events: GateResolutionEvent[]
-): Promise<{ resolved: boolean }> {
+): Promise<GateResolutionResult> {
+  const expectedGateId = isApprovalContext(metadata.approval)
+    ? metadata.approval.gateId
+    : undefined;
+  if (expectedGateId !== undefined) {
+    const admission = await resolveWorkflowGate(id, expectedGateId, metadata, events);
+    if (admission !== null) return admission;
+  }
   const dialect = getDialect();
   try {
     return await getDatabase().withTransaction(async query => {
@@ -311,8 +325,16 @@ export async function resolveApprovalGate(
 export async function resolveAndCancelApprovalGate(
   id: string,
   events: GateResolutionEvent[],
-  cancellation: WorkflowCancellationEventDetails
-): Promise<{ resolved: boolean }> {
+  cancellation: WorkflowCancellationEventDetails,
+  expectedGateId?: string
+): Promise<GateResolutionResult> {
+  if (expectedGateId !== undefined) {
+    const admission = await resolveWorkflowGate(id, expectedGateId, {}, events, cancellation);
+    if (admission !== null) {
+      if (admission.resolved) await reportRunTerminal(id);
+      return admission;
+    }
+  }
   const dialect = getDialect();
   let outcome: { resolved: boolean };
   try {

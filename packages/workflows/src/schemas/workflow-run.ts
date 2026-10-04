@@ -7,19 +7,9 @@ import {
   type DeclaredOutputPaths,
 } from '../output-ref';
 import { z } from '@hono/zod-openapi';
-import {
-  skipCauseSchema,
-  suspendReasonSchema,
-  type NodeState,
-  type SuspendReason,
-} from './node-state';
-import type { TokenUsage } from '@archon/providers/types';
-import { providerFailureSchema } from '@archon/provider-contract';
-import {
-  nodeExecutionMetadataSchema,
-  nodeFailureKindSchema,
-  type NodeExecutionMetadata,
-} from './node-execution';
+import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
+import { providerFailureSchema, tokenUsageSchema } from '@archon/provider-contract';
+import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
@@ -687,174 +677,140 @@ export function isRecognizedSuspendReason(type: string | undefined): boolean {
   return type === undefined || suspendReasonSchema.safeParse(type).success;
 }
 
-/** Approval context stored in workflow run metadata when paused for human review. */
-export interface ApprovalContext {
-  nodeId: string;
-  message: string;
-  /**
-   * Distinguishes the pause kind — see `SuspendReason` above for the resume-path
-   * pointer each variant carries:
-   *  - `approval`         — a DAG approval node awaiting a human decision.
-   *  - `interactive_loop` — an interactive loop gate.
-   *  - `writeback`        — the ENGINE-level container write-back gate (Phase C):
-   *    no DAG node behind it (`nodeId` is the synthetic `__writeback__`), the
-   *    overlay diff of a finished container run awaiting approve→apply / reject→
-   *    discard. Reuses the approve/reject CAS machinery; the executor's resume
-   *    path branches on the persisted `pending_writeback` marker, not this node.
-   *  - `child_workflow`   — a `workflow:` sub-run node (#2121 Phase 2) whose CHILD
-   *    run paused at its own gate. The parent pauses "blocked on child"; `nodeId`
-   *    is the parent's workflow node, `childRunId` the paused child. The reviewer
-   *    approves the CHILD by run id; when the child terminates, the parent_run_id
-   *    auto-resume hook re-enters the parent (executor.ts), which re-runs the
-   *    workflow node, finds the child terminal, and threads its output. NO
-   *    node_completed is written for the parent's node on this pause.
-   */
-  type?: SuspendReason;
-  /**
-   * Child run id when `type === 'child_workflow'` — the specific paused sub-run
-   * the parent is blocked on. Read by the parent auto-resume guard so a DIFFERENT
-   * child of the same parent can't trigger the wrong re-entry.
-   */
-  childRunId?: string;
-  /**
-   * Set only on an ESCALATED pause: a `gate:` node that is the sole terminal sink
-   * of a `loop_group` body (#2707 step 3), still `type: 'approval'`. The enclosing
-   * loop_group's own id occupies `nodeId` — required for the top-level DAG's
-   * resume walk to find it (it only knows top-level node ids, never a nested body
-   * id) — so this field carries the body gate's own bare id, the one piece the
-   * rewrite would otherwise lose. `approveWorkflow`/`rejectWorkflow`/
-   * `respondToWorkflowWithDeclaredDecision` read it to namespace the resolution's
-   * `node_completed` event as `<nodeId>.<bodyGateId>` instead of bare `nodeId` —
-   * the exact `<groupId>.<bodyId>` step name #2748's `outerNodeOutputs`
-   * pre-population already keys on, so the gate's own resolved decision is
-   * findable again after a resume the same way any other body node's output is.
-   * Absent for every other pause kind, including an ordinary top-level gate.
-   */
-  bodyGateId?: string;
-  /** Current loop iteration when paused (interactive loops only). */
-  iteration?: number;
-  /**
-   * Session ID to restore on resume (interactive loops only). Gate pauses write an
-   * explicit null when the loop has no session cursor to restore; readers treat that
-   * exactly like an absent key.
-   */
-  sessionId?: string | null;
-  /**
-   * Provider that created `sessionId` (#1992). Persisted by loop_group gates and
-   * restored together with the session id so a resumed loop never threads the
-   * session into a node that resolves to a different provider (cross-provider
-   * resume is impossible). Same null-means-no-cursor convention as `sessionId`.
-   * Absent on single-node loop gates — those restore the session into the same
-   * node, so the provider is the same by construction.
-   */
-  sessionProvider?: string | null;
-  /** When true, the user's approval comment is stored as `$nodeId.output`. Legacy-mode gates only (see `onRejectPrompt`). */
-  captureResponse?: boolean;
-  /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */
-  onRejectPrompt?: string;
-  /** Max rejection attempts before cancellation (default 3). */
-  onRejectMaxAttempts?: number;
-  /**
-   * The gate's declared decisions (#2707 step 1), snapshotted at pause time so
-   * approve/reject handlers don't need the workflow def to know the vocabulary
-   * — mirrors why `onRejectPrompt` is snapshotted rather than looked up.
-   * Always populated (synthesized default pair, `on_reject`-translated pair,
-   * or the authored array) regardless of mode — see `decisionsAuthored` for
-   * the actual mode signal. Absent on gates paused by builds that predate
-   * this field.
-   */
-  decisions?: { id: string; label?: string }[];
-  /**
-   * True only when the author wrote `approval.decisions:` explicitly in YAML
-   * (mirrors `GateNode.decisionsAuthored` — see its doc for the full
-   * rationale). THIS, not `onRejectPrompt`'s absence, is the signal
-   * `approveWorkflow`/`rejectWorkflow` use to pick the new structured-output
-   * resolution path: no workflow authored before #2707 step 1 can have
-   * written `decisions:`, so keying the new behavior on it — rather than on
-   * "no on_reject configured" — guarantees every already-authored gate
-   * (bare, or `capture_response`-only) keeps its exact pre-PR output shape
-   * AND reject-always-cancels behavior, unaffected by this PR. Absent (falsy)
-   * on gates paused by builds that predate this field, which resolves to
-   * legacy behavior — the safe default.
-   */
-  decisionsAuthored?: boolean;
-  /**
-   * Gate resolution marker. Set by approve/reject handlers while the run STAYS
-   * 'paused' awaiting auto-resume (#2075): 'approved' = approval recorded,
-   * 'rejected' = rejection recorded with an on_reject rework staged.
-   * null/undefined = gate unresolved (awaiting the human).
-   *
-   * Lifecycle: never cleared on resume — matching the never-clear convention for
-   * approval_response/rejection_reason/loop_user_input (consumed in place). The
-   * next fresh pause is what resets it: pauseWorkflowRun REPLACES the whole
-   * approval object, so a gate that sets no `resolved` stores none and a prior
-   * gate's 'approved' cannot survive to block it (#2673).
-   */
-  resolved?: 'approved' | 'rejected' | null;
-  /**
-   * Interactive-loop only. True when the iteration this gate paused on emitted the
-   * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
-   * executeLoopNode/executeLoopGroupNode: a signal-bearing gate approved WITHOUT feedback
-   * finalizes the node from `signaledOutput` instead of re-running. Cleared by the next
-   * fresh pause the same way `resolved` is — the whole approval object is replaced.
-   */
-  completionSignaled?: boolean | null;
-  /**
-   * Interactive-loop only. The (stripped) output of the signal-bearing paused iteration,
-   * persisted so the finalize path can write node_completed with the real output for
-   * downstream `$nodeId.output` refs. Only set when completionSignaled is true; null otherwise.
-   */
-  signaledOutput?: string | null;
-  /**
-   * Interactive-loop only. The signal-bearing iteration's structured payload (#2637),
-   * persisted beside `signaledOutput` so a bare-approve finalize attaches the same
-   * `structuredOutput` a natural completion would — without it the two completion
-   * routes of one node diverge in `$node.output.field` strictness (finalize would
-   * land in the strict text-parse tier while natural completion stays lenient).
-   * Only set when completionSignaled is true AND the iteration produced a payload;
-   * null otherwise. Absent on gates paused by builds predating this field — those
-   * finalize text-only, exactly as before.
-   */
-  signaledStructuredOutput?: unknown;
-  /**
-   * Interactive-loop only, and written by the single-node `loop` gate ONLY. Cumulative
-   * token usage through this pause, restored when the loop resumes so later gates and
-   * terminal metadata retain every pre-gate iteration. The historical name remains for
-   * compatibility with already-paused runs. A `loop_group` gate deliberately omits it:
-   * body nodes persist their own namespaced usage rows before the pause.
-   */
-  signaledTokens?: TokenUsage | null;
-  /** Cumulative USD cost through this single-node loop pause; paired with signaledTokens. */
-  signaledCostUsd?: number | null;
-  /** Original execution facts retained across a gate; no private session handle. */
-  execution?: NodeExecutionMetadata;
-  /**
-   * Interactive-loop only. Read-once snapshot of the resolved loop prompt
-   * template, whether authored as `loop.prompt` or loaded from `loop.command`,
-   * persisted at gate pause so the resumed invocation reuses the exact text the
-   * run started with. This also takes precedence over an included loop command's
-   * load-time compiled prompt/error after rediscovery. Absent on runs paused by builds
-   * that predate this field; those resume from the current prompt or command source.
-   */
-  commandSnapshot?: string | null;
+/** The complete gate snapshot, persisted before requesting a decision. */
+export const approvalContextSchema = z.object({
+  nodeId: z.string(),
+  message: z.string(),
+  type: suspendReasonSchema.optional(),
+  childRunId: z.string().optional(),
+  // An enclosing loop group owns resume; its body gate owns the decision event.
+  bodyGateId: z.string().optional(),
+  iteration: z.number().int().optional(),
+  sessionId: z.string().nullable().optional(),
+  sessionProvider: z.string().nullable().optional(),
+  captureResponse: z.boolean().optional(),
+  onRejectPrompt: z.string().optional(),
+  onRejectMaxAttempts: z.number().int().optional(),
+  decisions: z.array(z.object({ id: z.string(), label: z.string().optional() })).optional(),
+  // Only authored decisions opt into structured output and resumable rejection.
+  decisionsAuthored: z.boolean().optional(),
+  resolved: z.enum(['approved', 'rejected']).nullable().optional(),
+  completionSignaled: z.boolean().nullable().optional(),
+  signaledOutput: z.string().nullable().optional(),
+  signaledStructuredOutput: z.unknown().optional(),
+  // Cumulative loop usage through the suspended iteration; the field names are persisted contracts.
+  signaledTokens: tokenUsageSchema.nullable().optional(),
+  signaledCostUsd: z.number().nullable().optional(),
+  execution: nodeExecutionMetadataSchema.optional(),
+  // The resolved loop template survives cold resume, including command-backed loops.
+  commandSnapshot: z.string().nullable().optional(),
+  gateId: z.string().optional(),
+  admissionOwnerId: z.string().optional(),
+  admission: z.enum(['collecting', 'queued', 'active']).optional(),
+  presentation: z.enum(['unclaimed', 'claimed', 'delivered']).optional(),
+});
+export type ApprovalContext = z.infer<typeof approvalContextSchema>;
+
+export const gateResponseSchema = z.object({
+  resolved: z.enum(['approved', 'rejected']),
+  approval_response: z.string().optional(),
+  rejection_reason: z.string().optional(),
+  rejection_count: z.number().int().nonnegative().optional(),
+  loop_user_input: z.string().optional(),
+  loop_feedback_given: z.boolean().optional(),
+});
+export type GateResponse = z.infer<typeof gateResponseSchema>;
+
+const gateRecordFields = {
+  id: z.string().min(1),
+  runId: z.string().min(1),
+  context: approvalContextSchema
+    .omit({
+      resolved: true,
+      gateId: true,
+      admissionOwnerId: true,
+      admission: true,
+      presentation: true,
+    })
+    .strict(),
+  readyForPresentation: z.boolean(),
+  presentation: z.enum(['unclaimed', 'claimed', 'delivered']),
+};
+export const pendingGateSchema = z.object(gateRecordFields);
+export const resolvedGateSchema = z.object({
+  ...gateRecordFields,
+  response: gateResponseSchema,
+});
+export const gateQueueSchema = z
+  .object({
+    version: z.literal(1),
+    phase: z.enum(['collecting', 'parked']),
+    active: pendingGateSchema.nullable(),
+    pending: z.array(pendingGateSchema),
+    resolved: z.array(resolvedGateSchema),
+  })
+  .strict()
+  .superRefine((queue, ctx) => {
+    const records = [...(queue.active ? [queue.active] : []), ...queue.pending, ...queue.resolved];
+    if (new Set(records.map(record => record.id)).size !== records.length) {
+      ctx.addIssue({ code: 'custom', message: 'Gate identities must be unique' });
+    }
+    if (queue.active === null && queue.pending.length > 0) {
+      ctx.addIssue({ code: 'custom', message: 'Pending gates require an active gate' });
+    }
+  });
+export type PendingGate = z.infer<typeof pendingGateSchema>;
+export type ResolvedGate = z.infer<typeof resolvedGateSchema>;
+export type GateQueue = z.infer<typeof gateQueueSchema>;
+export type GateAdmission =
+  | { status: 'already_resolved'; ownerId: string; gate: ResolvedGate }
+  | { status: 'registered'; ownerId: string; gateId: string; position: 'active' | 'queued' }
+  | { status: 'externally_stopped'; runId: string; runStatus: WorkflowRunStatus | null };
+
+/** Missing is legacy; malformed modern state must never fall back to a fresh gate. */
+export function readGateQueue(metadata: Record<string, unknown>): GateQueue | undefined {
+  return metadata.gate_queue === undefined ? undefined : gateQueueSchema.parse(metadata.gate_queue);
 }
 
-/**
- * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate
- * protocol, written by approveWorkflow and read at resume by
- * executeLoopNode/executeLoopGroupNode (#2074). Deliberately NOT a Zod schema —
- * run metadata stays schemaless JSON; this alias exists solely so the write and
- * read sites share one key spelling (a typo is a compile error), nothing broader.
- */
-export interface LoopGateRunMetadata {
-  /** $LOOP_USER_INPUT for the resumed iteration (approve comment; defaults to 'Approved'). */
-  loop_user_input?: string;
-  /**
-   * True iff the approve carried real (non-whitespace) feedback. False/absent =
-   * bare approve — finalize-eligible when the gate's completionSignaled is true.
-   */
-  loop_feedback_given?: boolean;
+export function gateProjection(
+  queue: GateQueue,
+  gate: PendingGate,
+  ownerId: string
+): ApprovalContext {
+  return {
+    ...gate.context,
+    gateId: gate.id,
+    admissionOwnerId: ownerId,
+    admission:
+      gate.id !== queue.active?.id
+        ? 'queued'
+        : queue.phase === 'collecting' || !gate.readyForPresentation
+          ? 'collecting'
+          : 'active',
+    presentation: gate.presentation,
+  };
 }
+
+/** Select only this invocation's response; modern gates never inherit run-wide feedback. */
+export function gateContinuationMetadata(
+  queue: GateQueue,
+  runId: string,
+  nodeId: string
+): Record<string, unknown> | undefined {
+  const record = queue.resolved
+    .slice()
+    .reverse()
+    .find(gate => gate.runId === runId && gate.context.nodeId === nodeId);
+  return record
+    ? {
+        ...record.response,
+        approval: { ...record.context, resolved: record.response.resolved, gateId: record.id },
+      }
+    : undefined;
+}
+
+/** Legacy top-level loop response keys; modern gates retain these on their own record. */
+export type LoopGateRunMetadata = Pick<GateResponse, 'loop_user_input' | 'loop_feedback_given'>;
 
 /**
  * True when the run's current approval gate has already been resolved
@@ -892,6 +848,7 @@ export interface GateAddress {
   runId: string;
   /** The gate node inside that run. */
   nodeId: string;
+  gateId?: string;
 }
 
 /**
@@ -907,6 +864,7 @@ export interface GateAddress {
  */
 export type RunAttentionUnreadableReason =
   | 'malformed_gate'
+  | 'malformed_queue'
   | 'unrecognized_gate_type'
   | 'child_pointer_missing'
   | 'child_run_missing'
@@ -931,6 +889,13 @@ export type RunAttentionUnreadableReason =
 export type RunAttention =
   | { kind: 'terminal'; runId: string; status: RunTerminalStatus; at: Date | null }
   | { kind: 'awaiting_response'; runId: string; respondTo: GateAddress; message: string }
+  | {
+      kind: 'admission_pending';
+      runId: string;
+      ownerId: string;
+      gateId: string;
+      phase: 'collecting' | 'queued' | 'presentation';
+    }
   | {
       kind: 'action_required';
       runId: string;
@@ -976,6 +941,17 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
   }
   if (run.status !== 'paused') return null;
 
+  if (
+    run.metadata?.gate_queue !== undefined &&
+    !gateQueueSchema.safeParse(run.metadata.gate_queue).success
+  ) {
+    return unreadableAttention(
+      run.id,
+      'malformed_queue',
+      'the durable gate admission queue cannot be read'
+    );
+  }
+
   const wait = run.metadata?.wait;
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
     return {
@@ -986,7 +962,14 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
     };
   }
 
-  const raw = run.metadata?.approval;
+  const ownedQueue =
+    run.metadata?.gate_queue === undefined ? undefined : readGateQueue(run.metadata);
+  const raw =
+    ownedQueue?.active?.runId === run.id
+      ? gateProjection(ownedQueue, ownedQueue.active, run.id)
+      : run.metadata?.approval;
+  if (ownedQueue?.active === null && (!isApprovalContext(raw) || raw.type !== 'child_workflow'))
+    return null;
   if (raw === undefined) {
     // No gate recorded. A durable `wait:` owns its own resumption. Anything else is
     // a run parked with nothing that describes why, which nothing but an outside
@@ -1019,6 +1002,35 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
   // (see `isGateResolved`).
   if (isGateResolved(raw)) return null;
 
+  if (raw.admission !== undefined) {
+    if (
+      !approvalContextSchema.safeParse(raw).success ||
+      (ownedQueue && raw.gateId !== ownedQueue.active?.id)
+    ) {
+      return unreadableAttention(
+        run.id,
+        'malformed_queue',
+        'gate projection does not match its admission queue'
+      );
+    }
+    if (!raw.gateId || !raw.admissionOwnerId) {
+      return unreadableAttention(
+        run.id,
+        'malformed_queue',
+        'gate projection has no durable admission identity'
+      );
+    }
+    if (raw.admission !== 'active' || raw.presentation === 'unclaimed') {
+      return {
+        kind: 'admission_pending',
+        runId: run.id,
+        ownerId: raw.admissionOwnerId,
+        gateId: raw.gateId,
+        phase: raw.admission === 'active' ? 'presentation' : raw.admission,
+      };
+    }
+  }
+
   if (raw.type === 'child_workflow') {
     if (raw.childRunId === undefined || raw.childRunId === '') {
       // A block pointer with nothing to follow is a corrupt row, not a state to
@@ -1044,7 +1056,7 @@ export function runAttention(run: RunAttentionInput): RunAttention | null {
   return {
     kind: 'awaiting_response',
     runId: run.id,
-    respondTo: { runId: run.id, nodeId: raw.nodeId },
+    respondTo: { runId: run.id, nodeId: raw.nodeId, ...(raw.gateId ? { gateId: raw.gateId } : {}) },
     message: raw.message,
   };
 }

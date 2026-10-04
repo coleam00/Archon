@@ -127,6 +127,63 @@ describe('waitForRunAttention', () => {
     expect(await wait('nope')).toEqual({ kind: 'not_found', runId: 'nope' });
   });
 
+  test('queued child attention watches its admission owner rather than a missing child process', async () => {
+    putRun('child', {
+      status: 'paused',
+      metadata: gate({
+        gateId: 'queued-gate',
+        admissionOwnerId: 'parent',
+        admission: 'queued',
+        presentation: 'unclaimed',
+      }),
+    });
+    putRun('parent', {
+      status: 'paused',
+      metadata: gate({
+        gateId: 'active-gate',
+        admissionOwnerId: 'parent',
+        admission: 'collecting',
+        presentation: 'unclaimed',
+      }),
+    });
+    reachableOwners = new Set(['parent']);
+    const pending = wait('child');
+    await waitForOwner('parent');
+    expect(mockWatchRunLiveOwner.mock.calls.map(([runId]) => runId)).not.toContain('child');
+    putRun('parent', {
+      status: 'paused',
+      metadata: gate({
+        gateId: 'active-gate',
+        admissionOwnerId: 'parent',
+        admission: 'active',
+        presentation: 'delivered',
+      }),
+    });
+    ownerEvents.get('parent')?.('attention');
+    expect(await pending).toMatchObject({
+      kind: 'attention',
+      attention: {
+        kind: 'awaiting_response',
+        respondTo: { runId: 'parent', gateId: 'active-gate' },
+      },
+    });
+  });
+
+  test('a collecting admission with no live owner remains paused and reports owner loss', async () => {
+    const before = putRun('r1', {
+      status: 'paused',
+      metadata: gate({
+        gateId: 'gate',
+        admissionOwnerId: 'r1',
+        admission: 'collecting',
+        presentation: 'unclaimed',
+      }),
+    });
+    reachableOwners = new Set();
+    expect(await wait('r1')).toMatchObject({ kind: 'owner_lost', observedStatus: 'paused' });
+    expect(rows.get('r1')).toEqual(before);
+  });
+
   test('an already-terminal run answers on the first read, with no waiting', async () => {
     // AC4: durable, not live-only. A host that attaches after the transition gets
     // the same value one that attached before it would have.

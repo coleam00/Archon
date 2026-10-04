@@ -206,6 +206,12 @@ export type {
 
 // Workflow run state
 export {
+  approvalContextSchema,
+  gateQueueSchema,
+  gateResponseSchema,
+  readGateQueue,
+  gateProjection,
+  gateContinuationMetadata,
   workflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowWaitContextSchema,
@@ -258,6 +264,11 @@ export type {
   WorkflowRun,
   ArtifactType,
   ApprovalContext,
+  GateQueue,
+  GateResponse,
+  PendingGate,
+  ResolvedGate,
+  GateAdmission,
   WorkflowAttentionWaitContext,
   WorkflowDeadlineWaitContext,
   WorkflowWaitContext,

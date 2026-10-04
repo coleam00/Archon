@@ -124,7 +124,20 @@ export function formatPausedGateSection(gate: PausedGateContext): string {
   // decision the operations reject.
   if (attention === null || attention.kind === 'terminal') return '';
 
+  if (attention.kind === 'admission_pending') {
+    return (
+      header +
+      `Run \`${runId}\` is waiting for gate admission on run \`${attention.ownerId}\`. No decision is actionable yet.`
+    );
+  }
+
   if (attention.kind === 'unreadable') {
+    if (attention.reason === 'malformed_queue') {
+      return (
+        header +
+        `Run \`${runId}\` has unreadable gate admission state and needs inspection before it can continue.`
+      );
+    }
     // Paused, but the gate cannot be described — unreadable metadata, or a gate type
     // this build cannot resolve. Preserve the explicit-command guidance the old
     // natural-language branch sent directly to the user.

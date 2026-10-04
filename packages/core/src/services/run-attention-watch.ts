@@ -71,7 +71,7 @@ type WakeSource =
 
 function unreadable(
   runId: string,
-  reason: 'child_run_missing' | 'child_chain_too_deep',
+  reason: 'child_run_missing' | 'child_chain_too_deep' | 'malformed_queue',
   detail: string
 ): RunAttention {
   return { kind: 'unreadable', runId, reason, detail };
@@ -88,7 +88,38 @@ async function resolveRun(run: WorkflowRun): Promise<RunResolution> {
   let attention = runAttention(current);
   let steps = 0;
 
-  while (attention?.kind === 'blocked_on_child') {
+  while (attention?.kind === 'blocked_on_child' || attention?.kind === 'admission_pending') {
+    if (attention.kind === 'admission_pending') {
+      if (attention.ownerId === current.id) {
+        return attention.phase === 'collecting'
+          ? {
+              kind: 'owner_required',
+              activeRun: current,
+              executionChainIds: executionChain.map(candidate => candidate.id).reverse(),
+            }
+          : { kind: 'attention', attention };
+      }
+      const owner = await workflowDb.getWorkflowRun(attention.ownerId);
+      if (!owner)
+        return {
+          kind: 'attention',
+          attention: unreadable(current.id, 'malformed_queue', 'gate admission owner has no row'),
+        };
+      executionChain.push(owner);
+      current = owner;
+      attention = runAttention(owner);
+      steps += 1;
+      if (steps > MAX_CHAIN_RUNS)
+        return {
+          kind: 'attention',
+          attention: unreadable(
+            current.id,
+            'child_chain_too_deep',
+            'gate admission chain is too deep'
+          ),
+        };
+      continue;
+    }
     steps += 1;
     if (steps > MAX_CHAIN_RUNS) {
       return {

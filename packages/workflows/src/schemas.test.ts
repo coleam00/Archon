@@ -32,6 +32,10 @@ import {
   scheduledWorkflowResumeSchema,
   workflowWaitStepName,
   runAttention,
+  gateQueueSchema,
+  gateProjection,
+  gateContinuationMetadata,
+  readGateQueue,
   nodeOutputSchema,
 } from './schemas';
 import type { RunAttentionInput, SuspendReason, WorkflowRunStatus } from './schemas';
@@ -2581,5 +2585,109 @@ describe('resource start resource names', () => {
       expect(schema.safeParse(reserved).success).toBe(false);
       expect(schema.safeParse('deploy-lane').success).toBe(true);
     }
+  });
+});
+
+describe('durable gate queue', () => {
+  const first = {
+    id: 'gate-first',
+    runId: 'run-1',
+    context: { nodeId: 'first', message: 'First gate' },
+    readyForPresentation: false,
+    presentation: 'unclaimed' as const,
+  };
+  const second = {
+    ...first,
+    runId: 'run-2',
+    id: 'gate-second',
+    context: { nodeId: 'second', message: 'Second gate' },
+  };
+  const queue = () =>
+    gateQueueSchema.parse({
+      version: 1,
+      phase: 'collecting',
+      active: first,
+      pending: [second],
+      resolved: [],
+    });
+
+  test('only legacy absence falls back; malformed queue data is unreadable', () => {
+    expect(readGateQueue({})).toBeUndefined();
+    expect(() => readGateQueue({ gate_queue: { version: 2 } })).toThrow();
+    expect(
+      runAttention({
+        id: 'run-1',
+        status: 'paused',
+        metadata: {
+          gate_queue: { version: 2 },
+          approval: { nodeId: 'first', message: 'First gate' },
+        },
+      })
+    ).toMatchObject({ kind: 'unreadable', reason: 'malformed_queue' });
+  });
+
+  test('identities cannot appear twice or wait without an active gate', () => {
+    expect(gateQueueSchema.safeParse({ ...queue(), pending: [first] }).success).toBe(false);
+    expect(gateQueueSchema.safeParse({ ...queue(), active: null }).success).toBe(false);
+  });
+
+  test('collecting, queued, and unpresented gates cannot ask for a decision', () => {
+    const state = queue();
+    const attention = (record: NonNullable<ReturnType<typeof queue>['active']>) =>
+      runAttention({
+        id: record.runId,
+        status: 'paused',
+        metadata: {
+          ...(record.runId === 'run-1' ? { gate_queue: state } : {}),
+          approval: gateProjection(state, record, 'run-1'),
+        },
+      });
+    expect(attention(first)).toMatchObject({ kind: 'admission_pending', phase: 'collecting' });
+    expect(attention(second)).toMatchObject({ kind: 'admission_pending', phase: 'queued' });
+    state.phase = 'parked';
+    state.active!.readyForPresentation = true;
+    expect(attention(state.active!)).toMatchObject({
+      kind: 'admission_pending',
+      phase: 'presentation',
+    });
+    state.active!.presentation = 'claimed';
+    expect(attention(state.active!)).toMatchObject({
+      kind: 'awaiting_response',
+      respondTo: {
+        runId: 'run-1',
+        nodeId: 'first',
+        gateId: 'gate-first',
+      },
+    });
+  });
+
+  test('resolved feedback belongs only to its own continuation', () => {
+    const state = queue();
+    state.resolved.push({
+      ...first,
+      id: 'resolved-first',
+      response: {
+        resolved: 'approved',
+        loop_user_input: 'Refine first',
+        loop_feedback_given: true,
+      },
+    });
+    state.resolved.push({
+      ...second,
+      runId: 'run-1',
+      id: 'resolved-second',
+      response: { resolved: 'approved', loop_user_input: 'Approved', loop_feedback_given: false },
+    });
+    expect(gateContinuationMetadata(state, 'run-1', 'first')).toMatchObject({
+      loop_user_input: 'Refine first',
+      loop_feedback_given: true,
+      approval: { nodeId: 'first' },
+    });
+    expect(gateContinuationMetadata(state, 'run-1', 'second')).toMatchObject({
+      loop_user_input: 'Approved',
+      loop_feedback_given: false,
+      approval: { nodeId: 'second' },
+    });
+    expect(gateContinuationMetadata(state, 'run-other', 'first')).toBeUndefined();
   });
 });
