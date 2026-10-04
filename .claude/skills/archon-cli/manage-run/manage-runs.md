@@ -81,7 +81,10 @@ archon workflow resume <run-id>                     # executes; background task
 To let the continuation own a background process, add `--detach` to
 `approve`/`reject`/`respond`/`resume`. The parent validates the run and returns an
 ack with `continues: true`; the detached child records the decision and continues
-without `--json`.
+without `--json`. Detached `resume` acknowledges after engine acceptance clears the
+old pause, so immediately follow it with `workflow wait`. A new pause is still
+reported. If acceptance is unconfirmed after 60 seconds, inspect the run before
+retrying; the child may still continue.
 
 ## Interactive-loop gates: comment or no comment is a decision
 

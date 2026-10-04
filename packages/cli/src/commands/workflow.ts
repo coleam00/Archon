@@ -206,6 +206,13 @@ import {
 import { resolveCliUserId } from './auth';
 import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
 
+import {
+  DETACHED_RESUME_RECEIPT_ENV,
+  DETACHED_RESUME_RECEIPT_FD,
+  consumeDetachedResumeReceiptRequest,
+  waitForDetachedResumeReceipt,
+} from '../utils/detached-resume-receipt';
+
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -586,7 +593,8 @@ async function spawnDetachedWorkflowRun(
   cwd: string,
   conversationId: string,
   extraArgs: string[],
-  runConfigPayload?: string
+  runConfigPayload?: string,
+  confirmResume = false
 ): Promise<string | null> {
   const cmd = buildDetachedRunCmd(
     BUNDLED_IS_BINARY,
@@ -635,6 +643,7 @@ async function spawnDetachedWorkflowRun(
       env: {
         ...process.env,
         [DETACHED_RUN_OWNER_ENV]: '1',
+        [DETACHED_RESUME_RECEIPT_ENV]: confirmResume ? '1' : '',
         ...(runConfigPayload
           ? {
               // Empty strings preserve meaningful absence: Bun will not fill
@@ -643,7 +652,12 @@ async function spawnDetachedWorkflowRun(
             }
           : {}),
       },
-      stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+      stdio: [
+        'ignore',
+        logFd ?? 'ignore',
+        logFd ?? 'ignore',
+        ...(confirmResume ? ['pipe' as const] : []),
+      ],
       detached: true,
       windowsHide: true,
     });
@@ -661,7 +675,27 @@ async function spawnDetachedWorkflowRun(
     if (child.pid === undefined) {
       throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
     }
-    await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
+    if (confirmResume) {
+      const pipe = child.stdio[DETACHED_RESUME_RECEIPT_FD];
+      if (!pipe || !('readable' in pipe)) {
+        child.unref();
+        throw new Error('Detached resume acceptance pipe was not created.');
+      }
+      try {
+        await waitForDetachedResumeReceipt(child, pipe, (code, signal) =>
+          detachedStartupExitError(code, signal, null)
+        );
+      } catch (error) {
+        const tail = logPath ? readDetachedLogTail(logPath) : null;
+        throw new Error(
+          `Detached resume acceptance was not confirmed. ${error instanceof Error ? error.message : String(error)}` +
+            (logPath ? `\nChild output (${logPath}):\n${tail ?? '(no output recorded)'}` : ''),
+          { cause: error }
+        );
+      }
+    } else {
+      await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
+    }
   } finally {
     // The child inherits its own dup of the log fd; close the parent's copy so a
     // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
@@ -1627,7 +1661,8 @@ async function runWorkflowWithOwnedSource(
   workflowName: string,
   userMessage: string,
   options: WorkflowRunOptions = {},
-  detachedProcessOwner: boolean
+  detachedProcessOwner: boolean,
+  notifyResumeAccepted?: (runId: string) => void
 ): Promise<PendingWaitContinuation | undefined> {
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
   const modelOverrides = options.modelAssignments
@@ -3269,6 +3304,7 @@ async function runWorkflowWithOwnedSource(
             `  ${relaunch}`
         );
       }
+      notifyResumeAccepted?.(admission.runId);
       result = await admission.settled;
     } else {
       const opts = {
@@ -3654,6 +3690,10 @@ export async function workflowRunCommand(
   const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
   if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
 
+  const notifyResumeAccepted = consumeDetachedResumeReceiptRequest((runId, error) => {
+    getLog().warn({ err: error, runId }, 'cli.detached_resume_receipt_failed');
+  });
+
   let attempt: WaitResumeAttempt = { cwd, workflowName, userMessage, options };
   for (;;) {
     let pending: PendingWaitContinuation | undefined;
@@ -3668,7 +3708,8 @@ export async function workflowRunCommand(
           attempt.workflowName,
           attempt.userMessage,
           attempt.options,
-          detachedProcessOwner
+          detachedProcessOwner,
+          notifyResumeAccepted
         )
       );
     } catch (error) {
@@ -5330,10 +5371,9 @@ async function resolveRunIdArg(
  * working_path: the child re-resolves everything by run-id, and a container run's
  * working_path is a distro path the host cannot spawn into (ENOENT → the detach would
  * silently no-op). Reuses upstream's spawnDetachedWorkflowRun, which rebuilds the child
- * command from process.argv AND awaits the startup window (#2279) — so a child that
- * dies immediately throws here rather than being acked as started. That await is load
- * bearing: dropping it turns every startup failure into an unhandled rejection arriving
- * after the parent has already printed `{ ok: true }`.
+ * command from process.argv. Resume success requires engine admission; the other verbs
+ * retain the startup window (#2279). Awaiting that boundary keeps a launch failure from
+ * arriving after the parent has already printed `{ ok: true }`.
  */
 async function runDetachedControlCommand(
   runId: string,
@@ -5350,7 +5390,13 @@ async function runDetachedControlCommand(
     // repo) after the parent has already acked success. The run's working_path
     // is still never a candidate: a container run's working_path is a distro
     // path the host cannot spawn into, so the child re-resolves by run id.
-    const logPath = await spawnDetachedWorkflowRun(cwd ?? process.cwd(), runId, []);
+    const logPath = await spawnDetachedWorkflowRun(
+      cwd ?? process.cwd(),
+      runId,
+      [],
+      undefined,
+      action === 'resume'
+    );
     if (json) {
       // Through writeJsonLine, like every other --json ack: it writes with a
       // completion callback so a piped consumer can't receive a truncated
