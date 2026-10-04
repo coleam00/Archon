@@ -168,6 +168,11 @@ archon workflow resume <run-id>
 archon workflow resume <run-id> --detach
 ```
 
+Detached resume returns after engine acceptance, before completion. Immediately use
+`workflow wait <run-id> --json` for the next attention or terminal outcome. If the
+60-second acceptance confirmation fails, inspect the run before retrying: the
+child may still continue.
+
 The ambient sequential session cursor is not reconstructed by a cold resume.
 Explicit `context: { resume: node-id }` ancestry is restored from the completed
 source's saved handle, and a paused loop with `fresh_context: false` continues its

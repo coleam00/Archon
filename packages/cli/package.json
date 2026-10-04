@@ -72,6 +72,9 @@
       "src/utils/detached-run-control.integration.spec.ts"
     ],
     [
+      "src/utils/detached-resume-receipt.test.ts"
+    ],
+    [
       "src/telemetry-exit.integration.spec.ts"
     ],
     [

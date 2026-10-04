@@ -686,7 +686,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--detach',
     description:
-      "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)",
+      "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'approve' },

@@ -296,7 +296,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Unlike `--adopt`, it inherits no checkout. |
 | `--quiet`, `-q` | Suppress all progress output to stderr |
 | `--verbose`, `-v` | Also show tool-level events (tool name and duration) |
-| `--detach` | Run in a detached background child and return immediately. The child does all the work; find it later with `workflow runs`/`workflow get`. For `workflow run`, human output names both files and the `--json` acknowledgement carries `runId`, `transcriptPath` (the structured per-run JSONL), and `logPath` (the detached child process's stdout/stderr capture). These paths are intentionally distinct. Use [`workflow logs <run-id> --follow`](#workflow-logs) for execution events and [`workflow wait <run-id>`](#workflow-wait) when a host needs the next terminal or gate transition. Also available on `approve`/`reject`/`resume`; their acknowledgement differs — see [Detached control verbs](#detached-control-verbs). |
+| `--detach` | Run in a detached background child and return before completion. Exact-id `workflow resume` returns after the child accepts the resume. The child does all the work; find it later with `workflow runs`/`workflow get`. For `workflow run`, human output names both files and the `--json` acknowledgement carries `runId`, `transcriptPath` (the structured per-run JSONL), and `logPath` (the detached child process's stdout/stderr capture). These paths are intentionally distinct. Use [`workflow logs <run-id> --follow`](#workflow-logs) for execution events and [`workflow wait <run-id>`](#workflow-wait) when a host needs the next terminal or gate transition. Also available on `approve`/`reject`/`resume`; their acknowledgement differs — see [Detached control verbs](#detached-control-verbs). |
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
 | `--stubs <path>` | YAML mapping of node ids to scalar or structured outputs for `--dry-run`. Relative paths resolve from `--cwd`. |
 | `--stubs-init <path>` | Write a complete stub scaffold for the expanded workflow and exit. Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
@@ -823,7 +823,7 @@ In `--json` mode the command is a non-blocking control-plane ack: it validates t
 
 When you already hold a run id, prefer that exact-id form. `workflow run <name> --resume --detach` selects the newest resumable run of that workflow **in the current checkout**, which is a different question — from another worktree it correctly finds nothing, and in a checkout with several historical runs it expresses less than the id you already have. Keep the name form for the case you actually mean: "the latest failed run of this workflow, here."
 
-Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so it takes the inline path and does re-execute the run — just outside your shell. The ack carries `continues: true` to say so. See [Detached control verbs](#detached-control-verbs).
+Adding `--detach` **inverts** that: the child is re-invoked without `--json`, so it takes the inline path and does re-execute the run — just outside your shell. The ack carries `continues: true` to say so. Detached resume acknowledges only after the engine accepts it and clears the old pause. An immediate `workflow wait` can therefore report a genuine new pause, including repeated attention at the same node, but never the cleared pause. See [Detached control verbs](#detached-control-verbs).
 
 ### `workflow cancel`
 
@@ -923,11 +923,17 @@ no-working-path run is refused synchronously and nothing is spawned. The parent 
 hands the whole command to a detached child that owns all state mutation in its own
 process group. A shell that dies mid-flight can no longer wedge the run.
 
-The parent also waits out the child's startup window before acking, so a child that
-dies before it starts the run surfaces as an error carrying the tail of its log rather
-than as a success you only discover was false minutes later. A run that simply finishes
-inside that window — a short workflow, or one that fails on its first node — is acked
-normally; its outcome belongs to the run, and `workflow get <run-id>` reports it.
+For `resume`, the parent waits for the child's engine admission receipt before
+acknowledging success, rather than waiting for workflow completion. Even a run that
+immediately pauses again or finishes is acknowledged normally; use `workflow wait`
+to learn that outcome. Confirmation is bounded to 60 seconds. If acceptance is not
+confirmed, the command reports an error with the available log path. The child may
+still continue: inspect the run before retrying. A timeout never stops the child or
+changes run state.
+
+Other detached control verbs use the child's startup window. A child that dies during
+startup surfaces as an error carrying the tail of its log. A run that finishes inside
+that window is acknowledged normally; its outcome belongs to the run.
 
 ```bash
 archon workflow approve <run-id> --detach

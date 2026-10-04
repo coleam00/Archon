@@ -946,6 +946,54 @@ describe('archon workflow wait against a detached run', () => {
   }, 60_000);
 });
 
+describe('wait immediately after detached resume', () => {
+  for (const nextPause of [false, true]) {
+    test(
+      nextPause ? 'reports a new attention pause' : 'does not report the cleared pause',
+      async () => {
+        const name = 'resume-attention';
+        const workflow =
+          `name: ${name}\ndescription: Resume acknowledgement fixture.\nnodes:\n` +
+          '  - id: warmup\n    bash: "echo ready"\n' +
+          '  - id: old-pause\n    depends_on: [warmup]\n    wait:\n      attention: "First action"\n' +
+          (nextPause
+            ? '  - id: new-pause\n    depends_on: [old-pause]\n    wait:\n      attention: "Second action"\n'
+            : '  - id: finish\n    depends_on: [old-pause]\n    bash: "echo done"\n');
+        const fixture = makeFixture('archon-resume-attention-', { [name]: workflow });
+        const { runId } = await launchDetached(fixture, name);
+        await waitFor(
+          'the initial pause',
+          () => (readRunStatus(fixture.archonHome, runId) === 'paused' ? true : undefined),
+          30_000
+        );
+        await waitFor(
+          'the initial owner to release',
+          async () => ((await isRunOwnerAnswering(runId)) ? undefined : true),
+          30_000
+        );
+        const resume = await runCli(fixture, ['workflow', 'resume', runId, '--detach', '--json']);
+        expect(resume.exitCode).toBe(0);
+        expect(JSON.parse(resume.stdout)).toMatchObject({
+          ok: true,
+          runId,
+          action: 'resume',
+          detached: true,
+          continues: true,
+        });
+        const { exitCode, payload } = await startWait(fixture, runId, 30).settled();
+        expect(exitCode).toBe(0);
+        expect(payload).toMatchObject({
+          result: 'attention',
+          attention: nextPause
+            ? { kind: 'action_required', nodeId: 'new-pause', message: 'Second action' }
+            : { kind: 'terminal', runId, status: 'completed' },
+        });
+      },
+      90_000
+    );
+  }
+});
+
 /**
  * #3312: with no `archon serve` anywhere in this block, the process that owns a run
  * enforces its own durable wait deadline. On a build where the `--detach` child exits
