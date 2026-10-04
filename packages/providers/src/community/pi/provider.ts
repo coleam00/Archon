@@ -334,7 +334,7 @@ function isPiModelsError(error: unknown, code: ModelsErrorCode): boolean {
  * says whether a credential is configured; `getAuth` then resolves it, which refreshes an
  * OAuth grant and runs a command-backed key. `checkAuth` alone reports a models.json key
  * command as configured without running it, so a failing command would pass the check.
- * `apiKey` is the resolved key, for a turn that needs to inspect it. Evidence has every
+ * `apiKey` is the resolved key, which a turn inspects and reuses. Evidence has every
  * value in `credentialValues` redacted: Pi's errors can echo a configured credential.
  */
 export async function resolvePiAuth(
@@ -702,6 +702,21 @@ export class PiProvider implements IAgentProvider {
         break;
       case 'usable':
         resolvedKey = apiKey;
+        // Pi runs a models.json key command on every getAuth, so the session's request
+        // would run it again. Pin the key the check just resolved as a runtime-only key;
+        // Pi reads a runtime key before models.json, so the command runs once per node.
+        if (
+          apiKey &&
+          modelRuntime.getProviderAuthStatus(parsed.provider).source === 'models_json_command'
+        ) {
+          try {
+            await modelRuntime.setRuntimeApiKey(parsed.provider, apiKey);
+          } catch (error) {
+            // Pi's CredentialSynchronizationError carries the key on `credential`; rethrow
+            // without it so an error log cannot serialize the key.
+            throw new Error(error instanceof Error ? error.message : String(error));
+          }
+        }
         break;
     }
 

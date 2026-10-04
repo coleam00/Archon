@@ -267,6 +267,45 @@ describe('Pi native credentials', () => {
       failure: { class: 'auth' },
     });
   });
+  test('a node runs a models.json key command once, and doctor runs it once', async () => {
+    const runs = join(root, 'runs');
+    const keyCommand = join(root, 'key-command.sh');
+    writeFileSync(keyCommand, `#!/bin/sh\necho run >> '${runs}'\nprintf '${secret}'\n`, {
+      mode: 0o755,
+    });
+    const runCount = (): number =>
+      existsSync(runs) ? readFileSync(runs, 'utf8').trim().split('\n').length : 0;
+    writeFileSync(
+      join(root, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            // Port 9 is unbound, so the turn's request fails after Pi resolves its key.
+            baseUrl: 'http://127.0.0.1:9/v1',
+            api: 'openai-completions',
+            apiKey: `!${keyCommand}`,
+            models: [{ id: 'model', name: 'Local' }],
+          },
+        },
+      })
+    );
+    // Each retry resolves the key again; one attempt keeps the count about the node.
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({ retry: { enabled: false } }));
+
+    expect(await check('local/model')).toEqual({ state: 'usable', source: 'native' });
+    expect(runCount()).toBe(1);
+
+    const chunks = [];
+    for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
+      model: 'local/model',
+    }))
+      chunks.push(chunk);
+    // The request was sent with the resolved key; only the unbound port failed it.
+    expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+      errors: ['Connection error.'],
+    });
+    expect(runCount()).toBe(2);
+  });
   test('checks only the selected provider command-backed key', async () => {
     const selected = join(root, 'selected');
     const unrelated = join(root, 'unrelated');

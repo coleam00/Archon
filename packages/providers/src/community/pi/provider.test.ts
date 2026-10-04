@@ -176,6 +176,7 @@ type MockModelRuntime = {
   setRuntimeApiKey(providerId: string, key: string): Promise<void>;
   getAuth(providerId: string): Promise<unknown>;
   hasConfiguredAuth(providerId: string): boolean;
+  getProviderAuthStatus(providerId: string): { configured: boolean; source?: string };
 };
 type MockModelRegistryCtor = new (runtime: MockModelRuntime) => MockModelRegistry;
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
@@ -233,6 +234,7 @@ const mockModelRuntimeCreate = mock(
     setRuntimeApiKey: mockSetRuntimeApiKey,
     getAuth: mockGetAuth,
     hasConfiguredAuth: mockHasConfiguredAuth,
+    getProviderAuthStatus: () => ({ configured: false }),
   })
 );
 
@@ -625,6 +627,7 @@ describe('PiProvider', () => {
         setRuntimeApiKey: mockSetRuntimeApiKey,
         getAuth: mockGetAuth,
         hasConfiguredAuth: mockHasConfiguredAuth,
+        getProviderAuthStatus: () => ({ configured: false }),
       };
     });
 
