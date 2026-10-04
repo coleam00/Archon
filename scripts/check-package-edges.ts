@@ -98,6 +98,8 @@ function importedPackages(file: SourceFile): { target: string; line: number }[] 
   const source = ts.createSourceFile(file.path, file.content, ts.ScriptTarget.Latest, true);
   const imports: { target: string; line: number }[] = [];
   const add = (specifier: ts.Node | undefined): void => {
+    // Only literal specifiers name packages. Non-literal specifiers in this repo load
+    // file paths (webhook plugins, deep SDK files), so they are not package edges.
     if (!specifier || !ts.isStringLiteralLike(specifier)) return;
     const target = packageTarget(specifier.text);
     if (target !== undefined) {
