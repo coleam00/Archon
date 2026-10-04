@@ -16,6 +16,7 @@ const keys = [
   'ANTHROPIC_OAUTH_TOKEN',
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_FEDERATION_RULE_ID',
+  'PI_FIXTURE_TOKEN',
 ] as const;
 let previous: Record<string, string | undefined>;
 let root: string;
@@ -194,6 +195,19 @@ describe('Pi native credentials', () => {
             signal: AbortSignal.timeout(2000),
           })
         ).toEqual({
+          state: 'check_failed',
+          source: 'native',
+          evidence: 'OAuth refresh failed for anthropic: refresh rejected for [REDACTED]',
+        });
+      } finally {
+        restore();
+      }
+    });
+    test('is redacted from the check, with the value only in process.env as a turn reads it', async () => {
+      const restore = await leakingRefresh();
+      process.env.PI_FIXTURE_TOKEN = secret;
+      try {
+        expect(await check(undefined, {})).toEqual({
           state: 'check_failed',
           source: 'native',
           evidence: 'OAuth refresh failed for anthropic: refresh rejected for [REDACTED]',

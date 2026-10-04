@@ -404,6 +404,37 @@ async function resolvePiTurnAuth(
   return !catalogued && resolved.status.state === 'not_connected' ? deferred : resolved;
 }
 
+/**
+ * The env a Pi turn authenticates with; the login check builds it here too, so both read
+ * the same keys. Request env wins over process.env, which wins over assistant config env (a
+ * turn copies config env into process.env only where a key is unset). It fills `${VAR}`
+ * references in models.json, supplies the env key that overrides a stored credential, and
+ * lists the values to redact from Pi's errors.
+ */
+interface PiAuthEnv {
+  env: Readonly<Record<string, string>>;
+  /** Keys whose values must not be substituted into models.json. */
+  protectedEnvKeys?: readonly string[];
+  credentialValues: readonly string[];
+}
+
+function piAuthEnv(
+  configEnv: Readonly<Record<string, string>> | undefined,
+  requestEnv: Readonly<Record<string, string>> | undefined,
+  protectedEnvKeys?: readonly string[]
+): PiAuthEnv {
+  const env: Record<string, string> = { ...configEnv };
+  for (const [key, value] of Object.entries(process.env)) {
+    if (value !== undefined) env[key] = value;
+  }
+  Object.assign(env, requestEnv);
+  return {
+    env,
+    protectedEnvKeys,
+    credentialValues: collectCredentialValues(env, protectedEnvKeys),
+  };
+}
+
 async function applyPiEnvOverride(
   runtime: Pick<ModelRuntime, 'setRuntimeApiKey'>,
   providerId: string,
@@ -429,11 +460,11 @@ async function applyPiEnvOverride(
  * Archon delivers per-user credentials (API keys + subscriptions) as a per-run auth.json
  * and points at it via ARCHON_PI_AUTH_PATH, an explicit authPath (not PI_CODING_AGENT_DIR)
  * so the user's models.json / settings.json at ~/.pi/agent/ are untouched. The path rides
- * the per-call env (the executor's per-user injection never writes to process.env), so it
- * is read there first, then from process.env for a shell-level override.
+ * the per-call env (the executor's per-user injection never writes to process.env), which
+ * `piAuthEnv` layers over process.env for a shell-level override.
  *
  * For a provider with no Archon env mapping, `${VAR}` references in the user's models.json
- * are substituted from the per-call env into a per-call models.json: the SDK resolves them
+ * are substituted from that env into a per-call models.json: the SDK resolves them
  * from `process.env`, which Archon keeps free of per-call secrets (see `./request-auth.ts`).
  * That file holds the substituted secret in cleartext. `ModelRuntime.create` reads it (via
  * ModelConfig.load) while it builds the runtime, so it is removed as soon as create settles;
@@ -445,11 +476,8 @@ async function applyPiEnvOverride(
 async function createPiModelRuntime(
   piCodingAgent: typeof import('@earendil-works/pi-coding-agent'),
   provider: string,
-  requestEnv: Readonly<Record<string, string>> | undefined,
-  options: {
-    protectedEnvKeys?: readonly string[];
-    signal?: AbortSignal;
-  } = {}
+  authEnv: PiAuthEnv,
+  signal?: AbortSignal
 ): Promise<ModelRuntime> {
   let customProviderModelsPath: string | undefined;
   try {
@@ -457,15 +485,14 @@ async function createPiModelRuntime(
       ? undefined
       : buildCustomProviderModelsPath({
           provider,
-          requestEnv,
-          protectedEnvKeys: options.protectedEnvKeys,
+          requestEnv: authEnv.env,
+          protectedEnvKeys: authEnv.protectedEnvKeys,
         });
-    const authPath =
-      (requestEnv?.ARCHON_PI_AUTH_PATH ?? process.env.ARCHON_PI_AUTH_PATH)?.trim() || undefined;
+    const authPath = authEnv.env.ARCHON_PI_AUTH_PATH?.trim() || undefined;
     return await piCodingAgent.ModelRuntime.create({
       authPath,
       ...(customProviderModelsPath ? { modelsPath: customProviderModelsPath } : {}),
-      ...(options.signal ? { signal: options.signal } : {}),
+      ...(signal ? { signal } : {}),
     });
   } finally {
     if (customProviderModelsPath) {
@@ -487,23 +514,24 @@ export class PiProvider implements IAgentProvider {
   async checkCredential(
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {
-    let env = request.env;
     const { signal } = request;
+    let { credentialValues } = piAuthEnv(undefined, request.env);
     try {
       const piConfig = parsePiConfig(request.assistantConfig ?? {});
-      env = { ...piConfig.env, ...env };
+      const authEnv = piAuthEnv(piConfig.env, request.env);
+      credentialValues = authEnv.credentialValues;
       signal.throwIfAborted();
       ensurePiPackageDirShim();
       const piCodingAgent = await import('@earendil-works/pi-coding-agent');
       const parsed = resolvePiModel(request.model ?? piConfig.model, process.cwd(), piCodingAgent);
-      const runtime = await createPiModelRuntime(piCodingAgent, parsed.provider, env, { signal });
-      await applyPiEnvOverride(runtime, parsed.provider, env);
+      const runtime = await createPiModelRuntime(piCodingAgent, parsed.provider, authEnv, signal);
+      await applyPiEnvOverride(runtime, parsed.provider, authEnv.env);
       const { status } = await resolvePiTurnAuth(
         runtime,
         parsed.provider,
         new piCodingAgent.ModelRegistry(runtime).find(parsed.provider, parsed.modelId) !==
           undefined,
-        collectCredentialValues(env),
+        credentialValues,
         signal
       );
       return status;
@@ -513,7 +541,7 @@ export class PiProvider implements IAgentProvider {
         source: 'native',
         evidence: redactCredentialValues(
           error instanceof Error ? error.message : String(error),
-          collectCredentialValues(env)
+          credentialValues
         ),
       };
     }
@@ -632,17 +660,11 @@ export class PiProvider implements IAgentProvider {
     const parsed = resolvePiModel(requestOptions?.model ?? piConfig.model, cwd, piCodingAgent);
     const envVarName = PI_PROVIDER_ENV_VARS[parsed.provider];
     const oauthVarName = PI_OAUTH_ENV_VARS[parsed.provider];
+    const authEnv = piAuthEnv(piConfig.env, requestOptions?.env, requestOptions?.protectedEnvKeys);
     let modelRuntime: ModelRuntime;
     let modelRegistry: InstanceType<typeof piCodingAgent.ModelRegistry>;
     try {
-      modelRuntime = await createPiModelRuntime(
-        piCodingAgent,
-        parsed.provider,
-        requestOptions?.env,
-        {
-          protectedEnvKeys: requestOptions?.protectedEnvKeys,
-        }
-      );
+      modelRuntime = await createPiModelRuntime(piCodingAgent, parsed.provider, authEnv);
       modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
     } catch (err) {
       const e = err as Error;
@@ -683,19 +705,13 @@ export class PiProvider implements IAgentProvider {
     //    createClient discriminates OAuth vs api-key by token content (sk-ant-oat*),
     //    so one runtime channel serves both — and setRuntimeApiKey stays runtime-only
     //    (no auth.json disk write, unlike AuthStorage.set) (#1984).
-    await applyPiEnvOverride(modelRuntime, parsed.provider, {
-      ...process.env,
-      ...requestOptions?.env,
-    });
+    await applyPiEnvOverride(modelRuntime, parsed.provider, authEnv.env);
     let resolvedKey: string | undefined;
     const { status: authStatus, apiKey } = await resolvePiTurnAuth(
       modelRuntime,
       parsed.provider,
       model !== undefined,
-      collectCredentialValues(
-        { ...process.env, ...requestOptions?.env },
-        requestOptions?.protectedEnvKeys
-      ),
+      authEnv.credentialValues,
       requestOptions?.abortSignal
     );
     switch (authStatus.state) {
