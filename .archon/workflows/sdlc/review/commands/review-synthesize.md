@@ -70,11 +70,13 @@ Unneeded and doubly owned block only when the smaller shape preserves behavior a
 
 Scope does not demote them. An unneeded or doubly owned finding on the touched path — the code the change edits, or structure it extends — stays blocking when its fix reaches a file outside the scope the work order lists. Only a boundary the operator stated in the originating contract can stop that fix; a boundary a plan, triage, or work order inferred cannot. When an operator-stated boundary does stop it, the finding becomes a `scope_conflict` discovery, which delivery files as an issue, never a note the owner can quietly decline.
 
+A boundary never demotes the other kinds. A wrong, untrue, undocumented, or unproved finding stays blocking whatever the work order puts out of scope: "out of scope" is never a reason to label one a note. When its fix needs an operator-stated boundary crossed, the action is `replan`.
+
 A **note** is a real, evidence-backed improvement that fails that test: a smaller shape that changes observable behavior or could not be falsified, a speculative one, small local duplication the project's own documents allow, naming and wording, test-local tidying, tests or docs beyond what the change adds or claims. A note never blocks.
 
 Not a finding at all: taste the project's own documents do not back, defense against a failure with no named reachable path, and pre-existing work the change did not touch, which is a discovery.
 
-**Declining.** The owner judges every finding: fixes it, declines it, or names it unrelated to the change. A note may be declined for any stated reason; record it `declined`. A note declined as out of scope, unrelated, or because of a boundary is also preserved as a discovery. A blocking finding may be declined only with evidence that it is not a finding — it is wrong, already satisfied, or its smaller shape changes behavior — which you record as `disproved` when the evidence holds. Taste is never a reason to decline a blocking finding: a finding of one of the kinds above is not taste. When fixing a blocking finding would cross an explicit boundary — one the operator stated in the originating contract — the answer is `replan`, not a decline; an unneeded or doubly owned finding becomes a `scope_conflict` discovery instead, as above.
+**Declining.** The owner judges every finding: fixes it, declines it, or names it unrelated to the change. A note may be declined for any stated reason; record it `declined`. A declined note may still be preserved as a discovery; see Consolidate discoveries. A blocking finding may be declined only with evidence that it is not a finding — it is wrong, already satisfied, or its smaller shape changes behavior — which you record as `disproved` when the evidence holds. Taste is never a reason to decline a blocking finding: a finding of one of the kinds above is not taste. When fixing a blocking finding would cross an explicit boundary — one the operator stated in the originating contract — the answer is `replan`, not a decline; an unneeded or doubly owned finding becomes a `scope_conflict` discovery instead, as above.
 
 ## Complete a proved causal class
 
@@ -98,14 +100,16 @@ When scope.md says the contract states no acceptance, invariants, or steering, t
 
 ## Consolidate discoveries
 
-Validate each raw discovery against its cited evidence. Reject unsupported or speculative entries. A record that touches the change is not a discovery: raise it as a finding instead. Two records touch the change and stay discoveries: a fix an operator-stated boundary stopped, and a note the owner declined as out of scope, unrelated, or because of a boundary. Group genuine duplicates through your own judgment, preserving the source nodes and evidence.
+Validate each raw discovery against its cited evidence. Reject unsupported or speculative entries. A record that touches the change is not a discovery: raise it as a finding instead. Two kinds of record touch the change and still stay discoveries: a fix an operator-stated boundary stopped, and a note the change leaves unfixed, as below.
+
+When your verdict is `none` or `replan`, the change is final. Preserve every note it leaves unfixed, open or declined, that describes behavior or structure as a discovery with `relation` `note`, citing the finding's ID and evidence. A wording, naming, or test-tidying note stays in the report only. Which kind a note is, is your judgment of what it describes. Group genuine duplicates through your own judgment, preserving the source nodes and evidence.
 
 Create parent directories as needed, then write both:
 
 - `$ARTIFACTS_DIR/discoveries.json`: a JSON array of the accepted records with `title`, `claim`, `evidence`, `relation`, and `source_nodes`;
-- `$ARTIFACTS_DIR/discoveries.md`: the same accepted discoveries for a human reader, grouped by `unrelated` and `scope_conflict`.
+- `$ARTIFACTS_DIR/discoveries.md`: the same accepted discoveries for a human reader, grouped by `unrelated`, `scope_conflict`, and `note`.
 
-Write an empty array and a short "No proved unrelated discoveries" document when no records survive. An `unrelated` record never affects readiness. You file nothing yourself: delivery files each accepted record as a tracker issue once the review reaches its final verdict, `replan` included, so a record belongs in the file only when it is real, proved, and worth an issue of its own. A `scope_conflict` accompanies `replan` only when the conflict is necessary to the requested outcome; otherwise it remains non-blocking.
+Write an empty array and a short "No proved unrelated discoveries" document when no records survive. An `unrelated` record never affects readiness, and neither does a `note` record. You file nothing yourself: delivery files each accepted record as a tracker issue once the review reaches its final verdict, `replan` included, so a record belongs in the file only when it is real, proved, and worth an issue of its own. A `scope_conflict` accompanies `replan` only when the conflict is necessary to the requested outcome; otherwise it remains non-blocking.
 
 If the verdict requires `replan` for a proved blocker, the consolidated artifacts must contain its proved `scope_conflict`; a classification gap needs none. When no producer wrote that raw record, write `$ARTIFACTS_DIR/discoveries/review-synthesize.json` from the accepted finding's already-verified evidence, then include it in both consolidated files. Never emit `replan` from an unsupported discovery.
 

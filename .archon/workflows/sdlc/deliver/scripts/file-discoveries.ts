@@ -63,7 +63,7 @@ function body(record: Discovery, prUrl: string): string {
     evidence,
     '',
     `Found while delivering ${prUrl} (Archon run \`${process.env.WORKFLOW_ID ?? 'unknown'}\`` +
-      `${sources === '' ? '' : `, recorded by ${sources}`}). It is outside that change, so the run filed it instead of fixing it.`,
+      `${sources === '' ? '' : `, recorded by ${sources}`}). The run filed it instead of fixing it in that change.`,
   ].join('\n');
 }
 

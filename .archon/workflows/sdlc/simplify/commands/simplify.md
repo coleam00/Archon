@@ -21,7 +21,7 @@ Start with the exact diff your stage names, against its base. Establish the inte
 
 Look first for decisions that add coordination or prematurely close options:
 
-- **Data shape and ownership:** Do core types match the dominant access paths? Is data copied, flattened, rebuilt, cached, or represented more than once when one owner could carry it?
+- **Data shape and ownership:** Do core types match the dominant access paths? Is data copied, flattened, rebuilt, cached, or represented more than once when one owner could carry it? A copy of an owner's rule or vocabulary is a second owner even when a boundary forbids importing the owner: the boundary explains the copy, it does not justify it. Report it with the smallest shape that removes the second owner, even when that shape crosses a stated boundary; whether the boundary stops the fix is the owner's decision in `pre-pr` and the synthesizer's in `review`.
 - **Coherent capability:** Does the change deepen one useful abstraction, or spread special-case coordination across callers, layers, and schemas?
 - **Concurrency:** If another actor changes shared state concurrently, is the answer safely "nothing"? If not, should the state be isolated instead of synchronized?
 - **Foundations:** Would one smaller primitive make the downstream logic obvious? Remove dead weight before adding scaffold; add scaffold early only when every later phase benefits from it.
