@@ -813,7 +813,7 @@ export class CodexProvider implements IAgentProvider {
       const response = await Promise.race([
         aborted,
         // Ask for a refresh so a revoked sign-in reads as no account. A turn never sends
-        // account/read; Codex refreshes the sign-in itself when a turn starts.
+        // account/read, so this refresh is the check's own.
         connection.request('account/read', { refreshToken: true }),
       ]);
       signal.throwIfAborted();
