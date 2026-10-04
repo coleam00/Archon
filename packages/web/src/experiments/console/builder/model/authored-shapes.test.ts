@@ -4,7 +4,8 @@
  *
  * The shapes below are taken from real workflows: a `loop_group`, a sub-workflow
  * fan-out (`workflow:` + `fan_out:`), an `include:`, an approval with authored
- * `decisions`, and AI nodes carrying `settingSources` / node-local `with`.
+ * `decisions`, AI nodes carrying `settingSources` / node-local `with`, a node
+ * `description`, and bash and script nodes with `on_timeout`.
  */
 import { describe, test, expect } from 'bun:test';
 import { fromWorkflowDefinition } from './from-workflow';
@@ -18,9 +19,19 @@ const AUTHORED: WireWorkflowDefinition = {
   nodes: [
     {
       id: 'load',
+      description: 'Reads the part the run was started for',
       script: 'load-part',
       runtime: 'uv',
+      timeout: 60000,
+      on_timeout: 'skip',
       with: { part: '$INPUTS.part' },
+    },
+    {
+      id: 'lint',
+      depends_on: ['load'],
+      bash: 'bun run lint',
+      timeout: 120000,
+      on_timeout: 'skip',
     },
     {
       id: 'spec',

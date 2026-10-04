@@ -1,5 +1,6 @@
 import { describe, test, expect } from 'bun:test';
-import { VARIANTS, isVariantId } from './registry';
+import { VARIANTS, VARIANT_REGISTRY, isVariantId } from './registry';
+import { wireKeysWithRole } from '../types';
 import { waitToDag } from './wait';
 
 describe('isVariantId', () => {
@@ -13,6 +14,15 @@ describe('isVariantId', () => {
     for (const bad of ['', 'Prompt', 'workflow', 'node', 'application/json', 'loop ']) {
       expect(isVariantId(bad)).toBe(false);
     }
+  });
+});
+
+describe('variant wire keys', () => {
+  test('every wire key marked as a variant key is carried by at least one variant', () => {
+    // A key given the `variant` role but listed by no variant would be dropped on save
+    // with only a warning, which is the loss the role record exists to prevent.
+    const carried = new Set<string>(VARIANTS.flatMap(v => [...VARIANT_REGISTRY[v].wireKeys]));
+    expect(wireKeysWithRole('variant').filter(key => !carried.has(key))).toEqual([]);
   });
 });
 

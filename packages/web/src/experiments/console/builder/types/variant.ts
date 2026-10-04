@@ -11,6 +11,7 @@
  */
 import type { WorkflowNodeKind } from '../../primitives/workflow-graph';
 import type { WireDagNode, WireWorkflowDefinition } from './wire';
+import type { WireBaseKey } from './wire-keys';
 
 /**
  * The eight representable node variants — an alias of the console's
@@ -22,47 +23,6 @@ export type VariantId = WorkflowNodeKind;
 // ---------------------------------------------------------------------------
 // Base fields — shared across every variant (the wire base keys minus `id`)
 // ---------------------------------------------------------------------------
-
-/**
- * The base-field keys present on every wire `DagNode`, excluding `id` (which is
- * partitioned out separately) and the eight mutually-exclusive mode fields
- * (command/prompt/bash/script/loop/approval/wait/cancel) plus their satellites
- * (runtime/deps/timeout). Picking from `WireDagNode` keeps `BaseFields` exactly
- * in sync with the generated spec.
- *
- * Exported so `variants/base-fields.ts` can derive its runtime key list from an
- * exhaustive `Record<WireBaseKey, true>` — adding a key here without updating
- * the record (or vice versa) is a compile error, not silent round-trip loss.
- */
-export type WireBaseKey =
-  | 'depends_on'
-  | 'when'
-  | 'trigger_rule'
-  | 'model'
-  | 'provider'
-  | 'context'
-  | 'output_format'
-  | 'allowed_tools'
-  | 'denied_tools'
-  | 'idle_timeout'
-  | 'retry'
-  | 'hooks'
-  | 'mcp'
-  | 'skills'
-  | 'plugins'
-  | 'agents'
-  | 'effort'
-  | 'maxBudgetUsd'
-  | 'systemPrompt'
-  | 'fallbackModel'
-  | 'settingSources'
-  | 'pi'
-  | 'mutates_checkout'
-  | 'betas'
-  | 'sandbox'
-  | 'always_run'
-  | 'persist_session'
-  | 'output_type';
 
 /** Shared base fields carried verbatim across the round-trip. All optional. */
 export type BaseFields = Pick<WireDagNode, WireBaseKey>;
@@ -162,6 +122,8 @@ export interface ScriptNodeData {
   runtime: 'bun' | 'uv';
   deps?: string[];
   timeout?: number;
+  /** What a timeout does instead of failing the node. No editor yet; carried verbatim. */
+  on_timeout?: WireDagNode['on_timeout'];
   /**
    * Node-local bindings (#2637). Opaque passthrough: the builder has no editor
    * for them yet, but dropping the field on save would silently destroy a
@@ -187,6 +149,8 @@ export interface PromptNodeData {
 export interface BashNodeData {
   bash: string;
   timeout?: number;
+  /** What a timeout does instead of failing the node. No editor yet; carried verbatim. */
+  on_timeout?: WireDagNode['on_timeout'];
 }
 
 /** Maps each variant id to its concrete data shape. */

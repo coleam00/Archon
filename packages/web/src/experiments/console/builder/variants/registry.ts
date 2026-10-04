@@ -16,6 +16,7 @@ import type {
   VariantDataMap,
   VariantId,
   WireDagNode,
+  WireVariantKey,
 } from '../types';
 import { VARIANT_CAPABILITIES, type VariantCapabilities } from './capabilities';
 import { defaultLoopData, loopFromDag, loopToDag } from './loop';
@@ -57,10 +58,10 @@ export interface VariantRegistryEntry<K extends VariantId> {
    * The wire keys this variant's converters consume from `variantSpecific`.
    * The importer warns about (and drops) any other key that lands there, so a
    * field the round-trip cannot carry is never lost silently. Typed as
-   * `keyof WireDagNode` so a typo or a renamed wire field fails to compile
-   * rather than silently classifying every key as unsupported.
+   * `WireVariantKey` so a typo, a renamed wire field or a base key fails to
+   * compile rather than silently classifying every key as unsupported.
    */
-  wireKeys: readonly (keyof WireDagNode)[];
+  wireKeys: readonly WireVariantKey[];
 }
 
 /** Per-variant registry. Strongly typed per key. */
@@ -86,7 +87,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultBashData,
     fromDag: bashFromDag,
     toDag: bashToDag,
-    wireKeys: ['bash', 'timeout'],
+    wireKeys: ['bash', 'timeout', 'on_timeout'],
     capabilities: VARIANT_CAPABILITIES.bash,
   },
   script: {
@@ -94,7 +95,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultScriptData,
     fromDag: scriptFromDag,
     toDag: scriptToDag,
-    wireKeys: ['script', 'runtime', 'deps', 'timeout', 'with'],
+    wireKeys: ['script', 'runtime', 'deps', 'timeout', 'on_timeout', 'with'],
     capabilities: VARIANT_CAPABILITIES.script,
   },
   loop: {
