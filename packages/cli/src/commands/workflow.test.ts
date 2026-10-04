@@ -9508,6 +9508,34 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     expect(spawnCmd).toContain('run-123');
     expect((executeWorkflow as ReturnType<typeof mock>).mock.calls.length).toBe(execBefore);
   });
+
+  it('resume --detach fails fast with the executable when the child fails to spawn', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      ...pausedRun,
+      status: 'failed',
+    });
+    await silenceLogFile();
+
+    // Bun's failed spawn: no pid and no receipt pipe; the ENOENT arrives later as an event.
+    const child = new childProcess.ChildProcess();
+    Object.defineProperty(child, 'stdio', { value: [null, null, null, null] });
+    const spawnSpy = spyOn(childProcess, 'spawn').mockReturnValue(child);
+    const savedArgv = process.argv;
+    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'resume', 'run-123', '--detach'];
+
+    try {
+      await expect(workflowResumeCommand('run-123', undefined, undefined, true)).rejects.toThrow(
+        /Failed to start detached workflow child \(executable: /
+      );
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      "Started 'resume' for run run-123 in the background."
+    );
+  });
 });
 
 describe('buildDetachedRunCmd', () => {

@@ -84,15 +84,13 @@ describe('detached resume acceptance', () => {
     });
   }
 
-  for (const source of ['child', 'pipe'] as const) {
-    it(`preserves ${source} errors`, async () => {
-      const f = fixture();
-      const error = new Error(`${source} failed`);
-      f[source].emit('error', error);
-      await expect(f.result).rejects.toBe(error);
-      expectReleased(f);
-    });
-  }
+  it('preserves pipe errors', async () => {
+    const f = fixture();
+    const error = new Error('pipe failed');
+    f.pipe.emit('error', error);
+    await expect(f.result).rejects.toBe(error);
+    expectReleased(f);
+  });
 
   it('preserves the exit signal after drainage without a complete receipt', async () => {
     const f = fixture();

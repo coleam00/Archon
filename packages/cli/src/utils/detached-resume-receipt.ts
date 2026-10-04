@@ -16,7 +16,6 @@ export function waitForDetachedResumeReceipt(
     let received = '';
     const cleanup = (): void => {
       clearTimeout(timer);
-      child.off('error', onError);
       child.off('close', onClose);
       pipe.off('data', onData);
       pipe.off('error', onError);
@@ -50,7 +49,6 @@ export function waitForDetachedResumeReceipt(
         )
       );
     }, DETACHED_RESUME_CONFIRMATION_MS);
-    child.once('error', onError);
     child.once('close', onClose);
     pipe.on('data', onData);
     pipe.once('error', onError);

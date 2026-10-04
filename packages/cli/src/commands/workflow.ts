@@ -672,7 +672,7 @@ async function spawnDetachedWorkflowRun(
     });
     // pid is set synchronously iff the OS-level spawn succeeded (same check as
     // setup.ts's trySpawn) — fail fast instead of acking a run that never started.
-    if (child.pid === undefined && !confirmResume) {
+    if (child.pid === undefined) {
       throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
     }
     if (confirmResume) {
