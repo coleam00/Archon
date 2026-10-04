@@ -264,6 +264,26 @@ describe('Pi native credentials', () => {
     expect(existsSync(marker)).toBe(true);
     expect(readFileSync(marker, 'utf8')).toBe('ran');
   });
+  test('a failing auth.json key command is unusable on the check and the turn', async () => {
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: '!exit 1' } })
+    );
+    expect(await check()).toMatchObject({
+      state: 'unusable',
+      source: 'native',
+      evidence: expect.stringContaining('auth.json'),
+    });
+    const chunks = [];
+    for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
+      model: 'anthropic/claude-sonnet-4-6',
+    }))
+      chunks.push(chunk);
+    expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+      failure: { class: 'auth' },
+      errors: [expect.stringContaining('auth.json')],
+    });
+  });
   test('a failing models.json key command fails the check and the turn alike', async () => {
     const marker = join(root, 'command-ran');
     writeFileSync(
@@ -404,6 +424,7 @@ describe('Pi native credentials', () => {
   test('a check cancelled while the key command runs is check_failed', async () => {
     const controller = new AbortController();
     const runtime: Parameters<typeof resolvePiAuth>[0] = {
+      getProviderAuthStatus: () => ({ configured: true, source: 'models_json_command' }),
       checkAuth: async () => ({ type: 'api_key', source: 'configured API key' }),
       getAuth: async () => {
         controller.abort(new Error('cancelled'));

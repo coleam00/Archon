@@ -338,7 +338,7 @@ function isPiModelsError(error: unknown, code: ModelsErrorCode): boolean {
  * value in `credentialValues` redacted: Pi's errors can echo a configured credential.
  */
 export async function resolvePiAuth(
-  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth'>,
+  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth' | 'getProviderAuthStatus'>,
   providerId: string,
   credentialValues: readonly string[],
   signal?: AbortSignal
@@ -350,7 +350,20 @@ export async function resolvePiAuth(
   };
   try {
     signal?.throwIfAborted();
-    if (!(await runtime.checkAuth(providerId, { signal }))) return { status: missing };
+    if (!(await runtime.checkAuth(providerId, { signal }))) {
+      // Pi resolves a stored auth.json `!command` key while checking, and a failed command
+      // leaves the stored entry with no key. That is a broken credential, not a missing one.
+      if (runtime.getProviderAuthStatus(providerId).source === 'stored') {
+        return {
+          status: {
+            state: 'unusable',
+            source: 'native',
+            evidence: `Pi's stored credential for '${providerId}' in auth.json did not resolve to a key. If it is a \`!command\`, check that the command succeeds and prints the key.`,
+          },
+        };
+      }
+      return { status: missing };
+    }
     const resolution = await runtime.getAuth(providerId, { signal });
     // Pi runs a key command synchronously and ignores the signal, so a cancel during it
     // is only visible here.
@@ -379,7 +392,7 @@ export async function resolvePiAuth(
  * the key to choose the subscription-OAuth system prompt.
  */
 async function resolvePiTurnAuth(
-  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth'>,
+  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth' | 'getProviderAuthStatus'>,
   providerId: string,
   catalogued: boolean,
   credentialValues: readonly string[],
