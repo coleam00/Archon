@@ -32,7 +32,7 @@ const releases = new Map<string, Release>();
 // test is skipped, so the hooks check this too.
 const skipCompiled = skipCompiledBinaryTests();
 const latestTag = 'v1.0.0';
-// For the tests that write the ~86 MB compiled fixture (only v1.0.0 carries it; every
+// For the test that installs the ~86 MB compiled fixture (only v1.0.0 carries it; every
 // other release is a few bytes). That write has taken over 20 s on Windows CI, and a test
 // that times out keeps running after `afterEach` has deleted its temp home.
 const FIXTURE_WRITE_BUDGET_MS = 60_000;
@@ -316,28 +316,25 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
     });
   });
 
-  test(
-    'forge discovery does not see a binary under its staging name',
-    async () => {
-      const env = await environment();
-      await mkdir(env.pluginsDir, { recursive: true });
-      const staged = join(env.pluginsDir, stagingName(`archon-forge-github${hostExe}`));
-      await writeFile(staged, pluginBinary, { mode: 0o755 });
-      const stderr = spyOn(process.stderr, 'write');
-      try {
-        const discovery = await discoverPlugins({
-          config: { scanPath: false },
-          pluginsDir: env.pluginsDir,
-        });
-        expect(discovery.plugins).toEqual([]);
-        expect(discovery.unavailable).toEqual([]);
-        expect(stderr).not.toHaveBeenCalled();
-      } finally {
-        stderr.mockRestore();
-      }
-    },
-    FIXTURE_WRITE_BUDGET_MS
-  );
+  test('forge discovery does not see a binary under its staging name', async () => {
+    const env = await environment();
+    await mkdir(env.pluginsDir, { recursive: true });
+    const staged = join(env.pluginsDir, stagingName(`archon-forge-github${hostExe}`));
+    // Probing these bytes fails the handshake, so a probed staging file shows in `unavailable`.
+    await writeFile(staged, new Uint8Array([1]), { mode: 0o755 });
+    const stderr = spyOn(process.stderr, 'write');
+    try {
+      const discovery = await discoverPlugins({
+        config: { scanPath: false },
+        pluginsDir: env.pluginsDir,
+      });
+      expect(discovery.plugins).toEqual([]);
+      expect(discovery.unavailable).toEqual([]);
+      expect(stderr).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 
   test('update refuses a tag whose manifest is another kind, and copy refuses a forge plugin', async () => {
     const env = await environment();
