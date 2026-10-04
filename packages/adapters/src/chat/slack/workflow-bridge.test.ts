@@ -782,6 +782,18 @@ describe('SlackWorkflowBridge', () => {
       );
     });
 
+    test('a stop with unreclaimed containers reports the cleanup warning', async () => {
+      mockCancelWorkflow.mockResolvedValue({
+        kind: 'stopped',
+        pid: 4242,
+        cascadeFailures: 0,
+        blockedParentRunId: null,
+        cleanupWarnings: ['Container env-a remains allocated.'],
+      });
+      const posted = await clickCancel();
+      expect(posted[0]?.text).toContain(':warning: Container env-a remains allocated.');
+    });
+
     test('no owner answering posts the refusal and the abandon command', async () => {
       mockCancelWorkflow.mockRejectedValue(
         new CancelRefusedError(

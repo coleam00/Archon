@@ -811,6 +811,7 @@ async function handleWorkflowCommand(
           };
         }
         let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: \`${result.run.workflow_name}\``;
+        for (const warning of result.cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
         if (result.cascadeFailures > 0) {
           message += `\n⚠️ ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
@@ -914,9 +915,10 @@ async function handleWorkflowCommand(
       }
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const { run, cascadeFailures, blockedParentRunId, owner } =
+        const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
           await operations.abandonWorkflow(runId);
         let message = `${describeAbandonOwner(owner).join('\n')}\nAbandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        for (const warning of cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
         if (cascadeFailures > 0) {
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
         }
@@ -1419,11 +1421,15 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // the count and reports only the failure — precisely the case where the
       // user most needs to know that N runs were already cancelled.
       let abandoned = 0;
+      let cleanupWarnings: string[] | undefined;
       let abandonBlockedParentRunId: string | null = null;
       let abandonError: string | null = null;
       try {
-        ({ abandoned, blockedParentRunId: abandonBlockedParentRunId } =
-          await operations.abandonResumableRunsForConversation(conversation.id));
+        ({
+          abandoned,
+          cleanupWarnings,
+          blockedParentRunId: abandonBlockedParentRunId,
+        } = await operations.abandonResumableRunsForConversation(conversation.id));
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
@@ -1453,6 +1459,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
           ? 'Cleared workspace binding (worktree + isolation env).'
           : `Could not clear the workspace binding: ${bindingError ?? 'unknown error'}`
       );
+      for (const warning of cleanupWarnings ?? []) parts.push(`⚠️ ${warning}`);
       if (abandoned > 0) parts.push(`Abandoned ${String(abandoned)} resumable run(s).`);
       if (abandonBlockedParentRunId !== null) {
         parts.push(

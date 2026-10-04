@@ -3713,6 +3713,7 @@ export function registerApiRoutes(
         });
       }
       let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
+      for (const warning of result.cleanupWarnings ?? []) message += ` — warning: ${warning}`;
       if (result.cascadeFailures > 0) {
         message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
@@ -3844,8 +3845,10 @@ export function registerApiRoutes(
       // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
       // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
       // orphaned children that CLI/chat abandons cleaned up.
-      const { cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(runId);
+      const { cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+        await abandonWorkflow(runId);
       let message = `${describeAbandonOwner(owner).join(' ')} Abandoned workflow: ${run.workflow_name}`;
+      for (const warning of cleanupWarnings ?? []) message += ` — warning: ${warning}`;
       if (cascadeFailures > 0) {
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }

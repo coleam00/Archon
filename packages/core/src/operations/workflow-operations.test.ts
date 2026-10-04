@@ -116,6 +116,7 @@ const isolationStore: IIsolationStore = {
 const store: WorkflowOperationsDeps['store'] = {
   getWorkflowRun: mockGetWorkflowRun,
   listWorkflowRuns: mockListWorkflowRuns,
+  findWorkflowRunsByIdPrefix: async () => [],
   cancelWorkflowRun: mockCancelWorkflowRun,
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   findChildRuns: mockFindChildRuns,
@@ -1820,7 +1821,7 @@ describe('abandonWorkflow', () => {
     expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });
 
-  test('a reclaim failure does not fail the abandon (best-effort)', async () => {
+  test('reports a reclaim failure after committing abandonment', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(
       makePausedRun({
         status: 'paused',
@@ -1828,7 +1829,10 @@ describe('abandonWorkflow', () => {
       })
     );
     mockReclaimContainerEnv.mockImplementationOnce(() => Promise.reject(new Error('docker down')));
-    const { run } = await abandonWorkflow('run-1'); // resolves despite the reclaim throw
+    const { run, cleanupWarnings } = await abandonWorkflow('run-1');
+    expect(cleanupWarnings).toHaveLength(1);
+    expect(cleanupWarnings?.[0]).toContain('env-9');
+    expect(cleanupWarnings?.[0]).toContain('resources may remain allocated');
     expect(run.id).toBe('run-1');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
@@ -1973,7 +1977,17 @@ describe('supplied stores', () => {
     const secondRun = makePausedRun({ id: 'second' });
     const makeOperations = (run: WorkflowRun): WorkflowOperations =>
       createWorkflowOperations({
-        store: { ...store, getWorkflowRun: async () => run },
+        store: {
+          ...store,
+          getWorkflowRun: async () => run,
+          findWorkflowRunsByIdPrefix: async (prefix, codebaseId) =>
+            prefix === run.id && codebaseId === run.codebase_id ? [run] : [],
+          listWorkflowRuns: async () => ({
+            runs: [],
+            total: run.id === 'first' ? 1 : 2,
+            counts: EMPTY_COUNTS,
+          }),
+        },
         hostStore: { isolation: isolationStore },
         requestDetachedRunStop: mockRequestDetachedRunStop,
         isRunOwnedByThisProcess,
@@ -1985,6 +1999,10 @@ describe('supplied stores', () => {
     expect(await first.resumeWorkflow('first')).toBe(firstRun);
     expect(await second.resumeWorkflow('second')).toBe(secondRun);
     expect(await first.resumeWorkflow('first')).toBe(firstRun);
+    expect(await first.findWorkflowRunsByIdPrefix('first', 'cb-1')).toEqual([firstRun]);
+    expect(await second.findWorkflowRunsByIdPrefix('first', 'cb-1')).toEqual([]);
+    expect((await first.listWorkflowRuns()).total).toBe(1);
+    expect((await second.listWorkflowRuns()).total).toBe(2);
   });
 
   test('container cancellation reads and reclaims through the same supplied isolation store', async () => {
@@ -2398,6 +2416,38 @@ describe('abandonResumableRunsForConversation', () => {
     await abandonResumableRunsForConversation('conv-1');
 
     expect(mockReclaimContainerEnv.mock.calls.map(call => call[0])).toEqual(['env-a', 'env-b']);
+  });
+
+  test('reset uses its supplied isolation store and reports each failed reclaim while continuing', async () => {
+    const sentinel: IIsolationStore = { ...isolationStore };
+    const reclaim = mock<WorkflowOperationsDeps['reclaimContainerEnv']>(async () => {});
+    reclaim.mockRejectedValueOnce(new Error('docker down'));
+    const operations = createWorkflowOperations({
+      store,
+      hostStore: { isolation: sentinel },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess,
+      isRunOwnerAnswering,
+      reclaimContainerEnv: reclaim,
+    });
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([
+      makePausedRun({
+        id: 'container-a',
+        metadata: { isolation: 'container', isolation_env_id: 'env-a' },
+      }),
+      makePausedRun({
+        id: 'container-b',
+        metadata: { isolation: 'container', isolation_env_id: 'env-b' },
+      }),
+    ]);
+    const result = await operations.abandonResumableRunsForConversation('conv-1');
+    expect(reclaim).toHaveBeenNthCalledWith(1, 'env-a', sentinel);
+    expect(reclaim).toHaveBeenNthCalledWith(2, 'env-b', sentinel);
+    expect(reclaim.mock.calls[0]?.[1]).toBe(sentinel);
+    expect(reclaim.mock.calls[1]?.[1]).toBe(sentinel);
+    expect(result.abandoned).toBe(2);
+    expect(result.cleanupWarnings).toHaveLength(1);
+    expect(result.cleanupWarnings?.[0]).toContain('env-a');
   });
 
   test('reports the clean final state when selected roots overlap through a running parent (#2731 R4)', async () => {

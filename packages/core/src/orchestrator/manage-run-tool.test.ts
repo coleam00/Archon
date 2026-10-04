@@ -1,4 +1,5 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
   ApprovalOperationResult,
@@ -11,20 +12,12 @@ const { createWorkflowDeps: realCreateWorkflowDeps } = await import('../workflow
 
 const CODEBASE_ID = 'proj-1';
 
-// ---------------------------------------------------------------------------
-// Stub chat-owned reads and supply bound operations. This file runs
-// in its own `bun test` invocation (see package.json) because it mock.module's
-// ../db/workflows with a different shape than operations/workflow-operations.test.ts.
-// ---------------------------------------------------------------------------
-
-const mockFindByPrefix = mock(
-  (_idPrefix: string, _codebaseId: string): Promise<WorkflowRun[]> => Promise.resolve([])
-);
-const mockListDashboardRuns = mock(() => Promise.resolve({ runs: [] as unknown[] }));
-
-mock.module('../db/workflows', () => ({
-  findWorkflowRunsByIdPrefix: mockFindByPrefix,
-  listDashboardRuns: mockListDashboardRuns,
+const mockFindByPrefix = mock<WorkflowOperations['findWorkflowRunsByIdPrefix']>(async () => []);
+const counts = { all: 0, running: 0, paused: 0, pending: 0, completed: 0, failed: 0, cancelled: 0 };
+const mockListDashboardRuns = mock<WorkflowOperations['listWorkflowRuns']>(async () => ({
+  runs: [],
+  total: 0,
+  counts,
 }));
 
 const noOwnerAnswered = {
@@ -35,7 +28,7 @@ const noOwnerAnswered = {
   thisHost: 'here',
   thisUid: 501,
 } as const;
-const mockAbandon = mock((_id: string) =>
+const mockAbandon = mock<WorkflowOperations['abandonWorkflow']>((_id: string) =>
   Promise.resolve({
     run: makeRun({ id: 'r1abcdef', workflow_name: 'wf' }),
     cancelled: true,
@@ -105,6 +98,8 @@ const mockCancel = mock((_id: string) =>
 );
 
 const operations = {
+  listWorkflowRuns: mockListDashboardRuns,
+  findWorkflowRunsByIdPrefix: mockFindByPrefix,
   abandonWorkflow: mockAbandon,
   cancelWorkflow: mockCancel,
   approveWorkflow: mockApprove,
@@ -119,6 +114,8 @@ const operations = {
   | 'rejectWorkflow'
   | 'respondToWorkflow'
   | 'resumeWorkflow'
+  | 'listWorkflowRuns'
+  | 'findWorkflowRunsByIdPrefix'
 >;
 
 const mockLogger = {
@@ -157,6 +154,23 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     output_root: null,
     checkout_baseline: null,
     ...overrides,
+  };
+}
+
+function makeDashboardRun(): DashboardWorkflowRun {
+  return {
+    ...makeRun(),
+    codebase_name: null,
+    platform_type: null,
+    worker_platform_id: null,
+    parent_platform_id: null,
+    active_nodes: [],
+    current_step_name: null,
+    total_steps: null,
+    current_step_status: null,
+    agents_completed: null,
+    agents_failed: null,
+    agents_total: null,
   };
 }
 
@@ -223,8 +237,11 @@ describe('manage_run — progressive disclosure', () => {
 describe('manage_run — reads', () => {
   test('list renders runs scoped to the project', async () => {
     mockListDashboardRuns.mockResolvedValue({
+      total: 1,
+      counts,
       runs: [
         {
+          ...makeDashboardRun(),
           id: 'abcdef1234',
           workflow_name: 'wf',
           status: 'running',
@@ -241,8 +258,11 @@ describe('manage_run — reads', () => {
 
   test('list renders authored outcome beside contradictory execution status', async () => {
     mockListDashboardRuns.mockResolvedValue({
+      total: 1,
+      counts,
       runs: [
         {
+          ...makeDashboardRun(),
           id: 'abcdef1234',
           workflow_name: 'wf',
           status: 'completed',
@@ -258,7 +278,7 @@ describe('manage_run — reads', () => {
   });
 
   test('list with no runs is friendly', async () => {
-    mockListDashboardRuns.mockResolvedValue({ runs: [] });
+    mockListDashboardRuns.mockResolvedValue({ runs: [], total: 0, counts });
     const tool = buildManageRunTool({ operations, codebaseId: CODEBASE_ID });
     expect(await tool.handler({ action: 'list' })).toContain('No workflow runs');
   });
@@ -676,6 +696,21 @@ describe('manage_run — destructive confirmation gate', () => {
     expect(out).toContain("does not declare decision 'bogus'");
     expect(out).toContain('Declared decisions: approve, revise');
   });
+});
+
+test('abandon exposes cleanup warnings from the supplied operation', async () => {
+  mockFindByPrefix.mockResolvedValue([makeRun({ status: 'paused' })]);
+  mockAbandon.mockResolvedValueOnce({
+    run: makeRun(),
+    cancelled: true,
+    cascadeFailures: 0,
+    blockedParentRunId: null,
+    owner: noOwnerAnswered,
+    cleanupWarnings: ['Container env-a remains allocated.'],
+  });
+  const tool = buildManageRunTool({ operations, codebaseId: CODEBASE_ID });
+  const out = await tool.handler({ action: 'abandon', runId: 'r1abcdef', confirm: true });
+  expect(out).toContain('Warning: Container env-a remains allocated.');
 });
 
 // Resolving a gate and continuing the run are two halves of one action (#2565).

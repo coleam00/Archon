@@ -733,6 +733,8 @@ mock.module('@archon/core/workflows/sql-host', () => ({
           operationWorkflowDb.cancelResumableRunsForConversation(...args),
         deleteWorkflowNodeSessions: (...args) =>
           operationSessionDb.deleteWorkflowNodeSessions(...args),
+        findWorkflowRunsByIdPrefix: (...args) =>
+          operationWorkflowDb.findWorkflowRunsByIdPrefix(...args),
         listWorkflowRuns: (...args) => operationWorkflowDb.listDashboardRuns(...args),
       },
       hostStore: {
@@ -7491,7 +7493,7 @@ describe('workflowRunsCommand', () => {
 
     await workflowRunsCommand('/test/path');
 
-    const output = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+    const output = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
     expect(output).toContain('completed');
     expect(output).toContain('authored outcome: failed');
     expect(output).toContain('active node(s): parallel-a, parallel-b');
@@ -10338,6 +10340,34 @@ describe('workflowAbandonCommand', () => {
     });
     expect(consoleSpy).toHaveBeenCalledWith('Abandoned workflow run: run-1');
   });
+
+  for (const json of [false, true]) {
+    it(`reports container reclaim failure in ${json ? 'JSON' : 'text'} output`, async () => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-1',
+        workflow_name: 'implement',
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-a' },
+      });
+      (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        cancelled: true,
+      });
+      mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
+      const stdout = spyOnJsonStdout();
+      try {
+        await workflowAbandonCommand('run-1', json);
+        const output = json
+          ? stdout.mock.calls.map((call: unknown[]) => String(call[0])).join('')
+          : consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(output).toContain('Could not reclaim container environment env-a');
+        expect(output).toContain('resources may remain allocated');
+        if (json) expect(JSON.parse(output).cleanupWarnings).toHaveLength(1);
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  }
 
   it('stops a live owner before recording cancelled and says so', async () => {
     const workflowDb = await import('@archon/core/db/workflows');

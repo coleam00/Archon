@@ -5596,7 +5596,8 @@ export async function workflowAbandonCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
+      const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+        await abandonWorkflow(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5614,6 +5615,7 @@ export async function workflowAbandonCommand(
                 recordedUid: owner.recordedOwner?.uid ?? null,
                 lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
               },
+        ...(cleanupWarnings ? { cleanupWarnings } : {}),
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
       });
@@ -5624,10 +5626,12 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
+  const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+    await abandonWorkflow(resolvedId);
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+  for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
 }
 
@@ -5692,6 +5696,9 @@ export async function workflowCancelCommand(
         status: 'cancelled',
         processStopped: result.kind === 'stopped',
         workflowName: result.run.workflow_name,
+        ...(result.kind === 'stopped' && result.cleanupWarnings
+          ? { cleanupWarnings: result.cleanupWarnings }
+          : {}),
         ...(result.kind === 'stopped' && result.cascadeFailures > 0
           ? { cascadeFailures: result.cascadeFailures }
           : {}),
@@ -5715,6 +5722,7 @@ export async function workflowCancelCommand(
   console.log(`Cancelled detached workflow run: ${resolvedId}`);
   console.log(`Workflow: ${result.run.workflow_name}`);
   console.log('Host process tree stopped before run state was changed.');
+  for (const warning of result.cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
 }
 

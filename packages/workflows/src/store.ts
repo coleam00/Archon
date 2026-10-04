@@ -321,6 +321,7 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     scope_key?: string;
     node_id?: string;
   }): Promise<{ deleted: number }>;
+  findWorkflowRunsByIdPrefix(prefix: string, codebaseId: string): Promise<WorkflowRun[]>;
   listWorkflowRuns(options?: ListDashboardRunsOptions): Promise<DashboardRunsResult>;
 
   // Run lifecycle

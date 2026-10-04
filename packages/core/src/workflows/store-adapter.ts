@@ -65,6 +65,7 @@ export function createWorkflowStore(): IWorkflowStore {
     cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,
     deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRuns: workflowDb.listDashboardRuns,
+    findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
     recordWorkflowRunCheckoutBaseline: workflowDb.recordWorkflowRunCheckoutBaseline,

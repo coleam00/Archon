@@ -422,7 +422,9 @@ mock.module('../services/run-owner-stop', () => ({
   DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
 }));
 
+const mockReclaimContainerEnv = mock(async () => {});
 mock.module('../services/cleanup-service', () => ({
+  reclaimContainerEnv: mockReclaimContainerEnv,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
   getWorktreeStatusBreakdown: mock(() =>
@@ -995,6 +997,22 @@ describe('CommandHandler', () => {
         // "resumable", not "pending": pending is itself a status name and reads
         // as "waiting" to a user.
         expect(result.message).toContain('Abandoned 2 resumable run(s).');
+      });
+
+      test('reset reports failed container cleanup after cancelling its runs', async () => {
+        mockGetActiveSession.mockResolvedValue(null);
+        mockCancelResumableRunsForConversation.mockResolvedValueOnce([
+          makeWorkflowRun({
+            id: 'run-a',
+            status: 'paused',
+            metadata: { isolation: 'container', isolation_env_id: 'env-a' },
+          }),
+        ]);
+        mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
+        const result = await handleCommand(baseConversation, '/reset');
+        expect(result.message).toContain('Abandoned 1 resumable run(s).');
+        expect(result.message).toContain('Could not reclaim container environment env-a');
+        expect(result.message).toContain('resources may remain allocated');
       });
 
       test('still reports the abandoned count when clearing the binding fails', async () => {

@@ -32,6 +32,7 @@ const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true 
 const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
 
 mock.module('../db/workflows', () => ({
+  findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
   resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
   cancelResumableRunsForConversation: mock(() => Promise.resolve([])),
   listDashboardRuns: mock(() =>
@@ -188,6 +189,7 @@ describe('createWorkflowStore', () => {
     );
     expect(store.deleteWorkflowNodeSessions).toBe(sessionDb.deleteWorkflowNodeSessions);
     expect(store.listWorkflowRuns).toBe(workflowDb.listDashboardRuns);
+    expect(store.findWorkflowRunsByIdPrefix).toBe(workflowDb.findWorkflowRunsByIdPrefix);
   });
   test('returns object with all IWorkflowStore methods', () => {
     const store = createWorkflowStore();
@@ -197,6 +199,7 @@ describe('createWorkflowStore', () => {
       'cancelResumableRunsForConversation',
       'deleteWorkflowNodeSessions',
       'listWorkflowRuns',
+      'findWorkflowRunsByIdPrefix',
       'createWorkflowRun',
       'getWorkflowRun',
       'findChildRuns',

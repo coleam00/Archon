@@ -513,6 +513,7 @@ export interface AbandonWorkflowResult {
    * failures are also logged). Non-zero means part of the tree may still be alive.
    */
   cascadeFailures: number;
+  cleanupWarnings?: string[];
   /**
    * When the abandoned run was itself a `workflow:` sub-run and its parent is
    * paused blocked on it: the parent's run id. Nothing auto-resumes that parent
@@ -595,6 +596,7 @@ export type CancelWorkflowResult =
 export interface AbandonConversationRunsResult {
   /** Runs this call actually took to 'cancelled'. */
   abandoned: number;
+  cleanupWarnings?: string[];
   /**
    * First cancelled run that left a parent outside the conversation-scoped
    * mutation paused blocked-on-child (stranded parent id), or null. The user
@@ -652,6 +654,7 @@ export interface WorkflowOperationsDeps {
     | 'cancelResumableRunsForConversation'
     | 'deleteWorkflowNodeSessions'
     | 'listWorkflowRuns'
+    | 'findWorkflowRunsByIdPrefix'
   >;
   hostStore: IWorkflowHostStore;
   requestDetachedRunStop: typeof requestDetachedRunStop;
@@ -661,6 +664,8 @@ export interface WorkflowOperationsDeps {
 }
 
 export interface WorkflowOperations {
+  listWorkflowRuns: IWorkflowStore['listWorkflowRuns'];
+  findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'];
   getWorkflowStatus: (options?: { codebaseId?: string }) => Promise<WorkflowStatusData>;
   resumeWorkflow: (runId: string) => Promise<WorkflowRun>;
   abandonWorkflow: (
@@ -776,18 +781,22 @@ export function createWorkflowOperations({
   }
 
   /** Reclaim a container owned by a run this process successfully cancelled. */
-  async function reclaimCancelledRunContainer(run: WorkflowRun): Promise<void> {
+  async function reclaimCancelledRunContainer(run: WorkflowRun): Promise<string[]> {
     if (
       run.metadata?.isolation !== 'container' ||
       typeof run.metadata.isolation_env_id !== 'string'
     ) {
-      return;
+      return [];
     }
     try {
       await reclaimContainerEnv(run.metadata.isolation_env_id, hostStore.isolation);
     } catch (err) {
       getLog().warn({ err, runId: run.id }, 'operations.workflow_abandon_container_reclaim_failed');
+      return [
+        `Could not reclaim container environment ${run.metadata.isolation_env_id} for run ${run.id}; resources may remain allocated. Inspect the managed containers before retrying cleanup.`,
+      ];
     }
+    return [];
   }
 
   async function getRunOrThrow(runId: string, logEvent: string): Promise<WorkflowRun> {
@@ -863,8 +872,15 @@ export function createWorkflowOperations({
 
     // Reclaim only when our cancel won the CAS. A miss means another lifecycle
     // owner now controls the run and its environment.
-    if (cancelled) await reclaimCancelledRunContainer(run);
-    return { run, cancelled, cancelledDescendants, cascadeFailures, blockedParentRunId };
+    const cleanupWarnings = cancelled ? await reclaimCancelledRunContainer(run) : [];
+    return {
+      run,
+      cancelled,
+      cancelledDescendants,
+      cascadeFailures,
+      blockedParentRunId,
+      ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
+    };
   }
 
   /**
@@ -1045,6 +1061,7 @@ export function createWorkflowOperations({
       cancelled: result.cancelled,
       cascadeFailures: result.cascadeFailures,
       blockedParentRunId: result.blockedParentRunId,
+      ...(result.cleanupWarnings ? { cleanupWarnings: result.cleanupWarnings } : {}),
     };
   }
 
@@ -1067,8 +1084,9 @@ export function createWorkflowOperations({
   ): Promise<AbandonConversationRunsResult> {
     const runs = await store.cancelResumableRunsForConversation(conversationId);
     let blockedParentRunId: string | null = null;
+    const cleanupWarnings: string[] = [];
     for (const run of runs) {
-      await reclaimCancelledRunContainer(run);
+      cleanupWarnings.push(...(await reclaimCancelledRunContainer(run)));
       const blocked = await findParentBlockedOn(run);
       if (blockedParentRunId === null) blockedParentRunId = blocked;
     }
@@ -1081,6 +1099,7 @@ export function createWorkflowOperations({
     return {
       abandoned: runs.length,
       blockedParentRunId,
+      ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
     };
   }
 
@@ -1540,6 +1559,9 @@ export function createWorkflowOperations({
     }
   }
   return {
+    listWorkflowRuns: options => store.listWorkflowRuns(options),
+    findWorkflowRunsByIdPrefix: (prefix, codebaseId) =>
+      store.findWorkflowRunsByIdPrefix(prefix, codebaseId),
     getWorkflowStatus,
     resumeWorkflow,
     abandonWorkflow,

@@ -638,6 +638,7 @@ export class SlackWorkflowBridge {
         // no cascade facts, so a stop that left sub-runs or a parent behind says so here.
         if (result.kind === 'stopped') {
           let note = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled the run.`;
+          for (const warning of result.cleanupWarnings ?? []) note += `\n:warning: ${warning}`;
           if (result.cascadeFailures > 0) {
             note += `\n:warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check \`/archon-workflow status\`.`;
           }

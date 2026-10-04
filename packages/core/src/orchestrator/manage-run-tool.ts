@@ -7,7 +7,6 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { listDashboardRuns, findWorkflowRunsByIdPrefix } from '../db/workflows';
 import { toError } from '../utils/error';
 import {
   CancelRefusedError,
@@ -27,6 +26,8 @@ export interface ManageRunContext {
     | 'rejectWorkflow'
     | 'respondToWorkflow'
     | 'resumeWorkflow'
+    | 'listWorkflowRuns'
+    | 'findWorkflowRunsByIdPrefix'
   >;
   /** The project (codebase) this chat is scoped to. */
   codebaseId: string;
@@ -259,7 +260,7 @@ function handleHelp(subtool: string): string {
 }
 
 async function handleList(ctx: ManageRunContext): Promise<string> {
-  const { runs } = await listDashboardRuns({ codebaseId: ctx.codebaseId, limit: 20 });
+  const { runs } = await ctx.operations.listWorkflowRuns({ codebaseId: ctx.codebaseId, limit: 20 });
   log.info({ codebaseId: ctx.codebaseId, count: runs.length }, 'manage_run.list_completed');
   if (runs.length === 0) return 'No workflow runs for this project yet.';
 
@@ -421,6 +422,7 @@ async function handleWrite(
             : `Run ${id.slice(0, 8)} (${result.run.workflow_name}) already finished; nothing to cancel.`;
         }
         let msg = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}).`;
+        for (const warning of result.cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
         if (result.cascadeFailures > 0) {
           msg += ` Warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
         }
@@ -439,10 +441,12 @@ async function handleWrite(
       const {
         run: cancelled,
         cascadeFailures,
+        cleanupWarnings,
         blockedParentRunId,
         owner,
       } = await ctx.operations.abandonWorkflow(id);
       let msg = `${describeAbandonOwner(owner).join(' ')} Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
+      for (const warning of cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
       if (cascadeFailures > 0) {
         msg += ` Warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running.`;
       }
@@ -558,7 +562,7 @@ async function signalGateResolved(
  * or ambiguous prefix.
  */
 async function getScopedRun(runId: string, ctx: ManageRunContext): Promise<WorkflowRun | string> {
-  const matches = await findWorkflowRunsByIdPrefix(runId, ctx.codebaseId);
+  const matches = await ctx.operations.findWorkflowRunsByIdPrefix(runId, ctx.codebaseId);
   if (matches.length > 1) {
     return `manage_run: id '${runId}' matches more than one run — use more characters or the full id.`;
   }

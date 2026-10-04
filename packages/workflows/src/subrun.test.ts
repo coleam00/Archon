@@ -227,6 +227,7 @@ class InMemoryStore implements IWorkflowStore {
   deleteWorkflowNodeSessions: IWorkflowStore['deleteWorkflowNodeSessions'] = () => {
     throw new Error('Unexpected deleteWorkflowNodeSessions');
   };
+  findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
     throw new Error('Unexpected listWorkflowRuns');
   };

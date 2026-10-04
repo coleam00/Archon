@@ -97,6 +97,7 @@ const { approveWorkflow, rejectWorkflow } = createWorkflowOperations({
   store: {
     ...workflowDb,
     listWorkflowRuns: workflowDb.listDashboardRuns,
+    findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     deleteWorkflowNodeSessions: async () => {
       throw new Error('Unexpected session deletion');
     },
