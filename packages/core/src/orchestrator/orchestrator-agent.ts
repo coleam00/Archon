@@ -1,3 +1,5 @@
+import { withBranchLaunchSource } from '../workflows/branch-launch-source';
+import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
 /**
  * Orchestrator Agent - Main entry point for AI-powered message routing
  *
@@ -910,9 +912,9 @@ async function dispatchOrchestratorWorkflowOwned(
   // A reuse-worktree lane inherits the adopted run's worktree; its `.archon` belongs to
   // whatever branch that worktree carries, so the frozen source must come from THERE —
   // capturing from the parent checkout would mix vintages exactly as #2660 describes.
-  // A checkout-branch lane has the same constraint, but its worktree only exists after
-  // isolation resolution below — so its capture is deferred until `cwd` is known.
+  // A checkout-branch lane captures a read-only snapshot before isolation exists.
   const captureCwd = adoptionLane?.kind === 'reuse-worktree' ? adoptionLane.workingPath : runCwd;
+  let branchPrepared: Awaited<ReturnType<typeof prepareRunAiConfiguration>> | undefined;
   if (!willContinueExistingRun && adoptionLane?.kind !== 'checkout-branch') {
     freshCaptured = await captureFreshSource(
       owner,
@@ -924,6 +926,40 @@ async function dispatchOrchestratorWorkflowOwned(
     );
     if (!freshCaptured) return; // capture failed, message already sent
     workflow = freshCaptured.workflow;
+  }
+
+  if (!willContinueExistingRun && adoptionLane?.kind === 'checkout-branch') {
+    await withBranchLaunchSource(
+      codebase.default_cwd,
+      adoptionLane.taskBranch.branch,
+      async snapshot => {
+        freshCaptured = await captureFreshSource(
+          owner,
+          snapshot,
+          workflow,
+          conversationId,
+          platform,
+          snapshot
+        );
+        if (freshCaptured) {
+          workflow = freshCaptured.workflow;
+          branchPrepared = await prepareRunAiConfiguration(
+            createWorkflowDeps(),
+            workflow,
+            snapshot,
+            {
+              codebaseId: codebase.id,
+              userId,
+              runConfig: options?.runConfig,
+              ...(options?.modelOverrides
+                ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
+                : {}),
+            }
+          );
+        }
+      }
+    );
+    if (!freshCaptured) return;
   }
 
   let resolvedInputs: Record<string, string> | undefined;
@@ -990,9 +1026,7 @@ async function dispatchOrchestratorWorkflowOwned(
     return true;
   };
 
-  const gatesWaitForBranchVintage =
-    adoptionLane?.kind === 'checkout-branch' && !willContinueExistingRun;
-  if (!gatesWaitForBranchVintage && !(await runSignatureGates(workflow))) return;
+  if (!(await runSignatureGates(workflow))) return;
 
   // Keys the engine dropped from this workflow's YAML (#2213). Every chat and
   // console run funnels through here, so this is the one place that covers all
@@ -1030,6 +1064,21 @@ async function dispatchOrchestratorWorkflowOwned(
       );
     }
   }
+
+  const preparedAiConfiguration =
+    branchPrepared ??
+    (!willContinueExistingRun
+      ? await prepareRunAiConfiguration(createWorkflowDeps(), workflow, captureCwd, {
+          codebaseId: codebase.id,
+          userId,
+          runConfig: options?.runConfig,
+          ...(options?.modelOverrides
+            ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
+            : {}),
+        })
+      : undefined);
+  if (preparedAiConfiguration)
+    await assertRunCredentials(createWorkflowDeps(), workflow, preparedAiConfiguration);
 
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {
@@ -1113,16 +1162,11 @@ async function dispatchOrchestratorWorkflowOwned(
     }
   }
 
-  // Deferred capture for the checkout-branch lane: the resolver materialized the
-  // adopted branch, so its `.archon` is the branch's vintage — freeze it instead of
-  // the parent checkout's, for the same reason the reuse-worktree lane captures above.
-  if (adoptionLane?.kind === 'checkout-branch' && !willContinueExistingRun) {
-    freshCaptured = await captureFreshSource(owner, cwd, workflow, conversationId, platform, cwd);
-    if (!freshCaptured) return; // capture failed, message already sent
-    workflow = freshCaptured.workflow;
-    // The executed graph just changed vintages; judge the invocation against the
-    // branch's definition, not the parent checkout's it was provisionally read from.
-    if (!(await runSignatureGates(workflow))) return;
+  if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
+    freshCaptured = {
+      ...freshCaptured,
+      preparedSource: { ...freshCaptured.preparedSource, origin: cwd },
+    };
   }
 
   // Dispatch workflow.
@@ -1406,7 +1450,8 @@ async function dispatchOrchestratorWorkflowOwned(
     // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
     // executor adopts for us there (see #2690). `freshCaptured` proves the prior
     // `captureFreshSource` call already ran `owner.hold`.
-    await withRunLiveOwner(freshCaptured.preparedSource.runId, {}, async () => {
+    const captured = freshCaptured;
+    await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
       await freshEngine.submit({
         platform,
         conversationId,
@@ -1419,7 +1464,8 @@ async function dispatchOrchestratorWorkflowOwned(
           parentConversationId: conversation.id,
           userId,
           source,
-          preparedSource: freshCaptured.preparedSource,
+          preparedSource: captured.preparedSource,
+          preparedAiConfiguration,
           parseWarnings,
           baseBranch: codebaseBaseBranch,
           resolveChildIsolation,

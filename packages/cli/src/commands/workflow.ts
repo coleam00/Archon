@@ -1,3 +1,9 @@
+import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
+import {
+  prepareRunAiConfiguration,
+  assertRunCredentials,
+  type PreparedRunAiConfiguration,
+} from '@archon/workflows/run-preflight';
 /**
  * Workflow command - list and run workflows
  */
@@ -2236,6 +2242,28 @@ async function runWorkflowWithOwnedSource(
   // chat dispatch enforce `requires: [github]` identically.
   await assertCliWorkflowRequirementsMet(workflow);
 
+  const cliUserId = await resolveCliUserRecordId();
+  const prepareCredentialPreflight = async (
+    configCwd: string,
+    codebaseId?: string
+  ): Promise<PreparedRunAiConfiguration> => {
+    if (!workflow) throw new Error('Workflow disappeared before credential preflight');
+    const prepared = await prepareRunAiConfiguration(createWorkflowDeps(), workflow, configCwd, {
+      codebaseId,
+      userId: detachedPreCreatedRun ? (detachedPreCreatedRun.user_id ?? undefined) : cliUserId,
+      ...(isContinuation && continuationRun
+        ? { continuationRun }
+        : {
+            runConfig,
+            ...(modelOverrides
+              ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
+              : {}),
+          }),
+    });
+    await assertRunCredentials(createWorkflowDeps(), workflow, prepared);
+    return prepared;
+  };
+
   // --detach: hand the whole run to a detached background child and return now.
   // Done AFTER workflow resolution + flag validation above (so unknown-workflow /
   // bad-flag errors surface synchronously to the caller, not lost in the child)
@@ -2312,6 +2340,9 @@ async function runWorkflowWithOwnedSource(
     // pure resolution with no filesystem or database mutation, so running it as a
     // pre-flight costs nothing and the child still re-resolves it against the live
     // checkout when it starts (its lane binds a worktree this process never touches).
+    let detachedAdoptionLane:
+      | Awaited<ReturnType<typeof resolveWorkflowAdoption>>['lane']
+      | undefined;
     let adoptedRunId: string | undefined;
     let supersededRunId: string | undefined;
     if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined) {
@@ -2322,13 +2353,15 @@ async function runWorkflowWithOwnedSource(
       }
       if (options.adoptRunId !== undefined) {
         adoptedRunId = await resolveRunIdArg(options.adoptRunId, cwd, false, detachCodebase.id);
-        await resolveWorkflowAdoption({
-          adoptedRunId,
-          codebaseId: detachCodebase.id,
-          codebasePath: detachCodebase.default_cwd,
-          codebaseKind: detachCodebase.kind,
-          containerRequested: options.container === true,
-        });
+        detachedAdoptionLane = (
+          await resolveWorkflowAdoption({
+            adoptedRunId,
+            codebaseId: detachCodebase.id,
+            codebasePath: detachCodebase.default_cwd,
+            codebaseKind: detachCodebase.kind,
+            containerRequested: options.container === true,
+          })
+        ).lane;
       } else if (options.supersedesRunId !== undefined) {
         supersededRunId = await resolveRunIdArg(
           options.supersedesRunId,
@@ -2338,6 +2371,32 @@ async function runWorkflowWithOwnedSource(
         );
         await resolveSupersededRun(supersededRunId);
       }
+    }
+
+    if (detachedAdoptionLane?.kind === 'checkout-branch' && detachCodebase) {
+      await withBranchLaunchSource(
+        detachCodebase.default_cwd,
+        detachedAdoptionLane.taskBranch.branch,
+        async snapshot => {
+          if (options.discoveryCwd === undefined) await recaptureForLane(snapshot);
+          await prepareCredentialPreflight(snapshot, detachCodebase.id);
+        }
+      );
+    } else {
+      const existingBranch =
+        wantsIsolation && detachCodebase && options.branchName
+          ? await isolationDb.findActiveByWorkflow(detachCodebase.id, 'task', options.branchName)
+          : undefined;
+      const configCwd =
+        detachedAdoptionLane?.kind === 'reuse-worktree'
+          ? detachedAdoptionLane.workingPath
+          : (continuationRun?.working_path ??
+            (existingBranch && existsSync(existingBranch.working_path)
+              ? existingBranch.working_path
+              : cwd));
+      if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
+        await recaptureForLane(configCwd);
+      await prepareCredentialPreflight(configCwd, detachCodebase?.id);
     }
 
     // The run id the ack hands back. A continuation already has one; a fresh launch
@@ -2369,7 +2428,7 @@ async function runWorkflowWithOwnedSource(
           `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
         );
       }
-      const detachedUserId = await resolveCliUserRecordId();
+      const detachedUserId = cliUserId;
       const continuationDeclaration =
         adoptedRunId !== undefined
           ? { mode: 'adopt' as const, runId: adoptedRunId }
@@ -2744,6 +2803,30 @@ async function runWorkflowWithOwnedSource(
     }
   }
 
+  const existingBranchEnv =
+    wantsIsolation && codebase && options.branchName
+      ? await isolationDb.findActiveByWorkflow(codebase.id, 'task', options.branchName)
+      : undefined;
+  const executionConfigCwd =
+    existingBranchEnv && existsSync(existingBranchEnv.working_path)
+      ? existingBranchEnv.working_path
+      : workingCwd;
+  const preparedAiConfiguration =
+    adoptedTaskBranch && codebase
+      ? await withBranchLaunchSource(
+          codebase.default_cwd,
+          adoptedTaskBranch.branch,
+          async snapshot => {
+            if (options.discoveryCwd === undefined) await recaptureForLane(snapshot);
+            return prepareCredentialPreflight(snapshot, codebase.id);
+          }
+        )
+      : await (async (): Promise<PreparedRunAiConfiguration> => {
+          if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined)
+            await recaptureForLane(workingCwd);
+          return prepareCredentialPreflight(executionConfigCwd, codebase?.id);
+        })();
+
   const isFolderCodebase = codebase?.kind === 'folder';
 
   // Container isolation is folder-project-only in v1. A repo-kind project (or a
@@ -2920,9 +3003,7 @@ async function runWorkflowWithOwnedSource(
     const provider = getIsolationProvider();
 
     // Check for existing worktree (only when explicit --branch)
-    const existingEnv = options.branchName
-      ? await isolationDb.findActiveByWorkflow(codebase.id, 'task', options.branchName)
-      : undefined;
+    const existingEnv = existingBranchEnv;
 
     if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
       if (options.fromBranch) {
@@ -3049,11 +3130,8 @@ async function runWorkflowWithOwnedSource(
     });
   }
 
-  // The lane's checkout is final here. Preserve an explicitly selected authoring
-  // source; only default discovery follows the adopted execution checkout.
-  if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined) {
-    console.log(`Capturing workflow source from ${workingCwd}.`);
-    await recaptureForLane(workingCwd);
+  if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
+    preparedSource = { ...preparedSource, origin: workingCwd };
   }
 
   // Update conversation with cwd and isolation info
@@ -3070,13 +3148,6 @@ async function runWorkflowWithOwnedSource(
 
   // Wire adapter for assistant message persistence
   adapter.setConversationDbId(conversationId, conversation.id);
-
-  // Resolve the CLI user once (ARCHON_USER_ID, else $USER/$USERNAME). When set,
-  // upsert via the `cli` platform identity so the same Archon user is reused
-  // across invocations — this is what attributes the workflow run to the human
-  // running the command and what `getUserProviderEnv` keys on for per-user
-  // AI-provider credentials (#1891 Phase 2).
-  const cliUserId = await resolveCliUserRecordId();
 
   // Persist user message for Web UI history.
   try {
@@ -3315,6 +3386,7 @@ async function runWorkflowWithOwnedSource(
           ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
           : {}),
         ...(runConfig ? { runConfig } : {}),
+        preparedAiConfiguration,
         // The frozen source this run executes, captured before the workflow was even
         // selected. A resume ignores it and loads the source recorded on its own row.
         preparedSource,

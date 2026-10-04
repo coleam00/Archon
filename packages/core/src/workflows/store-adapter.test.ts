@@ -1,6 +1,8 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { DagResumeSnapshot, IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { CredentialStatus } from '@archon/provider-contract';
+import type { StoredCredential } from '../db/user-provider-key-store';
 import type { ResolvedCredential } from '../credentials/delivery';
 
 // Mock DB modules before importing store-adapter
@@ -81,7 +83,10 @@ mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
 }));
 
+const credentialCatalog = await import('../../../providers/src/credential-catalog');
 mock.module('@archon/providers', () => ({
+  LEGACY_VENDOR_ALIASES: credentialCatalog.LEGACY_VENDOR_ALIASES,
+  normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
   getRegistration: mock(
@@ -130,10 +135,26 @@ mock.module('../db/user-provider-key-store', () => ({
   listDecryptedUserProviderCredentials: mockListDecryptedUserProviderCredentials,
   saveUserProviderKey: mock(() => Promise.resolve()),
   getUserProviderKeyRecord: mock(() => Promise.resolve(null)),
-  listUserProviderKeys: mock(() => Promise.resolve([])),
+  listUserProviderKeys: mock(async (userId: string) =>
+    (await mockListDecryptedUserProviderCredentials(userId)).map(r => ({
+      provider: r.provider,
+      kind: r.cred.kind,
+      label: null,
+    }))
+  ),
   deleteUserProviderKey: mock(() => Promise.resolve()),
-  getDecryptedProviderCredential: mock(() =>
-    Promise.resolve({ state: 'not_connected', source: 'archon' })
+  getDecryptedProviderCredential: mock(
+    async (userId: string, provider: string): Promise<StoredCredential> => {
+      const row = (await mockListDecryptedUserProviderCredentials(userId)).find(
+        r => r.provider === provider
+      );
+      return row
+        ? { state: 'usable', source: 'archon', credential: row.cred }
+        : { state: 'not_connected', source: 'archon' };
+    }
+  ),
+  getStoredCredentialStatus: mock(
+    async (): Promise<CredentialStatus> => ({ state: 'usable', source: 'archon' })
   ),
 }));
 
@@ -345,11 +366,12 @@ describe('createWorkflowDeps', () => {
       expect(typeof deps.getUserProviderEnv).toBe('function');
     });
 
-    test('getUserProviderEnv returns empty delivery bags when list query throws', async () => {
+    test('getUserProviderEnv refuses delivery when list query throws', async () => {
       mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
       const deps = createWorkflowDeps();
-      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art');
-      expect(result).toEqual({ env: {}, files: [], protectedValues: [] });
+      await expect(deps.getUserProviderEnv?.('u-1', '/tmp/art', ['openai'])).rejects.toThrow(
+        'db gone'
+      );
     });
 
     // Regression guard for #2035: enabling the credential vault (auto-key on by
@@ -358,25 +380,29 @@ describe('createWorkflowDeps', () => {
     // there is no scrub on the AI-provider path (unlike the GitHub org-token path).
     // A future change that scrubbed ambient provider keys would fail this.
     test('getUserProviderEnv is additive: unconnected user gets empty env (no ambient scrub)', async () => {
-      mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([]);
+      mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
       const deps = createWorkflowDeps();
-      const result = await deps.getUserProviderEnv?.('u-unconnected', '/tmp/art');
+      const result = await deps.getUserProviderEnv?.('u-unconnected', '/tmp/art', ['openai']);
       expect(result).toEqual({ env: {}, files: [], protectedValues: [] });
     });
 
     test('getUserProviderEnv aggregates env from multiple providers', async () => {
-      mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      mockListDecryptedUserProviderCredentials.mockResolvedValue([
         { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-k' } },
         { provider: 'google', cred: { kind: 'api_key', apiKey: 'g-k' } },
       ]);
       const deps = createWorkflowDeps();
-      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art');
+      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art', [
+        'openrouter',
+        'google',
+        'openai',
+      ]);
       expect(result?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-k', GEMINI_API_KEY: 'g-k' });
       expect(result?.protectedValues).toEqual(['or-k', 'g-k']);
     });
 
     test('getUserProviderEnv protects OAuth secrets without hiding public metadata', async () => {
-      mockListDecryptedUserProviderCredentials.mockResolvedValueOnce([
+      mockListDecryptedUserProviderCredentials.mockResolvedValue([
         {
           provider: 'openai',
           cred: {
@@ -396,7 +422,11 @@ describe('createWorkflowDeps', () => {
         },
       ]);
       const deps = createWorkflowDeps();
-      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art');
+      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art', [
+        'openrouter',
+        'google',
+        'openai',
+      ]);
       expect(result?.protectedValues).toEqual([
         'derived-bearer',
         'access-token',
@@ -409,5 +439,51 @@ describe('createWorkflowDeps', () => {
       expect(result?.protectedValues).not.toContain('claude-sonnet-4');
       expect(result?.protectedValues).not.toContain('gpt-5');
     });
+  });
+});
+
+describe('required workflow credential delivery', () => {
+  test('decrypts only the required vendor and prefers its canonical row over a legacy row', async () => {
+    const db = await import('../db/user-provider-key-store');
+    const decrypt = db.getDecryptedProviderCredential as ReturnType<typeof mock>;
+    decrypt.mockClear();
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      { provider: 'claude', cred: { kind: 'api_key', apiKey: 'legacy' } },
+      { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'canonical' } },
+      { provider: 'openai', cred: { kind: 'api_key', apiKey: 'unused-dead' } },
+    ]);
+    const result = await createWorkflowDeps().getUserProviderEnv?.('u', '/tmp/art', ['anthropic']);
+    expect(decrypt.mock.calls).toEqual([['u', 'anthropic']]);
+    expect(result?.env.ANTHROPIC_API_KEY).toBe('canonical');
+    expect(result?.protectedValues).not.toContain('unused-dead');
+  });
+
+  test('checks a legacy connection when no canonical row exists', async () => {
+    const db = await import('../db/user-provider-key-store');
+    const status = db.getStoredCredentialStatus as ReturnType<typeof mock>;
+    status.mockClear();
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      { provider: 'codex', cred: { kind: 'api_key', apiKey: 'legacy' } },
+    ]);
+    await createWorkflowDeps().getUserProviderCredentialStatus?.('u', 'openai');
+    expect(status).toHaveBeenCalledWith('u', 'codex');
+  });
+
+  test('a required stored failure throws a secret-free typed refusal', async () => {
+    const db = await import('../db/user-provider-key-store');
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'planted-secret' } },
+    ]);
+    (db.getDecryptedProviderCredential as ReturnType<typeof mock>).mockResolvedValueOnce({
+      state: 'unusable',
+      source: 'archon',
+      evidence: 'cannot read',
+    });
+    const attempt = createWorkflowDeps().getUserProviderEnv?.('u', '/tmp/art', ['anthropic']);
+    await expect(attempt).rejects.toMatchObject({
+      vendor: 'anthropic',
+      status: { state: 'unusable', evidence: 'cannot read' },
+    });
+    await expect(attempt).rejects.not.toThrow('planted-secret');
   });
 });

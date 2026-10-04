@@ -1,3 +1,4 @@
+import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * Workflow dependency injection types.
  *
@@ -212,19 +213,20 @@ export interface WorkflowDeps {
    */
   isPerUserProviderKeysEnabled?: () => boolean;
   /**
-   * Optional: resolve every connected provider credential for a user into a
+   * Optional: resolve the required connected provider credentials into a
    * delivery bag (env vars + files to write under `artifactsDir`) plus the
    * decrypted values that must be scrubbed from subprocess failures. Called
    * once per run from `executeWorkflow`. Implementations own the delivery
    * map — the engine just merges `env` into `config.envVars` and writes the
    * `files` before any provider invocation.
    *
-   * Must never throw — return empty bags on any failure so the
-   * workflow continues with whatever env inheritance was already in place.
+   * Delivery failures must throw to prevent fallback to another account.
    */
+  getUserProviderCredentialStatus?: (userId: string, vendor: string) => Promise<CredentialStatus>;
   getUserProviderEnv?: (
     userId: string,
-    artifactsDir: string
+    artifactsDir: string,
+    vendors: readonly string[]
   ) => Promise<{
     env: Record<string, string>;
     files: { path: string; contents: string }[];

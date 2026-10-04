@@ -503,6 +503,16 @@ async function createPiModelRuntime(
  * (no reuse) so concurrent calls don't collide.
  */
 export class PiProvider implements IAgentProvider {
+  async resolveCredentialModel(
+    request: Parameters<NonNullable<IAgentProvider['resolveCredentialModel']>>[0]
+  ): Promise<string> {
+    ensurePiPackageDirShim();
+    const sdk = await import('@earendil-works/pi-coding-agent');
+    const config = parsePiConfig(request.assistantConfig ?? {});
+    const parsed = resolvePiModel(request.model ?? config.model, request.cwd, sdk);
+    return `${parsed.provider}/${parsed.modelId}`;
+  }
+
   async checkCredential(
     request: Parameters<IAgentProvider['checkCredential']>[0]
   ): Promise<CredentialStatus> {

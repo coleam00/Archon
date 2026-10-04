@@ -53,6 +53,9 @@
   },
   "testGroups": [
     [
+      "src/workflows/branch-launch-source.test.ts"
+    ],
+    [
       "src/db/resource-starts.integration.test.ts"
     ],
     [
