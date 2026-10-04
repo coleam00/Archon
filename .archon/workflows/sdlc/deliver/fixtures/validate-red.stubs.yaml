@@ -20,14 +20,15 @@ impl__assert-changed: "3 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 2 }
 review__code: "0 findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__synthesize:
   ready: true
@@ -50,15 +51,19 @@ validate__compare:
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 classify:
+  tier: full
   errors: true
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: the diff adds a retry and a fallback"
     docs: "stub: no doc-facing changes"
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: failed
   fail-node: gate-validated
-  reached: [review__code, review__seams, review__simplify, review__tests]
+  reached: [review__code, review__seams, review__tests]
   inputs:
     errors: "false"
 exec-code: true

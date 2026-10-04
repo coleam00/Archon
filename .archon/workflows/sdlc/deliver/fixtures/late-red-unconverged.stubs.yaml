@@ -23,20 +23,23 @@ impl__assert-changed: "3 files changed"
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 11, url: "https://github.com/example/repo/pull/11", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 classify:
+  tier: full
   errors: false
   docs: false
   reasons:
+    tier: "stub: touches persisted state"
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 11 }
 review__code: "0 findings"
+review__simplify__simplify: { findings: false }
 review__seams: "0 findings"
-review__simplify: "0 findings"
+shape__simplify: { findings: false }
 review__tests: "0 findings"
 review__synthesize:
   ready: true
@@ -52,19 +55,30 @@ validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], q
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
+ci-classify:
+  failing_checks: ["test (windows-latest)"]
+  failing_paths: ["packages/core/src/feature.test.ts"]
+  base: passes
+  rerun: not_rerun
+  claim: introduced
+  evidence: "stub: the new test fails on Windows; the base passes"
 ci-fix__implement:
   done: true
   green: false
   red_cause: ""
   summary: "stub: still red and no explanation recorded"
 ci-fix__assert-changed: "1 file changed"
+ci-delta-scope: '{"moved":false}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/11" }
 outcome: { pr_url: "https://github.com/example/repo/pull/11", summary: "https://github.com/example/repo/pull/11" }
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
 fixture:
   expect: failed
   # The gate fails inside the loop, so the failed set is the node AND its
   # group — which is exactly the property under test: the group's failure is
   # what the flip's join must see directly.
-  fail-node: [gate-ci-fix, ci-corrections]
+  fail-node: [gate-ci-fix]
   reached: [ci-verdict, ci-fix__implement]
 exec-code: true
