@@ -106,7 +106,7 @@ describe('output reference token boundaries', () => {
     ['$LOOP_PREV.review', PRIOR_OUTPUT_PATH_SOURCE],
   ] as const) {
     it(`rejects unsupported ${prefix} syntax before any prefix is substituted`, () => {
-      for (const suffix of ['[0]', '.*', '..action', '.0', '(value)', '+1', '?.action']) {
+      for (const suffix of ['[0]', '.*', '..action', '.0', '?.action']) {
         const reference = `${prefix}.output.proposal.action${suffix}`;
         expect(() => assertSupportedOutputRefs(reference)).toThrow(reference);
       }
@@ -114,10 +114,27 @@ describe('output reference token boundaries', () => {
 
     it(`preserves punctuation and literal suffixes around ${prefix} paths`, () => {
       const reference = `${prefix}.output.proposal.action`;
-      for (const suffix of ['.', ', next', '!', '?', '**', '-suffix', '/file', '-$INPUTS.item']) {
+      for (const suffix of [
+        '.',
+        ', next',
+        '!',
+        '?',
+        '**',
+        '(value)',
+        '+1',
+        '-suffix',
+        '/file',
+        '-$INPUTS.item',
+      ]) {
         const template = `${reference}${suffix}`;
         expect(() => assertSupportedOutputRefs(template)).not.toThrow();
         expect(new RegExp(source, 'g').exec(template)?.[0]).toBe(reference);
+      }
+    });
+
+    it(`treats any text after a whole ${prefix} output as literal`, () => {
+      for (const suffix of ['[0]', '.*', '..', '.5', '(see)', '+1', '?.x']) {
+        expect(() => assertSupportedOutputRefs(`${prefix}.output${suffix}`)).not.toThrow();
       }
     });
   }

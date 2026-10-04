@@ -1506,6 +1506,10 @@ describe('substituteNodeOutputRefs', () => {
     expect(substituteNodeOutputRefs('$x.outputs', outputs)).toBe('{"f":"ok"}s');
     expect(substituteNodeOutputRefs('$x.output_text', outputs)).toBe('{"f":"ok"}_text');
     expect(substituteNodeOutputRefs('Done: $x.output.', outputs)).toBe('Done: {"f":"ok"}.');
+    // Only a field path can continue into nested syntax; a whole-output ref never does.
+    expect(substituteNodeOutputRefs('$x.output(see)', outputs)).toBe('{"f":"ok"}(see)');
+    expect(substituteNodeOutputRefs('$x.output+1', outputs)).toBe('{"f":"ok"}+1');
+    expect(substituteNodeOutputRefs('**$x.output.**', outputs)).toBe('**{"f":"ok"}.**');
   });
 
   it('substitutes the complete nested output path', () => {

@@ -141,10 +141,12 @@ export const CURRENT_OUTPUT_PATH_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_P
 /** Prior-iteration form, with capture 1 = node id and capture 2 = optional field path. */
 export const PRIOR_OUTPUT_PATH_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
 
-// Indexing, calls, wildcards, malformed segments, and attached arithmetic are not paths.
-// Anything else after a reference is literal text: a sentence-ending dot, markdown
-// emphasis (`**$x.output.f**`), or a word suffix (`$x.outputs`).
-const UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE = String.raw`(?:\.(?=[\w.*\[])|[\[(+]|\?\.)`;
+// After a field path, indexing, optional chaining, wildcards and malformed segments
+// would read as deeper access the grammar does not support. Anything else is literal
+// text: a sentence-ending dot, markdown emphasis (`**$x.output.f**`), a call-like
+// `(note)`. A whole-output ref is never followed by path syntax, so text after it is
+// always literal, as it was before nested paths.
+const UNSUPPORTED_PATH_CONTINUATION_SOURCE = String.raw`(?:\.(?=[\w.*\[])|\[|\?\.)`;
 
 /**
  * The canonical text of an output reference, for messages about a reference that was
@@ -160,12 +162,14 @@ export function outputRefText(
   return `${prefix}${nodeId}.output${field !== undefined ? `.${field}` : ''}`;
 }
 
-/** Reject unsupported continuations before any valid prefix can be substituted. */
+/** Reject unsupported path continuations before any valid prefix can be substituted. */
 export function assertSupportedOutputRefs(text: string): void {
   const refs = new RegExp(`${CURRENT_OUTPUT_PATH_SOURCE}|${PRIOR_OUTPUT_PATH_SOURCE}`, 'g');
-  const continuation = new RegExp(`^${UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE}`);
+  const continuation = new RegExp(`^${UNSUPPORTED_PATH_CONTINUATION_SOURCE}`);
   for (const match of text.matchAll(refs)) {
     if (match[1] === 'INPUTS') continue;
+    // Groups 2 and 4 are the field path of the current and prior forms.
+    if (match[2] === undefined && match[4] === undefined) continue;
     const end = match.index + match[0].length;
     if (!continuation.test(text.slice(end))) continue;
     const reference = text.slice(match.index).split(/\s/)[0];
