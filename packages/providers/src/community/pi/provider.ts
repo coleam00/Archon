@@ -414,10 +414,11 @@ async function resolvePiTurnAuth(
  * the env key that overrides a stored credential and the per-run auth path, and lists the
  * values to redact from Pi's errors.
  *
- * models.json `${VAR}` substitution does not use that layering: it reads the per-call
- * request env only. Pi resolves a host env reference from the real models.json itself,
- * and a substituted per-call copy is lost when the runtime later refreshes, so a copy is
- * written only when the request env supplies a value.
+ * A turn's models.json `${VAR}` substitution does not use that layering: it reads the
+ * per-call request env only. Pi resolves a host env reference from the real models.json
+ * itself, and a substituted per-call copy is lost when the runtime later refreshes, so a
+ * copy is written only when the request env supplies a value. The login check substitutes
+ * from `credentialEnv` instead (see `checkCredential`).
  */
 interface PiAuthEnv {
   credentialEnv: Readonly<Record<string, string>>;
@@ -525,7 +526,15 @@ export class PiProvider implements IAgentProvider {
     let { credentialValues } = piAuthEnv(undefined, request.env);
     try {
       const piConfig = parsePiConfig(request.assistantConfig ?? {});
-      const authEnv = piAuthEnv(piConfig.env, request.env);
+      const turnEnv = piAuthEnv(piConfig.env, request.env);
+      // A turn copies config env into process.env, where Pi resolves a `${VAR}` itself. The
+      // check leaves process.env alone, so it substitutes from the layered env to resolve
+      // what a turn resolves. It binds no extensions, so its runtime never refreshes away
+      // the per-call file.
+      const authEnv: PiAuthEnv = {
+        ...turnEnv,
+        modelsSubstitution: { ...turnEnv.modelsSubstitution, requestEnv: turnEnv.credentialEnv },
+      };
       credentialValues = authEnv.credentialValues;
       signal.throwIfAborted();
       ensurePiPackageDirShim();

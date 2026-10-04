@@ -18,6 +18,7 @@ const keys = [
   'ANTHROPIC_FEDERATION_RULE_ID',
   'PI_FIXTURE_TOKEN',
   'PI_HOST_ONLY_KEY',
+  'PI_CONFIG_ONLY_KEY',
 ] as const;
 let previous: Record<string, string | undefined>;
 let root: string;
@@ -169,6 +170,28 @@ describe('Pi native credentials', () => {
       state: 'usable',
       source: 'native',
     });
+  });
+  test('resolves a custom provider key set only in assistant config env, as a turn does', async () => {
+    writeFileSync(
+      join(root, 'models.json'),
+      JSON.stringify({
+        providers: {
+          local: {
+            baseUrl: 'http://localhost:1234/v1',
+            api: 'openai-completions',
+            apiKey: '${PI_CONFIG_ONLY_KEY}',
+            models: [{ id: 'model', name: 'Local' }],
+          },
+        },
+      })
+    );
+    expect(
+      await new PiProvider().checkCredential({
+        assistantConfig: { model: 'local/model', env: { PI_CONFIG_ONLY_KEY: secret } },
+        env: {},
+        signal: AbortSignal.timeout(2000),
+      })
+    ).toEqual({ state: 'usable', source: 'native' });
   });
   describe('a runtime error that echoes a configured credential', () => {
     const leakingRefresh = async () => {
