@@ -58,12 +58,14 @@
  * The file-mode test (which doesn't need the SDK) runs unconditionally.
  */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 
-import { buildCustomProviderModelsPath } from './request-auth';
+import type { ModelRuntime as PiModelRuntime } from '@earendil-works/pi-coding-agent';
+
+import { buildCustomProviderModelsPath, createRequestModelRuntime } from './request-auth';
 
 interface ModelRuntimeCtor {
   create(options?: {
@@ -384,6 +386,74 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
       } catch {
         // The reject above is the expected outcome; this branch only fires
         // if the contract regresses and the call resolves.
+      }
+    }
+  );
+
+  test.skipIf(!realSdkAvailable)(
+    'the per-call models.json outlives a provider registration until release()',
+    async () => {
+      // Pi re-reads modelsPath on refresh() and treats a missing file as an
+      // empty config; registerProvider() ends with a background refresh(). The
+      // custom provider must survive that for the whole session.
+      const scratchTmp = mkdtempSync(join(tmpdir(), 'archon-pi-int-tmp-'));
+      createdDirs.push(scratchTmp);
+      // node:os tmpdir() reads TMPDIR on POSIX and TMP/TEMP on Windows.
+      const tmpEnvKeys = ['TMPDIR', 'TMP', 'TEMP'] as const;
+      const previousTmpEnv = tmpEnvKeys.map(key => process.env[key]);
+      for (const key of tmpEnvKeys) process.env[key] = scratchTmp;
+      try {
+        makeUserModelsDir({
+          mygw: {
+            baseUrl: 'https://gateway.example/v1',
+            api: 'openai-completions',
+            apiKey: '${MYGW_API_KEY}',
+            models: [{ id: 'demo' }],
+          },
+        });
+        const ModelRuntime = (await loadRealModelRuntime()) as unknown as typeof PiModelRuntime;
+        const { runtime, release } = await createRequestModelRuntime(
+          options => ModelRuntime.create(options),
+          undefined,
+          { provider: 'mygw', requestEnv: { MYGW_API_KEY: 'request-secret' }, protectedEnvKeys: [] }
+        );
+
+        runtime.registerProvider('other', {
+          baseUrl: 'https://other.example/v1',
+          api: 'openai-completions',
+          apiKey: 'other-key',
+          models: [
+            {
+              id: 'o1',
+              name: 'o1',
+              reasoning: false,
+              input: ['text'],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1000,
+              maxTokens: 100,
+            },
+          ],
+        });
+        // Runs the same ModelConfig.load(modelsPath) as the background refresh
+        // registerProvider() started, and settles after it.
+        await runtime.refresh({ allowNetwork: false });
+
+        const model = runtime.getModel('mygw', 'demo');
+        expect(model).toBeDefined();
+        expect((await runtime.getAuth(model!))?.auth.apiKey).toBe('request-secret');
+
+        // The catalog store stays the user's: nothing but the per-call file
+        // lives in the per-call directory, and release() removes it.
+        const perCallDir = join(scratchTmp, 'archon-pi-models');
+        expect(readdirSync(perCallDir)).toHaveLength(1);
+        release();
+        expect(readdirSync(perCallDir)).toEqual([]);
+      } finally {
+        tmpEnvKeys.forEach((key, i) => {
+          const value = previousTmpEnv[i];
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+        });
       }
     }
   );

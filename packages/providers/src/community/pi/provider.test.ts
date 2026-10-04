@@ -600,12 +600,8 @@ describe('PiProvider', () => {
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = userModelsDir;
 
-    // The per-call file is unlinked in `provider.ts`'s `finally` block as
-    // soon as ModelRuntime.create resolves. The mock factory returns
-    // synchronously without actually reading the file, so the cleanup
-    // would race with the file-content assertions below. Capture the file
-    // contents INSIDE the mock implementation, while the file still exists,
-    // and assert against the captured snapshot.
+    // The per-call file is removed when the session ends, so capture its
+    // contents inside the create() mock and assert against the snapshot.
     let capturedPerCallContent: string | undefined;
     mockModelRuntimeCreate.mockImplementationOnce(async (options?: { modelsPath?: string }) => {
       if (options?.modelsPath && existsSync(options.modelsPath)) {
@@ -648,9 +644,6 @@ describe('PiProvider', () => {
       expect(createArgs?.modelsPath).toBeDefined();
       expect(createArgs?.modelsPath).not.toBe(userModelsPath);
       // The per-call file carried the substituted literals at create time.
-      // The cleanup `finally` in provider.ts unlinks it as soon as create()
-      // resolves — see the dedicated "per-call models.json is unlinked after
-      // ModelRuntime.create" test below for the post-cleanup assertion.
       expect(capturedPerCallContent).toBeDefined();
       const perCallModels = JSON.parse(capturedPerCallContent as string) as {
         providers: Record<
@@ -698,21 +691,20 @@ describe('PiProvider', () => {
     }
   });
 
-  test('custom provider: per-call models.json is unlinked after ModelRuntime.create', async () => {
-    // Round-2 review (Finding 3): the per-call models.json was written and
-    // returned to the caller, but never deleted. Long-running processes
-    // accumulate one file per sendQuery until mkdirSync/writeFileSync fails
-    // with ENOSPC, after which buildCustomProviderModelsPath's errors are
-    // caught at the caller and the SDK silently falls back to the
-    // unsubstituted user models.json — re-opening the round-1 R1 leak
-    // surface. The fix wraps ModelRuntime.create in a try/finally that
-    // unlinks the file regardless of create() outcome.
-    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-cleanup-'));
+  /**
+   * Point PI_CODING_AGENT_DIR at a scratch models.json whose `provider` entry
+   * has a `${MYGW_API_KEY}` apiKey, so sendQuery writes a per-call file.
+   */
+  async function withTemplatedUserModels(
+    provider: string,
+    run: () => Promise<void>
+  ): Promise<void> {
+    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-lifetime-'));
     writeFileSync(
       join(userModelsDir, 'models.json'),
       JSON.stringify({
         providers: {
-          mygw: {
+          [provider]: {
             baseUrl: 'https://gateway.example/v1',
             api: 'openai-completions',
             apiKey: 'prefix-${MYGW_API_KEY}',
@@ -723,36 +715,86 @@ describe('PiProvider', () => {
     );
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = userModelsDir;
-
-    resetScript(scriptedAgentEnd());
-    let perCallPath: string | undefined;
     try {
-      await consume(
+      await run();
+    } finally {
+      const perCallPath = (mockModelRuntimeCreate.mock.calls[0]?.[0] as { modelsPath?: string })
+        ?.modelsPath;
+      if (perCallPath) rmSync(perCallPath, { force: true });
+      rmSync(userModelsDir, { recursive: true, force: true });
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  }
+
+  function perCallModelsPath(): string {
+    const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as { modelsPath?: string };
+    expect(createArgs.modelsPath).toBeDefined();
+    return createArgs.modelsPath as string;
+  }
+
+  test('custom provider: per-call models.json lives until the session ends', async () => {
+    // Pi re-reads modelsPath on every refresh(), and registerProvider() ends
+    // with one, so a file removed mid-session drops the custom provider.
+    let existedDuringPrompt: boolean | undefined;
+    mockPrompt.mockImplementationOnce(async () => {
+      existedDuringPrompt = existsSync(perCallModelsPath());
+      for (const ev of scriptedEvents) capturedListener?.(ev);
+    });
+    resetScript(scriptedAgentEnd());
+    await withTemplatedUserModels('mygw', async () => {
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'mygw/demo',
           env: { MYGW_API_KEY: 'request-secret' },
           protectedEnvKeys: [],
         })
       );
-      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
-        | { modelsPath?: string }
-        | undefined;
-      perCallPath = createArgs?.modelsPath;
-      expect(perCallPath).toBeDefined();
-      // The cleanup ran in the provider's `finally` block, so the file is
-      // gone after sendQuery resolves.
-      expect(existsSync(perCallPath as string)).toBe(false);
-    } finally {
-      if (perCallPath && existsSync(perCallPath)) {
-        rmSync(perCallPath, { force: true });
-      }
-      rmSync(userModelsDir, { recursive: true, force: true });
-      if (previousAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-      }
-    }
+      expect(failure).toBeUndefined();
+      expect(existedDuringPrompt).toBe(true);
+      expect(existsSync(perCallModelsPath())).toBe(false);
+    });
+  });
+
+  test.each([
+    {
+      exit: 'a model lookup miss',
+      provider: 'nonexistent',
+      arrange: (): void => undefined,
+      abortSignal: undefined,
+    },
+    {
+      exit: 'an extension failure',
+      provider: 'mygw',
+      arrange: (): void => {
+        mockBindExtensions.mockImplementationOnce(async () => {
+          throw new Error('extension failed to bind');
+        });
+      },
+      abortSignal: undefined,
+    },
+    {
+      exit: 'cancellation',
+      provider: 'mygw',
+      arrange: (): void => undefined,
+      abortSignal: AbortSignal.abort(),
+    },
+  ])('custom provider: per-call models.json is removed after $exit', async c => {
+    c.arrange();
+    resetScript(scriptedAgentEnd());
+    await withTemplatedUserModels(c.provider, async () => {
+      const { failure, error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: `${c.provider}/demo`,
+          env: { MYGW_API_KEY: 'request-secret' },
+          protectedEnvKeys: [],
+          abortSignal: c.abortSignal,
+        })
+      );
+      expect(failure ?? error).toBeDefined();
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(c.abortSignal ? 0 : 1);
+      expect(existsSync(perCallModelsPath())).toBe(false);
+    });
   });
 
   test('custom provider: per-call models.json is unlinked even when ModelRuntime.create throws', async () => {
