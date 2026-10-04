@@ -134,10 +134,10 @@ describe('toRunEvent — tokens', () => {
     { input: 12000, output: 300 },
     { input: 12000, output: 300, cacheRead: 0, cachePartial: true },
     { input: 0, output: 0 },
-  ])('retains reported axes without inventing missing values: %j', tokens => {
+  ])('retains gross input and output without cache sums or defaults: %j', tokens => {
     const event = toRunEvent(raw({ event_type: 'node_completed', data: { tokens } }));
     if (event.kind !== 'node_transition') throw new Error('unreachable');
-    expect(event.tokens).toEqual(tokens);
+    expect(event.tokens).toEqual({ input: tokens.input, output: tokens.output });
   });
 
   test.each([{}, { tokens: null }, { cost_usd: 0.04, num_turns: 2 }])(
@@ -149,24 +149,20 @@ describe('toRunEvent — tokens', () => {
     }
   );
 
-  test.each([
-    '12000',
-    {},
-    { input: 12000 },
-    { input: '12000', output: 300 },
-    { input: 12000, output: 300, cacheRead: '8000' },
-    { input: 12000, output: 300, cachePartial: false },
-  ])('malformed token payloads are not displayed: %j', tokens => {
-    expect(toRunEvent(raw({ event_type: 'node_completed', data: { tokens } }))).toMatchObject({
-      tokens: null,
-    });
-  });
+  test.each(['12000', {}, { input: 12000 }, { input: '12000', output: 300 }])(
+    'malformed token payloads are not displayed: %j',
+    tokens => {
+      expect(toRunEvent(raw({ event_type: 'node_completed', data: { tokens } }))).toMatchObject({
+        tokens: null,
+      });
+    }
+  );
 
   test('only the latest completed transition owns displayed tokens', () => {
     const old = toRunEvent(
       raw({ event_type: 'node_completed', data: { tokens: { input: 900, output: 90 } } })
     );
-    const tokens = { input: 12000, output: 300, cachePartial: true as const };
+    const tokens = { input: 12000, output: 300 };
     const completed = toRunEvent(raw({ event_type: 'node_completed', data: { tokens } }));
     const skipped = toRunEvent(raw({ event_type: 'node_skipped_prior_success' }));
     for (const state of ['pending', 'running', 'completed', 'failed', 'skipped'] as const) {

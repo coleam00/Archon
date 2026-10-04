@@ -37,9 +37,6 @@ describe('NodeDivider tokens', () => {
     const html = render('own', {
       input: 12000,
       output: 300,
-      cacheRead: 8000,
-      cacheWrite: 1000,
-      cachePartial: true,
     });
     expect(html).toContain('· $0.04');
     expect(html).toContain('tokens 12K in / 300 out');

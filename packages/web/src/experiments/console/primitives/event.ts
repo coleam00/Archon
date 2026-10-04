@@ -116,7 +116,10 @@ export type RunEvent =
 type RawWorkflowEvent = components['schemas']['WorkflowEvent'];
 
 type Execution = NonNullable<components['schemas']['DagNodeSseEvent']['execution']>;
-type TokenUsage = Extract<Execution['spend']['tokens'], { source: 'provider' }>['value'];
+type TokenUsage = Pick<
+  Extract<Execution['spend']['tokens'], { source: 'provider' }>['value'],
+  'input' | 'output'
+>;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -126,18 +129,7 @@ function readTokens(value: unknown): TokenUsage | null {
   if (!isRecord(value)) return null;
   if (!('input' in value) || typeof value.input !== 'number') return null;
   if (!('output' in value) || typeof value.output !== 'number') return null;
-  const tokens: TokenUsage = { input: value.input, output: value.output };
-  for (const key of ['cacheRead', 'cacheWrite', 'total', 'cost'] as const) {
-    if (!(key in value)) continue;
-    const axis = value[key];
-    if (typeof axis !== 'number') return null;
-    tokens[key] = axis;
-  }
-  if ('cachePartial' in value) {
-    if (value.cachePartial !== true) return null;
-    tokens.cachePartial = value.cachePartial;
-  }
-  return tokens;
+  return { input: value.input, output: value.output };
 }
 
 function readString(obj: Record<string, unknown>, key: string): string {
