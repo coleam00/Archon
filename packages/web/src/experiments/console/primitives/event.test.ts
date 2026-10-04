@@ -467,6 +467,51 @@ describe('foldNodeRuns', () => {
   });
 });
 
+describe('foldNodeRuns — cost scope', () => {
+  const completed = (stepName: string, data: Record<string, unknown>) =>
+    toRunEvent(raw({ event_type: 'node_completed', step_name: stepName, data }));
+
+  test('a composed fan-out: only own-scope costs count, and they sum to the run total', () => {
+    // Shape of the durable rows a two-item compose_fan_out writes at $0.02 per call
+    // (#3657): leaves own their spend, instance terminals and the wrapper restate it.
+    const runTotal = 0.04;
+    const runs = foldNodeRuns([
+      completed('fan__0__leaf', { cost_usd: 0.02, accounting: 'node' }),
+      completed('fan__1__leaf', { cost_usd: 0.02, accounting: 'node' }),
+      completed('fan__0', { cost_usd: 0.02, accounting: 'instance', aggregate: true }),
+      completed('fan__1', { cost_usd: 0.02, accounting: 'instance', aggregate: true }),
+      completed('fan', { cost_usd: 0.04, accounting: 'aggregate', aggregate: true }),
+    ]);
+    const scopeOf = Object.fromEntries(runs.map(r => [r.nodeId, r.costScope]));
+    expect(scopeOf).toEqual({
+      fan__0__leaf: 'own',
+      fan__1__leaf: 'own',
+      fan__0: 'total',
+      fan__1: 'total',
+      fan: 'total',
+    });
+    const ownSum = runs
+      .filter(r => r.costScope === 'own')
+      .reduce((sum, r) => sum + (r.costUsd ?? 0), 0);
+    expect(ownSum).toBeCloseTo(runTotal, 10);
+  });
+
+  test('an amendment row restates its attempts', () => {
+    const [run] = foldNodeRuns([completed('build', { cost_usd: 0.05, accounting: 'amendment' })]);
+    expect(run?.costScope).toBe('total');
+  });
+
+  test('a row recorded before `accounting` existed reads as own spend', () => {
+    const [run] = foldNodeRuns([completed('plan', { cost_usd: 0.1 })]);
+    expect(run).toMatchObject({ costUsd: 0.1, costScope: 'own' });
+  });
+
+  test('a row with only the older `aggregate` marker still reads as a total', () => {
+    const [run] = foldNodeRuns([completed('loop', { cost_usd: 0.3, aggregate: true })]);
+    expect(run?.costScope).toBe('total');
+  });
+});
+
 describe('toRunEvent — container lifecycle (DB rows)', () => {
   test('container_created → system event with the container id', () => {
     const e = toRunEvent(

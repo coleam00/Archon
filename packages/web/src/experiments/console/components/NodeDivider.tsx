@@ -1,6 +1,7 @@
 import type { ReactElement } from 'react';
 import { formatElapsed, formatRelativeToBaseline, formatClock } from '../lib/format';
 import { useStreamContext } from '../lib/stream-context';
+import type { CostScope } from '../primitives/event';
 
 interface NodeDividerProps {
   /** `step_name` — the scroll-anchor target for the graph panel. */
@@ -12,6 +13,7 @@ interface NodeDividerProps {
   timestamp: string;
   /** From `node_completed` — surfaced inline so per-node spend is visible. */
   costUsd?: number | null;
+  costScope?: CostScope;
   numTurns?: number | null;
   /** From `node_completed` — surfaced under the System detail toggle. */
   stopReason?: string | null;
@@ -53,6 +55,7 @@ export function NodeDivider({
   durationMs,
   timestamp,
   costUsd,
+  costScope = 'own',
   numTurns,
   stopReason,
   skipReason,
@@ -67,10 +70,12 @@ export function NodeDivider({
       ? ` · ${formatElapsed(Math.floor(durationMs / 1000))}`
       : '';
   // Per-node spend, surfaced inline next to the status. Sub-cent costs keep
-  // more precision so cheap nodes don't all read "$0.00".
+  // more precision so cheap nodes don't all read "$0.00". A scope total restates
+  // spend other nodes already show, so it is labelled rather than read as this
+  // node's own.
   const cost =
     costUsd !== null && costUsd !== undefined && costUsd > 0
-      ? ` · $${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
+      ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
       : '';
   const turns =
     numTurns !== null && numTurns !== undefined && numTurns > 0 ? ` · ${numTurns}t` : '';
