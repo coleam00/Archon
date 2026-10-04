@@ -9,6 +9,7 @@ interface UpdateCheckCache {
   latestVersion: string;
   releaseUrl: string;
   checkedAt: number; // Date.now() ms
+  lastNoticeShownAt?: number;
 }
 
 export interface UpdateCheckResult {
@@ -20,6 +21,7 @@ export interface UpdateCheckResult {
 
 const CACHE_FILE = 'update-check.json';
 const STALENESS_MS = 60 * 60 * 1000; // 1 hour
+const NOTICE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 3000; // 3 seconds
 const GITHUB_API_URL = 'https://api.github.com/repos/coleam00/Archon/releases/latest';
 
@@ -31,27 +33,48 @@ function readCache(): UpdateCheckCache | null {
   const cachePath = getCachePath();
   try {
     const raw = readFileSync(cachePath, 'utf-8');
-    const data = JSON.parse(raw) as UpdateCheckCache;
-    if (!data.latestVersion || !data.releaseUrl || typeof data.checkedAt !== 'number') {
+    const data: unknown = JSON.parse(raw);
+    if (typeof data !== 'object' || data === null) return null;
+    if (
+      !(
+        'latestVersion' in data &&
+        typeof data.latestVersion === 'string' &&
+        'releaseUrl' in data &&
+        typeof data.releaseUrl === 'string' &&
+        'checkedAt' in data &&
+        typeof data.checkedAt === 'number' &&
+        Number.isFinite(data.checkedAt)
+      )
+    ) {
       return null;
     }
-    if (Date.now() - data.checkedAt > STALENESS_MS) {
-      return null;
-    }
-    return data;
+    const lastNoticeShownAt =
+      'lastNoticeShownAt' in data &&
+      typeof data.lastNoticeShownAt === 'number' &&
+      Number.isFinite(data.lastNoticeShownAt)
+        ? data.lastNoticeShownAt
+        : undefined;
+    return {
+      latestVersion: data.latestVersion,
+      releaseUrl: data.releaseUrl,
+      checkedAt: data.checkedAt,
+      lastNoticeShownAt,
+    };
   } catch (err) {
     log.debug({ err, cachePath }, 'update_check.cache_read_failed');
     return null;
   }
 }
 
-function writeCache(cache: UpdateCheckCache): void {
+function writeCache(cache: UpdateCheckCache): boolean {
   try {
     const home = getArchonHome();
     mkdirSync(home, { recursive: true });
     writeFileSync(getCachePath(), JSON.stringify(cache), 'utf-8');
+    return true;
   } catch (err) {
     log.debug({ err }, 'update_check.cache_write_failed');
+    return false;
   }
 }
 
@@ -89,13 +112,12 @@ export function parseLatestRelease(json: unknown): { version: string; url: strin
 /**
  * Full update check: read cache → fetch if stale → write cache → return result.
  * Network errors are swallowed (returns null).
- * Only call when BUNDLED_IS_BINARY is true.
+ * Callers decide whether their install supports release checks.
  */
 export async function checkForUpdate(currentVersion: string): Promise<UpdateCheckResult | null> {
   try {
-    // Try cache first
     const cached = readCache();
-    if (cached) {
+    if (cached && Date.now() - cached.checkedAt <= STALENESS_MS) {
       return {
         updateAvailable: isNewerVersion(currentVersion, cached.latestVersion),
         currentVersion,
@@ -104,7 +126,6 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
       };
     }
 
-    // Fetch from GitHub with timeout
     const controller = new AbortController();
     const timeout = setTimeout(() => {
       controller.abort();
@@ -114,12 +135,19 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
         signal: controller.signal,
         headers: { 'User-Agent': 'archon-update-check' },
       });
-      if (!res.ok) return null;
+      if (!res.ok) {
+        log.debug({ status: res.status }, 'update_check.fetch_failed');
+        return null;
+      }
       const json: unknown = await res.json();
       const { version, url } = parseLatestRelease(json);
 
-      // Write cache
-      writeCache({ latestVersion: version, releaseUrl: url, checkedAt: Date.now() });
+      writeCache({
+        latestVersion: version,
+        releaseUrl: url,
+        checkedAt: Date.now(),
+        lastNoticeShownAt: readCache()?.lastNoticeShownAt,
+      });
 
       return {
         updateAvailable: isNewerVersion(currentVersion, version),
@@ -142,9 +170,28 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
  */
 export function getCachedUpdateCheck(currentVersion: string): UpdateCheckResult | null {
   const cached = readCache();
-  if (!cached) return null;
+  if (!cached || Date.now() - cached.checkedAt > STALENESS_MS) return null;
   return {
     updateAvailable: isNewerVersion(currentVersion, cached.latestVersion),
+    currentVersion,
+    latestVersion: cached.latestVersion,
+    releaseUrl: cached.releaseUrl,
+  };
+}
+
+/** Claim a fresh cached notice without waiting for the network. */
+export function takeCachedUpdateNotice(currentVersion: string): UpdateCheckResult | null {
+  const cached = readCache();
+  if (!cached || Date.now() - cached.checkedAt > STALENESS_MS) return null;
+  if (!isNewerVersion(currentVersion, cached.latestVersion)) return null;
+  if (
+    cached.lastNoticeShownAt !== undefined &&
+    Date.now() - cached.lastNoticeShownAt < NOTICE_INTERVAL_MS
+  )
+    return null;
+  if (!writeCache({ ...cached, lastNoticeShownAt: Date.now() })) return null;
+  return {
+    updateAvailable: true,
     currentVersion,
     latestVersion: cached.latestVersion,
     releaseUrl: cached.releaseUrl,
