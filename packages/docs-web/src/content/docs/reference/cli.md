@@ -919,7 +919,12 @@ After termination is confirmed, `cancel` records cancellation through the same r
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
 descendant and can report the same cascade failures or blocked parent described below.
 
-Managed container reclamation after cancellation is best-effort. If reclamation fails,
+For a detached container run, cancel must also confirm container teardown after stopping
+the owner and before recording cancellation. If that teardown fails, cancel fails and
+leaves the run's state unchanged, even though the owner process has stopped. With
+`--json`, this returns `ok: false` and an error, without `cleanupWarnings`.
+
+Once cancellation is recorded, further managed container reclamation is best-effort. If it fails,
 the run stays `cancelled`, but container resources may remain allocated. Every cancel
 surface reports a warning identifying the run and environment; inspect the managed
 containers before retrying cleanup. Successful `--json` responses include an optional
