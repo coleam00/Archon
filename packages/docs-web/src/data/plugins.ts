@@ -1,6 +1,7 @@
 import { z } from 'astro/zod';
 import {
   PLUGIN_MANIFEST_FILE,
+  isPluginPathSegment,
   pluginManifestSchema,
   type PluginManifest,
 } from '../../../plugin-manifest/src/index';
@@ -103,10 +104,7 @@ export async function discoverPlugins({
       if (
         file.type !== 'blob' ||
         (file.mode !== '100644' && file.mode !== '100755') ||
-        (directory &&
-          !directory
-            .split('/')
-            .every(part => /^[A-Za-z0-9._-]+$/.test(part) && part !== '.' && part !== '..'))
+        (directory && !directory.split('/').every(isPluginPathSegment))
       ) {
         log(
           `[plugins] Skipping ${repo}/${file.path}: unsupported install path or non-regular manifest`
