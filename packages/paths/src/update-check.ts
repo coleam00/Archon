@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, unlinkSync } from 'fs';
 import { getArchonHome } from './archon-paths';
 import { createLogger } from './logger';
 
@@ -68,13 +68,35 @@ function readCache(): UpdateCheckCache | null {
 
 function writeCache(cache: UpdateCheckCache): boolean {
   try {
-    const home = getArchonHome();
-    mkdirSync(home, { recursive: true });
     writeFileSync(getCachePath(), JSON.stringify(cache), 'utf-8');
     return true;
   } catch (err) {
     log.debug({ err }, 'update_check.cache_write_failed');
     return false;
+  }
+}
+
+// Both release refreshes and notice claims must preserve the shared notice timestamp.
+function withCacheLock<T>(claim: () => T): T | null {
+  const lockPath = `${getCachePath()}.lock`;
+  let lock: number;
+  try {
+    mkdirSync(getArchonHome(), { recursive: true });
+    lock = openSync(lockPath, 'wx');
+  } catch (err) {
+    log.debug({ err }, 'update_check.cache_lock_unavailable');
+    return null;
+  }
+  try {
+    return claim();
+  } finally {
+    try {
+      closeSync(lock);
+      unlinkSync(lockPath);
+    } catch (err) {
+      // Leave an unreleasable lock in place: skipping a notice is safer than duplicating it.
+      log.debug({ err }, 'update_check.cache_lock_release_failed');
+    }
   }
 }
 
@@ -142,12 +164,14 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
       const json: unknown = await res.json();
       const { version, url } = parseLatestRelease(json);
 
-      writeCache({
-        latestVersion: version,
-        releaseUrl: url,
-        checkedAt: Date.now(),
-        lastNoticeShownAt: readCache()?.lastNoticeShownAt,
-      });
+      withCacheLock(() =>
+        writeCache({
+          latestVersion: version,
+          releaseUrl: url,
+          checkedAt: Date.now(),
+          lastNoticeShownAt: readCache()?.lastNoticeShownAt,
+        })
+      );
 
       return {
         updateAvailable: isNewerVersion(currentVersion, version),
@@ -181,19 +205,21 @@ export function getCachedUpdateCheck(currentVersion: string): UpdateCheckResult 
 
 /** Claim a fresh cached notice without waiting for the network. */
 export function takeCachedUpdateNotice(currentVersion: string): UpdateCheckResult | null {
-  const cached = readCache();
-  if (!cached || Date.now() - cached.checkedAt > STALENESS_MS) return null;
-  if (!isNewerVersion(currentVersion, cached.latestVersion)) return null;
-  if (
-    cached.lastNoticeShownAt !== undefined &&
-    Date.now() - cached.lastNoticeShownAt < NOTICE_INTERVAL_MS
-  )
-    return null;
-  if (!writeCache({ ...cached, lastNoticeShownAt: Date.now() })) return null;
-  return {
-    updateAvailable: true,
-    currentVersion,
-    latestVersion: cached.latestVersion,
-    releaseUrl: cached.releaseUrl,
-  };
+  return withCacheLock(() => {
+    const cached = readCache();
+    if (!cached || Date.now() - cached.checkedAt > STALENESS_MS) return null;
+    if (!isNewerVersion(currentVersion, cached.latestVersion)) return null;
+    if (
+      cached.lastNoticeShownAt !== undefined &&
+      Date.now() - cached.lastNoticeShownAt < NOTICE_INTERVAL_MS
+    )
+      return null;
+    if (!writeCache({ ...cached, lastNoticeShownAt: Date.now() })) return null;
+    return {
+      updateAvailable: true,
+      currentVersion,
+      latestVersion: cached.latestVersion,
+      releaseUrl: cached.releaseUrl,
+    };
+  });
 }

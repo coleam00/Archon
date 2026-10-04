@@ -112,6 +112,85 @@ describe('checkForUpdate', () => {
     }
   });
 
+  test('concurrent processes cannot claim the same notice interval', async () => {
+    writeFileSync(
+      join(testDir, 'update-check.json'),
+      JSON.stringify({
+        latestVersion: '0.5.0',
+        releaseUrl: 'https://example.com',
+        checkedAt: Date.now(),
+      })
+    );
+    const modulePath = join(import.meta.dir, 'update-check.ts');
+    const childSource = `
+      import { spyOn } from 'bun:test';
+      import * as fs from 'node:fs';
+      import { takeCachedUpdateNotice } from ${JSON.stringify(modulePath)};
+      const write = fs.writeFileSync;
+      spyOn(fs, 'writeFileSync').mockImplementation((...args) => {
+        fs.writeSync(1, 'claiming\\n');
+        fs.readSync(0, Buffer.alloc(1), 0, 1, null);
+        return write(...args);
+      });
+      console.log(takeCachedUpdateNotice('0.4.0') ? 'noticed' : 'skipped');
+    `;
+    const owner = Bun.spawn([process.execPath, '--eval', childSource], {
+      env: { ...process.env, ARCHON_HOME: testDir },
+      stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    try {
+      const output = owner.stdout.getReader();
+      const ready = await output.read();
+      expect(new TextDecoder().decode(ready.value)).toBe('claiming\n');
+      const contender = Bun.spawn(
+        [
+          process.execPath,
+          '--eval',
+          `
+          import { takeCachedUpdateNotice } from ${JSON.stringify(modulePath)};
+          console.log(takeCachedUpdateNotice('0.4.0') ? 'noticed' : 'skipped');
+        `,
+        ],
+        { env: { ...process.env, ARCHON_HOME: testDir }, stdout: 'pipe', stderr: 'pipe' }
+      );
+      expect(await contender.exited).toBe(0);
+      expect(await new Response(contender.stdout).text()).toBe('skipped\n');
+      owner.stdin.write('x');
+      owner.stdin.end();
+      expect(await owner.exited).toBe(0);
+      expect(new TextDecoder().decode((await output.read()).value)).toBe('noticed\n');
+      expect((await output.read()).done).toBe(true);
+      output.releaseLock();
+      expect(takeCachedUpdateNotice('0.4.0')).toBeNull();
+    } finally {
+      owner.kill();
+      await owner.exited;
+    }
+  });
+
+  test('release refresh skips persistence while another process owns the cache lock', async () => {
+    const cachePath = join(testDir, 'update-check.json');
+    const cache = {
+      latestVersion: '0.5.0',
+      releaseUrl: 'https://example.com',
+      checkedAt: Date.now() - 2 * 60 * 60 * 1000,
+      lastNoticeShownAt: Date.now(),
+    };
+    writeFileSync(cachePath, JSON.stringify(cache));
+    writeFileSync(`${cachePath}.lock`, '');
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ tag_name: 'v0.6.0', html_url: 'https://example.com' }))
+    );
+    try {
+      expect((await checkForUpdate('0.4.0'))?.latestVersion).toBe('0.6.0');
+      expect(JSON.parse(readFileSync(cachePath, 'utf8'))).toEqual(cache);
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   test('refreshing stale release data preserves the notice timestamp', async () => {
     const lastNoticeShownAt = Date.now() - 2 * 60 * 60 * 1000;
     writeFileSync(
