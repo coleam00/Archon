@@ -1292,6 +1292,7 @@ describe('filterToolIndicators logic (replicated regex tests)', () => {
 
 function makePlatform() {
   return {
+    capabilities: { messagePersistence: 'adapter', defaultWorkflowDispatch: 'background' } as const,
     sendMessage: mock<IPlatformAdapter['sendMessage']>(() => Promise.resolve()),
     ensureThread: mock<NonNullable<IPlatformAdapter['ensureThread']>>(id => Promise.resolve(id)),
     getStreamingMode: mock<IPlatformAdapter['getStreamingMode']>(() => 'batch'),
@@ -3145,6 +3146,18 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
+  test('calls dispatchBackgroundWorkflow for non-interactive workflow on a background-default adapter', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
+
+    const platform = { ...makePlatform(), getPlatformType: mock(() => 'matrix-chat') };
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+  });
+
   // -------------------------------------------------------------------------
   // Declared inputs supplied by the run route (#2554)
   // -------------------------------------------------------------------------
@@ -3658,6 +3671,30 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/web-feature');
   });
 
+  test('a background-default adapter non-interactive workflow with resumable run resumes foreground (not background)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined))); // non-interactive
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeResumableRun({
+          id: 'web-noninteractive-resume-1',
+          working_path: '/repos/test-repo/worktrees/web-feature',
+          status: 'paused',
+        })
+      )
+    );
+
+    const platform = { ...makePlatform(), getPlatformType: mock(() => 'matrix-chat') };
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+
+    expect(mockHydrateResumableRun).toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/web-feature');
+  });
+
   test('calls executeWorkflow for interactive workflow on non-web platform', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
@@ -3665,6 +3702,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'slack' as const),
     };
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
@@ -3695,6 +3733,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'telegram' as const),
     };
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
@@ -3723,6 +3762,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'slack' as const),
     };
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
@@ -3742,6 +3782,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'discord' as const),
     };
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
@@ -6231,6 +6272,7 @@ describe('message persistence for non-web platforms', () => {
   test('persists user + assistant messages for non-web platform (batch mode)', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'github'),
       getStreamingMode: mock(() => 'batch' as const),
     };
@@ -6257,6 +6299,7 @@ describe('message persistence for non-web platforms', () => {
   test('persists user + assistant messages for non-web platform (stream mode)', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'telegram'),
       getStreamingMode: mock(() => 'stream' as const),
     };
@@ -6278,6 +6321,22 @@ describe('message persistence for non-web platforms', () => {
     expect(mockAddMessage).toHaveBeenCalledTimes(2);
   });
 
+  for (const mode of ['stream', 'batch'] as const) {
+    for (const owner of ['core', 'adapter'] as const) {
+      test(`new adapter ${owner} persistence in ${mode} mode`, async () => {
+        const platform: IPlatformAdapter = {
+          ...makePlatform(),
+          capabilities: { messagePersistence: owner, defaultWorkflowDispatch: 'foreground' },
+          getPlatformType: () => 'matrix-chat',
+          getStreamingMode: () => mode,
+        };
+        await handleMessage(platform, 'conv-1', 'what is this repo?');
+        expect(mockAddMessage).toHaveBeenCalledTimes(owner === 'core' ? 2 : 0);
+        expect(platform.sendMessage).toHaveBeenCalled();
+      });
+    }
+  }
+
   test('does NOT call addMessage for web platform (web adapter owns persistence)', async () => {
     const platform = makePlatform(); // makePlatform defaults getPlatformType to 'web'
 
@@ -6289,6 +6348,7 @@ describe('message persistence for non-web platforms', () => {
   test('platform delivery is not blocked when persistence rejects', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'github'),
       getStreamingMode: mock(() => 'batch' as const),
     };
@@ -6301,6 +6361,7 @@ describe('message persistence for non-web platforms', () => {
   test('platform delivery is not blocked when persistence rejects (stream mode)', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'telegram'),
       getStreamingMode: mock(() => 'stream' as const),
     };
@@ -6315,6 +6376,7 @@ describe('message persistence for non-web platforms', () => {
   test('passes userId to addMessage when context provides it', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'github'),
       getStreamingMode: mock(() => 'batch' as const),
     };
@@ -6340,6 +6402,7 @@ describe('message persistence for non-web platforms', () => {
   test('does NOT persist a user row for a deterministic slash command (no orphan)', async () => {
     const platform: IPlatformAdapter = {
       ...makePlatform(),
+      capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'github'),
       getStreamingMode: mock(() => 'batch' as const),
     };

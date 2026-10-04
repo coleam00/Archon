@@ -119,6 +119,18 @@ export interface MessageMetadata {
 export { toPersistedMessageMetadata } from './message-metadata';
 
 export interface IPlatformAdapter {
+  readonly capabilities: {
+    readonly messagePersistence: 'core' | 'adapter';
+    readonly defaultWorkflowDispatch: 'foreground' | 'background';
+  };
+
+  /** The returned finalizer is awaited when dispatch setup or worker execution ends. */
+  prepareBackgroundConversation?(context: {
+    workerConversationId: string;
+    parentConversationId: string;
+    conversationDbId: string;
+  }): Promise<() => Promise<void>>;
+
   /**
    * Send a message to the platform
    */
@@ -182,27 +194,6 @@ export interface IPlatformAdapter {
     conversationId: string,
     info: { cost?: number; tokens?: TokenUsage; stopReason?: string }
   ): Promise<void>;
-}
-
-/**
- * Extended platform adapter for the Web UI.
- * Adds methods for SSE event bridging, message persistence, and lock events
- * that are only meaningful in the web context.
- */
-export interface IWebPlatformAdapter extends IPlatformAdapter {
-  sendStructuredEvent(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
-  setConversationDbId(platformConversationId: string, dbId: string): void;
-  setupEventBridge(workerConversationId: string, parentConversationId: string): () => void;
-  emitLockEvent(conversationId: string, locked: boolean, queuePosition?: number): Promise<void>;
-  registerOutputCallback(conversationId: string, callback: (text: string) => void): void;
-  removeOutputCallback(conversationId: string): void;
-}
-
-/**
- * Type guard for web platform adapter.
- */
-export function isWebAdapter(adapter: IPlatformAdapter): adapter is IWebPlatformAdapter {
-  return adapter.getPlatformType() === 'web';
 }
 
 // Re-export workflow schema types for config-types.ts compatibility

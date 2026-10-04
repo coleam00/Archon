@@ -15,6 +15,11 @@ interface MyMessageContext {
 }
 
 export class MyChatAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
+
   private messageHandler?: (ctx: MyMessageContext) => Promise<void>;
 
   onMessage(handler: (ctx: MyMessageContext) => Promise<void>): void {
@@ -75,6 +80,22 @@ if (process.env.MY_PLATFORM_TOKEN) {
   await myAdapter.start();
 }
 ```
+
+Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
+
+Hosts must register offline policies before loading config or running cleanup, even when credentials are absent or the transport is disabled:
+
+```typescript
+import { registerPlatformPolicy } from '@archon/core/platforms/registry';
+
+registerPlatformPolicy({
+  id: 'my-platform',
+  workspaceRetention: 'age-based',
+  streaming: { defaultMode: 'batch', envVar: 'MY_PLATFORM_STREAMING_MODE' },
+});
+```
+
+Use `workspaceRetention: 'retain'` to exempt workspaces from age-based cleanup. Merged and missing worktrees can still be removed. Unregistered platforms use age-based cleanup; SDK hosts start with an empty registry. Bundled hosts call `registerBundledPlatformPolicies` from `@archon/adapters/platform-policies` before config and cleanup. Policies load without transport SDKs or credentials. Platform identifiers are lowercase kebab-case, start with a letter, and contain at most 32 characters.
 
 ## Testing
 

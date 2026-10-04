@@ -7,7 +7,7 @@
  * 3. Repository config (.archon/config.yaml)
  * 4. Environment variables
  */
-
+import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import {
@@ -516,15 +516,16 @@ function getDefaults(): MergedConfig {
     }
   }
 
+  const streaming: MergedConfig['streaming'] = {};
+  for (const policy of getRegisteredPlatformPolicies()) {
+    if (policy.streaming) streaming[policy.id] = policy.streaming.defaultMode;
+  }
+
   return {
     botName: 'Archon',
     assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
     assistants: registeredAssistants,
-    streaming: {
-      telegram: 'stream',
-      discord: 'batch',
-      slack: 'batch',
-    },
+    streaming,
     paths: {
       workspaces: getArchonWorkspacesPath(),
       worktrees: getArchonWorktreesPath(),
@@ -589,21 +590,10 @@ function applyEnvOverrides(
     }
   }
 
-  // Streaming overrides
-  const streamingModes = ['stream', 'batch'] as const;
-  const telegramMode = process.env.TELEGRAM_STREAMING_MODE;
-  if (telegramMode && streamingModes.includes(telegramMode as 'stream' | 'batch')) {
-    config.streaming.telegram = telegramMode as 'stream' | 'batch';
-  }
-
-  const discordMode = process.env.DISCORD_STREAMING_MODE;
-  if (discordMode && streamingModes.includes(discordMode as 'stream' | 'batch')) {
-    config.streaming.discord = discordMode as 'stream' | 'batch';
-  }
-
-  const slackMode = process.env.SLACK_STREAMING_MODE;
-  if (slackMode && streamingModes.includes(slackMode as 'stream' | 'batch')) {
-    config.streaming.slack = slackMode as 'stream' | 'batch';
+  for (const policy of getRegisteredPlatformPolicies()) {
+    if (!policy.streaming) continue;
+    const mode = process.env[policy.streaming.envVar];
+    if (mode === 'stream' || mode === 'batch') config.streaming[policy.id] = mode;
   }
 
   // Path overrides (these come from archon-paths.ts which already checks env vars)
@@ -652,11 +642,8 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   result.aliases = mergeAliases(result.aliases, global.aliases);
   result.tiers = mergeTiers(result.tiers, global.tiers);
 
-  // Streaming preferences
   if (global.streaming) {
-    if (global.streaming.telegram) result.streaming.telegram = global.streaming.telegram;
-    if (global.streaming.discord) result.streaming.discord = global.streaming.discord;
-    if (global.streaming.slack) result.streaming.slack = global.streaming.slack;
+    result.streaming = { ...result.streaming, ...global.streaming };
   }
 
   // Path preferences
@@ -1005,11 +992,7 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     botName: config.botName,
     assistant: config.assistant,
     assistants: toSafeAssistantDefaults(config.assistants),
-    streaming: {
-      telegram: config.streaming.telegram,
-      discord: config.streaming.discord,
-      slack: config.streaming.slack,
-    },
+    streaming: { ...config.streaming },
     concurrency: { maxConversations: config.concurrency.maxConversations },
     defaults: {
       copyDefaults: config.defaults.copyDefaults,

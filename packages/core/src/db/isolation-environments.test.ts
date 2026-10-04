@@ -1,3 +1,4 @@
+import { registerTestPlatformPolicies } from '../test/mocks/platform-policies';
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
@@ -29,6 +30,7 @@ import {
 
 describe('isolation-environments', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockQuery.mockClear();
   });
 
@@ -413,8 +415,9 @@ describe('isolation-environments', () => {
 
       await findStaleEnvironments();
 
-      const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain("created_by_platform != 'telegram'");
+      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(query).toContain('created_by_platform NOT IN ($3)');
+      expect(params).toEqual([14, 14, 'telegram']);
     });
 
     test('returns environments with codebase info', async () => {

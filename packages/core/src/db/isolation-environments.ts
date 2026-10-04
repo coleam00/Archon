@@ -1,6 +1,7 @@
 /**
  * Database operations for isolation environments
  */
+import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType } from './connection';
 import {
   TERMINAL_WORKFLOW_STATUSES,
@@ -304,7 +305,6 @@ export async function getLiveRunOwningEnv(
 
 /**
  * Find stale environments (no activity for specified days)
- * Excludes Telegram (persistent workspaces never auto-cleanup)
  */
 export async function findStaleEnvironments(
   staleDays = 14
@@ -314,19 +314,27 @@ export async function findStaleEnvironments(
   const staleActivityThreshold = dialect.nowMinusDays(1);
   const staleCreationThreshold = dialect.nowMinusDays(2);
 
+  const retainedIds = getRegisteredPlatformPolicies()
+    .filter(policy => policy.workspaceRetention === 'retain')
+    .map(policy => policy.id);
+  const retentionFilter = retainedIds.length
+    ? `AND e.created_by_platform NOT IN (${retainedIds.map((_, index) => `$${index + 3}`).join(', ')})`
+    : '';
+
   const result = await pool.query<IsolationEnvironmentRow & { codebase_default_cwd: string }>(
     `SELECT e.*, c.default_cwd as codebase_default_cwd
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
      WHERE e.status = 'active'
-       AND e.created_by_platform != 'telegram'
+       AND e.created_by_platform IS NOT NULL
+       ${retentionFilter}
        AND NOT EXISTS (
          SELECT 1 FROM remote_agent_conversations conv
          WHERE conv.isolation_env_id = e.id
            AND conv.last_activity_at > ${staleActivityThreshold}
        )
        AND e.created_at < ${staleCreationThreshold}`,
-    [staleDays, staleDays]
+    [staleDays, staleDays, ...retainedIds]
   );
   return result.rows.map(normalizeEnvironmentRow);
 }

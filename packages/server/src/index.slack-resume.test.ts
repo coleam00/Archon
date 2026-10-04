@@ -1,3 +1,8 @@
+import {
+  clearPlatformPolicies,
+  retainsWorkspace,
+  getRegisteredPlatformPolicies,
+} from '@archon/core/platforms/registry';
 import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { EventEmitter } from 'events';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -177,10 +182,19 @@ mock.module('@archon/core', () => ({
   },
   ConversationLockManager: MockConversationLockManager,
   classifyAndFormatError: (error: unknown): string => String(error),
-  startCleanupScheduler: (): void => undefined,
+  startCleanupScheduler: (): void => {
+    expect(retainsWorkspace('telegram')).toBe(true);
+  },
   stopCleanupScheduler: (): void => undefined,
   getDbNotificationListener: (): null => null,
-  loadConfig: async (): Promise<{ botName: string }> => ({ botName: 'Archon' }),
+  loadConfig: async (): Promise<{ botName: string }> => {
+    expect(
+      getRegisteredPlatformPolicies()
+        .map(policy => policy.id)
+        .sort()
+    ).toEqual(['discord', 'slack', 'telegram']);
+    return { botName: 'Archon' };
+  },
   logConfig: (): void => undefined,
   getPort: async (): Promise<number> => 12345,
   createGitHubAppAuthProvider: (): never => {
@@ -358,6 +372,20 @@ afterAll(() => {
 });
 
 describe('Slack workflow resume composition', () => {
+  test('server registers offline policies with all platform transports skipped', async () => {
+    clearPlatformPolicies();
+    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+      port: 12345,
+    })) as unknown as typeof Bun.serve);
+    try {
+      const { startServer } = await import('./index');
+      await startServer({ port: 12345, skipPlatformAdapters: true });
+      expect(retainsWorkspace('telegram')).toBe(true);
+    } finally {
+      serveSpy.mockRestore();
+    }
+  });
+
   test('server startup injects the persisted, destination-aware resume path', async () => {
     const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
       port: 12345,

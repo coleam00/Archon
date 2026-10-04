@@ -1,3 +1,6 @@
+import { platformStreamingSchema } from './config-types';
+import { registerPlatformPolicy, clearPlatformPolicies } from '../platforms/registry';
+import { registerTestPlatformPolicies } from '../test/mocks/platform-policies';
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -45,6 +48,7 @@ describe('config-loader', () => {
     'TELEGRAM_STREAMING_MODE',
     'DISCORD_STREAMING_MODE',
     'SLACK_STREAMING_MODE',
+    'MATRIX_STREAMING_MODE',
     'MAX_CONCURRENT_CONVERSATIONS',
     'WORKSPACE_PATH',
     'WORKTREE_BASE',
@@ -52,6 +56,8 @@ describe('config-loader', () => {
   ];
 
   beforeEach(() => {
+    clearPlatformPolicies();
+    registerTestPlatformPolicies();
     clearConfigCache();
     mockFsReadFile.mockReset();
     mockFsWriteFile.mockReset();
@@ -76,6 +82,51 @@ describe('config-loader', () => {
     // Clear mock state between tests
     mockFsReadFile.mockClear();
     mockFsWriteFile.mockClear();
+  });
+
+  test('new and unregistered streaming keys survive load, merge, update and safe projection', async () => {
+    registerPlatformPolicy({
+      id: 'matrix-chat',
+      workspaceRetention: 'age-based',
+      streaming: { defaultMode: 'stream', envVar: 'MATRIX_STREAMING_MODE' },
+    });
+    mockFsReadFile.mockResolvedValue('streaming:\n  matrix-chat: batch\n  other-chat: stream\n');
+    expect((await loadGlobalConfig()).streaming).toEqual({
+      'matrix-chat': 'batch',
+      'other-chat': 'stream',
+    });
+    const config = await loadConfig();
+    expect(toSafeConfig(config).streaming).toEqual({
+      telegram: 'stream',
+      discord: 'batch',
+      slack: 'batch',
+      'matrix-chat': 'batch',
+      'other-chat': 'stream',
+    });
+    await updateGlobalConfig({ streaming: { 'matrix-chat': 'stream' } });
+    const written = Bun.YAML.parse(mockFsWriteFile.mock.calls[0]?.[1] as string) as {
+      streaming: unknown;
+    };
+    expect(platformStreamingSchema.parse(written.streaming)).toEqual({
+      'matrix-chat': 'stream',
+      'other-chat': 'stream',
+    });
+  });
+
+  test('registered streaming default and validated environment override apply', async () => {
+    registerPlatformPolicy({
+      id: 'matrix-chat',
+      workspaceRetention: 'age-based',
+      streaming: { defaultMode: 'stream', envVar: 'MATRIX_STREAMING_MODE' },
+    });
+    mockFsReadFile.mockResolvedValue('');
+    expect((await loadConfig()).streaming['matrix-chat']).toBe('stream');
+    process.env.MATRIX_STREAMING_MODE = 'batch';
+    clearConfigCache();
+    expect((await loadConfig()).streaming['matrix-chat']).toBe('batch');
+    process.env.MATRIX_STREAMING_MODE = 'invalid';
+    clearConfigCache();
+    expect((await loadConfig()).streaming['matrix-chat']).toBe('stream');
   });
 
   describe('loadGlobalConfig', () => {

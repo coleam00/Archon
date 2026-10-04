@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 
 // Mock logger before importing any module that transitively imports @archon/paths
 const mockLogger = {
@@ -179,4 +179,38 @@ describe('WebAdapter.sendMessage — text event category', () => {
 
     expect(emitted.length).toBe(0);
   });
+});
+
+test('background preparation maps persistence and releases the bridge before awaited lock flush', async () => {
+  const { adapter } = makeAdapter();
+  const calls: string[] = [];
+  const mapping = spyOn(adapter, 'setConversationDbId').mockImplementation(() => {
+    calls.push('mapping');
+  });
+  const bridge = spyOn(adapter, 'setupEventBridge').mockImplementation(() => () => {
+    calls.push('unsubscribe');
+  });
+  spyOn(adapter, 'removeOutputCallback').mockImplementation(() => {
+    calls.push('remove');
+  });
+  let release: () => void = () => {};
+  const lock = spyOn(adapter, 'emitLockEvent').mockImplementation(async () => {
+    await new Promise<void>(resolve => {
+      release = resolve;
+    });
+    calls.push('lock');
+  });
+  const finish = await adapter.prepareBackgroundConversation({
+    workerConversationId: 'worker',
+    parentConversationId: 'parent',
+    conversationDbId: 'db',
+  });
+  expect(mapping).toHaveBeenCalledWith('worker', 'db');
+  expect(bridge).toHaveBeenCalledWith('worker', 'parent');
+  const finished = finish();
+  expect(calls).toEqual(['mapping', 'unsubscribe', 'remove']);
+  expect(lock).toHaveBeenCalledWith('worker', false);
+  release();
+  await finished;
+  expect(calls).toEqual(['mapping', 'unsubscribe', 'remove', 'lock']);
 });

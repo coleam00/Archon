@@ -2,6 +2,7 @@
  * Slack platform adapter using @slack/bolt with Socket Mode
  * Handles message sending with markdown block formatting for AI responses
  */
+import { slackPolicy } from './policy';
 import { App, LogLevel, type SlashCommand } from '@slack/bolt';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import {
@@ -38,6 +39,10 @@ export interface SlackMessageRef {
 const MAX_TRACKED_TRIGGERS = 1000;
 
 export class SlackAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private app: App;
   private streamingMode: 'stream' | 'batch';
   private messageHandler: ((event: SlackMessageEvent) => Promise<void>) | null = null;
@@ -59,7 +64,11 @@ export class SlackAdapter implements IPlatformAdapter {
    */
   private missingScopeLogged = false;
 
-  constructor(botToken: string, appToken: string, mode: 'stream' | 'batch' = 'batch') {
+  constructor(
+    botToken: string,
+    appToken: string,
+    mode: 'stream' | 'batch' = slackPolicy.streaming.defaultMode
+  ) {
     this.app = new App({
       token: botToken,
       socketMode: true,

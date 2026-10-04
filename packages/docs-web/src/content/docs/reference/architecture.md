@@ -79,39 +79,7 @@ Platform adapters connect messaging platforms to the orchestrator. Implement the
 
 ### IPlatformAdapter Interface
 
-**Location:** `packages/core/src/types/index.ts`
-
-```typescript
-export interface IPlatformAdapter {
-  // Send a message to the platform (optional metadata for message type hints)
-  sendMessage(conversationId: string, message: string, metadata?: MessageMetadata): Promise<void>;
-
-  // Ensure responses go to a thread, creating one if needed
-  // Returns the thread's conversation ID (may be same as original)
-  ensureThread(originalConversationId: string, messageContext?: unknown): Promise<string>;
-
-  // Get the configured streaming mode
-  getStreamingMode(): 'stream' | 'batch';
-
-  // Get the platform type identifier
-  getPlatformType(): string;
-
-  // Start the platform adapter (e.g., begin polling, start webhook server)
-  start(): Promise<void>;
-
-  // Stop the platform adapter gracefully
-  stop(): void;
-
-  // Optional: Send a structured event (a tool call or its update, a result, a status line or a dispatch)
-  sendStructuredEvent?(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
-
-  // Optional: Retract previously streamed text (workflow routing intercept)
-  emitRetract?(conversationId: string): Promise<void>;
-
-  // Optional: Append a cost / token footer after a direct-chat reply
-  sendResultFooter?(conversationId: string, info: { cost?: number; tokens?: TokenUsage; stopReason?: string }): Promise<void>;
-}
-```
+The current contract is [IPlatformAdapter](https://github.com/coleam00/Archon/blob/dev/packages/core/src/types/index.ts). It declares transport methods, message persistence ownership, and the default workflow dispatch mode. Structured events and background worker preparation are optional capabilities. Hosts register offline retention and streaming policies before config or cleanup; see the [adapter authoring guide](https://github.com/coleam00/Archon/blob/dev/packages/adapters/src/community/chat/README.md).
 
 ### Implementation Guide
 
@@ -123,6 +91,11 @@ export interface IPlatformAdapter {
 import type { IPlatformAdapter } from '@archon/core';
 
 export class YourPlatformAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
+
   private streamingMode: 'stream' | 'batch';
 
   constructor(config: YourPlatformConfig, mode: 'stream' | 'batch' = 'stream') {

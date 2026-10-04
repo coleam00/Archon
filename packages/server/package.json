@@ -132,6 +132,9 @@
     ],
     [
       "src/services/workflow-continuation-scheduler.test.ts"
+    ],
+    [
+      "src/routes/schemas/config.schemas.test.ts"
     ]
   ]
 }

@@ -2,6 +2,7 @@
  * Cleanup service for isolation environments
  * Handles removal triggered by events, schedule, or commands
  */
+import { retainsWorkspace } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
 import * as sessionDb from '../db/sessions';
@@ -674,9 +675,8 @@ export async function runScheduledCleanup(): Promise<CleanupReport> {
           continue;
         }
 
-        // Check staleness (skip Telegram - already filtered in query but double-check)
-        if (env.created_by_platform === 'telegram') {
-          continue; // Never cleanup Telegram (persistent workspace)
+        if (retainsWorkspace(env.created_by_platform)) {
+          continue;
         }
 
         // Check if environment is stale
@@ -805,8 +805,7 @@ export async function getWorktreeStatusBreakdown(
   const { remoteMainRef } = await resolveRepoGitContext(repoPath, mainRepoPath);
 
   for (const env of environments) {
-    // Skip Telegram (never shown as stale)
-    const isTelegram = env.created_by_platform === 'telegram';
+    const retained = retainsWorkspace(env.created_by_platform);
 
     // Check if merged (treat as not-merged on unexpected errors)
     let merged = false;
@@ -832,8 +831,7 @@ export async function getWorktreeStatusBreakdown(
       continue;
     }
 
-    // Check if stale (non-Telegram only)
-    const isStale = !isTelegram && env.days_since_activity >= STALE_THRESHOLD_DAYS;
+    const isStale = !retained && env.days_since_activity >= STALE_THRESHOLD_DAYS;
     if (isStale) {
       breakdown.stale++;
       breakdown.staleEnvs.push({
@@ -864,8 +862,7 @@ export async function cleanupStaleWorktrees(
   const environments = await isolationEnvDb.listByCodebaseWithAge(codebaseId);
 
   for (const env of environments) {
-    // Skip Telegram
-    if (env.created_by_platform === 'telegram') continue;
+    if (retainsWorkspace(env.created_by_platform)) continue;
 
     // Check if stale
     if (env.days_since_activity < STALE_THRESHOLD_DAYS) continue;

@@ -30,13 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('orchestrator');
   return cachedLog;
 }
-import {
-  IPlatformAdapter,
-  Conversation,
-  Codebase,
-  ConversationNotFoundError,
-  isWebAdapter,
-} from '../types';
+import { IPlatformAdapter, Conversation, Codebase, ConversationNotFoundError } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
 import type { AdoptionLane } from '../operations/workflow-adoption';
 import {
@@ -350,7 +344,7 @@ export interface WorkflowRoutingContext {
 }
 
 /**
- * Dispatch a workflow to run in a background worker conversation (web platform only).
+ * Dispatch a workflow to run in a background worker conversation.
  * Creates a hidden worker conversation, sets up event bridging from worker to parent,
  * and fires-and-forgets the workflow execution.
  */
@@ -380,12 +374,12 @@ async function dispatchBackgroundWorkflowOwned(
   assertComposedGateDriveable(workflow.nodes);
 
   // 1. Generate worker conversation ID
-  const workerPlatformId = `web-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const workerPlatformId = `${ctx.platform.getPlatformType()}-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
   // 2. Create worker conversation in DB; propagate userId so the worker
   // row has the same attribution as the parent (matters for "my runs" queries).
   const workerConv = await db.getOrCreateConversation(
-    'web',
+    ctx.platform.getPlatformType(),
     workerPlatformId,
     undefined,
     undefined,
@@ -509,291 +503,278 @@ async function dispatchBackgroundWorkflowOwned(
     }
   );
 
-  // Narrow to web adapter for web-specific operations
-  const webAdapter = isWebAdapter(ctx.platform) ? ctx.platform : null;
+  await ctx.platform.sendStructuredEvent?.(ctx.conversationId, {
+    type: 'workflow_dispatch',
+    workerConversationId: workerPlatformId,
+    workflowName: workflow.name,
+  });
+  const finalizeConversation = await ctx.platform.prepareBackgroundConversation?.({
+    workerConversationId: workerPlatformId,
+    parentConversationId: ctx.conversationId,
+    conversationDbId: workerConv.id,
+  });
 
-  // Send structured dispatch event for Web UI
-  if (webAdapter) {
-    await webAdapter.sendStructuredEvent(ctx.conversationId, {
-      type: 'workflow_dispatch',
-      workerConversationId: workerPlatformId,
-      workflowName: workflow.name,
-    });
-  }
-
-  // 5. Set up DB ID mapping for worker (needed for message persistence)
-  if (webAdapter) {
-    webAdapter.setConversationDbId(workerPlatformId, workerConv.id);
-  }
-
-  // 6. Set up event bridge (worker events → parent SSE stream)
-  let unsubscribeBridge: (() => void) | undefined;
-  if (webAdapter) {
-    unsubscribeBridge = webAdapter.setupEventBridge(workerPlatformId, ctx.conversationId);
-  }
-
-  const workflowDeps = createWorkflowDeps();
-  const engine = new InProcessWorkflowEngine(workflowDeps);
-
-  // Freeze this run's executable source, then re-resolve the workflow FROM the frozen
-  // copy so the definition executed and the commands and scripts beside it are one
-  // consistent set of bytes. This background path calls `executeWorkflow` directly, so
-  // without its own capture it would be the one surface still reading live source.
-  //
-  // Ordinary worktrees inherit workflow definitions from the canonical checkout.
-  // Adoption is different: the selected branch is the declared estate, so its
-  // workflow source must stay anchored to that exact checkout.
-  const workflowSourceRoot = ctx.adoptionLane
-    ? workerCwd
-    : ((await resolveWorkflowSourceRoot(workerCwd)) ?? workerCwd);
-  let preparedSource: PreparedWorkflowSource | undefined;
+  let backgroundStarted = false;
   try {
-    preparedSource = await prepareWorkflowSource(workflowDeps, {
-      sourceRoot: workflowSourceRoot,
-    });
-    // From here the owner reclaims it unless a run adopts it, whichever way we leave.
-    owner.hold(preparedSource);
-    // See the note in orchestrator-agent.ts: an empty capture means the definition came
-    // from a binary's embedded bundled set, which has nothing on disk to re-read.
-    if (preparedSource.manifest.scopes.length > 0) {
-      const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
-        workerCwd,
-        loadConfig,
-        preparedSource.roots
-      );
-      const reResolved = resolveWorkflowName(
-        workflow.name,
-        capturedWorkflows.map(w => w.workflow)
-      );
-      if (!reResolved) {
-        throw new Error(`workflow '${workflow.name}' is not present in the captured source`);
-      }
-      workflow = reResolved;
-    }
-    await recordSelectedWorkflow(preparedSource.anchor.root, workflow.name);
-  } catch (error) {
-    const err = error as Error;
-    // Reclaim before returning: this branch is the console's default dispatch path, and
-    // leaving the tree behind here leaks one capture per failed dispatch.
-    getLog().error({ err, workflowName: workflow.name }, 'workflow.source_capture_failed');
-    await ctx.platform.sendMessage(
-      ctx.conversationId,
-      `Could not capture the workflow source for **${workflow.name}**: ${err.message}. ` +
-        'Nothing has been started.'
-    );
-    return;
-  }
+    const workflowDeps = createWorkflowDeps();
+    const engine = new InProcessWorkflowEngine(workflowDeps);
 
-  // 7. Publish the owner before the row can become visible as active.
-  const runLiveOwner = await startRunLiveOwner(preparedSource.runId);
-  let runLiveOwnerClose: Promise<void> | undefined;
-  const closeRunLiveOwner = (): Promise<void> => {
-    runLiveOwnerClose ??= runLiveOwner.close();
-    return runLiveOwnerClose;
-  };
-
-  // Pre-create workflow run row so the UI can fetch it immediately.
-  // Without this, navigating to the execution page before executeWorkflow's
-  // async setup completes would 404 (row doesn't exist yet for 1-5 seconds).
-  let preCreatedRun: Awaited<ReturnType<typeof workflowDeps.store.createWorkflowRun>> | undefined;
-  try {
-    preCreatedRun = await workflowDeps.store.createWorkflowRun({
-      // The id its already-written source capture is filed under.
-      id: preparedSource.runId,
-      workflow_name: workflow.name,
-      conversation_id: workerConv.id,
-      codebase_id: ctx.codebaseId,
-      user_message: ctx.originalMessage,
-      working_path: workerCwd,
-      metadata: {
-        ...(ctx.issueContext ? { github_context: ctx.issueContext } : {}),
-        // Declared inputs supplied by this invocation (#2554). Stamped here because the
-        // executor only writes them when IT creates the row, and this path hands it a
-        // pre-created one.
-        ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
-          ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
-          : {}),
-        // Between-run continuation (#2747) — write-once with the column below.
-        ...(ctx.adoptRunId || ctx.supersedesRunId
-          ? {
-              [CONTINUATION_METADATA_KEY]: {
-                mode: ctx.adoptRunId ? 'adopt' : 'supersede',
-              },
-            }
-          : {}),
-      },
-      parent_conversation_id: ctx.conversationDbId,
-      user_id: ctx.userId,
-      ...(ctx.adoptRunId || ctx.supersedesRunId
-        ? { adopted_from_run_id: ctx.adoptRunId ?? ctx.supersedesRunId }
-        : {}),
-    });
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, workflowName: workflow.name }, 'pre_create_workflow_run_failed');
-    // Non-fatal: executeWorkflow will create its own row as fallback
-  }
-
-  // 8. Fire-and-forget: transfer the capture into a second ownership scope whose
-  // lifetime encloses the detached execution. `withCapturedSource` invokes its body
-  // synchronously, so the new owner holds the capture before the dispatch owner adopts
-  // and returns. The detached scope then reclaims on any pre-rename failure or stops
-  // tracking only when executeWorkflow adopts after the rename succeeds.
-  const backgroundExecution = withCapturedSource(async backgroundOwner => {
-    backgroundOwner.hold(preparedSource);
+    // Freeze this run's executable source, then re-resolve the workflow FROM the frozen
+    // copy so the definition executed and the commands and scripts beside it are one
+    // consistent set of bytes. This background path calls `executeWorkflow` directly, so
+    // without its own capture it would be the one surface still reading live source.
+    //
+    // Ordinary worktrees inherit workflow definitions from the canonical checkout.
+    // Adoption is different: the selected branch is the declared estate, so its
+    // workflow source must stay anchored to that exact checkout.
+    const workflowSourceRoot = ctx.adoptionLane
+      ? workerCwd
+      : ((await resolveWorkflowSourceRoot(workerCwd)) ?? workerCwd);
+    let preparedSource: PreparedWorkflowSource | undefined;
     try {
+      preparedSource = await prepareWorkflowSource(workflowDeps, {
+        sourceRoot: workflowSourceRoot,
+      });
+      // From here the owner reclaims it unless a run adopts it, whichever way we leave.
+      owner.hold(preparedSource);
+      // See the note in orchestrator-agent.ts: an empty capture means the definition came
+      // from a binary's embedded bundled set, which has nothing on disk to re-read.
+      if (preparedSource.manifest.scopes.length > 0) {
+        const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
+          workerCwd,
+          loadConfig,
+          preparedSource.roots
+        );
+        const reResolved = resolveWorkflowName(
+          workflow.name,
+          capturedWorkflows.map(w => w.workflow)
+        );
+        if (!reResolved) {
+          throw new Error(`workflow '${workflow.name}' is not present in the captured source`);
+        }
+        workflow = reResolved;
+      }
+      await recordSelectedWorkflow(preparedSource.anchor.root, workflow.name);
+    } catch (error) {
+      const err = error as Error;
+      // Reclaim before returning: this branch is the console's default dispatch path, and
+      // leaving the tree behind here leaks one capture per failed dispatch.
+      getLog().error({ err, workflowName: workflow.name }, 'workflow.source_capture_failed');
+      await ctx.platform.sendMessage(
+        ctx.conversationId,
+        `Could not capture the workflow source for **${workflow.name}**: ${err.message}. ` +
+          'Nothing has been started.'
+      );
+      return;
+    }
+
+    // 7. Publish the owner before the row can become visible as active.
+    const runLiveOwner = await startRunLiveOwner(preparedSource.runId);
+    let runLiveOwnerClose: Promise<void> | undefined;
+    const closeRunLiveOwner = (): Promise<void> => {
+      runLiveOwnerClose ??= runLiveOwner.close();
+      return runLiveOwnerClose;
+    };
+
+    // Pre-create workflow run row so the UI can fetch it immediately.
+    // Without this, navigating to the execution page before executeWorkflow's
+    // async setup completes would 404 (row doesn't exist yet for 1-5 seconds).
+    let preCreatedRun: Awaited<ReturnType<typeof workflowDeps.store.createWorkflowRun>> | undefined;
+    try {
+      preCreatedRun = await workflowDeps.store.createWorkflowRun({
+        // The id its already-written source capture is filed under.
+        id: preparedSource.runId,
+        workflow_name: workflow.name,
+        conversation_id: workerConv.id,
+        codebase_id: ctx.codebaseId,
+        user_message: ctx.originalMessage,
+        working_path: workerCwd,
+        metadata: {
+          ...(ctx.issueContext ? { github_context: ctx.issueContext } : {}),
+          // Declared inputs supplied by this invocation (#2554). Stamped here because the
+          // executor only writes them when IT creates the row, and this path hands it a
+          // pre-created one.
+          ...(ctx.inputs && Object.keys(ctx.inputs).length > 0
+            ? { [SUBRUN_METADATA_KEYS.inputs]: { ...ctx.inputs } }
+            : {}),
+          // Between-run continuation (#2747) — write-once with the column below.
+          ...(ctx.adoptRunId || ctx.supersedesRunId
+            ? {
+                [CONTINUATION_METADATA_KEY]: {
+                  mode: ctx.adoptRunId ? 'adopt' : 'supersede',
+                },
+              }
+            : {}),
+        },
+        parent_conversation_id: ctx.conversationDbId,
+        user_id: ctx.userId,
+        ...(ctx.adoptRunId || ctx.supersedesRunId
+          ? { adopted_from_run_id: ctx.adoptRunId ?? ctx.supersedesRunId }
+          : {}),
+      });
+    } catch (error) {
+      const err = error as Error;
+      getLog().error({ err, workflowName: workflow.name }, 'pre_create_workflow_run_failed');
+      // Non-fatal: executeWorkflow will create its own row as fallback
+    }
+
+    // 8. Fire-and-forget: transfer the capture into a second ownership scope whose
+    // lifetime encloses the detached execution. `withCapturedSource` invokes its body
+    // synchronously, so the new owner holds the capture before the dispatch owner adopts
+    // and returns. The detached scope then reclaims on any pre-rename failure or stops
+    // tracking only when executeWorkflow adopts after the rename succeeds.
+    const backgroundExecution = withCapturedSource(async backgroundOwner => {
+      backgroundOwner.hold(preparedSource);
       try {
-        // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
-        // executor adopts for us there (see #2690). Until then a rename failure leaves
-        // the staged directory un-adopted so the wrap reclaims it on the way out.
-        const result = await engine.submit({
-          platform: ctx.platform,
-          conversationId: workerPlatformId,
-          cwd: workerCwd,
-          workflow,
-          userMessage: ctx.originalMessage,
-          conversationDbId: workerConv.id,
-          options: {
-            codebaseId: ctx.codebaseId,
-            issueContext: ctx.issueContext,
-            isolationContext,
-            parentConversationId: ctx.conversationDbId,
-            preCreatedRun,
-            userId: ctx.userId,
-            source: ctx.source,
-            parseWarnings: ctx.parseWarnings,
-            baseBranch: codebaseBaseBranch,
-            resolveChildIsolation,
-            preparedSource,
-            capturedSourceOwner: backgroundOwner,
-            ...(workerCutFromCommit !== undefined ? { cutFromCommit: workerCutFromCommit } : {}),
-            // Only consumed when `preCreatedRun` is undefined (pre-creation failed and
-            // the executor creates the row itself); otherwise the row above already
-            // carries them.
-            inputs: ctx.inputs,
-            ...(ctx.adoptRunId
-              ? { adoptedFromRunId: ctx.adoptRunId, continuationMode: 'adopt' as const }
-              : ctx.supersedesRunId
-                ? {
-                    adoptedFromRunId: ctx.supersedesRunId,
-                    continuationMode: 'supersede' as const,
-                  }
+        try {
+          // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
+          // executor adopts for us there (see #2690). Until then a rename failure leaves
+          // the staged directory un-adopted so the wrap reclaims it on the way out.
+          const result = await engine.submit({
+            platform: ctx.platform,
+            conversationId: workerPlatformId,
+            cwd: workerCwd,
+            workflow,
+            userMessage: ctx.originalMessage,
+            conversationDbId: workerConv.id,
+            options: {
+              codebaseId: ctx.codebaseId,
+              issueContext: ctx.issueContext,
+              isolationContext,
+              parentConversationId: ctx.conversationDbId,
+              preCreatedRun,
+              userId: ctx.userId,
+              source: ctx.source,
+              parseWarnings: ctx.parseWarnings,
+              baseBranch: codebaseBaseBranch,
+              resolveChildIsolation,
+              preparedSource,
+              capturedSourceOwner: backgroundOwner,
+              ...(workerCutFromCommit !== undefined ? { cutFromCommit: workerCutFromCommit } : {}),
+              // Only consumed when `preCreatedRun` is undefined (pre-creation failed and
+              // the executor creates the row itself); otherwise the row above already
+              // carries them.
+              inputs: ctx.inputs,
+              ...(ctx.adoptRunId
+                ? { adoptedFromRunId: ctx.adoptRunId, continuationMode: 'adopt' as const }
+                : ctx.supersedesRunId
+                  ? {
+                      adoptedFromRunId: ctx.supersedesRunId,
+                      continuationMode: 'supersede' as const,
+                    }
+                  : {}),
+              ...(ctx.modelOverrides
+                ? { modelOverrideLayer: { kind: 'raw' as const, overrides: ctx.modelOverrides } }
                 : {}),
-            ...(ctx.modelOverrides
-              ? { modelOverrideLayer: { kind: 'raw' as const, overrides: ctx.modelOverrides } }
-              : {}),
-            ...(ctx.runConfig ? { runConfig: ctx.runConfig } : {}),
-          },
-        });
-        await closeRunLiveOwner();
-        // Surface workflow output to parent conversation as a result card
-        if ('paused' in result) {
-          // Paused workflows (approval gates) — no result card yet
-        } else if (result.success && result.summary) {
-          try {
-            await ctx.platform.sendMessage(ctx.conversationId, result.summary, {
-              category: 'workflow_result',
-              segment: 'new',
-              workflowResult: {
-                workflowName: workflow.name,
-                runId: result.workflowRunId,
-              },
-            });
-          } catch (surfaceError) {
-            getLog().warn(
-              { err: toError(surfaceError), conversationId: ctx.conversationId },
-              'workflow_output_surface_failed'
-            );
-          }
-        } else if (!result.success && result.workflowRunId) {
-          // Surface failure as a result card so the chat shows status + "View full logs"
-          try {
-            await ctx.platform.sendMessage(
-              ctx.conversationId,
-              `Workflow **${workflow.name}** failed: ${result.error}`,
-              {
+              ...(ctx.runConfig ? { runConfig: ctx.runConfig } : {}),
+            },
+          });
+          await closeRunLiveOwner();
+          // Surface workflow output to parent conversation as a result card
+          if ('paused' in result) {
+            // Paused workflows (approval gates) — no result card yet
+          } else if (result.success && result.summary) {
+            try {
+              await ctx.platform.sendMessage(ctx.conversationId, result.summary, {
                 category: 'workflow_result',
                 segment: 'new',
                 workflowResult: {
                   workflowName: workflow.name,
                   runId: result.workflowRunId,
                 },
-              }
-            );
-          } catch (surfaceError) {
-            getLog().warn(
-              { err: toError(surfaceError), conversationId: ctx.conversationId },
-              'workflow_output_surface_failed'
-            );
-          }
-        }
-      } catch (error) {
-        const err = toError(error);
-        const terminalWriteFailed = error instanceof TerminalStatusWriteError;
-        // A rejected terminal write leaves the row saying `running`. Do not compensate
-        // with a second failWorkflowRun over the write channel that just failed, and do
-        // not tell the user the workflow "failed" — its real outcome is unknown.
-        if (preCreatedRun && !terminalWriteFailed) {
-          await workflowDeps.store
-            .failWorkflowRun(preCreatedRun.id, err.message, { exitReason: 'unhandled_error' })
-            .catch(dbError => {
-              getLog().error(
-                { err: toError(dbError), workflowRunId: preCreatedRun.id },
-                'background_workflow_fail_db_record_failed'
+              });
+            } catch (surfaceError) {
+              getLog().warn(
+                { err: toError(surfaceError), conversationId: ctx.conversationId },
+                'workflow_output_surface_failed'
               );
-            });
-        }
-        getLog().error(
-          {
-            err,
-            workflowName: workflow.name,
-            workerConversationId: workerPlatformId,
-          },
-          terminalWriteFailed
-            ? 'background_workflow_terminal_write_failed'
-            : 'background_workflow_failed'
-        );
-        await closeRunLiveOwner();
-        // Surface error to parent conversation — include workflowResult metadata when
-        // we have a pre-created run ID so the chat renders a result card with "View full logs"
-        const failureRunId = preCreatedRun?.id;
-        const failureMessage = terminalWriteFailed
-          ? `⚠️ Workflow **${workflow.name}** finished, but its final status could not be saved. ` +
-            'It may still show as running — check it before starting another.'
-          : `Workflow **${workflow.name}** failed: ${err.message}`;
-        await ctx.platform
-          .sendMessage(
-            ctx.conversationId,
-            failureMessage,
-            failureRunId
-              ? {
+            }
+          } else if (!result.success && result.workflowRunId) {
+            // Surface failure as a result card so the chat shows status + "View full logs"
+            try {
+              await ctx.platform.sendMessage(
+                ctx.conversationId,
+                `Workflow **${workflow.name}** failed: ${result.error}`,
+                {
                   category: 'workflow_result',
                   segment: 'new',
-                  workflowResult: { workflowName: workflow.name, runId: failureRunId },
+                  workflowResult: {
+                    workflowName: workflow.name,
+                    runId: result.workflowRunId,
+                  },
                 }
-              : undefined
-          )
-          .catch((sendErr: unknown) => {
-            getLog().error({ err: toError(sendErr) }, 'background_workflow_notify_failed');
-          });
+              );
+            } catch (surfaceError) {
+              getLog().warn(
+                { err: toError(surfaceError), conversationId: ctx.conversationId },
+                'workflow_output_surface_failed'
+              );
+            }
+          }
+        } catch (error) {
+          const err = toError(error);
+          const terminalWriteFailed = error instanceof TerminalStatusWriteError;
+          // A rejected terminal write leaves the row saying `running`. Do not compensate
+          // with a second failWorkflowRun over the write channel that just failed, and do
+          // not tell the user the workflow "failed" — its real outcome is unknown.
+          if (preCreatedRun && !terminalWriteFailed) {
+            await workflowDeps.store
+              .failWorkflowRun(preCreatedRun.id, err.message, { exitReason: 'unhandled_error' })
+              .catch(dbError => {
+                getLog().error(
+                  { err: toError(dbError), workflowRunId: preCreatedRun.id },
+                  'background_workflow_fail_db_record_failed'
+                );
+              });
+          }
+          getLog().error(
+            {
+              err,
+              workflowName: workflow.name,
+              workerConversationId: workerPlatformId,
+            },
+            terminalWriteFailed
+              ? 'background_workflow_terminal_write_failed'
+              : 'background_workflow_failed'
+          );
+          await closeRunLiveOwner();
+          // Surface error to parent conversation — include workflowResult metadata when
+          // we have a pre-created run ID so the chat renders a result card with "View full logs"
+          const failureRunId = preCreatedRun?.id;
+          const failureMessage = terminalWriteFailed
+            ? `⚠️ Workflow **${workflow.name}** finished, but its final status could not be saved. ` +
+              'It may still show as running — check it before starting another.'
+            : `Workflow **${workflow.name}** failed: ${err.message}`;
+          await ctx.platform
+            .sendMessage(
+              ctx.conversationId,
+              failureMessage,
+              failureRunId
+                ? {
+                    category: 'workflow_result',
+                    segment: 'new',
+                    workflowResult: { workflowName: workflow.name, runId: failureRunId },
+                  }
+                : undefined
+            )
+            .catch((sendErr: unknown) => {
+              getLog().error({ err: toError(sendErr) }, 'background_workflow_notify_failed');
+            });
+        } finally {
+          await finalizeConversation?.();
+        }
+      } catch (outerError) {
+        getLog().error({ err: toError(outerError) }, 'background_workflow_unhandled_error');
       } finally {
-        // Clean up event bridge
-        if (unsubscribeBridge) {
-          unsubscribeBridge();
-        }
-        if (webAdapter) {
-          webAdapter.removeOutputCallback(workerPlatformId);
-          await webAdapter.emitLockEvent(workerPlatformId, false);
-        }
+        await closeRunLiveOwner();
       }
-    } catch (outerError) {
-      getLog().error({ err: toError(outerError) }, 'background_workflow_unhandled_error');
-    } finally {
-      await closeRunLiveOwner();
-    }
-  });
-  owner.adopt();
-  void backgroundExecution;
+    });
+    backgroundStarted = true;
+    owner.adopt();
+    void backgroundExecution;
+  } finally {
+    if (!backgroundStarted) await finalizeConversation?.();
+  }
 }
 
 /**

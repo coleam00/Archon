@@ -19,7 +19,7 @@ import type {
 } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
 import { sessionPreview, toolCallDisplayName } from '@archon/provider-contract';
-import { ConversationNotFoundError, isWebAdapter } from '../types';
+import { ConversationNotFoundError } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
@@ -1345,8 +1345,11 @@ async function dispatchOrchestratorWorkflowOwned(
     } finally {
       if (!resumeOwnerClosed) await resumeOwner.close();
     }
-  } else if (platform.getPlatformType() === 'web' && !workflow.interactive) {
-    // Background dispatch: web-only, non-interactive workflows with no resumable run.
+  } else if (
+    platform.capabilities.defaultWorkflowDispatch === 'background' &&
+    !workflow.interactive
+  ) {
+    // Background dispatch: adapter-default, non-interactive workflows with no resumable run.
     // This is the console's default path, so it is exactly where a console-supplied
     // input map must not be dropped.
     //
@@ -1387,7 +1390,7 @@ async function dispatchOrchestratorWorkflowOwned(
       throw err;
     }
   } else {
-    // Fresh foreground execution: web interactive workflows + all chat platforms.
+    // Fresh foreground execution for interactive workflows and foreground-default adapters.
     // Reaching this branch means `resumableRun?.working_path` is falsy, which implies
     // `willContinueExistingRun` was false and step 2 above ran. `freshCaptured` is
     // invariantly defined here — the capture-flow helper ran before this branch.
@@ -2109,8 +2112,7 @@ export async function handleMessage(
       }
     }
 
-    // Persist the inbound user message for non-web platforms (Slack/Telegram/
-    // GitHub/Discord/CLI) — the web adapter's route persists web turns itself.
+    // Persist inbound turns only when core owns message storage.
     // Placed AFTER every early return that declines the turn — deterministic
     // commands (including `/workflow approve|reject`), the stale-worktree guard and
     // the missing-project guard above — so only AI-bound turns get a user row (no
@@ -2124,7 +2126,7 @@ export async function handleMessage(
     // hoist that dependency first, the way `codebases` was hoisted here — putting
     // the refusal below the persist instead is what orphans the row.
     // Fire-and-forget: a DB failure must not break platform delivery (#1182).
-    if (!isWebAdapter(platform)) {
+    if (platform.capabilities.messagePersistence === 'core') {
       messageDb
         .addMessage(conversation.id, 'user', message, undefined, userId)
         .catch((e: unknown) => {
@@ -2874,10 +2876,8 @@ async function handleStreamMode(
   }
 
   // Text was already streamed — nothing more to send.
-  // Persist the assistant reply for non-web platforms so it appears in the
-  // Web UI conversation history. The web adapter persists through its
-  // MessagePersistence buffer; skip it here to avoid double-write (#1182).
-  if (!isWebAdapter(platform) && fullResponse) {
+  // Adapter-owned storage must not get a second copy of the assistant reply (#1182).
+  if (platform.capabilities.messagePersistence === 'core' && fullResponse) {
     messageDb.addMessage(conversation.id, 'assistant', fullResponse).catch((e: unknown) => {
       const err = e instanceof Error ? e : new Error(String(e));
       getLog().warn(
@@ -3138,10 +3138,8 @@ async function handleBatchMode(
   // No orchestrator commands — send the clean response
   getLog().debug({ messageLength: finalMessage.length }, 'sending_final_message');
   await platform.sendMessage(conversationId, finalMessage);
-  // Persist the assistant reply for non-web platforms so it appears in the
-  // Web UI conversation history. The web adapter persists through its
-  // MessagePersistence buffer; skip it here to avoid double-write (#1182).
-  if (!isWebAdapter(platform) && finalMessage) {
+  // Adapter-owned storage must not get a second copy of the assistant reply (#1182).
+  if (platform.capabilities.messagePersistence === 'core' && finalMessage) {
     messageDb.addMessage(conversation.id, 'assistant', finalMessage).catch((e: unknown) => {
       const err = e instanceof Error ? e : new Error(String(e));
       getLog().warn(

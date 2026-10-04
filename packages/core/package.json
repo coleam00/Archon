@@ -24,7 +24,9 @@
     "./services/*": "./src/services/*.ts",
     "./state/*": "./src/state/*.ts",
     "./schemas": "./src/schemas/index.ts",
-    "./schemas/*": "./src/schemas/*.ts"
+    "./schemas/*": "./src/schemas/*.ts",
+    "./platforms/registry": "./src/platforms/registry.ts",
+    "./platforms/types": "./src/platforms/types.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -257,6 +259,12 @@
     ],
     [
       "src/workflows/continuation-host.test.ts"
+    ],
+    [
+      "src/platforms/registry.test.ts"
+    ],
+    [
+      "src/db/isolation-environments.retention.integration.test.ts"
     ]
   ]
 }

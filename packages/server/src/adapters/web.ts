@@ -2,7 +2,7 @@
  * Web platform adapter implementing IPlatformAdapter with SSE stream management.
  * Bridge between the orchestrator and the React frontend via Server-Sent Events.
  */
-import type { IWebPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import type { PlatformStructuredEvent } from '@archon/workflows/deps';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
@@ -17,7 +17,11 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export class WebAdapter implements IWebPlatformAdapter {
+export class WebAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'adapter',
+    defaultWorkflowDispatch: 'background',
+  } as const;
   /**
    * Per-conversation running tool stack for SSE duration tracking.
    * Uses a Map of toolCallId → start info so parallel DAG nodes don't
@@ -279,6 +283,19 @@ export class WebAdapter implements IWebPlatformAdapter {
    */
   setupEventBridge(workerConversationId: string, parentConversationId: string): () => void {
     return this.workflowBridge.bridgeWorkerEvents(workerConversationId, parentConversationId);
+  }
+
+  async prepareBackgroundConversation(
+    context: Parameters<NonNullable<IPlatformAdapter['prepareBackgroundConversation']>>[0]
+  ): Promise<() => Promise<void>> {
+    const { workerConversationId, parentConversationId, conversationDbId } = context;
+    this.setConversationDbId(workerConversationId, conversationDbId);
+    const unsubscribe = this.setupEventBridge(workerConversationId, parentConversationId);
+    return async () => {
+      unsubscribe();
+      this.removeOutputCallback(workerConversationId);
+      await this.emitLockEvent(workerConversationId, false);
+    };
   }
 
   registerOutputCallback(conversationId: string, callback: (text: string) => void): void {

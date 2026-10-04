@@ -4,6 +4,7 @@
  * Note: These tests focus on argument parsing logic.
  * Full integration tests would require mocking the database and commands.
  */
+import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
 import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
@@ -1591,4 +1592,80 @@ describe('log output channel (#3444)', () => {
       await removeTempTree(root);
     }
   }, 30_000);
+});
+
+it('CLI cleanup retains historical Telegram workspaces with no adapter credentials', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-cli-retention-'));
+  const repo = join(root, 'repo');
+  const home = join(root, 'home');
+  const worktree = join(root, 'worktree');
+  mkdirSync(repo);
+  mkdirSync(home);
+  try {
+    expect(spawnSync('git', ['init', '-q', repo]).status).toBe(0);
+    expect(
+      spawnSync(
+        'git',
+        [
+          '-c',
+          'user.name=Test',
+          '-c',
+          'user.email=test@example.com',
+          'commit',
+          '--allow-empty',
+          '-qm',
+          'initial',
+        ],
+        { cwd: repo }
+      ).status
+    ).toBe(0);
+    expect(
+      spawnSync('git', ['worktree', 'add', '-qb', 'retained', worktree], { cwd: repo }).status
+    ).toBe(0);
+    const db = new SqliteAdapter(join(home, 'archon.db'));
+    try {
+      await db.query(
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb', 'repo', $1)",
+        [repo]
+      );
+      await db.query(
+        "INSERT INTO remote_agent_isolation_environments (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name, created_by_platform, created_at) VALUES ('retained', 'cb', 'thread', 'chat', 'worktree', $1, 'retained', 'telegram', datetime('now', '-30 days'))",
+        [worktree]
+      );
+    } finally {
+      await db.close();
+    }
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'isolation', 'cleanup', '7', '--cwd', repo],
+      {
+        cwd: repo,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: home,
+          ARCHON_TELEMETRY_DISABLED: '1',
+          DATABASE_URL: '',
+          TELEGRAM_BOT_TOKEN: '',
+          SLACK_BOT_TOKEN: '',
+          DISCORD_BOT_TOKEN: '',
+        },
+      }
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('No stale environments found.');
+    expect(existsSync(worktree)).toBe(true);
+    const verify = new Database(join(home, 'archon.db'), { readonly: true });
+    try {
+      expect(
+        verify
+          .query("SELECT status FROM remote_agent_isolation_environments WHERE id = 'retained'")
+          .get()
+      ).toEqual({ status: 'active' });
+    } finally {
+      verify.close();
+    }
+  } finally {
+    await removeTempTree(root);
+  }
 });

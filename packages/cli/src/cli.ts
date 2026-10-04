@@ -149,8 +149,12 @@ async function registerProviders(): Promise<void> {
 
 async function loadRoute<T>(
   loader: () => Promise<T>,
-  options: { providers?: boolean; database?: boolean } = {}
+  options: { providers?: boolean; database?: boolean; platformPolicies?: boolean } = {}
 ): Promise<T> {
+  if (options.providers || options.database || options.platformPolicies) {
+    const { registerBundledPlatformPolicies } = await import('@archon/adapters/platform-policies');
+    registerBundledPlatformPolicies();
+  }
   if (options.providers) await registerProviders();
   const route = await loader();
   if (options.database) databaseRouteLoaded = true;
@@ -434,7 +438,9 @@ async function main(): Promise<number> {
     if (command === 'workflow' && subcommand === 'test') {
       const target = positionals[2];
       try {
-        const { workflowTestCommand } = await loadRoute(() => import('./commands/workflow'));
+        const { workflowTestCommand } = await loadRoute(() => import('./commands/workflow'), {
+          platformPolicies: true,
+        });
         return await workflowTestCommand(cwd, target, { json: jsonFlag });
       } catch (error) {
         const err = error as Error;
@@ -1139,7 +1145,8 @@ async function main(): Promise<number> {
 
       case 'validate': {
         const { validateWorkflowsCommand, validateCommandsCommand } = await loadRoute(
-          () => import('./commands/validate')
+          () => import('./commands/validate'),
+          { platformPolicies: true }
         );
         switch (subcommand) {
           case 'workflows': {

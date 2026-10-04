@@ -1,3 +1,5 @@
+import { registerPlatformPolicy } from '../platforms/registry';
+import { registerTestPlatformPolicies } from '../test/mocks/platform-policies';
 import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { toBranchName } from '@archon/git';
@@ -305,6 +307,7 @@ describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () =
     days_since_created: 30,
   });
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockListActiveContainerEnvironments.mockReset();
     mockGetLiveRunOwningEnv.mockReset();
     mockGetLiveRunOwningEnv.mockImplementation(() => Promise.resolve(null));
@@ -357,6 +360,7 @@ describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () =
 
 describe('cleanup-service', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
@@ -764,6 +768,7 @@ describe('cleanup-service', () => {
 
 describe('runScheduledCleanup', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
@@ -805,102 +810,110 @@ describe('runScheduledCleanup', () => {
     expect(report.errors).toHaveLength(0);
   });
 
-  test('marks missing paths as destroyed and cleans up branch', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironmentWithCodebase({
-        id: 'env-123',
-        working_path: '/nonexistent/path',
-        branch_name: 'issue-42',
-        status: 'active',
-        created_by_platform: 'github',
-        created_at: new Date(),
-        codebase_default_cwd: '/workspace/repo',
-        codebase_id: 'codebase-1',
-        workflow_type: 'issue',
-        workflow_id: '42',
-        provider: 'worktree',
-        metadata: {},
-      }),
-    ]);
-    // worktreeExists returns false for both calls (runScheduledCleanup + removeEnvironment)
-    // (already default)
-    // removeEnvironment: getById returns the env
-    mockGetById.mockResolvedValueOnce(
-      makeEnvironment({
-        id: 'env-123',
-        codebase_id: 'codebase-1',
-        working_path: '/nonexistent/path',
-        branch_name: 'issue-42',
-        status: 'active',
-      })
-    );
-    // removeEnvironment: getCodebase for canonical repo path
-    mockGetCodebase.mockResolvedValueOnce(
-      makeCodebase({
-        id: 'codebase-1',
-        name: 'test-repo',
-        default_cwd: '/workspace/repo',
-      })
-    );
+  test.each(['github', 'matrix-chat'])(
+    'marks missing paths as destroyed and cleans up branch (%s)',
+    async platformId => {
+      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([
+        makeEnvironmentWithCodebase({
+          id: 'env-123',
+          working_path: '/nonexistent/path',
+          branch_name: 'issue-42',
+          status: 'active',
+          created_by_platform: platformId,
+          created_at: new Date(),
+          codebase_default_cwd: '/workspace/repo',
+          codebase_id: 'codebase-1',
+          workflow_type: 'issue',
+          workflow_id: '42',
+          provider: 'worktree',
+          metadata: {},
+        }),
+      ]);
+      // worktreeExists returns false for both calls (runScheduledCleanup + removeEnvironment)
+      // (already default)
+      // removeEnvironment: getById returns the env
+      mockGetById.mockResolvedValueOnce(
+        makeEnvironment({
+          id: 'env-123',
+          codebase_id: 'codebase-1',
+          working_path: '/nonexistent/path',
+          branch_name: 'issue-42',
+          status: 'active',
+        })
+      );
+      // removeEnvironment: getCodebase for canonical repo path
+      mockGetCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          id: 'codebase-1',
+          name: 'test-repo',
+          default_cwd: '/workspace/repo',
+        })
+      );
 
-    const report = await runScheduledCleanup();
+      const report = await runScheduledCleanup();
 
-    expect(report.removed).toContain('env-123 (path missing)');
-    // Should call destroy to clean up the branch
-    expect(mockDestroy).toHaveBeenCalledWith('/nonexistent/path', {
-      force: false,
-      branchName: 'issue-42',
-      canonicalRepoPath: '/workspace/repo',
-    });
-    expect(mockUpdateStatus).toHaveBeenCalledWith('env-123', 'destroyed');
-  });
+      expect(report.removed).toContain('env-123 (path missing)');
+      // Should call destroy to clean up the branch
+      expect(mockDestroy).toHaveBeenCalledWith('/nonexistent/path', {
+        force: false,
+        branchName: 'issue-42',
+        canonicalRepoPath: '/workspace/repo',
+      });
+      expect(mockUpdateStatus).toHaveBeenCalledWith('env-123', 'destroyed');
+    }
+  );
 
-  test('removes merged branches without uncommitted changes', async () => {
-    mockListAllActiveWithCodebase.mockResolvedValueOnce([
-      makeEnvironmentWithCodebase({
-        id: 'env-456',
-        working_path: '/workspace/repo/worktrees/pr-99',
-        branch_name: 'pr-99',
-        status: 'active',
-        created_by_platform: 'github',
-        created_at: new Date(),
-        codebase_default_cwd: '/workspace/repo',
-        codebase_id: 'codebase-1',
-        workflow_type: 'pr',
-        workflow_id: '99',
-        provider: 'worktree',
-        metadata: {},
-      }),
-    ]);
-    // worktreeExists returns true (path exists)
-    mockWorktreeExists.mockResolvedValue(true);
-    // getDefaultBranch returns 'main' (default)
-    // isBranchMerged returns true
-    mockIsBranchMerged.mockResolvedValueOnce(true);
-    // hasUncommittedChanges returns false (default)
-    // No conversations using it
-    // For removeEnvironment: getById returns the env
-    mockGetById.mockResolvedValueOnce(
-      makeEnvironment({
-        id: 'env-456',
-        codebase_id: 'codebase-1',
-        working_path: '/workspace/repo/worktrees/pr-99',
-        status: 'active',
-      })
-    );
-    // removeEnvironment: getCodebase for canonical repo path
-    mockGetCodebase.mockResolvedValueOnce(
-      makeCodebase({
-        id: 'codebase-1',
-        name: 'test-repo',
-        default_cwd: '/workspace/repo',
-      })
-    );
+  test.each(['github', 'matrix-chat'])(
+    'removes merged branches without uncommitted changes (%s)',
+    async platformId => {
+      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      mockListAllActiveWithCodebase.mockResolvedValueOnce([
+        makeEnvironmentWithCodebase({
+          id: 'env-456',
+          working_path: '/workspace/repo/worktrees/pr-99',
+          branch_name: 'pr-99',
+          status: 'active',
+          created_by_platform: platformId,
+          created_at: new Date(),
+          codebase_default_cwd: '/workspace/repo',
+          codebase_id: 'codebase-1',
+          workflow_type: 'pr',
+          workflow_id: '99',
+          provider: 'worktree',
+          metadata: {},
+        }),
+      ]);
+      // worktreeExists returns true (path exists)
+      mockWorktreeExists.mockResolvedValue(true);
+      // getDefaultBranch returns 'main' (default)
+      // isBranchMerged returns true
+      mockIsBranchMerged.mockResolvedValueOnce(true);
+      // hasUncommittedChanges returns false (default)
+      // No conversations using it
+      // For removeEnvironment: getById returns the env
+      mockGetById.mockResolvedValueOnce(
+        makeEnvironment({
+          id: 'env-456',
+          codebase_id: 'codebase-1',
+          working_path: '/workspace/repo/worktrees/pr-99',
+          status: 'active',
+        })
+      );
+      // removeEnvironment: getCodebase for canonical repo path
+      mockGetCodebase.mockResolvedValueOnce(
+        makeCodebase({
+          id: 'codebase-1',
+          name: 'test-repo',
+          default_cwd: '/workspace/repo',
+        })
+      );
 
-    const report = await runScheduledCleanup();
+      const report = await runScheduledCleanup();
 
-    expect(report.removed).toContain('env-456 (merged)');
-  });
+      expect(report.removed).toContain('env-456 (merged)');
+    }
+  );
 
   test('passes deleteRemoteBranch: true for merged branches in scheduled cleanup', async () => {
     mockListAllActiveWithCodebase.mockResolvedValueOnce([
@@ -1112,6 +1125,29 @@ describe('runScheduledCleanup', () => {
 
     // Should not be in removed (Telegram is persistent)
     expect(report.removed).toHaveLength(0);
+  });
+
+  test('scheduled cleanup retains a declared adapter and removes an age-based control', async () => {
+    registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+    const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const retained = makeEnvironmentWithCodebase({
+      id: 'retained',
+      created_by_platform: 'matrix-chat',
+      created_at: old,
+    });
+    const ageBased = makeEnvironmentWithCodebase({
+      id: 'age-based',
+      created_by_platform: 'new-forge',
+      created_at: old,
+    });
+    mockListAllActiveWithCodebase.mockResolvedValueOnce([retained, ageBased]);
+    mockWorktreeExists.mockResolvedValue(true);
+    mockGetById.mockResolvedValue(ageBased);
+    const report = await runScheduledCleanup();
+    expect(report.removed).toEqual(['age-based (stale)']);
+    expect(report.errors).toEqual([]);
+    expect(mockUpdateStatus).toHaveBeenCalledTimes(1);
+    expect(mockUpdateStatus).toHaveBeenCalledWith('age-based', 'destroyed');
   });
 
   test('continues processing after error on one environment', async () => {
@@ -1595,6 +1631,7 @@ describe('SESSION_RETENTION_DAYS', () => {
 
 describe('scheduler lifecycle', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     stopCleanupScheduler(); // Ensure clean state
     mockListAllActiveWithCodebase.mockClear();
     mockListAllActiveWithCodebase.mockResolvedValue([]); // Prevent actual cleanup during tests
@@ -1631,6 +1668,7 @@ describe('scheduler lifecycle', () => {
 
 describe('getWorktreeStatusBreakdown', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockGetDefaultBranch.mockClear();
     mockIsBranchMerged.mockClear();
@@ -1702,26 +1740,30 @@ describe('getWorktreeStatusBreakdown', () => {
     );
   });
 
-  test('excludes telegram from stale count', async () => {
-    mockListByCodebaseWithAge.mockResolvedValueOnce([
-      makeEnvironmentWithAge({
-        id: 'env-telegram',
-        branch_name: 'telegram-branch',
-        created_by_platform: 'telegram',
-        days_since_activity: 100,
-        working_path: '/path',
-        status: 'active',
-      }),
-    ]);
+  test.each(['telegram', 'matrix-chat'])(
+    'excludes telegram from stale count (%s)',
+    async platformId => {
+      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      mockListByCodebaseWithAge.mockResolvedValueOnce([
+        makeEnvironmentWithAge({
+          id: 'env-telegram',
+          branch_name: 'telegram-branch',
+          created_by_platform: platformId,
+          days_since_activity: 100,
+          working_path: '/path',
+          status: 'active',
+        }),
+      ]);
 
-    // getDefaultBranch returns 'main' (default from beforeEach)
-    // isBranchMerged returns false (default from beforeEach)
+      // getDefaultBranch returns 'main' (default from beforeEach)
+      // isBranchMerged returns false (default from beforeEach)
 
-    const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
+      const breakdown = await getWorktreeStatusBreakdown('codebase-1', '/workspace/repo');
 
-    expect(breakdown.stale).toBe(0);
-    expect(breakdown.active).toBe(1);
-  });
+      expect(breakdown.stale).toBe(0);
+      expect(breakdown.active).toBe(1);
+    }
+  );
 
   test('returns empty breakdown for empty codebase', async () => {
     mockListByCodebaseWithAge.mockResolvedValueOnce([]);
@@ -1801,6 +1843,7 @@ describe('getWorktreeStatusBreakdown', () => {
 
 describe('cleanupMergedWorktrees', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2388,6 +2431,7 @@ describe('cleanupMergedWorktrees', () => {
 
 describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockListAllActiveWithCodebase.mockClear();
     mockWorktreeExists.mockClear();
     mockGetDefaultBranch.mockClear();
@@ -2536,6 +2580,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
 
 describe('onConversationClosed', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockUpdateStatus.mockClear();
@@ -2821,6 +2866,7 @@ describe('onConversationClosed', () => {
 
 describe('cleanupStaleWorktrees', () => {
   beforeEach(() => {
+    registerTestPlatformPolicies();
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2866,23 +2912,27 @@ describe('cleanupStaleWorktrees', () => {
     expect(result.removed).toContain('stale-branch');
   });
 
-  test('skips telegram worktrees even if old', async () => {
-    mockListByCodebaseWithAge.mockResolvedValueOnce([
-      makeEnvironmentWithAge({
-        id: 'env-telegram',
-        branch_name: 'telegram-branch',
-        working_path: '/workspace/repo/worktrees/telegram-branch',
-        created_by_platform: 'telegram',
-        days_since_activity: 100,
-        status: 'active',
-      }),
-    ]);
+  test.each(['telegram', 'matrix-chat'])(
+    'skips telegram worktrees even if old (%s)',
+    async platformId => {
+      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      mockListByCodebaseWithAge.mockResolvedValueOnce([
+        makeEnvironmentWithAge({
+          id: 'env-telegram',
+          branch_name: 'telegram-branch',
+          working_path: '/workspace/repo/worktrees/telegram-branch',
+          created_by_platform: platformId,
+          days_since_activity: 100,
+          status: 'active',
+        }),
+      ]);
 
-    const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
+      const result = await cleanupStaleWorktrees('codebase-1', '/workspace/repo');
 
-    expect(result.removed).toHaveLength(0);
-    expect(result.skipped).toHaveLength(0);
-  });
+      expect(result.removed).toHaveLength(0);
+      expect(result.skipped).toHaveLength(0);
+    }
+  );
 
   test('skips worktrees that are not stale', async () => {
     mockListByCodebaseWithAge.mockResolvedValueOnce([

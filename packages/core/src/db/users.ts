@@ -11,6 +11,7 @@
  * — the UNIQUE constraint causes the second writer to throw, and we recover
  * by re-SELECTing the winner's identity row.
  */
+import { identityPlatformSchema } from '../schemas/user';
 import { pool, getDatabase, getDialect } from './connection';
 import type { IdentityPlatform, User, UserIdentity } from '../types';
 import { createLogger } from '@archon/paths';
@@ -73,6 +74,7 @@ export async function findOrCreateUserByPlatformIdentity(
   platformUserId: string,
   displayName?: string
 ): Promise<User> {
+  identityPlatformSchema.parse(platform);
   getLog().debug({ platform, platformUserId }, 'user.create_started');
 
   const existing = await selectIdentity(platform, platformUserId);
