@@ -7,19 +7,20 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 const track = trackTempRoots();
 
-for (const entry of ['config.yaml', '.hidden', 'empty-directory']) {
-  test(`ARCHON_HOME guard rejects ${entry}`, async () => {
-    const result = await runGuardFixture(`
-      const path = join(getArchonHome(), ${JSON.stringify(entry)});
-      ${entry === 'empty-directory' ? 'mkdirSync(path)' : "writeFileSync(path, 'leak')"};
-    `);
-    expect(result.exitCode).toBe(1);
-    expect(result.output).toContain('Adapter test wrote under guard-owned ARCHON_HOME');
+test('ARCHON_HOME guard rejects files, dotfiles and empty directories', async () => {
+  const result = await runGuardFixture(`
+    writeFileSync(join(getArchonHome(), 'config.yaml'), 'leak');
+    writeFileSync(join(getArchonHome(), '.hidden'), 'leak');
+    mkdirSync(join(getArchonHome(), 'empty-directory'));
+  `);
+  expect(result.exitCode).toBe(1);
+  expect(result.output).toContain('Adapter test wrote under guard-owned ARCHON_HOME');
+  for (const entry of ['config.yaml', '.hidden', 'empty-directory']) {
     expect(result.output).toContain(join(result.guardedHome, entry));
-    expect(result.output).toContain('mock.module() merges');
-    expect(existsSync(result.guardedHome)).toBe(false);
-  });
-}
+  }
+  expect(result.output).toContain('mock.module() merges');
+  expect(existsSync(result.guardedHome)).toBe(false);
+});
 
 test('ARCHON_HOME guard allows a test-owned temporary home', async () => {
   const result = await runGuardFixture(`
