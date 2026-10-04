@@ -2408,6 +2408,20 @@ describe('PiProvider', () => {
           },
         },
       ],
+      forkTurn: {
+        name: 'forked session',
+        source: 'source-id',
+        run: () => {
+          mockSessionList.mockImplementationOnce(async () => [
+            { id: 'source-id', path: '/sessions/source-id.jsonl', cwd: '/tmp' },
+          ]);
+          resetScript(scriptedAgentEnd());
+          return new PiProvider().sendQuery('hi', '/tmp', 'source-id', {
+            model: 'google/gemini-2.5-pro',
+            forkSession: true,
+          });
+        },
+      },
       toolTurn: {
         name: 'interrupted tool turn',
         run: () => {
