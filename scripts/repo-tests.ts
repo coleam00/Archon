@@ -5,9 +5,9 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
 /**
  * Runs the repository's tests, from the repository root.
  *
- * With no arguments it walks `ROOT_TEST_PLAN`, which is the work the
- * `bun --filter '*' --parallel test && bun test ./scripts/ && bun test ./.archon/scripts/`
- * chain used to do. The chain had to go because `bun run` appends its arguments to
+ * With no arguments it walks `ROOT_TEST_PLAN`. Workspace packages run in parallel,
+ * followed by the web suite and root-owned tests. The former shell chain had to go
+ * because `bun run` appends its arguments to
  * whatever the script expands to, so `bun run test <path>` ran the whole chain and then
  * tacked the path onto its last step — green even when the path was wrong.
  *
@@ -33,8 +33,12 @@ export const ROOT_TEST_PLAN: readonly RootTestStep[] = [
   { kind: 'root', selectors: ['./.archon/scripts/'] },
 ];
 
-/** Each workspace runs its own `test` script, which owns that package's group splitting. */
-const WORKSPACE_TEST_COMMAND = ['bun', '--filter', '*', '--parallel', 'test'];
+// Cold Chrome startup competes with the other suites' subprocesses on CI runners (#1684).
+// Run the web suite after them, preserving its existing assertions and timeout budgets.
+const WORKSPACE_TEST_COMMANDS = [
+  ['bun', '--filter', '*', '--filter', '!@archon/web', '--parallel', 'test'],
+  ['bun', '--filter', '@archon/web', 'test'],
+];
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -109,10 +113,12 @@ async function run(command: string[], cwd: string): Promise<number> {
 
 async function runPlan(): Promise<number> {
   for (const step of ROOT_TEST_PLAN) {
-    const command =
-      step.kind === 'workspaces' ? WORKSPACE_TEST_COMMAND : bunTestCommand(step.selectors);
-    const code = await run(command, REPO_ROOT);
-    if (code !== 0) return code;
+    const commands =
+      step.kind === 'workspaces' ? WORKSPACE_TEST_COMMANDS : [bunTestCommand(step.selectors)];
+    for (const command of commands) {
+      const code = await run(command, REPO_ROOT);
+      if (code !== 0) return code;
+    }
   }
   return 0;
 }
