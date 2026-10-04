@@ -1571,7 +1571,7 @@ describe('ClaudeProvider', () => {
       spy.mockRestore();
     });
 
-    test('container run SKIPS host binary resolution (works when host Claude is absent)', async () => {
+    test('container run skips host binary resolution even with a configured host path', async () => {
       // Simulate a compiled binary with no host Claude — resolveClaudeBinaryPath
       // would throw. A container run must NOT call it (Claude is baked into the
       // runner image).
@@ -1585,6 +1585,7 @@ describe('ClaudeProvider', () => {
       // Must not throw at resolution time.
       for await (const _ of client.sendQuery('test', '/workspace', undefined, {
         execContext: { kind: 'container', containerId: 'c-1' },
+        assistantConfig: { claudeBinaryPath: '/missing-host-claude' },
       })) {
         // consume
       }
