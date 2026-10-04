@@ -5,7 +5,7 @@ import { K } from '../store/keys';
 
 const dismissalKey = (version: string): string => `console:updateDismissed:${version}`;
 
-export function dismissUpdate(version: string): void {
+function dismissUpdate(version: string): void {
   try {
     localStorage.setItem(dismissalKey(version), 'true');
   } catch (error) {

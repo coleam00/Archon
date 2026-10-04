@@ -1,7 +1,7 @@
 import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import { join } from 'path';
 import { mkdirSync, writeFileSync, readFileSync } from 'fs';
-import { tmpdir } from 'os';
+import { tmpdir, hostname } from 'os';
 import { removeTempTree } from './test-utils';
 import {
   isNewerVersion,
@@ -179,7 +179,11 @@ describe('checkForUpdate', () => {
       lastNoticeShownAt: Date.now(),
     };
     writeFileSync(cachePath, JSON.stringify(cache));
-    writeFileSync(`${cachePath}.lock`, '');
+    mkdirSync(`${cachePath}.locks`);
+    writeFileSync(
+      join(`${cachePath}.locks`, `${encodeURIComponent(hostname())}!${process.pid}!test`),
+      ''
+    );
     const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ tag_name: 'v0.6.0', html_url: 'https://example.com' }))
     );
@@ -187,6 +191,68 @@ describe('checkForUpdate', () => {
       expect((await checkForUpdate('0.4.0'))?.latestVersion).toBe('0.6.0');
       expect(JSON.parse(readFileSync(cachePath, 'utf8'))).toEqual(cache);
     } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
+  test('a killed owner releases both refresh persistence and notice claims', async () => {
+    const cachePath = join(testDir, 'update-check.json');
+    writeFileSync(
+      cachePath,
+      JSON.stringify({
+        latestVersion: '0.5.0',
+        releaseUrl: 'https://example.com',
+        checkedAt: Date.now(),
+      })
+    );
+    const owner = Bun.spawn(
+      [
+        process.execPath,
+        '--eval',
+        `
+      import { spyOn } from 'bun:test';
+      import * as fs from 'node:fs';
+      import { takeCachedUpdateNotice } from ${JSON.stringify(join(import.meta.dir, 'update-check.ts'))};
+      spyOn(fs, 'writeFileSync').mockImplementation(() => {
+        fs.writeSync(1, 'locked');
+        fs.readSync(0, Buffer.alloc(1), 0, 1, null);
+      });
+      takeCachedUpdateNotice('0.4.0');
+    `,
+      ],
+      {
+        env: { ...process.env, ARCHON_HOME: testDir },
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ tag_name: 'v0.6.0', html_url: 'https://example.com' }))
+    );
+    try {
+      const reader = owner.stdout.getReader();
+      expect(new TextDecoder().decode((await reader.read()).value)).toBe('locked');
+      reader.releaseLock();
+      owner.kill('SIGKILL');
+      await owner.exited;
+      expect(takeCachedUpdateNotice('0.4.0')?.latestVersion).toBe('0.5.0');
+      const claimed = JSON.parse(readFileSync(cachePath, 'utf8'));
+      writeFileSync(cachePath, JSON.stringify({ ...claimed, checkedAt: 0 }));
+      // Recreate the same dead claim to exercise refresh recovery independently.
+      writeFileSync(
+        join(`${cachePath}.locks`, `${encodeURIComponent(hostname())}!${owner.pid}!dead`),
+        ''
+      );
+      await checkForUpdate('0.4.0');
+      const refreshed = JSON.parse(readFileSync(cachePath, 'utf8'));
+      expect(refreshed.latestVersion).toBe('0.6.0');
+      expect(refreshed.lastNoticeShownAt).toBe(claimed.lastNoticeShownAt);
+      expect(getCachedUpdateCheck('0.4.0')?.latestVersion).toBe('0.6.0');
+      expect(takeCachedUpdateNotice('0.4.0')).toBeNull();
+    } finally {
+      owner.kill();
+      await owner.exited;
       fetchSpy.mockRestore();
     }
   });

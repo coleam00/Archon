@@ -1,5 +1,15 @@
 import { join } from 'path';
-import { readFileSync, writeFileSync, mkdirSync, openSync, closeSync, unlinkSync } from 'fs';
+import { randomUUID } from 'node:crypto';
+import { hostname } from 'node:os';
+import {
+  readFileSync,
+  writeFileSync,
+  mkdirSync,
+  openSync,
+  closeSync,
+  unlinkSync,
+  readdirSync,
+} from 'fs';
 import { getArchonHome } from './archon-paths';
 import { createLogger } from './logger';
 
@@ -76,25 +86,40 @@ function writeCache(cache: UpdateCheckCache): boolean {
   }
 }
 
-// Both release refreshes and notice claims must preserve the shared notice timestamp.
+// Unique claim files let contenders remove dead owners without unlinking a replacement lock.
 function withCacheLock<T>(claim: () => T): T | null {
-  const lockPath = `${getCachePath()}.lock`;
-  let lock: number;
+  const lockDir = `${getCachePath()}.locks`;
+  const ownerHost = encodeURIComponent(hostname());
+  const ownerFile = `${ownerHost}!${process.pid}!${randomUUID()}`;
+  const lockPath = join(lockDir, ownerFile);
   try {
-    mkdirSync(getArchonHome(), { recursive: true });
-    lock = openSync(lockPath, 'wx');
+    mkdirSync(lockDir, { recursive: true });
+    closeSync(openSync(lockPath, 'wx'));
+    for (const entry of readdirSync(lockDir)) {
+      if (entry === ownerFile) continue;
+      const [host, pidText] = entry.split('!');
+      const pid = Number(pidText);
+      if (host !== ownerHost || !Number.isInteger(pid) || pid <= 0) return null;
+      try {
+        process.kill(pid, 0);
+        return null;
+      } catch (err) {
+        if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH')) return null;
+      }
+      try {
+        unlinkSync(join(lockDir, entry));
+      } catch (err) {
+        if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) throw err;
+      }
+    }
+    return claim();
   } catch (err) {
     log.debug({ err }, 'update_check.cache_lock_unavailable');
     return null;
-  }
-  try {
-    return claim();
   } finally {
     try {
-      closeSync(lock);
       unlinkSync(lockPath);
     } catch (err) {
-      // Leave an unreleasable lock in place: skipping a notice is safer than duplicating it.
       log.debug({ err }, 'update_check.cache_lock_release_failed');
     }
   }

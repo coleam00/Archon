@@ -39,6 +39,24 @@ irm https://archon.diy/install.ps1 | iex
 archon version
 ```
 
+## Docker
+
+For the release image shown in the installation guide, pull the new image before
+starting another container:
+
+```bash
+docker pull ghcr.io/coleam00/archon:latest
+docker run --rm -v "$PWD:/workspace" ghcr.io/coleam00/archon:latest version
+```
+
+For a long-running container, stop and recreate it using the same volumes,
+environment, and ports as the original container. Restarting an existing container
+does not change its image. Keep your data volumes.
+
+The repository's Docker Compose deployment builds from source. Follow its
+[update instructions](/deployment/docker/#update), retaining the profiles you
+used for deployment; rebuilding and recreating the app loads the updated source.
+
 ## From source
 
 In your Archon checkout, first check for local changes:
