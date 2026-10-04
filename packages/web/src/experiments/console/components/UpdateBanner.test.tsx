@@ -26,11 +26,13 @@ test(
     const result = new Promise<string>(resolve => {
       complete = resolve;
     });
+    const requests: string[] = [];
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
         const path = new URL(request.url).pathname;
+        requests.push(path);
         if (path === '/result') {
           complete(await request.text());
           return new Response('ok');
@@ -68,7 +70,15 @@ test(
       ],
       { stdout: 'ignore', stderr: 'pipe' }
     );
-    const diagnostics = new Response(child.stderr).text();
+    let diagnostics = '';
+    const decoder = new TextDecoder();
+    void child.stderr.pipeTo(
+      new WritableStream<Uint8Array>({
+        write(chunk): void {
+          diagnostics += decoder.decode(chunk);
+        },
+      })
+    );
     const timeout = setTimeout(() => {
       complete('browser did not report within 10 seconds');
     }, 10000);
@@ -78,9 +88,9 @@ test(
         child.exited.then(code => `browser exited early: ${code}`),
       ]);
       if (outcome !== 'passed') {
-        child.kill();
-        await child.exited;
-        throw new Error(`${outcome}\n${await diagnostics}`);
+        throw new Error(
+          `${outcome}\nBrowser: ${browser}\nURL: ${server.url.href}\nRequests: ${requests.join(', ')}\n${diagnostics}`
+        );
       }
       expect(outcome).toBe('passed');
     } finally {
