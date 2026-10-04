@@ -251,6 +251,12 @@
     [
       "src/orchestrator/prompt-builder.test.ts",
       "src/schemas/index.test.ts"
+    ],
+    [
+      "src/workflows/headless-platform.test.ts"
+    ],
+    [
+      "src/workflows/continuation-host.test.ts"
     ]
   ]
 }

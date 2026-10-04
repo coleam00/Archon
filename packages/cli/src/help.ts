@@ -158,6 +158,40 @@ const commandHelp: HelpEntry[] = [
   },
   {
     command: 'workflow',
+    subcommand: 'wake',
+    spec: 'workflow wake [--watch] [--json]',
+    description: 'Wake due continuations across this install',
+    scopedFlags: [
+      {
+        spec: '--watch',
+        description: 'Repeat serial passes every 5 seconds; drain execution on shutdown',
+      },
+      { spec: '--json', description: 'One JSON document per pass' },
+      { spec: 'schedule install|remove', description: 'Manage a macOS wake timer' },
+      {
+        spec: '--interval <seconds>',
+        description: 'Timer interval (positive integer, default: 5)',
+      },
+    ],
+  },
+  {
+    command: 'workflow',
+    subcommand: 'signal',
+    spec: 'workflow signal <full-run-id>',
+    description: 'Signal and wake one exact event wait occurrence',
+    scopedFlags: [
+      { spec: '--event <name>', description: 'Required event name' },
+      {
+        spec: '--resume-at <ISO timestamp>',
+        description: 'Required occurrence deadline from the run',
+      },
+      { spec: '--data <JSON>', description: 'Optional signal payload' },
+      { spec: '--json', description: 'Report signal and execution separately' },
+    ],
+  },
+
+  {
+    command: 'workflow',
     subcommand: 'cancel',
     spec: 'workflow cancel <run-id>',
     description: 'Stop a running workflow (stops an owning process first)',

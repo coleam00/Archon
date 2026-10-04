@@ -54,6 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The console's per-node cost no longer counts a composed fan-out, a loop group or a retried node twice. A node whose cost restates spend other nodes already show now reads `total $X` instead of looking like its own spend, so the per-node costs that are not marked as totals add up to the run total. (#3657)
 - Codex title generation now starts with no ambient skills catalog, plugins, apps or MCP servers and a read-only sandbox. Native guidance and provider settings still load; failures still fall back to a truncated message title. (#3626)
 - Workflow nodes whose output only mentions a credit balance or session limit no longer fail as out of credit. Quota failures now come only from the provider's typed failure, and the node error includes the reset time when reported and tells the operator to resume once the limit reopens. (#3619)
 - Parallel nodes that all declare `mutates_checkout: false` now run in parallel instead of one at a time. When one of them changes the checkout, every guarded node running at that moment fails, and the error names the other guarded nodes that ran in the layer, since the change may not be the failing node's alone. A layer that mixes guarded nodes with any node that isn't checkout-guarded still runs one node at a time. (#3606)

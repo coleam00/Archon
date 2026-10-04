@@ -15,7 +15,7 @@ import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
-import { HeadlessPlatform } from '../adapters/headless';
+import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 
 const log = createLogger('resource-start-hosting');
 
