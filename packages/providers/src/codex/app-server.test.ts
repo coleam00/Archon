@@ -237,6 +237,7 @@ describe('Codex native credential check', () => {
     { type: 'chatgpt', planType: 'a-plan-this-codex-does-not-know' },
     { type: 'amazonBedrock' },
     { type: 'apiKey', aFieldThisCodexDoesNotKnow: true },
+    { type: 'aKindThisCodexDoesNotKnow' },
   ]) {
     test(`fields the check does not read do not matter: ${JSON.stringify(account)}`, async () => {
       expect(await check({ accountResponse: { account, requiresOpenaiAuth: true } })).toEqual({
@@ -248,8 +249,7 @@ describe('Codex native credential check', () => {
   for (const accountResponse of [
     {},
     null,
-    { account: {}, requiresOpenaiAuth: true },
-    { account: { type: 'aKindThisCodexDoesNotKnow' }, requiresOpenaiAuth: true },
+    { account: 'chatgpt', requiresOpenaiAuth: true },
     { account: null },
   ]) {
     test(`malformed account response ${JSON.stringify(accountResponse)} is check_failed`, async () => {

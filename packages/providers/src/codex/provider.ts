@@ -3,7 +3,6 @@
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
 import { z } from 'zod';
-import type { Account } from './protocol/v2/Account';
 import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import type { CredentialStatus } from '@archon/provider-contract';
 import {
@@ -64,22 +63,15 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-const accountTypes = {
-  apiKey: 'apiKey',
-  chatgpt: 'chatgpt',
-  amazonBedrock: 'amazonBedrock',
-} satisfies { [Kind in Account['type']]: Kind };
-
 /**
- * The `account/read` fields the login check decides on. The account's other fields (plan,
- * email) are left unvalidated, so a Codex that adds a plan or a field still reads as logged in.
+ * The `account/read` fields the login check decides on. The account's own fields (type,
+ * plan, email) are left unvalidated, so a Codex that adds an account type, a plan or a
+ * field still reads as logged in.
  */
 const accountResponseSchema = z.object({
-  account: z.object({ type: z.enum(accountTypes) }).nullable(),
+  account: z.object({}).nullable(),
   requiresOpenaiAuth: z.boolean(),
-}) satisfies z.ZodType<
-  Pick<GetAccountResponse, 'requiresOpenaiAuth'> & { account: Pick<Account, 'type'> | null }
->;
+}) satisfies z.ZodType<Pick<GetAccountResponse, 'requiresOpenaiAuth'>>;
 
 type CodexConfig = Record<string, JsonValue>;
 
