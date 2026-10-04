@@ -67,7 +67,11 @@ import type { ModelRuntime as PiModelRuntime } from '@earendil-works/pi-coding-a
 
 import { trackTempRoots } from '@archon/paths/test-utils';
 
-import { buildCustomProviderModelsPath, createRequestModelRuntime } from './request-auth';
+import {
+  buildCustomProviderModelsPath,
+  createRequestModelRuntime,
+  getUserModelsStorePath,
+} from './request-auth';
 
 interface ModelRuntimeCtor {
   create(options?: {
@@ -454,6 +458,58 @@ describe('buildCustomProviderModelsPath integration with the real pi-coding-agen
       expect(readdirSync(perCallDir)).toHaveLength(1);
       release();
       expect(readdirSync(perCallDir)).toEqual([]);
+    }
+  );
+
+  test.skipIf(!realSdkAvailable)(
+    "the per-call runtime reads the user's models-store.json, not one beside the per-call file",
+    async () => {
+      // Pi derives the catalog store from dirname(modelsPath) unless told
+      // otherwise; a model the user's Pi learned into models-store.json must
+      // still resolve when the runtime reads a per-call models.json.
+      const userDir = makeUserModelsDir({
+        mygw: {
+          baseUrl: 'https://gateway.example/v1',
+          api: 'openai-completions',
+          apiKey: '${MYGW_API_KEY}',
+          models: [{ id: 'demo' }],
+        },
+      });
+      expect(getUserModelsStorePath()).toBe(join(userDir, 'models-store.json'));
+      writeFileSync(
+        getUserModelsStorePath(),
+        JSON.stringify({
+          openrouter: {
+            models: [
+              {
+                id: 'archon-test/store-only-model',
+                name: 'Archon store-only test model',
+                api: 'openai-completions',
+                baseUrl: 'https://openrouter.ai/api/v1',
+                provider: 'openrouter',
+                reasoning: false,
+                input: ['text'],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 131072,
+                maxTokens: 32768,
+              },
+            ],
+            checkedAt: Date.now(),
+            lastModified: Date.now(),
+          },
+        })
+      );
+      const ModelRuntime = (await loadRealModelRuntime()) as unknown as typeof PiModelRuntime;
+      const { runtime, release } = await createRequestModelRuntime(
+        options => ModelRuntime.create(options),
+        undefined,
+        { provider: 'mygw', requestEnv: { MYGW_API_KEY: 'request-secret' }, protectedEnvKeys: [] }
+      );
+      try {
+        expect(runtime.getModel('openrouter', 'archon-test/store-only-model')).toBeDefined();
+      } finally {
+        release();
+      }
     }
   );
 
