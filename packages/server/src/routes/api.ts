@@ -3,7 +3,7 @@
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
 
-import { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
@@ -4319,13 +4319,16 @@ export function registerApiRoutes(
         parentPlatformId = parentConv?.platform_conversation_id;
       }
 
+      const terminalRecord = getTerminalRecord(run.status, events);
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
-          terminal_record: getTerminalRecord(run.status, events),
+          terminal_record: terminalRecord,
+          // The console reads node state from here and keeps no fold of its own.
+          nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
         },
         events,
       });

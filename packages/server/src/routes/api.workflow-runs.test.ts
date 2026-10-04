@@ -1,4 +1,8 @@
-import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
+import {
+  RUN_GRAPH_METADATA_KEY,
+  terminalRecordSchema,
+} from '@archon/workflows/schemas/terminal-record';
+import { buildTerminalRecord } from '@archon/workflows/terminal-record';
 import { describe, test, expect, mock, beforeAll, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
@@ -1632,6 +1636,87 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(response.status).toBe(200);
     const body = (await response.json()) as { run: { terminal_record: unknown } };
     expect(body.run.terminal_record).toBeNull();
+  });
+
+  describe('serves the engine node states the console renders', () => {
+    // The #3544 workflow: `prepare` is always_run, `flaky` fails on its first try.
+    const graphRun = {
+      ...MOCK_FAILED_RUN,
+      metadata: { [RUN_GRAPH_METADATA_KEY]: { node_ids: ['prepare', 'flaky'] } },
+    };
+    let seq = 0;
+    const event = (event_type: string, step_name: string | null, data = {}): MockWorkflowEvent => ({
+      id: `event-${++seq}`,
+      workflow_run_id: graphRun.id,
+      event_type,
+      step_index: null,
+      step_name,
+      data,
+      created_at: NOW_DATE.toISOString(),
+    });
+    const firstAttemptThenResetOnResume = (): MockWorkflowEvent[] => [
+      event('node_started', 'prepare'),
+      event('node_completed', 'prepare'),
+      event('node_started', 'flaky'),
+      event('node_failed', 'flaky', { error: 'flaky failed' }),
+      event('workflow_failed', null),
+      event('workflow_resumed', null),
+      event('workflow_started', null),
+      event('node_always_run_reset', 'prepare'),
+    ];
+    async function getNodes(run: MockWorkflowRun, events: MockWorkflowEvent[]) {
+      mockGetWorkflowRun.mockImplementationOnce(async () => run);
+      mockListWorkflowEvents.mockImplementationOnce(async () => events);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}`);
+      expect(response.status).toBe(200);
+      return (
+        (await response.json()) as {
+          run: { nodes: unknown; terminal_record: { nodes: unknown } | null };
+        }
+      ).run;
+    }
+
+    test('a node reset on resume is pending while the resumed run is active', async () => {
+      const events = firstAttemptThenResetOnResume();
+      const run = await getNodes({ ...graphRun, status: 'running' }, events);
+      expect(run.terminal_record).toBeNull();
+      expect(run.nodes).toEqual([
+        { node_id: 'prepare', state: 'pending' },
+        { node_id: 'flaky', state: 'failed', error: 'flaky failed' },
+      ]);
+      const record = await buildTerminalRecord({ run: graphRun, events });
+      expect(run.nodes).toEqual(record.nodes);
+    });
+
+    test('a resumed node whose re-run fails is failed, as the terminal record says', async () => {
+      const events = [
+        ...firstAttemptThenResetOnResume(),
+        event('node_started', 'prepare'),
+        event('node_failed', 'prepare', { error: 'prepare failed' }),
+      ];
+      const record = await buildTerminalRecord({ run: graphRun, events });
+      const run = await getNodes(graphRun, [
+        ...events,
+        event('workflow_failed', null, { terminal_record: record }),
+      ]);
+      expect(run.terminal_record?.nodes).toEqual(record.nodes);
+      expect(run.nodes).toEqual(record.nodes);
+      expect(run.nodes).toContainEqual({
+        node_id: 'prepare',
+        state: 'failed',
+        error: 'prepare failed',
+      });
+    });
+
+    test('a run recorded before terminal records still lists its nodes', async () => {
+      const run = await getNodes(MOCK_FAILED_RUN, [
+        event('node_started', 'build'),
+        event('node_completed', 'build'),
+      ]);
+      expect(run.terminal_record).toBeNull();
+      expect(run.nodes).toEqual([{ node_id: 'build', state: 'completed' }]);
+    });
   });
 
   test('does not disguise an event query failure as an absent terminal record', async () => {
