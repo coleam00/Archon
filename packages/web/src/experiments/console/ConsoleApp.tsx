@@ -13,6 +13,8 @@ import { SettingsPage } from './routes/SettingsPage';
 import { invalidate } from './store/cache';
 import { K } from './store/keys';
 import { useKeymap, type Binding } from './lib/keymap';
+import { useDashboardSSE } from './lib/sse';
+import { useRunAttentionAlerts } from './lib/attention-alerts';
 import { SHORTCUTS } from './lib/shortcuts';
 import './theme.css';
 
@@ -23,6 +25,7 @@ export function ConsoleApp(): ReactElement {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const [railOpen, setRailOpen] = useState(false);
+  useDashboardSSE(useRunAttentionAlerts());
   useEffect(() => {
     setRailOpen(false);
   }, [pathname]);
