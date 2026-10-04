@@ -757,7 +757,7 @@ export class PiProvider implements IAgentProvider {
         if (
           apiKey &&
           modelRuntime.getProviderAuthStatus(parsed.provider).source === 'models_json_command' &&
-          !(await modelRuntime.listCredentials()).some(
+          !(await modelRuntime.listCredentials({ signal: requestOptions?.abortSignal })).some(
             credential => credential.providerId === parsed.provider
           )
         ) {
