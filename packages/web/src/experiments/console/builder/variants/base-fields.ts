@@ -10,7 +10,7 @@ import { wireKeysWithRole, type BaseFields, type WireDagNode } from '../types';
 /**
  * `timeout` and `on_timeout` are deliberately NOT base fields even though the
  * flattened wire `DagNode` type carries them top-level: the engine accepts them
- * only on bash and script nodes, so `WIRE_KEY_ROLES` marks them variant keys.
+ * only on some node kinds, so `WIRE_KEY_ROLES` marks them variant keys.
  */
 const BASE_FIELD_KEY_SET = new Set<string>(wireKeysWithRole('base'));
 

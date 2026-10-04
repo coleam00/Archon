@@ -5,7 +5,8 @@
  * The shapes below are taken from real workflows: a `loop_group`, a sub-workflow
  * fan-out (`workflow:` + `fan_out:`), an `include:`, an approval with authored
  * `decisions`, AI nodes carrying `settingSources` / node-local `with`, a node
- * `description`, and bash and script nodes with `on_timeout`.
+ * `description`, bash and script nodes with `on_timeout`, and a loop with
+ * `signal_completes` and a node `timeout`.
  */
 import { describe, test, expect } from 'bun:test';
 import { fromWorkflowDefinition } from './from-workflow';
@@ -41,6 +42,20 @@ const AUTHORED: WireWorkflowDefinition = {
       settingSources: [],
       allowed_tools: ['Read'],
       with: { slug: '$load.output.slug' },
+    },
+    {
+      id: 'refine',
+      depends_on: ['spec'],
+      loop: {
+        prompt: 'Refine the spec until it is complete',
+        until: 'COMPLETE',
+        max_iterations: 4,
+        fresh_context: false,
+        interactive: true,
+        gate_message: 'Review the draft',
+        signal_completes: true,
+      },
+      timeout: 900000,
     },
     {
       id: 'gate',

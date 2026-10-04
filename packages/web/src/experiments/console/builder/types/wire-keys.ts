@@ -53,7 +53,8 @@ export const WIRE_KEY_ROLES = {
   output_type: 'base',
 
   // `timeout` and `on_timeout` sit top-level on the flattened wire type, but the
-  // engine accepts them only on bash and script nodes, so they are variant keys.
+  // engine accepts `timeout` only on bash, script and loop nodes and `on_timeout`
+  // only on bash and script nodes, so they are variant keys.
   command: 'variant',
   prompt: 'variant',
   bash: 'variant',

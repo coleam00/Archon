@@ -103,7 +103,7 @@ export const VARIANT_REGISTRY: { [K in VariantId]: VariantRegistryEntry<K> } = {
     defaultData: defaultLoopData,
     fromDag: loopFromDag,
     toDag: loopToDag,
-    wireKeys: ['loop'],
+    wireKeys: ['loop', 'timeout'],
     capabilities: VARIANT_CAPABILITIES.loop,
   },
   approval: {
