@@ -435,8 +435,10 @@ async function applyPiEnvOverride(
  * For a provider with no Archon env mapping, `${VAR}` references in the user's models.json
  * are substituted from the per-call env into a per-call models.json: the SDK resolves them
  * from `process.env`, which Archon keeps free of per-call secrets (see `./request-auth.ts`).
- * That file holds the substituted secret in cleartext. `ModelRuntime.create` reads it once
- * (via ModelConfig.load), so it is removed as soon as create settles. Without the cleanup a
+ * That file holds the substituted secret in cleartext. `ModelRuntime.create` reads it (via
+ * ModelConfig.load) while it builds the runtime, so it is removed as soon as create settles;
+ * a later refresh of the same runtime (Pi refreshes when an extension registers a provider)
+ * finds no file and loads an empty models config. Without the cleanup a
  * long-running process accumulates one file per call until ENOSPC, after which
  * buildCustomProviderModelsPath fails and the SDK falls back to the unsubstituted models.json.
  */
@@ -722,6 +724,10 @@ export class PiProvider implements IAgentProvider {
         // Pi runs a models.json key command on every getAuth, so the session's request
         // would run it again. Pin the key the check just resolved as a runtime-only key;
         // Pi reads a runtime key before models.json, so the command runs once per node.
+        // The pinned key is fixed for the whole node: a short-lived token the command prints
+        // can expire before a long node ends. Only a catalogued model (or Anthropic) reaches
+        // here; an extension provider's model is not_checked, so Pi keeps running its key
+        // command on each request.
         if (
           apiKey &&
           modelRuntime.getProviderAuthStatus(parsed.provider).source === 'models_json_command'
