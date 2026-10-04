@@ -523,12 +523,12 @@ describe('GET /api/workflows/:name', () => {
     registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
     mockListCodebases.mockImplementationOnce(async () => []);
 
-    const response = await app.request('/api/workflows/archon-assist');
+    const response = await app.request('/api/workflows/archon-review');
     expect(response.status).toBe(200);
     const body = (await response.json()) as { authored?: unknown };
     expect(body.authored).toEqual({
-      name: 'archon-assist',
-      description: 'Archon Assist',
+      name: 'archon-review',
+      description: 'Archon Review',
       nodes: [],
     });
   });
