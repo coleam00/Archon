@@ -228,6 +228,10 @@ let oauthFlowRegistrationPromise: Promise<void> | undefined;
  * A failure only affects OAuth-credentialed backends, so it is swallowed with a
  * WARN: API-key and `models.json` backends keep working, and an OAuth node then
  * surfaces pi-ai's original `Cannot find module` error.
+ *
+ * Both this and the Bedrock override register into pi-ai module state, so they
+ * only take effect while Pi resolves the same pi-ai instance this package
+ * imports. `pi-sdk-instance.test.ts` guards that.
  */
 export function ensurePiOAuthFlowsRegistered(
   registrar: OAuthFlowRegistrar = defaultOAuthFlowRegistrar
