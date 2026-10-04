@@ -175,7 +175,9 @@ function abortSession(session: OAuthSession, cause: OAuthAbortCause): void {
   session.codeDeferred.reject(new OAuthLoginAbortedError(cause.reason));
   // Log at the abort boundary: device flows and already-resolved deferreds
   // need not reject with the bridge's error, and some providers ignore aborts.
-  if (cause.reason !== 'test-reset') {
+  // A connected or failed session stays mapped until polled, so a later
+  // cancel/expiry/supersede still cleans it up but must not log an abort.
+  if (session.status === 'pending' && cause.reason !== 'test-reset') {
     getLog().info(
       {
         userId: session.userId,

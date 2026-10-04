@@ -260,6 +260,39 @@ describe('oauth-bridge', () => {
     });
   }
 
+  for (const outcome of ['connected', 'failed'] as const) {
+    for (const trigger of ['expiry', 'supersede'] as const) {
+      test(`a ${outcome} session dropped by ${trigger} is not logged as aborted`, async () => {
+        let finish!: () => void;
+        const gate = new Promise<void>(resolve => {
+          finish = resolve;
+        });
+        loginImpl = async cb => {
+          cb.onDeviceCode({ userCode: 'WXYZ', verificationUri: 'https://dev' });
+          await gate;
+          if (outcome === 'failed') throw new Error('denied');
+          return { access: 'a', refresh: 'r', expires: 1 };
+        };
+        const start = await startOAuth('u1', 'copilot');
+        finish();
+        await tick();
+        if (trigger === 'expiry') {
+          const clock = spyOn(Date, 'now').mockReturnValue(Date.now() + start.expiresIn * 1000 + 1);
+          try {
+            pollOAuth(start.sessionId, 'u1');
+          } finally {
+            clock.mockRestore();
+          }
+        } else {
+          await startOAuth('u1', 'copilot');
+        }
+        expect(
+          mockLogger.info.mock.calls.filter(call => call[1] === 'oauth_bridge.login_aborted')
+        ).toEqual([]);
+      });
+    }
+  }
+
   test('test reset stays quiet', async () => {
     await startOAuth('u1', 'openai');
     mockLogger.info.mockClear();
