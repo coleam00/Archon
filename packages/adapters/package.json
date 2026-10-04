@@ -80,6 +80,9 @@
     ],
     [
       "src/forge/github/lifecycle.test.ts"
+    ],
+    [
+      "src/platform-policies.test.ts"
     ]
   ]
 }

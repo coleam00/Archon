@@ -327,7 +327,6 @@ export function mapWorkflowEventRow(row: WorkflowEventRow): string | null {
 
 export class WorkflowEventBridge {
   private unsubscribeWorkflowEvents: (() => void) | null = null;
-  private outputCallbacks = new Map<string, (text: string) => void>();
   private onStepTransition: ((workerConversationId: string) => void) | null = null;
 
   constructor(private transport: SSETransport) {}
@@ -369,12 +368,11 @@ export class WorkflowEventBridge {
       this.unsubscribeWorkflowEvents();
       this.unsubscribeWorkflowEvents = null;
     }
-    this.outputCallbacks.clear();
   }
 
   /**
    * Bridge workflow events from a worker conversation to a parent conversation's SSE stream.
-   * Forwards compact progress events (step progress, status) and output previews.
+   * Forwards compact progress events (step progress, status).
    */
   bridgeWorkerEvents(workerConversationId: string, parentConversationId: string): () => void {
     const emitter = getWorkflowEventEmitter();
@@ -403,28 +401,5 @@ export class WorkflowEventBridge {
     );
 
     return unsubscribe;
-  }
-
-  registerOutputCallback(conversationId: string, cb: (text: string) => void): void {
-    this.outputCallbacks.set(conversationId, cb);
-  }
-
-  removeOutputCallback(conversationId: string): void {
-    this.outputCallbacks.delete(conversationId);
-  }
-
-  emitOutput(conversationId: string, text: string): void {
-    const callback = this.outputCallbacks.get(conversationId);
-    if (callback) {
-      try {
-        callback(text);
-      } catch (e: unknown) {
-        getLog().warn({ conversationId, err: e }, 'output_callback_failed');
-      }
-    }
-  }
-
-  clearConversation(conversationId: string): void {
-    this.outputCallbacks.delete(conversationId);
   }
 }

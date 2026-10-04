@@ -30,8 +30,6 @@ export {
   type CommandResult,
   type WorkflowRequest,
   type IPlatformAdapter,
-  type IWebPlatformAdapter,
-  isWebAdapter,
   type MessageMetadata,
   type User,
   type UserIdentity,

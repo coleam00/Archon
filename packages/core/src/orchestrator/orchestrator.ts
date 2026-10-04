@@ -30,13 +30,7 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('orchestrator');
   return cachedLog;
 }
-import {
-  IPlatformAdapter,
-  Conversation,
-  Codebase,
-  ConversationNotFoundError,
-  isWebAdapter,
-} from '../types';
+import { IPlatformAdapter, Conversation, Codebase, ConversationNotFoundError } from '../types';
 import type { IsolationHints, IsolationEnvironmentRow } from '@archon/isolation';
 import type { AdoptionLane } from '../operations/workflow-adoption';
 import {
@@ -350,7 +344,7 @@ export interface WorkflowRoutingContext {
 }
 
 /**
- * Dispatch a workflow to run in a background worker conversation (web platform only).
+ * Dispatch a workflow to run in a background worker conversation.
  * Creates a hidden worker conversation, sets up event bridging from worker to parent,
  * and fires-and-forgets the workflow execution.
  */
@@ -380,12 +374,12 @@ async function dispatchBackgroundWorkflowOwned(
   assertComposedGateDriveable(workflow.nodes);
 
   // 1. Generate worker conversation ID
-  const workerPlatformId = `web-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+  const workerPlatformId = `${ctx.platform.getPlatformType()}-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
   // 2. Create worker conversation in DB; propagate userId so the worker
   // row has the same attribution as the parent (matters for "my runs" queries).
   const workerConv = await db.getOrCreateConversation(
-    'web',
+    ctx.platform.getPlatformType(),
     workerPlatformId,
     undefined,
     undefined,
@@ -509,29 +503,11 @@ async function dispatchBackgroundWorkflowOwned(
     }
   );
 
-  // Narrow to web adapter for web-specific operations
-  const webAdapter = isWebAdapter(ctx.platform) ? ctx.platform : null;
-
-  // Send structured dispatch event for Web UI
-  if (webAdapter) {
-    await webAdapter.sendStructuredEvent(ctx.conversationId, {
-      type: 'workflow_dispatch',
-      workerConversationId: workerPlatformId,
-      workflowName: workflow.name,
-    });
-  }
-
-  // 5. Set up DB ID mapping for worker (needed for message persistence)
-  if (webAdapter) {
-    webAdapter.setConversationDbId(workerPlatformId, workerConv.id);
-  }
-
-  // 6. Set up event bridge (worker events → parent SSE stream)
-  let unsubscribeBridge: (() => void) | undefined;
-  if (webAdapter) {
-    unsubscribeBridge = webAdapter.setupEventBridge(workerPlatformId, ctx.conversationId);
-  }
-
+  await ctx.platform.sendStructuredEvent?.(ctx.conversationId, {
+    type: 'workflow_dispatch',
+    workerConversationId: workerPlatformId,
+    workflowName: workflow.name,
+  });
   const workflowDeps = createWorkflowDeps();
   const engine = new InProcessWorkflowEngine(workflowDeps);
 
@@ -641,8 +617,14 @@ async function dispatchBackgroundWorkflowOwned(
   // tracking only when executeWorkflow adopts after the rename succeeds.
   const backgroundExecution = withCapturedSource(async backgroundOwner => {
     backgroundOwner.hold(preparedSource);
+    let finalizeConversation: (() => Promise<void>) | undefined;
     try {
       try {
+        finalizeConversation = await ctx.platform.prepareBackgroundConversation?.({
+          workerConversationId: workerPlatformId,
+          parentConversationId: ctx.conversationId,
+          conversationDbId: workerConv.id,
+        });
         // The wrap owns the capture until `executeWorkflow`'s rename succeeds; the
         // executor adopts for us there (see #2690). Until then a rename failure leaves
         // the staged directory un-adopted so the wrap reclaims it on the way out.
@@ -777,14 +759,7 @@ async function dispatchBackgroundWorkflowOwned(
             getLog().error({ err: toError(sendErr) }, 'background_workflow_notify_failed');
           });
       } finally {
-        // Clean up event bridge
-        if (unsubscribeBridge) {
-          unsubscribeBridge();
-        }
-        if (webAdapter) {
-          webAdapter.removeOutputCallback(workerPlatformId);
-          await webAdapter.emitLockEvent(workerPlatformId, false);
-        }
+        await finalizeConversation?.();
       }
     } catch (outerError) {
       getLog().error({ err: toError(outerError) }, 'background_workflow_unhandled_error');

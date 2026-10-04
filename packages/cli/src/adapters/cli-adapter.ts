@@ -22,6 +22,10 @@ export interface CLIAdapterOptions {
 }
 
 export class CLIAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private readonly streamingMode: 'stream' | 'batch';
   private readonly dbIdMap = new Map<string, string>(); // platform_conversation_id → DB UUID
 

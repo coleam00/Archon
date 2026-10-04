@@ -27,6 +27,10 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_LENGTH = 2000;
 
 export class DiscordAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private client: Client;
   private streamingMode: 'stream' | 'batch';
   private token: string;

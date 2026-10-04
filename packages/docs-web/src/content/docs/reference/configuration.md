@@ -724,7 +724,7 @@ docker run -v /my/data:/.archon ghcr.io/coleam00/archon
 
 ## Streaming Modes
 
-Each platform adapter supports two streaming modes, configured via environment variable or `~/.archon/config.yaml`.
+Telegram, Slack, and Discord adapters support two streaming modes. The server selects their runtime mode from environment variables. `~/.archon/config.yaml` accepts a `streaming` map keyed by platform identifier and exposes merged preferences through the config API; these YAML preferences currently do not control adapter construction. Existing `telegram`, `slack`, and `discord` keys remain accepted. Additional keys use lowercase kebab-case identifiers of at most 32 characters.
 
 ### Stream Mode
 

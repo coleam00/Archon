@@ -79,39 +79,7 @@ Platform adapters connect messaging platforms to the orchestrator. Implement the
 
 ### IPlatformAdapter Interface
 
-**Location:** `packages/core/src/types/index.ts`
-
-```typescript
-export interface IPlatformAdapter {
-  // Send a message to the platform (optional metadata for message type hints)
-  sendMessage(conversationId: string, message: string, metadata?: MessageMetadata): Promise<void>;
-
-  // Ensure responses go to a thread, creating one if needed
-  // Returns the thread's conversation ID (may be same as original)
-  ensureThread(originalConversationId: string, messageContext?: unknown): Promise<string>;
-
-  // Get the configured streaming mode
-  getStreamingMode(): 'stream' | 'batch';
-
-  // Get the platform type identifier
-  getPlatformType(): string;
-
-  // Start the platform adapter (e.g., begin polling, start webhook server)
-  start(): Promise<void>;
-
-  // Stop the platform adapter gracefully
-  stop(): void;
-
-  // Optional: Send a structured event (a tool call or its update, a result, a status line or a dispatch)
-  sendStructuredEvent?(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
-
-  // Optional: Retract previously streamed text (workflow routing intercept)
-  emitRetract?(conversationId: string): Promise<void>;
-
-  // Optional: Append a cost / token footer after a direct-chat reply
-  sendResultFooter?(conversationId: string, info: { cost?: number; tokens?: TokenUsage; stopReason?: string }): Promise<void>;
-}
-```
+The current contract is [IPlatformAdapter](https://github.com/coleam00/Archon/blob/dev/packages/core/src/types/index.ts). It declares transport methods, message persistence ownership, and the default workflow dispatch mode. Structured events and background worker preparation are optional capabilities. Hosts set the complete offline retention and streaming policy set before config or cleanup, and cleanup fails until they do; see the [adapter authoring guide](https://github.com/coleam00/Archon/blob/dev/packages/adapters/src/community/chat/README.md).
 
 ### Implementation Guide
 
@@ -123,6 +91,11 @@ export interface IPlatformAdapter {
 import type { IPlatformAdapter } from '@archon/core';
 
 export class YourPlatformAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
+
   private streamingMode: 'stream' | 'batch';
 
   constructor(config: YourPlatformConfig, mode: 'stream' | 'batch' = 'stream') {
@@ -1098,7 +1071,7 @@ remote_agent_codebases
 
 remote_agent_conversations
 ├── id (UUID)
-├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'gitea' | 'gitlab' | 'cli'
+├── platform_type (VARCHAR) -- lowercase kebab-case platform identifier, at most 32 characters
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
 ├── cwd (VARCHAR) -- Explicit working-directory override, usually null (set by worktree create/remove; effective cwd falls back to codebase.default_cwd)
@@ -1176,7 +1149,7 @@ remote_agent_users
 remote_agent_user_identities
 ├── id (UUID)
 ├── user_id (UUID -> remote_agent_users.id, ON DELETE CASCADE)
-├── platform (VARCHAR) -- 'slack' | 'telegram' | 'discord' | 'github' | 'gitea' | 'gitlab' | 'web' | 'cli'
+├── platform (VARCHAR) -- lowercase kebab-case platform identifier, at most 32 characters
 ├── platform_user_id (VARCHAR) -- Slack U-id, Telegram chat id, Discord snowflake, GitHub login, ...
 ├── platform_display_name (VARCHAR) -- Cached per-platform display name
 └── UNIQUE(platform, platform_user_id)
