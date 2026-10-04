@@ -638,6 +638,15 @@ describe('checkAssistantLogin', () => {
       expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
         status: 'fail',
       });
+      // A failed credential lookup still runs the native check, as if nothing were connected.
+      const callsBefore = native.mock.calls.length;
+      rows.mockRejectedValue(new Error('database unreachable'));
+      expect(await checkAssistantLogin({ ARCHON_USER_ID: 'operator' })).toMatchObject({
+        status: 'fail',
+        message:
+          'pi: no native credential. Log in through pi or connect a credential with `archon ai`.',
+      });
+      expect(native.mock.calls.length).toBe(callsBefore + 1);
     } finally {
       native.mockRestore();
       rows.mockRestore();

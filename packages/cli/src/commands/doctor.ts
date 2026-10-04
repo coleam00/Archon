@@ -486,13 +486,22 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
   const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
   let connectedVendors: string[] = [];
   if (usableVendors.length > 0 && cliId) {
-    const deps = await defaultLoadProviderDeps();
-    const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
-    const rows = await deps.listUserProviderKeys(user.id);
-    // Delivery normalizes legacy agent-keyed rows to their vendor; so does this lookup.
-    connectedVendors = [
-      ...new Set(rows.map(row => normalizeCredentialVendor(row.provider))),
-    ].filter(vendor => usableVendors.includes(vendor));
+    try {
+      const deps = await defaultLoadProviderDeps();
+      const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+      const rows = await deps.listUserProviderKeys(user.id);
+      // Delivery normalizes legacy agent-keyed rows to their vendor; so does this lookup.
+      connectedVendors = [
+        ...new Set(rows.map(row => normalizeCredentialVendor(row.provider))),
+      ].filter(vendor => usableVendors.includes(vendor));
+    } catch (err) {
+      // Best-effort, like the Codex binary check: the database check reports a broken
+      // database, and the native login check still runs as if nothing were connected.
+      getLog().debug(
+        { error: err instanceof Error ? err.name : typeof err },
+        'doctor.assistant_login_credential_lookup_failed'
+      );
+    }
   }
   return {
     assistant: config.assistant,
