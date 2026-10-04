@@ -87,9 +87,6 @@ export class WebAdapter implements IPlatformAdapter {
       ...(metadata?.workflowResult ? { workflowResult: metadata.workflowResult } : {}),
     });
 
-    // Forward output to registered callback (for event bridge preview)
-    this.workflowBridge.emitOutput(conversationId, message);
-
     await this.transport.emit(conversationId, event);
 
     // Workflow result arrives after the parent lock is released (background dispatch),
@@ -277,33 +274,20 @@ export class WebAdapter implements IPlatformAdapter {
     return this.transport.hasActiveStream(conversationId);
   }
 
-  /**
-   * Bridge workflow events from a worker conversation to a parent conversation's SSE stream.
-   * Forwards compact progress events (step progress, status) and output previews.
-   */
-  setupEventBridge(workerConversationId: string, parentConversationId: string): () => void {
-    return this.workflowBridge.bridgeWorkerEvents(workerConversationId, parentConversationId);
-  }
-
   async prepareBackgroundConversation(
     context: Parameters<NonNullable<IPlatformAdapter['prepareBackgroundConversation']>>[0]
   ): Promise<() => Promise<void>> {
     const { workerConversationId, parentConversationId, conversationDbId } = context;
     this.setConversationDbId(workerConversationId, conversationDbId);
-    const unsubscribe = this.setupEventBridge(workerConversationId, parentConversationId);
+    // Worker workflow events are forwarded to the parent conversation's stream.
+    const unsubscribe = this.workflowBridge.bridgeWorkerEvents(
+      workerConversationId,
+      parentConversationId
+    );
     return async () => {
       unsubscribe();
-      this.removeOutputCallback(workerConversationId);
       await this.emitLockEvent(workerConversationId, false);
     };
-  }
-
-  registerOutputCallback(conversationId: string, callback: (text: string) => void): void {
-    this.workflowBridge.registerOutputCallback(conversationId, callback);
-  }
-
-  removeOutputCallback(conversationId: string): void {
-    this.workflowBridge.removeOutputCallback(conversationId);
   }
 
   async emitRetract(conversationId: string): Promise<void> {

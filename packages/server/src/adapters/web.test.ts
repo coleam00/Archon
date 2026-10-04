@@ -33,6 +33,7 @@ function makeAdapter(): {
   adapter: WebAdapter;
   emitted: string[];
   appendToolResultCalls: unknown[][];
+  bridge: WorkflowEventBridge;
 } {
   const emitted: string[] = [];
   const appendToolResultCalls: unknown[][] = [];
@@ -54,9 +55,6 @@ function makeAdapter(): {
   } as unknown as MessagePersistence;
 
   const mockBridge = {
-    emitOutput: mock(() => {}),
-    registerOutputCallback: mock(() => {}),
-    removeOutputCallback: mock(() => {}),
     setStepTransitionCallback: mock(() => {}),
     start: mock(() => {}),
     stop: mock(() => {}),
@@ -64,7 +62,7 @@ function makeAdapter(): {
   } as unknown as WorkflowEventBridge;
 
   const adapter = new WebAdapter(mockTransport, mockPersistence, mockBridge);
-  return { adapter, emitted, appendToolResultCalls };
+  return { adapter, emitted, appendToolResultCalls, bridge: mockBridge };
 }
 
 // ---------------------------------------------------------------------------
@@ -192,16 +190,13 @@ describe('WebAdapter.sendMessage — text event category', () => {
 });
 
 test('background preparation maps persistence and releases the bridge before awaited lock flush', async () => {
-  const { adapter } = makeAdapter();
+  const { adapter, bridge: workflowBridge } = makeAdapter();
   const calls: string[] = [];
   const mapping = spyOn(adapter, 'setConversationDbId').mockImplementation(() => {
     calls.push('mapping');
   });
-  const bridge = spyOn(adapter, 'setupEventBridge').mockImplementation(() => () => {
+  const bridge = spyOn(workflowBridge, 'bridgeWorkerEvents').mockImplementation(() => () => {
     calls.push('unsubscribe');
-  });
-  spyOn(adapter, 'removeOutputCallback').mockImplementation(() => {
-    calls.push('remove');
   });
   let release: () => void = () => {};
   const lock = spyOn(adapter, 'emitLockEvent').mockImplementation(async () => {
@@ -218,9 +213,9 @@ test('background preparation maps persistence and releases the bridge before awa
   expect(mapping).toHaveBeenCalledWith('worker', 'db');
   expect(bridge).toHaveBeenCalledWith('worker', 'parent');
   const finished = finish();
-  expect(calls).toEqual(['mapping', 'unsubscribe', 'remove']);
+  expect(calls).toEqual(['mapping', 'unsubscribe']);
   expect(lock).toHaveBeenCalledWith('worker', false);
   release();
   await finished;
-  expect(calls).toEqual(['mapping', 'unsubscribe', 'remove', 'lock']);
+  expect(calls).toEqual(['mapping', 'unsubscribe', 'lock']);
 });
