@@ -840,7 +840,7 @@ Exit status is 0 for an empty batch, a concurrent claim loser, a completed segme
 
 The CLI preserves the run's recorded source, inputs, configuration, user, conversation, and working path. It accepts local CLI/API conversations. Container execution, missing paths or captured source, and external platform origins are refused with the run ID and reason. Use manual `workflow resume` for a container, or the server hosting the external conversation. A run stays parked if no waker runs; age never marks it failed.
 
-SIGINT/SIGTERM stops scheduling new passes and drains admitted segments and owner cleanup. Shutdown can wait for a long executing segment. An abrupt kill retains the existing ambiguous-owner behavior; it does not provide automatic recovery of a running segment.
+SIGINT/SIGTERM stops scheduling new passes and drains admitted segments and owner cleanup. Shutdown can wait for a long executing segment. An abrupt kill retains the existing ambiguous-owner behavior; it does not provide automatic recovery of a running segment. On Windows, SIGTERM ends the process immediately, so it behaves as an abrupt kill rather than a drain.
 
 #### Wake timers
 
