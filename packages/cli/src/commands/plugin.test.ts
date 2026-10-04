@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { discoverPlugins } from '@archon/forge/discovery';
 import { compileDiscoveryPlugin } from '@archon/forge/test-fixtures';
 import { removeTempTree, skipCompiledBinaryTests, trackTempRoots } from '@archon/paths/test-utils';
-import { pluginCommand, stagingName, type PluginEnvironment } from './plugin';
+import { parsePluginRef, pluginCommand, stagingName, type PluginEnvironment } from './plugin';
 
 // A local stand-in for GitHub: the repository is served over git's dumb HTTP
 // protocol (so `git ls-remote` runs for real), next to the `releases/latest`
@@ -356,4 +356,19 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
       expect((await run(env, 'install', target)).err).toContain('Invalid plugin');
     }
   });
+});
+
+test('plugin references accept installable directories and reject unsafe segments', () => {
+  expect(parsePluginRef('owner/repo/.archon/packs/review-kit@v1.0.0')).toMatchObject({
+    id: 'owner/repo/.archon/packs/review-kit',
+    tag: 'v1.0.0',
+  });
+  for (const target of [
+    'owner/../x',
+    'owner/repo/..',
+    'owner/repo/path with spaces',
+    'owner/repo/x;echo',
+  ]) {
+    expect(() => parsePluginRef(target)).toThrow('Invalid plugin');
+  }
 });
