@@ -310,28 +310,10 @@ AI agent providers wrap AI SDKs and provide a unified streaming interface. Imple
 
 ### IAgentProvider Interface
 
-**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps)
+**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps). That file is the definition; this page does not copy it.
 
-```typescript
-export interface IAgentProvider {
-  checkCredential(request: {
-    model?: string;
-    env: Record<string, string>;
-    signal: AbortSignal;
-  }): Promise<CredentialStatus>;
+A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery(prompt, cwd, resumeSessionId, options)`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`), the caller's `env`, and an abort `signal`.
 
-  sendQuery(
-    prompt: string,
-    cwd: string,
-    resumeSessionId?: string,
-    options?: SendQueryOptions
-  ): AsyncGenerator<MessageChunk>;
-
-  getType(): string;
-
-  getCapabilities(): ProviderCapabilities;
-}
-```
 
 ### MessageChunk Types
 
