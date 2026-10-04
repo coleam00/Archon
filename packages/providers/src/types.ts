@@ -2,6 +2,7 @@
 // @archon/workflows and @archon/core import from this subpath (@archon/providers/types).
 // HARD RULE: This file must never import SDK packages.
 
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { EffortRung } from '@archon/paths/effort';
 import type {
   ProviderCapabilities,
@@ -606,8 +607,12 @@ export interface CredentialSpec {
  * introspection API and exposes it through a dedicated endpoint).
  */
 export type ProviderCredentialCatalog =
-  | { kind: 'static'; specs: CredentialSpec[] }
-  | { kind: 'dynamic' };
+  | {
+      kind: 'static';
+      specs: CredentialSpec[];
+      vendorFor(model: string | undefined): string | undefined;
+    }
+  | { kind: 'dynamic'; vendorFor(model: string | undefined): undefined };
 
 /**
  * Registration entry for a provider in the provider registry.
@@ -665,6 +670,14 @@ export interface ProviderInfo {
  * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */
 export interface IAgentProvider {
+  /** Check the credential this provider uses when Archon delivers none. */
+  checkCredential(request: {
+    assistantConfig?: SendQueryOptions['assistantConfig'];
+    model?: string;
+    env: Record<string, string>;
+    signal: AbortSignal;
+  }): Promise<CredentialStatus>;
+
   /**
    * Send a message and get streaming response.
    * @param prompt - User message or prompt

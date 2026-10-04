@@ -28,6 +28,7 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import type { CredentialStatus } from '@archon/provider-contract';
 import {
   query,
   type Options,
@@ -1561,6 +1562,10 @@ async function* streamClaudeMessages(
  * - classifyClaudeThrownError: typed failure for an error thrown by the SDK
  */
 export class ClaudeProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   constructor() {
     if (getProcessUid() === 0 && process.env.IS_SANDBOX !== '1') {
       throw new Error(

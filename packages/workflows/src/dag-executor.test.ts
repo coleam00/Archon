@@ -375,6 +375,7 @@ const mockSendQueryDag = mock<ReturnType<WorkflowDeps['getAgentProvider']>['send
 
 const mockGetAgentProviderDag = mock<WorkflowDeps['getAgentProvider']>(_provider => ({
   sendQuery: mockSendQueryDag,
+  checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: () => 'claude',
   getCapabilities: mockClaudeCapabilities,
 }));
@@ -1988,6 +1989,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
     // Restore default claude client
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -2069,6 +2071,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('warns that settingSources is ignored on a Codex node', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -2110,6 +2113,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('routes Codex tier effort to nodeConfig.effort like every other provider', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -2168,6 +2172,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('an explicit effort on a Codex node beats its tier preset instead of erasing both', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -2215,6 +2220,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('applies inherited workflow tier effort to nodes without model overrides', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -2265,6 +2271,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('drops a tier effort for a provider with no reasoning control, and applies nothing', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'opencode',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -2324,6 +2331,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('drops a declared effort for a provider with no reasoning control', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'opencode',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -2543,6 +2551,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('warns when explicit node provider conflicts with alias provider and alias wins', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -2590,6 +2599,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('warns user when Codex DAG node has denied_tools only', async () => {
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     });
@@ -2695,6 +2705,7 @@ describe('executeDagWorkflow -- tool restrictions', () => {
   it('warns user when Codex DAG node has hooks', async () => {
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     });
@@ -2821,6 +2832,7 @@ describe('executeDagWorkflow -- bash nodes', () => {
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -3514,6 +3526,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -3675,6 +3688,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
     const classifyJson = { run_code_review: 'true', run_tests: 'false' };
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -3746,6 +3760,7 @@ describe('executeDagWorkflow -- output_format structured output', () => {
     // Codex provider normalizes inline JSON into structuredOutput on the result chunk
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -3808,6 +3823,7 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -3820,6 +3836,7 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -3951,6 +3968,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -3963,6 +3981,7 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -4410,6 +4429,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -4661,6 +4681,7 @@ describe('executeDagWorkflow -- tool events reach a streaming platform', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -4728,6 +4749,7 @@ describe('executeDagWorkflow -- provider event recording', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -5181,6 +5203,7 @@ describe('executeDagWorkflow -- skills options', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -5435,6 +5458,7 @@ describe('executeDagWorkflow -- skills options', () => {
   it('warns user when Codex DAG node has inline agents', async () => {
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     });
@@ -5759,6 +5783,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -12067,6 +12092,7 @@ describe('executeDagWorkflow -- always_run resume opt-out', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -12319,6 +12345,7 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -12327,6 +12354,7 @@ describe('executeDagWorkflow -- prior-success cache invalidated by dep re-execut
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -13066,6 +13094,7 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -13079,6 +13108,7 @@ describe('executeDagWorkflow -- break at settled (no hang on subprocess exit)', 
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -13188,6 +13218,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -13200,6 +13231,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -14999,6 +15031,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -15025,6 +15058,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     );
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
@@ -15088,6 +15122,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
       const sendQuery = quotaExhaustedQuery(resetAt);
       mockGetAgentProviderDag.mockReturnValue({
         sendQuery,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
         getType: () => 'claude',
         getCapabilities: mockClaudeCapabilities,
       });
@@ -15150,6 +15185,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: quotaExhaustedQuery(resetAt),
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
@@ -15193,6 +15229,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     const resetAt = new Date(Date.now() + 10 * 60_000).toISOString();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: quotaExhaustedQuery(resetAt),
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
@@ -15247,6 +15284,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     );
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: proseOnlyQuery,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
@@ -15281,6 +15319,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     const creditExhaustedQuery = quotaExhaustedQuery();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: creditExhaustedQuery,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
@@ -15332,6 +15371,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     const creditExhaustedQuery = quotaExhaustedQuery();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: creditExhaustedQuery,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
@@ -15379,6 +15419,7 @@ describe('executeDagWorkflow -- credit exhaustion', () => {
     const creditExhaustedQuery = quotaExhaustedQuery();
     mockGetAgentProviderDag.mockReturnValue({
       sendQuery: creditExhaustedQuery,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     });
@@ -15780,6 +15821,7 @@ describe('executeDagWorkflow -- approval node', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -15788,6 +15830,7 @@ describe('executeDagWorkflow -- approval node', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -16512,6 +16555,7 @@ describe('executeDagWorkflow -- env var injection', () => {
     mockSendQueryDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -16520,6 +16564,7 @@ describe('executeDagWorkflow -- env var injection', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -16609,6 +16654,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -16892,6 +16938,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
   it('applies node-level effort on a Codex node without warning', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -16937,6 +16984,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
   it('applies workflow-level effort to a Codex node', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -16974,6 +17022,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
   it('applies the node-level effort; the deprecated field is inert at this layer', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -17013,6 +17062,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
   it('forwards workflow-level webSearchMode to a Codex node', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -17051,6 +17101,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
   it('workflow-level effort beats a preset-routed effort, and node_started reports the applied value', async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -17176,6 +17227,7 @@ describe('executeDagWorkflow -- Claude SDK advanced options', () => {
     // the executor applies `effort:` and does not look at the old field.
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -17275,6 +17327,7 @@ describe('executeDagWorkflow -- cost tracking', () => {
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -17481,6 +17534,7 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -18142,6 +18196,7 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -19441,6 +19496,7 @@ describe('executeDagWorkflow -- MCP failure filtering', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -19934,6 +19990,7 @@ describe('executeDagWorkflow -- final status derivation', () => {
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -20420,6 +20477,7 @@ describe('provider resolution -- regression for #1610', () => {
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -20428,6 +20486,7 @@ describe('provider resolution -- regression for #1610', () => {
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -20443,6 +20502,7 @@ describe('provider resolution -- regression for #1610', () => {
     // workflowProvider ('codex' when defaultAssistant: codex), not to 'claude'.
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'codex',
       getCapabilities: mockCodexCapabilities,
     }));
@@ -20534,6 +20594,7 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -20831,6 +20892,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -21466,6 +21528,7 @@ describe('executeDagWorkflow -- persist_session', () => {
     // Provider with sessionResume: false
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'no-resume',
       getCapabilities: () => ({
         ...mockClaudeCapabilities(),
@@ -21745,6 +21808,7 @@ describe('executeDagWorkflow -- concurrent persist_session runs (#2667)', () => 
     });
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: opts.sessionFork }),
     }));
@@ -21868,6 +21932,7 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -22088,6 +22153,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -26298,6 +26364,7 @@ describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', 
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -26627,6 +26694,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -27084,6 +27152,7 @@ describe('executeDagWorkflow -- addressable session resume', () => {
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: () => ({ ...mockClaudeCapabilities(), sessionFork: false }),
     }));
@@ -27257,6 +27326,7 @@ describe('executeDagWorkflow -- provider-boundary session threading (#1992)', ()
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -30110,6 +30180,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -30523,6 +30594,10 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
               yield { type: 'settled' };
             }
           ),
+          checkCredential: async () => ({
+            state: 'not_checked' as const,
+            source: 'native' as const,
+          }),
           getType: (): string => provider,
           getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
         })
@@ -31155,6 +31230,10 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
           seen.push(provider);
           return settlingProvider({
             sendQuery: mockSendQueryDag,
+            checkCredential: async () => ({
+              state: 'not_checked' as const,
+              source: 'native' as const,
+            }),
             getType: (): string => provider,
             getCapabilities: provider === 'codex' ? mockCodexCapabilities : mockClaudeCapabilities,
           });
@@ -31523,6 +31602,7 @@ describe('TokenUsage axis seam guard', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -31544,6 +31624,7 @@ describe('TokenUsage axis seam guard', () => {
     });
     mockGetAgentProviderDag.mockImplementation(_provider => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -31808,6 +31889,7 @@ describe('value transport (#2637): persistence, resume, and node-local bindings'
   afterEach(async () => {
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -32597,6 +32679,7 @@ describe('exec result contracts (#2453)', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -32928,6 +33011,7 @@ describe('artifact pointers (#2453)', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -33141,6 +33225,7 @@ describe('a result contract survives the whole composed path (#2453)', () => {
     mockGetAgentProviderDag.mockClear();
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -34819,6 +34904,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     );
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -36787,6 +36873,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     );
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -36953,6 +37040,7 @@ describe('executeDagWorkflow -- node-level mutates_checkout: false (#2771)', () 
 
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
@@ -37373,6 +37461,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
       });
       mockGetAgentProviderDag.mockImplementation(() => ({
         sendQuery: mockSendQueryDag,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
         getType: () => 'claude',
         getCapabilities: mockClaudeCapabilities,
       }));

@@ -8,6 +8,7 @@
  * (`scripts/generate-codex-protocol.ts`). Users run their own Codex version, so the
  * provider reads only the fields it needs from what arrives.
  */
+import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { delimiter } from 'node:path';
 import { createLogger } from '@archon/paths';
@@ -198,6 +199,8 @@ export class AppServerConnection {
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */
+  request(method: 'account/read', params: ParamsOf<'account/read'>): Promise<GetAccountResponse>;
+  request<M extends Method>(method: M, params: ParamsOf<M>): Promise<unknown>;
   request<M extends Method>(method: M, params: ParamsOf<M>): Promise<unknown> {
     if (this.endedWith) return Promise.reject(this.closedError(this.endedWith));
     const id = this.nextId++;

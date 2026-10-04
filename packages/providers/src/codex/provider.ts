@@ -2,6 +2,13 @@
  * Codex provider: one Codex turn per `sendQuery`, driven over the `codex app-server`
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
+import { z } from 'zod';
+import type { GetAccountResponse } from './protocol/v2/GetAccountResponse';
+import type { CredentialStatus } from '@archon/provider-contract';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import type {
   IAgentProvider,
   SendQueryOptions,
@@ -56,6 +63,16 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
+/**
+ * The `account/read` fields the login check decides on. The account's own fields (type,
+ * plan, email) are left unvalidated, so a Codex that adds an account type, a plan or a
+ * field still reads as logged in.
+ */
+const accountResponseSchema = z.object({
+  account: z.object({}).nullable(),
+  requiresOpenaiAuth: z.boolean(),
+}) satisfies z.ZodType<Pick<GetAccountResponse, 'requiresOpenaiAuth'>>;
+
 type CodexConfig = Record<string, JsonValue>;
 
 /**
@@ -94,12 +111,31 @@ function resolveModelReasoningEffort(
   return clamped;
 }
 
-/** The process env with the request env on top: managed project env wins on collisions. */
-function buildCodexEnv(requestEnv?: Record<string, string>): Record<string, string> {
+/**
+ * What a Codex app-server starts with: the process env with the request env on top (managed
+ * project env wins on collisions), the API key that env opts into, and the configured binary.
+ * The login check starts the same app-server a turn does.
+ */
+function codexLaunch(
+  assistantConfig: Record<string, unknown> | undefined,
+  requestEnv?: Record<string, string>
+): {
+  config: CodexProviderDefaults;
+  env: Record<string, string>;
+  apiKey: string | undefined;
+  resolveBinary: () => ReturnType<typeof resolveCodexBinary>;
+} {
+  const config = parseCodexConfig(assistantConfig ?? {});
   const baseEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
-  return { ...baseEnv, ...requestEnv };
+  const env = { ...baseEnv, ...requestEnv };
+  return {
+    config,
+    env,
+    apiKey: env.CODEX_API_KEY || undefined,
+    resolveBinary: () => resolveCodexBinary(config.codexBinaryPath),
+  };
 }
 
 const CODEX_MCP_PASSTHROUGH_KEYS = [
@@ -746,6 +782,80 @@ export class CodexProvider implements IAgentProvider {
     private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS
   ) {}
 
+  async checkCredential(
+    request: Parameters<IAgentProvider['checkCredential']>[0]
+  ): Promise<CredentialStatus> {
+    const { signal } = request;
+    const { env, apiKey, resolveBinary } = codexLaunch(request.assistantConfig, request.env);
+    let connection: AppServerConnection | undefined;
+    let onAbort: (() => void) | undefined;
+    try {
+      signal.throwIfAborted();
+      if (apiKey) return { state: 'usable', source: 'native' };
+      const binary = await resolveBinary();
+      signal.throwIfAborted();
+      connection = AppServerConnection.start(binary, [], env, this.spawner);
+      const aborted = new Promise<never>((_resolve, reject) => {
+        onAbort = (): void => {
+          const reason: unknown = signal.reason;
+          reject(reason instanceof Error ? reason : new Error(String(reason)));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+      });
+      await Promise.race([
+        aborted,
+        connection.request('initialize', {
+          clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
+          capabilities: null,
+        }),
+      ]);
+      connection.notify('initialized');
+      const response = await Promise.race([
+        aborted,
+        // Ask for a refresh so a revoked sign-in reads as no account. A turn never sends
+        // account/read, so this refresh is the check's own.
+        connection.request('account/read', { refreshToken: true }),
+      ]);
+      signal.throwIfAborted();
+      const validated = accountResponseSchema.safeParse(response);
+      if (!validated.success) {
+        return {
+          state: 'check_failed',
+          source: 'native',
+          evidence: 'Codex account/read returned an invalid protocol response.',
+        };
+      }
+      const { account, requiresOpenaiAuth } = validated.data;
+      if (account !== null) return { state: 'usable', source: 'native' };
+      // A model provider configured in Codex that needs no OpenAI login authenticates on its
+      // own terms, which account/read does not report.
+      if (!requiresOpenaiAuth) return { state: 'not_checked', source: 'native' };
+      return {
+        state: 'unusable',
+        source: 'native',
+        evidence:
+          'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
+      };
+    } catch (error) {
+      const reason: unknown = signal.aborted ? signal.reason : error;
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence: redactCredentialValues(
+          reason instanceof ConnectionClosedError
+            ? reason.evidence
+            : reason instanceof Error
+              ? reason.message
+              : String(reason),
+          collectCredentialValues(env)
+        ),
+      };
+    } finally {
+      if (onAbort) signal.removeEventListener('abort', onAbort);
+      await connection?.shutdown(this.shutdownGraceMs);
+    }
+  }
+
   getCapabilities(): ProviderCapabilities {
     return CODEX_CAPABILITIES;
   }
@@ -790,7 +900,8 @@ export class CodexProvider implements IAgentProvider {
       });
     };
 
-    const codexConfig = parseCodexConfig(requestOptions?.assistantConfig ?? {});
+    const launch = codexLaunch(requestOptions?.assistantConfig, requestOptions?.env);
+    const codexConfig = launch.config;
     const model = requestOptions?.model ?? codexConfig.model;
     const titleRequest = requestOptions?.purpose === 'title-generation';
     abortSignal?.addEventListener('abort', onAbort, { once: true });
@@ -823,11 +934,10 @@ export class CodexProvider implements IAgentProvider {
         yield { type: 'warning', ...warning };
       }
 
-      const binary = await resolveCodexBinary(codexConfig.codexBinaryPath);
-      const env = buildCodexEnv(requestOptions?.env);
+      const binary = await launch.resolveBinary();
+      const { env, apiKey } = launch;
       // `CODEX_API_KEY` opts a turn into API-key auth. Without it Codex uses the user's
       // own login in their CODEX_HOME. The ephemeral store keeps the key out of that home.
-      const apiKey = env.CODEX_API_KEY || undefined;
       const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
       const effort = resolveModelReasoningEffort(
         requestOptions?.nodeConfig,

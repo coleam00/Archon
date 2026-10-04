@@ -1,3 +1,4 @@
+import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -116,6 +117,14 @@ const mockGetAuth = mock(async (providerId: string) => {
     return { auth: { apiKey: 'sk-ant-oat01-file-stub' }, source: 'auth.json' };
   return undefined;
 });
+const mockCheckAuth = mock(async (providerId: string) => {
+  if (runtimeOverrides[providerId]) return { type: 'api_key', source: 'runtime override' };
+  if (fileCreds[providerId])
+    return { type: fileCreds[providerId].type, source: 'stored credential' };
+  if (!PI_PROVIDER_ENV_VARS[providerId] && mockHasConfiguredAuth(providerId))
+    return { type: 'api_key', source: 'config' };
+  return undefined;
+});
 const mockHasConfiguredAuth = mock(
   (providerId: string) =>
     runtimeOverrides[providerId] !== undefined || fileCreds[providerId] !== undefined
@@ -163,9 +172,12 @@ type MockModelRegistry = Pick<ModelRegistry, 'find'> &
 // previously poked at the auth passed to `ModelRegistry.create` now poke at
 // the runtime passed to the constructor.
 type MockModelRuntime = {
+  checkAuth: typeof mockCheckAuth;
   setRuntimeApiKey(providerId: string, key: string): Promise<void>;
   getAuth(providerId: string): Promise<unknown>;
   hasConfiguredAuth(providerId: string): boolean;
+  getProviderAuthStatus(providerId: string): { configured: boolean; source?: string };
+  listCredentials(): Promise<readonly { providerId: string }[]>;
 };
 type MockModelRegistryCtor = new (runtime: MockModelRuntime) => MockModelRegistry;
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
@@ -219,9 +231,12 @@ const mockModelRegistryConstruct = mock(
 // (just on the runtime object now).
 const mockModelRuntimeCreate = mock(
   async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => ({
+    checkAuth: mockCheckAuth,
     setRuntimeApiKey: mockSetRuntimeApiKey,
     getAuth: mockGetAuth,
     hasConfiguredAuth: mockHasConfiguredAuth,
+    getProviderAuthStatus: () => ({ configured: false }),
+    listCredentials: async () => [],
   })
 );
 
@@ -540,8 +555,6 @@ describe('PiProvider', () => {
     expect(mockLogger.info).toHaveBeenCalledWith(
       {
         piProvider: 'unknownprovider',
-        envHint: expect.stringContaining("not in the Archon adapter's env-var table"),
-        loginHint: expect.stringContaining('/login'),
       },
       'pi.auth_missing'
     );
@@ -608,9 +621,12 @@ describe('PiProvider', () => {
         capturedPerCallContent = readFileSync(options.modelsPath, 'utf-8');
       }
       return {
+        checkAuth: mockCheckAuth,
         setRuntimeApiKey: mockSetRuntimeApiKey,
         getAuth: mockGetAuth,
         hasConfiguredAuth: mockHasConfiguredAuth,
+        getProviderAuthStatus: () => ({ configured: false }),
+        listCredentials: async () => [],
       };
     });
 
@@ -1168,7 +1184,7 @@ describe('PiProvider', () => {
     // Runtime override NOT set — no env var present — so Pi's getAuth
     // resolves through the OAuth code path.
     expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
-    expect(mockGetAuth).toHaveBeenCalledWith('anthropic');
+    expect(mockGetAuth).toHaveBeenCalledWith('anthropic', { signal: undefined });
   });
 
   test('reports a failure when ModelRegistry.find returns undefined', async () => {
@@ -1234,6 +1250,39 @@ describe('PiProvider', () => {
     expect(mockSetModel).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'custom-model', provider: 'extension-provider' })
     );
+  });
+
+  test('an Anthropic model outside the static catalog with no stored login reaches the extensions', async () => {
+    // An extension may register the model and manage its credential outside Pi's store.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() =>
+      createMockModel('anthropic', 'extension-model')
+    );
+    resetScript(scriptedAgentEnd());
+
+    const { error, failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/extension-model',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(failure).toBeUndefined();
+    expect(mockSetModel).toHaveBeenCalledTimes(1);
+  });
+
+  test('a configured login that resolves to nothing names no env var the provider lacks', async () => {
+    fileCreds['local-oauth'] = { type: 'oauth' };
+    mockGetAuth.mockImplementationOnce(async () => undefined);
+    resetScript(scriptedAgentEnd());
+
+    const { failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'local-oauth/model' })
+    );
+
+    expect(failure?.class).toBe('auth');
+    expect(failure?.evidence).toContain("no credentials for provider 'local-oauth'");
+    expect(failure?.evidence).not.toContain('undefined');
   });
 
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
@@ -2782,6 +2831,41 @@ describe('PiProvider', () => {
     );
 
     expect(result.error?.message).toBe('Query aborted');
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
+  test('a caller that aborts during the credential check gets Query aborted, not an auth failure', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const controller = new AbortController();
+    let entered: () => void = () => undefined;
+    const checking = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    mockCheckAuth.mockImplementationOnce((async (
+      _providerId: string,
+      options?: { signal?: AbortSignal }
+    ) => {
+      entered();
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(new Error('The operation was aborted.'));
+        });
+      });
+    }) as unknown as typeof mockCheckAuth);
+    resetScript(scriptedAgentEnd());
+
+    const pending = consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        abortSignal: controller.signal,
+      })
+    );
+    await checking;
+    controller.abort();
+    const result = await pending;
+
+    expect(result.error?.message).toBe('Query aborted');
+    expect(result.failure).toBeUndefined();
     expect(mockCreateAgentSession).not.toHaveBeenCalled();
   });
 

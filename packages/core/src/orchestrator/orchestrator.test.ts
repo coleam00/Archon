@@ -522,6 +522,7 @@ const mockClientSendQuery = mock<IAgentProvider['sendQuery']>(async function* ()
 });
 const mockClient = {
   sendQuery: mockClientSendQuery,
+  checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: mock(() => 'claude'),
   getCapabilities: mock(() => providerCapabilities),
 } satisfies IAgentProvider;
@@ -1057,6 +1058,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
       const codexClient = {
         sendQuery: codexSendQuery,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
         getType: () => 'codex',
         getCapabilities: () => providerCapabilities,
       } satisfies IAgentProvider;

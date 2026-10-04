@@ -310,22 +310,10 @@ AI agent providers wrap AI SDKs and provide a unified streaming interface. Imple
 
 ### IAgentProvider Interface
 
-**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps)
+**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps). That file is the definition; this page does not copy it.
 
-```typescript
-export interface IAgentProvider {
-  sendQuery(
-    prompt: string,
-    cwd: string,
-    resumeSessionId?: string,
-    options?: SendQueryOptions
-  ): AsyncGenerator<MessageChunk>;
+A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery(prompt, cwd, resumeSessionId, options)`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`), the caller's `env`, and an abort `signal`.
 
-  getType(): string;
-
-  getCapabilities(): ProviderCapabilities;
-}
-```
 
 ### MessageChunk Types
 
@@ -360,9 +348,14 @@ Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(r
 **2. Implement the interface:**
 
 ```typescript
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
 
 export class YourAssistantProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -1366,7 +1359,7 @@ Post single comment on issue with summary
 This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the folder layout, registration, and capability discipline are covered there in depth.
 
 - [ ] Create `packages/providers/src/your-assistant/provider.ts`
-- [ ] Implement `IAgentProvider` interface (sendQuery + getType + getCapabilities)
+- [ ] Implement `IAgentProvider` interface (checkCredential + sendQuery + getType + getCapabilities)
 - [ ] Map SDK events to `MessageChunk` discriminated union
 - [ ] Handle session creation and resumption
 - [ ] Declare `ProviderCapabilities` honestly — under-declare rather than over-promise

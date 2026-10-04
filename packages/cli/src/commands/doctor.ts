@@ -7,7 +7,6 @@
  */
 import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
-import { homedir } from 'os';
 import { execFileAsync } from '@archon/git';
 import {
   BUNDLED_IS_BINARY,
@@ -24,10 +23,7 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
-import {
-  readPiAuthValidity,
-  type PiAuthValidity,
-} from '@archon/providers/community/pi/auth-status';
+import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 import type { CredentialStatus } from '@archon/provider-contract';
 
@@ -35,20 +31,6 @@ import type { CredentialStatus } from '@archon/provider-contract';
 // by vendor, not agent). A connected `openai` key signals Codex intent even
 // when it isn't the configured default assistant.
 const CODEX_CREDENTIAL_VENDOR = 'openai';
-
-// Env vars that indicate a Pi backend API key is configured. Keep in sync with
-// `PI_BACKENDS` in setup.ts — these are the auth signals checkPi inspects.
-const PI_API_KEY_VARS = [
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'GEMINI_API_KEY',
-  'OPENROUTER_API_KEY',
-  'GROQ_API_KEY',
-  'MISTRAL_API_KEY',
-  'XAI_API_KEY',
-  'CEREBRAS_API_KEY',
-  'HUGGINGFACE_API_KEY',
-] as const;
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -403,102 +385,130 @@ export async function checkGhAuth(env: NodeJS.ProcessEnv): Promise<CheckResult> 
   }
 }
 
-/**
- * Read the Pi credential store and report what the credential in it says
- * (#3274). A file on disk is not a usable credential — an OAuth grant that
- * expired months ago still has its file, and every Pi workflow on that install
- * failed while `doctor` reported pass.
- *
- * Wrapped so tests can spy on it by name without fighting ESM named-import
- * rebinding limitations.
- */
-export function probePiAuthValidity(authJsonPath: string, now: number): PiAuthValidity {
-  return readPiAuthValidity(authJsonPath, { now });
+export interface AssistantLoginDeps {
+  assistant: string;
+  assistantConfig?: Parameters<IAgentProvider['checkCredential']>[0]['assistantConfig'];
+  model?: string;
+  /**
+   * The credential vendor the configured model uses; undefined when Archon config names no
+   * model or the model's provider has no credential vendor (a Pi models.json provider).
+   */
+  vendor?: string;
+  /** Vendors of the user's connected credentials that this assistant can use, as delivery names them. */
+  connectedVendors: readonly string[];
+  provider: Pick<IAgentProvider, 'checkCredential'>;
 }
 
-/** Format an expiry instant for a doctor line, without leaking a credential. */
-function formatExpiry(expiresAt: number): string {
-  const date = new Date(expiresAt);
-  // A non-finite or out-of-range instant yields an Invalid Date, whose
-  // toISOString() throws — and this runs inside a doctor line, not a crash path.
-  if (Number.isNaN(date.getTime())) return 'an unknown date';
-  return date.toISOString().slice(0, 10);
-}
-
-export async function checkPi(env: NodeJS.ProcessEnv): Promise<CheckResult> {
-  const label = 'Pi provider';
-  const isDefault = env.DEFAULT_AI_ASSISTANT === 'pi';
-
-  // Skip when Pi isn't the default — shared keys like ANTHROPIC_API_KEY shouldn't
-  // trigger a pass for Claude-only users who happen to have them set.
-  if (!isDefault) {
-    return { label, status: 'skip', message: 'Pi not configured' };
-  }
-
-  // Pi reads OAuth credentials from ~/.pi/agent/auth.json (written by `pi /login`)
-  // or API key env vars; either path is sufficient.
-  const authJsonPath = join(homedir(), '.pi', 'agent', 'auth.json');
-  // No existence gate in front of the read. `existsSync` swallows every errno
-  // and answers `false`, so a store the current user cannot traverse (EACCES on
-  // the parent directory, ENOTDIR when a path component is a file) used to skip
-  // the validity read entirely and surface as generic missing auth. The reader
-  // already separates ENOENT (`missing`) from every other read failure
-  // (`unreadable`), so let it answer for both.
-  const validity = probePiAuthValidity(authJsonPath, Date.now());
-
-  // An expired *access* token is not a broken credential. `expires` is the
-  // access token's expiry; Pi refreshes it on the next use as long as the
-  // refresh token still works, and so does Archon's own OAuth mint path. So
-  // an install whose access token lapsed weeks ago still authenticates — and
-  // reporting fail here would be a false alarm on a healthy install, which is
-  // worse than the false pass this check replaced (#3274). Warn instead: name
-  // the provider and the date, and say what happens next.
-  //
-  // Only the grants that actually expired are named: the verdict is aggregate,
-  // but pointing at a still-usable provider sends the operator to renew a
-  // credential that does not need it.
-  if (validity.status === 'expired') {
-    const expired = validity.expiredProviders;
+export async function checkAssistantLogin(
+  env: NodeJS.ProcessEnv = process.env,
+  loadDeps: (env: NodeJS.ProcessEnv) => Promise<AssistantLoginDeps> = defaultLoadAssistantLoginDeps
+): Promise<CheckResult> {
+  const label = 'Assistant login';
+  try {
+    const deps = await loadDeps(env);
+    if (deps.vendor !== undefined && deps.connectedVendors.includes(deps.vendor)) {
+      return {
+        label,
+        status: 'pass',
+        message: `${deps.assistant}: uses the credential connected in Archon`,
+      };
+    }
+    const status = await deps.provider.checkCredential({
+      assistantConfig: deps.assistantConfig,
+      model: deps.model,
+      env: Object.fromEntries(
+        Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)
+      ),
+      signal: AbortSignal.timeout(20_000),
+    });
+    // A run receives every connected credential, and the model picks the one it uses. With
+    // no model in Archon config (Pi falls back to its own default), doctor cannot tell
+    // whether a connected credential covers a missing native login, so it warns instead.
+    const connectedHint =
+      deps.model === undefined && deps.connectedVendors.length > 0
+        ? ` A run also receives your connected ${deps.connectedVendors.join(', ')} credential and uses it if its model is from that vendor; set a model in assistants.${deps.assistant} so doctor can tell.`
+        : undefined;
+    switch (status.state) {
+      case 'usable':
+        return { label, status: 'pass', message: `${deps.assistant}: usable` };
+      case 'not_checked':
+        // Nothing was verified, so this is not a pass.
+        return { label, status: 'skip', message: `${deps.assistant}: not checked` };
+      case 'check_failed':
+        return {
+          label,
+          status: 'warn',
+          message: `${deps.assistant}: could not be verified. ${status.evidence}`,
+        };
+      case 'unusable':
+        return connectedHint
+          ? {
+              label,
+              status: 'warn',
+              message: `${deps.assistant}: native login cannot be used. ${status.evidence}${connectedHint}`,
+            }
+          : {
+              label,
+              status: 'fail',
+              message: `${deps.assistant}: cannot be used. ${status.evidence} Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
+            };
+      case 'not_connected':
+        return connectedHint
+          ? {
+              label,
+              status: 'warn',
+              message: `${deps.assistant}: no native credential.${connectedHint}`,
+            }
+          : {
+              label,
+              status: 'fail',
+              message: `${deps.assistant}: no native credential. Log in through ${deps.assistant} or connect a credential with \`archon ai\`.`,
+            };
+    }
+  } catch (error) {
     return {
       label,
       status: 'warn',
-      message: `~/.pi/agent/auth.json holds an expired access token for ${expired.join(', ')} (expired ${formatExpiry(validity.expiresAt)}). Pi refreshes it on the next use; re-run \`pi /login\` if the refresh token has also expired.`,
+      message: `could not check assistant login: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+}
 
-  // The file exists but says nothing usable. Reported on its own line: an
-  // unreadable store is not an expired credential, and conflating them sends
-  // the operator looking for a renewal that cannot help.
-  if (validity.status === 'unreadable') {
-    return {
-      label,
-      status: 'fail',
-      message:
-        '~/.pi/agent/auth.json could not be read or holds an unusable credential. Check that the path and permissions are correct, then re-run `pi /login` to rewrite it.',
-    };
+async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<AssistantLoginDeps> {
+  const config = await defaultLoadMergedConfig(process.cwd());
+  const { getRegistration, getAgentProvider, normalizeCredentialVendor } =
+    await import('@archon/providers');
+  const configuredModel = config.assistants[config.assistant]?.model;
+  const model = typeof configuredModel === 'string' ? configuredModel : undefined;
+  const { credentials } = getRegistration(config.assistant);
+  const usableVendors =
+    credentials.kind === 'static' ? credentials.specs.map(spec => spec.vendor) : [];
+  const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
+  let connectedVendors: string[] = [];
+  if (usableVendors.length > 0 && cliId) {
+    try {
+      const deps = await defaultLoadProviderDeps();
+      const user = await deps.findOrCreateUserByPlatformIdentity('cli', cliId, cliId);
+      const rows = await deps.listUserProviderKeys(user.id);
+      // Delivery normalizes legacy agent-keyed rows to their vendor; so does this lookup.
+      connectedVendors = [
+        ...new Set(rows.map(row => normalizeCredentialVendor(row.provider))),
+      ].filter(vendor => usableVendors.includes(vendor));
+    } catch (err) {
+      // Best-effort, as in the Codex credential lookup: a failed lookup must not hide the
+      // native login check, which runs as if nothing were connected. The AI credentials
+      // check runs the same lookup and shows its error. The lookup reads only credential
+      // metadata, never key material, so its error is safe to log.
+      getLog().debug({ err }, 'doctor.assistant_login_credential_lookup_failed');
+    }
   }
-
-  // 'empty' must not claim a pass: the file is present but holds no
-  // credential, so `pi` has nothing to authenticate with. Falling through
-  // lets the env-var check below answer, and a Pi-default user with neither
-  // gets the failure instead of a green doctor.
-  if (validity.status === 'valid') {
-    return { label, status: 'pass', message: '~/.pi/agent/auth.json found' };
-  }
-
-  // 'missing' and 'empty' both fall through to the env-var check below: no
-  // stored credential, so a configured API key is the answer.
-
-  const foundKey = PI_API_KEY_VARS.find(v => (env[v] ?? '').trim().length > 0);
-  if (foundKey) {
-    return { label, status: 'pass', message: `${foundKey} is set` };
-  }
-
   return {
-    label,
-    status: 'fail',
-    message:
-      'Pi is configured as default but no auth found. Run `pi /login` or set an API key env var (e.g. ANTHROPIC_API_KEY).',
+    assistant: config.assistant,
+    assistantConfig: { ...(config.assistants[config.assistant] ?? {}) },
+    model,
+    vendor: credentials.vendorFor(model),
+    connectedVendors,
+    provider: getAgentProvider(config.assistant),
   };
 }
 
@@ -987,7 +997,7 @@ export async function doctorCommand(
         checkClaudeBinary(),
         checkCodexBinary(env),
         checkGhAuth(env),
-        checkPi(env),
+        checkAssistantLogin(env),
         checkOpenCode(env, full),
         checkDatabase(),
         checkFolderProject(),
