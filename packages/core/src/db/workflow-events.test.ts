@@ -6,6 +6,7 @@ import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { NODE_STATE_EVENT_TYPES, type NodeStateEventType } from '@archon/workflows/store';
+import { inMemoryDagResumeSnapshot } from '@archon/workflows/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1352,6 +1353,28 @@ describe('workflow-events', () => {
         expect(snapshot.costUsd).toBe(2);
       }
     );
+
+    test('selects the same reusable outputs as the workflows in-memory store double', async () => {
+      const rows = [
+        { step_name: 'text', event_type: 'node_completed', data: { node_output: 'kept' } },
+        { step_name: 'number', event_type: 'node_completed', data: { node_output: 42 } },
+        { step_name: 'object', event_type: 'node_completed', data: { node_output: { a: 1 } } },
+        { step_name: 'null', event_type: 'node_completed', data: { node_output: null } },
+        { step_name: 'missing', event_type: 'node_completed', data: {} },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 7 } },
+      ];
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+
+      const production = await getDagResumeSnapshot('run-double');
+      const double = inMemoryDagResumeSnapshot(
+        rows.map(row => ({ workflow_run_id: 'run-double', ...row })),
+        'run-double'
+      );
+
+      expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
+      expect(double.completedNodeOutputs).toEqual(production.completedNodeOutputs);
+    });
 
     test('returns an empty snapshot when no events exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));

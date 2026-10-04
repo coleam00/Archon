@@ -6258,7 +6258,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(2);
   });
 
-  it('reconciles total usage across a failed run and its resume', async () => {
+  it('seeds a resumed run with prior usage and accumulates the resumed pass', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -6318,42 +6318,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     ]);
     (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
 
-    const firstExecutionEvents = (
-      store.createWorkflowEvent as ReturnType<typeof mock>
-    ).mock.calls.map(
-      (call: unknown[]) =>
-        call[0] as {
-          event_type: string;
-          step_name?: string;
-          data?: Record<string, unknown>;
-        }
-    );
-    const priorCompletedNodes = new Map<string, PersistedNodeOutput>();
-    const priorUsage = { tokens: { input: 0, output: 0 }, costUsd: 0 };
-    for (const event of firstExecutionEvents) {
-      if (event.event_type !== 'node_completed' || !event.step_name) continue;
-      if (typeof event.data?.node_output === 'string') {
-        priorCompletedNodes.set(event.step_name, { output: event.data.node_output });
-      }
-      const eventTokens = event.data?.tokens as { input?: unknown; output?: unknown } | undefined;
-      if (
-        typeof eventTokens?.input === 'number' &&
-        typeof eventTokens.output === 'number' &&
-        Number.isFinite(eventTokens.input) &&
-        Number.isFinite(eventTokens.output)
-      ) {
-        priorUsage.tokens.input += eventTokens.input;
-        priorUsage.tokens.output += eventTokens.output;
-      }
-      const eventCost = event.data?.cost_usd;
-      if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
-        priorUsage.costUsd += eventCost;
-      }
-    }
-    expect(priorCompletedNodes).toEqual(new Map([['step1', { output: 'first execution output' }]]));
-    // Both axes are reconstructable from the event log — this mirrors what
-    // getDagResumeSnapshot does, and cost is now among them (#2469).
-    expect(priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.02 });
+    // The resume snapshot is the store's to build (covered in core's workflow-events
+    // tests); here it is fixed data matching what pass 1 persisted.
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+      ['step1', { output: 'first execution output' }],
+    ]);
+    const priorUsage = { tokens: { input: 40, output: 4 }, costUsd: 0.02 };
 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'resumed execution output' };
