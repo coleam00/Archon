@@ -427,6 +427,13 @@ describe('aiDefaultCommand', () => {
     });
   });
 
+  it('a deprecated provider prints its notice; a supported one does not', async () => {
+    expect(await aiDefaultCommand('opencode', undefined)).toBe(0);
+    expect(out()).toContain('OpenCode is deprecated');
+    expect(await aiDefaultCommand('codex', undefined)).toBe(0);
+    expect(out().match(/is deprecated/g)).toHaveLength(1);
+  });
+
   it('unknown provider → 1, no write', async () => {
     expect(await aiDefaultCommand('nope', undefined)).toBe(1);
     expect(mockUpdateGlobalConfig).not.toHaveBeenCalled();
