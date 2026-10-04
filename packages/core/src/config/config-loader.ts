@@ -38,7 +38,7 @@ import type {
   RawAliasesConfig,
   RawTiersConfig,
 } from './config-types';
-import { workflowContinuationConfigSchema } from './config-types';
+import { platformStreamingSchema, workflowContinuationConfigSchema } from './config-types';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -382,11 +382,23 @@ function validateModelBindingConfig(parsed: unknown, configPath: string): void {
   }
 }
 
+function validateStreamingConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.streaming === undefined) return;
+  const result = platformStreamingSchema.safeParse(parsed.streaming);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `streaming.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid streaming config', configPath, issues);
+  }
+  parsed.streaming = result.data;
+}
+
 /**
  * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
  * or unreadable. A missing file is created from the documented template; any
- * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases` or
- * `workflows` block — is logged and the install falls back to defaults.
+ * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases`,
+ * `streaming` or `workflows` block — is logged and the install falls back to defaults.
  */
 async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
   try {
@@ -394,6 +406,7 @@ async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConf
     const parsed = parseYaml(content);
     validateWorkflowContinuationConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
+    validateStreamingConfig(parsed, configPath);
     return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
     const err = error as { code?: string };
@@ -930,6 +943,7 @@ export async function updateGlobalConfig(
     // config load, and a bad block already on disk must be repaired, not kept.
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
+    validateStreamingConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
     // Serialize to YAML and write

@@ -115,6 +115,16 @@ describe('config-loader', () => {
     });
   });
 
+  test('invalid streaming keys or modes never reach the safe projection or the file', async () => {
+    mockFsReadFile.mockResolvedValue('streaming:\n  Not A Platform: stream\n  streamtest: fast\n');
+    expect(await loadGlobalConfig()).toEqual({});
+    expect(toSafeConfig(await loadConfig()).streaming).toEqual({ streamtest: 'stream' });
+    await expect(updateGlobalConfig({ streaming: { 'matrix-chat': 'stream' } })).rejects.toThrow(
+      'Invalid streaming config'
+    );
+    expect(mockFsWriteFile).not.toHaveBeenCalled();
+  });
+
   test('registered streaming default and validated environment override apply', async () => {
     setPlatformPolicies([streamtestPolicy, matrixPolicy]);
     mockFsReadFile.mockResolvedValue('');
