@@ -17,6 +17,7 @@ const keys = [
   'ANTHROPIC_AUTH_TOKEN',
   'ANTHROPIC_FEDERATION_RULE_ID',
   'PI_FIXTURE_TOKEN',
+  'PI_HOST_ONLY_KEY',
 ] as const;
 let previous: Record<string, string | undefined>;
 let root: string;
@@ -406,6 +407,23 @@ describe('Pi native credentials', () => {
       expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
       expect(runCount()).toBe(2);
       expect(pin).toHaveBeenCalledTimes(1);
+    });
+    test('a turn with no request env lets Pi read the real models.json', async () => {
+      // Pi resolves a host env reference itself, so no per-call models.json is written.
+      process.env.PI_HOST_ONLY_KEY = secret;
+      localProvider('${PI_HOST_ONLY_KEY}');
+      const realCreate = ModelRuntime.create.bind(ModelRuntime);
+      const create = spyOn(ModelRuntime, 'create').mockImplementation(options =>
+        realCreate(options)
+      );
+      try {
+        await runTurn();
+        expect(create).toHaveBeenCalledTimes(1);
+        expect(create.mock.calls[0]?.[0]?.modelsPath).toBeUndefined();
+      } finally {
+        create.mockRestore();
+      }
+      expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
     });
     test('a stored auth.json key is not pinned when another provider check throws', async () => {
       localProvider(`!printf '${secret}-from-command'`);

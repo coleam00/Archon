@@ -30,7 +30,9 @@
  * The file is written with mode 0o600 (and explicit chmod to defeat umask);
  * the containing directory with mode 0o700. The file is meant to be removed
  * by the caller after `ModelRuntime.create()` returns — `ModelConfig.load`
- * reads the file once and the SDK never touches it again. The provider wraps
+ * reads it while the runtime is built. A later refresh of that runtime (Pi
+ * refreshes when an extension registers a provider) reads the path again and
+ * finds it gone, so the substituted provider is lost then. The provider wraps
  * the SDK call in try/finally so the file is cleaned up whether the SDK
  * succeeds or fails.
  */
