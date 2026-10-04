@@ -1294,6 +1294,21 @@ describe('gate decisions in the run transcript', () => {
     );
   });
 
+  test('a gate paused before execution metadata existed skips its completion row and says so', async () => {
+    // The gate decision still reaches the transcript, so a missing completion row with
+    // no log would leave an operator no way to know the approval was never completed.
+    mockLogger.warn.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
+
+    await approveWorkflow('run-1', 'Looks good');
+
+    expect(await decisionRows()).toHaveLength(1);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { runId: 'run-1', step: 'review' },
+      'workflow.gate_transcript_metadata_missing'
+    );
+  });
+
   test('a resolution that loses the race writes no decision row', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });

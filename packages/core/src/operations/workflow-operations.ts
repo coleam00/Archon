@@ -273,6 +273,10 @@ function resolvedNodeCompletedStepName(approval: ApprovalContext): string {
  * root. A persisted root outside `ARCHON_HOME` is refused the same way, for the life of
  * the run. Either way the rows are skipped, visibly, rather than written to a second
  * file under a guessed root.
+ *
+ * A completion row with no execution metadata to publish is skipped visibly too: the
+ * gate decision beside it still reaches the transcript, so an operator must be able to
+ * tell that the approval was recorded and its completion was not.
  */
 async function publishGateExecution(
   run: WorkflowRun,
@@ -309,7 +313,16 @@ async function publishGateExecution(
     }
     if (event.event_type !== 'node_completed') continue;
     const record = readNodeRecordEvent({ workflow_run_id: run.id, ...event })?.metadata;
-    if (record === undefined) continue;
+    if (record === undefined) {
+      // Zero of the seven execution keys, not a damaged record — readNodeRecordEvent
+      // throws on partial metadata. So this is a gate paused before `approval.execution`
+      // existed, whose completion is never invented; skip it visibly, not silently.
+      getLog().warn(
+        { runId: run.id, step: event.step_name },
+        'workflow.gate_transcript_metadata_missing'
+      );
+      continue;
+    }
     if (logDir === null) {
       const emitted = serializeNodeEmitter(record);
       if (emitted !== undefined) getWorkflowEventEmitter().emit(emitted);
