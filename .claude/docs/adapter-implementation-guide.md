@@ -12,6 +12,7 @@ Defined at `packages/core/src/types/index.ts` — search for `export interface I
 
 | Method | Signature | Required |
 |--------|-----------|----------|
+| `capabilities` | `{ messagePersistence: 'core' \| 'adapter'; defaultWorkflowDispatch: 'foreground' \| 'background' }` (readonly property) | Yes |
 | `sendMessage` | `(conversationId: string, message: string, metadata?: MessageMetadata): Promise<void>` | Yes |
 | `ensureThread` | `(originalConversationId: string, messageContext?: unknown): Promise<string>` | Yes |
 | `getStreamingMode` | `(): 'stream' \| 'batch'` | Yes |
@@ -20,6 +21,7 @@ Defined at `packages/core/src/types/index.ts` — search for `export interface I
 | `stop` | `(): void` | Yes |
 | `sendStructuredEvent` | `(conversationId: string, event: MessageChunk): Promise<void>` | Optional |
 | `emitRetract` | `(conversationId: string): Promise<void>` | Optional |
+| `prepareBackgroundConversation` | `(context: { workerConversationId; parentConversationId; conversationDbId }): Promise<() => Promise<void>>` — runs before a background worker starts; core awaits the returned finalizer when dispatch setup or the worker ends | Optional |
 
 `WebAdapter` (`packages/server/src/adapters/web.ts`) adds web-only methods such as `setConversationDbId` and `emitLockEvent`. The server holds the concrete `WebAdapter` and calls them directly; core sees only `IPlatformAdapter`.
 
