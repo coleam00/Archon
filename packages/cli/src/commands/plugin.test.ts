@@ -28,10 +28,14 @@ let pluginBinary: Uint8Array;
 const commits = new Map<string, string>();
 const manifests = new Map<string, unknown>();
 const releases = new Map<string, Release>();
-// Every test installs the compiled fixture. Bun still runs file-level hooks when every
+// The suite needs the compiled fixture. Bun still runs file-level hooks when every
 // test is skipped, so the hooks check this too.
 const skipCompiled = skipCompiledBinaryTests();
 const latestTag = 'v1.0.0';
+// For the test that installs the ~86 MB compiled fixture (only v1.0.0 carries it; every
+// other release is a few bytes). That write has taken over 20 s on Windows CI, and a test
+// that times out keeps running after `afterEach` has deleted its temp home.
+const FIXTURE_WRITE_BUDGET_MS = 60_000;
 
 const manifest = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
   schemaVersion: 1,
@@ -42,9 +46,6 @@ const manifest = (extra: Record<string, unknown> = {}): Record<string, unknown> 
   ...extra,
 });
 
-// On a Windows host this asset is also the host's, so it must stay the working binary.
-const windowsBinary = (): Uint8Array =>
-  hostAsset === 'archon-forge-github-windows-x64.exe' ? pluginBinary : new Uint8Array([7]);
 const sha256 = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
 const checksumsFor = (assets: Record<string, Uint8Array>): string =>
   Object.entries(assets)
@@ -139,13 +140,14 @@ beforeAll(async () => {
     description: 'fixture',
     entrypoints: { review: 'review/review.yaml' },
   });
-  releases.set('v1.0.0', {
+  releases.set('v1.0.0', { assets: { [hostAsset]: pluginBinary } });
+  // On a Windows x64 host both keys are the same asset.
+  releases.set('v2.0.0', {
     assets: {
-      [hostAsset]: pluginBinary,
-      'archon-forge-github-windows-x64.exe': windowsBinary(),
+      [hostAsset]: new Uint8Array([2, 2]),
+      'archon-forge-github-windows-x64.exe': new Uint8Array([2, 2]),
     },
   });
-  releases.set('v2.0.0', { assets: { [hostAsset]: new Uint8Array([2, 2]) } });
   releases.set('v3.0.0', { assets: { [hostAsset]: new Uint8Array([3]) } });
   // The asset was replaced after checksums.txt was generated.
   releases.set('v4.0.0', {
@@ -217,43 +219,47 @@ const receiptOf = async (env: PluginEnvironment): Promise<Record<string, unknown
   ) as Record<string, unknown>;
 
 describe.skipIf(skipCompiled)('archon plugin', () => {
-  test('installs the latest release where forge discovery finds it, then updates, lists and removes it', async () => {
-    const env = await environment();
-    const installed = await run(env, 'install', ID);
-    expect(installed.err).toBe('');
-    expect(installed.code).toBe(0);
-    expect(installed.out).toContain(`commit ${commits.get('v1.0.0')}`);
+  test(
+    'installs the latest release where forge discovery finds it, then updates, lists and removes it',
+    async () => {
+      const env = await environment();
+      const installed = await run(env, 'install', ID);
+      expect(installed.err).toBe('');
+      expect(installed.code).toBe(0);
+      expect(installed.out).toContain(`commit ${commits.get('v1.0.0')}`);
 
-    const receipt = await receiptOf(env);
-    expect(receipt).toMatchObject({ id: ID, tag: 'v1.0.0', commit: commits.get('v1.0.0') });
-    const discovery = await discoverPlugins({
-      config: { scanPath: false },
-      pluginsDir: env.pluginsDir,
-    });
-    expect(discovery.plugins.map(plugin => plugin.metadata.name)).toEqual(['github']);
+      const receipt = await receiptOf(env);
+      expect(receipt).toMatchObject({ id: ID, tag: 'v1.0.0', commit: commits.get('v1.0.0') });
+      const discovery = await discoverPlugins({
+        config: { scanPath: false },
+        pluginsDir: env.pluginsDir,
+      });
+      expect(discovery.plugins.map(plugin => plugin.metadata.name)).toEqual(['github']);
 
-    // A binary the operator placed by hand is not the receipt's to remove.
-    const handPlaced = join(env.pluginsDir, 'archon-forge-other');
-    await writeFile(handPlaced, 'mine');
+      // A binary the operator placed by hand is not the receipt's to remove.
+      const handPlaced = join(env.pluginsDir, 'archon-forge-other');
+      await writeFile(handPlaced, 'mine');
 
-    expect((await run(env, 'install', ID)).err).toContain('already installed');
-    const updated = await run(env, 'update', `${ID}@v2.0.0`);
-    expect(updated.code).toBe(0);
-    expect(updated.out).toContain(`${commits.get('v1.0.0')}) -> `);
-    expect(await receiptOf(env)).toMatchObject({ tag: 'v2.0.0', commit: commits.get('v2.0.0') });
-    expect(
-      new Uint8Array(await readFile(join(env.pluginsDir, `archon-forge-github${hostExe}`)))
-    ).toEqual(new Uint8Array([2, 2]));
+      expect((await run(env, 'install', ID)).err).toContain('already installed');
+      const updated = await run(env, 'update', `${ID}@v2.0.0`);
+      expect(updated.code).toBe(0);
+      expect(updated.out).toContain(`${commits.get('v1.0.0')}) -> `);
+      expect(await receiptOf(env)).toMatchObject({ tag: 'v2.0.0', commit: commits.get('v2.0.0') });
+      expect(
+        new Uint8Array(await readFile(join(env.pluginsDir, `archon-forge-github${hostExe}`)))
+      ).toEqual(new Uint8Array([2, 2]));
 
-    const listed = await run(env, 'list');
-    expect(listed.out).toBe(
-      `${ID}  forge  v2.0.0  ${commits.get('v2.0.0')?.slice(0, 12)}  archon any`
-    );
+      const listed = await run(env, 'list');
+      expect(listed.out).toBe(
+        `${ID}  forge  v2.0.0  ${commits.get('v2.0.0')?.slice(0, 12)}  archon any`
+      );
 
-    expect((await run(env, 'remove', ID)).code).toBe(0);
-    expect(Object.keys(await snapshot(env.pluginsDir))).toEqual(['archon-forge-other']);
-    expect((await run(env, 'list')).out).toBe('No plugins installed.');
-  });
+      expect((await run(env, 'remove', ID)).code).toBe(0);
+      expect(Object.keys(await snapshot(env.pluginsDir))).toEqual(['archon-forge-other']);
+      expect((await run(env, 'list')).out).toBe('No plugins installed.');
+    },
+    FIXTURE_WRITE_BUDGET_MS
+  );
 
   test('a checksum mismatch fails the update and leaves the previous install untouched', async () => {
     const env = await environment();
@@ -294,7 +300,7 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
 
   test("never overwrites another plugin's executable", async () => {
     const env = await environment();
-    expect((await run(env, 'install', ID)).code).toBe(0);
+    expect((await run(env, 'install', `${ID}@v2.0.0`)).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
     const result = await run(env, 'install', 'owner/repo/plugins/copy');
     expect(result.err).toContain(`belongs to ${ID}`);
@@ -303,10 +309,10 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
 
   test('names the executable with .exe on Windows', async () => {
     const env = await environment({ platform: 'win32', arch: 'x64' });
-    expect((await run(env, 'install', `${ID}@v1.0.0`)).code).toBe(0);
+    expect((await run(env, 'install', `${ID}@v2.0.0`)).code).toBe(0);
     expect(Object.keys(await snapshot(env.pluginsDir))[0]).toBe('archon-forge-github.exe');
     expect(await receiptOf(env)).toMatchObject({
-      files: [{ path: 'archon-forge-github.exe', sha256: sha256(windowsBinary()) }],
+      files: [{ path: 'archon-forge-github.exe', sha256: sha256(new Uint8Array([2, 2])) }],
     });
   });
 
@@ -314,7 +320,8 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
     const env = await environment();
     await mkdir(env.pluginsDir, { recursive: true });
     const staged = join(env.pluginsDir, stagingName(`archon-forge-github${hostExe}`));
-    await writeFile(staged, pluginBinary, { mode: 0o755 });
+    // Probing these bytes fails the handshake, so a probed staging file shows in `unavailable`.
+    await writeFile(staged, new Uint8Array([1]), { mode: 0o755 });
     const stderr = spyOn(process.stderr, 'write');
     try {
       const discovery = await discoverPlugins({
@@ -331,7 +338,7 @@ describe.skipIf(skipCompiled)('archon plugin', () => {
 
   test('update refuses a tag whose manifest is another kind, and copy refuses a forge plugin', async () => {
     const env = await environment();
-    expect((await run(env, 'install', `${ID}@v1.0.0`)).code).toBe(0);
+    expect((await run(env, 'install', `${ID}@v2.0.0`)).code).toBe(0);
     const before = await snapshot(env.pluginsDir);
     expect((await run(env, 'update', `${ID}@pack-0.1.0`)).err).toContain(
       'is now a workflow-pack plugin, not forge'
