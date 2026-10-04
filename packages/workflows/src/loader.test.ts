@@ -2825,6 +2825,89 @@ nodes:
   });
 
   describe('DAG output ref validation', () => {
+    it('rejects nested output paths in approval messages before execution', () => {
+      const result = parseWorkflow(
+        `
+name: nested-approval-output
+description: Nested structured output in a gate
+nodes:
+  - id: review
+    prompt: Review the proposal
+    output_format:
+      type: object
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: { type: string }
+            text: { type: string }
+          required: [action, text]
+      required: [proposal]
+  - id: gate
+    approval:
+      message: |
+        Proposed: $review.output.proposal.action
+        $review.output.proposal.text
+    depends_on: [review]
+`,
+        'nested-approval-output.yaml'
+      );
+
+      expect(result.workflow).toBeNull();
+      expect(result.error?.error).toContain("Node 'gate' field 'approval.message'");
+      expect(result.error?.error).toContain('$review.output.proposal.action');
+      expect(result.error?.error).toContain("'$review.output' or '$review.output.field'");
+    });
+
+    it('rejects nested canonical output paths in when conditions', () => {
+      const result = parseWorkflow(
+        `
+name: nested-when-output
+description: Nested structured output in a condition
+nodes:
+  - id: review
+    bash: echo review
+  - id: apply
+    bash: echo apply
+    depends_on: [review]
+    when: "$review.output.proposal.action == 'add'"
+`,
+        'nested-when-output.yaml'
+      );
+
+      expect(result.workflow).toBeNull();
+      expect(result.error?.error).toContain("Node 'apply' field 'when'");
+      expect(result.error?.error).toContain('$review.output.proposal.action');
+      expect(result.error?.error).toContain("'$review.output.field'");
+    });
+
+    it('rejects nested prior-iteration output paths in loop-group conditions', () => {
+      const result = parseWorkflow(
+        `
+name: nested-loop-prev-output
+description: Nested structured output from a prior iteration
+nodes:
+  - id: refine
+    loop_group:
+      until: DONE
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo work
+        - id: guarded
+          bash: echo guarded
+          depends_on: [work]
+          when: "$LOOP_PREV.work.output.proposal.action == 'add'"
+`,
+        'nested-loop-prev-output.yaml'
+      );
+
+      expect(result.workflow).toBeNull();
+      expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+      expect(result.error?.error).toContain('$LOOP_PREV.work.output.proposal.action');
+      expect(result.error?.error).toContain("'$LOOP_PREV.work.output.field'");
+    });
+
     it('should reject a workflow where when: references an unknown node output', async () => {
       await writeWorkflowFile(
         testDir,

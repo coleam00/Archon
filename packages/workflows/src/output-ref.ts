@@ -133,6 +133,87 @@ export const OUTPUT_REF_SOURCE = String.raw`\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output`
  */
 export const LOOP_PREV_OUTPUT_REF_SOURCE = String.raw`\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output`;
 
+/** A top-level output field name. Nested field paths are not part of the reference grammar. */
+export const OUTPUT_FIELD_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
+
+/** Supported current-output form, with capture 1 = node id and capture 2 = optional field. */
+export const SUPPORTED_OUTPUT_REF_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_FIELD_SOURCE}))?`;
+
+/** Supported prior-iteration form, with capture 1 = node id and capture 2 = optional field. */
+export const SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_FIELD_SOURCE}))?`;
+
+export interface UnsupportedNestedOutputReference {
+  reference: string;
+  supportedForms: readonly string[];
+}
+
+const NESTED_OUTPUT_REF_SOURCE = `${OUTPUT_REF_SOURCE}\\.${OUTPUT_FIELD_SOURCE}(?:\\.${OUTPUT_FIELD_SOURCE})+`;
+const NESTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}\\.${OUTPUT_FIELD_SOURCE}(?:\\.${OUTPUT_FIELD_SOURCE})+`;
+
+function firstCurrentNestedOutputRef(
+  text: string
+): (UnsupportedNestedOutputReference & { index: number }) | undefined {
+  for (const match of text.matchAll(new RegExp(NESTED_OUTPUT_REF_SOURCE, 'g'))) {
+    const nodeId = match[1];
+    if (nodeId === undefined || nodeId === 'INPUTS') continue;
+    return {
+      reference: match[0],
+      supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`],
+      index: match.index,
+    };
+  }
+  return undefined;
+}
+
+function firstLoopPrevNestedOutputRef(
+  text: string
+): (UnsupportedNestedOutputReference & { index: number }) | undefined {
+  const match = new RegExp(NESTED_LOOP_PREV_OUTPUT_REF_SOURCE).exec(text);
+  const nodeId = match?.[1];
+  if (!match || nodeId === undefined) return undefined;
+  return {
+    reference: match[0],
+    supportedForms: [`$LOOP_PREV.${nodeId}.output`, `$LOOP_PREV.${nodeId}.output.field`],
+    index: match.index,
+  };
+}
+
+/** Find the first canonical output reference that tries to access more than one field. */
+export function findUnsupportedNestedOutputRef(
+  text: string,
+  kind?: 'current' | 'loop_prev'
+): UnsupportedNestedOutputReference | undefined {
+  const current = kind === 'loop_prev' ? undefined : firstCurrentNestedOutputRef(text);
+  const loopPrev = kind === 'current' ? undefined : firstLoopPrevNestedOutputRef(text);
+  const first = !current
+    ? loopPrev
+    : !loopPrev
+      ? current
+      : current.index <= loopPrev.index
+        ? current
+        : loopPrev;
+  if (!first) return undefined;
+  return {
+    reference: first.reference,
+    supportedForms: first.supportedForms,
+  };
+}
+
+/** Explain the supported zero-or-one-field forms for a rejected nested output reference. */
+export function unsupportedNestedOutputRefMessage(ref: UnsupportedNestedOutputReference): string {
+  const topLevelFieldForm =
+    ref.supportedForms.find(form => form.endsWith('.output.field')) ?? ref.supportedForms.at(-1);
+  const supported = ref.supportedForms
+    .map((form, index) => `${index === ref.supportedForms.length - 1 ? 'or ' : ''}'${form}'`)
+    .join(', ')
+    .replace(', or ', ' or ');
+  return (
+    `Reference '${ref.reference}' uses more than one output field segment, which is not supported. ` +
+    `Use ${supported}. Flatten the producer's output_format, or pass the top-level object ` +
+    `(${topLevelFieldForm ? `'${topLevelFieldForm}'` : 'as one field'}) to a script node and inspect it there.`
+  );
+}
+
 /**
  * The one shape of a declared-input NAME — `with:` keys, `inputs:` keys, and the
  * `<name>` of a `$INPUTS.<name>` reference all share it. Lives here beside
@@ -175,9 +256,7 @@ export function substituteInputRefs(
 }
 
 /** Anchored whole-value form: the ENTIRE (trimmed) string is one `$id.output[.field]` ref. */
-const WHOLE_OUTPUT_REF_PATTERN = new RegExp(
-  `^${OUTPUT_REF_SOURCE}(?:\\.([a-zA-Z_][a-zA-Z0-9_]*))?$`
-);
+const WHOLE_OUTPUT_REF_PATTERN = new RegExp(`^${SUPPORTED_OUTPUT_REF_SOURCE}$`);
 
 /**
  * Parse a string that is exactly one whole `$node.output[.field]` reference
