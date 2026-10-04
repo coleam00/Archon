@@ -472,8 +472,8 @@ async function applyPiEnvOverride(
  *
  * For a provider with no Archon env mapping, `${VAR}` references in the user's models.json
  * are substituted from the per-call request env (`modelsSubstitution`, not the layered
- * env) into a per-call models.json: the SDK resolves them
- * from `process.env`, which Archon keeps free of per-call secrets (see `./request-auth.ts`).
+ * env) into a per-call models.json, because the SDK resolves them only from
+ * `process.env`, which Archon keeps free of per-call secrets (see `./request-auth.ts`).
  * That file holds the substituted secret in cleartext. `ModelRuntime.create` reads it (via
  * ModelConfig.load) while it builds the runtime, so it is removed as soon as create settles;
  * a later refresh of the same runtime (Pi refreshes when an extension registers a provider)
