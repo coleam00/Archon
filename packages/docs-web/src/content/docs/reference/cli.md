@@ -919,6 +919,13 @@ After termination is confirmed, `cancel` records cancellation through the same r
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
 descendant and can report the same cascade failures or blocked parent described below.
 
+Managed container reclamation after cancellation is best-effort. If reclamation fails,
+the run stays `cancelled`, but container resources may remain allocated. Every cancel
+surface reports a warning identifying the run and environment; inspect the managed
+containers before retrying cleanup. Successful `--json` responses include an optional
+`cleanupWarnings` array of warning strings when reclamation fails; the field is omitted
+when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
+
 ### `workflow abandon`
 
 Discard a workflow run by marking it `cancelled`. `cancelled` releases the run's
@@ -947,6 +954,13 @@ archon workflow abandon <run-id> --json
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
+
+Managed container reclamation is best-effort here too. A failure leaves the run
+`cancelled` and reports a warning on every abandon surface because container resources
+may remain allocated. Inspect the managed containers before retrying cleanup.
+Successful `--json` responses include an optional `cleanupWarnings` array of warning
+strings when reclamation fails; the field is omitted when there are no cleanup
+warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
