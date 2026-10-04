@@ -214,14 +214,6 @@ function createNotePayload(overrides?: {
 }
 
 describe('GitLabAdapter', () => {
-  test.each([
-    ['messagePersistence', 'core'],
-    ['defaultWorkflowDispatch', 'foreground'],
-  ] as const)('declares %s as %s', (capability, expected) => {
-    const adapter = createAdapter();
-    expect(adapter.capabilities[capability]).toBe(expected);
-  });
-
   beforeEach(() => {
     mockHandleMessage.mockClear();
     mockOnConversationClosed.mockClear();

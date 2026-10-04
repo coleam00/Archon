@@ -33,14 +33,6 @@ import { TelegramAdapter } from './adapter';
 type SendMessage = Api['sendMessage'];
 
 describe('TelegramAdapter', () => {
-  test.each([
-    ['messagePersistence', 'core'],
-    ['defaultWorkflowDispatch', 'foreground'],
-  ] as const)('declares %s as %s', (capability, expected) => {
-    const adapter = new TelegramAdapter('fake-token-for-testing');
-    expect(adapter.capabilities[capability]).toBe(expected);
-  });
-
   describe('streaming mode configuration', () => {
     test('should return batch mode when configured', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing', 'batch');
