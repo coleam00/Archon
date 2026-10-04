@@ -401,6 +401,19 @@ describe('Pi native credentials', () => {
       auth.mockRestore();
     }
   });
+  test('a check cancelled while the key command runs is check_failed', async () => {
+    const controller = new AbortController();
+    const runtime: Parameters<typeof resolvePiAuth>[0] = {
+      checkAuth: async () => ({ type: 'api_key', source: 'configured API key' }),
+      getAuth: async () => {
+        controller.abort(new Error('cancelled'));
+        return { auth: { apiKey: secret }, source: 'configured API key' };
+      },
+    };
+    expect(await resolvePiAuth(runtime, 'anthropic', [], controller.signal)).toEqual({
+      status: { state: 'check_failed', source: 'native', evidence: 'cancelled' },
+    });
+  });
   test('aborted checks are check_failed', async () => {
     expect(
       await new PiProvider().checkCredential({

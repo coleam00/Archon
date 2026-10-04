@@ -352,6 +352,9 @@ export async function resolvePiAuth(
     signal?.throwIfAborted();
     if (!(await runtime.checkAuth(providerId, { signal }))) return { status: missing };
     const resolution = await runtime.getAuth(providerId, { signal });
+    // Pi runs a key command synchronously and ignores the signal, so a cancel during it
+    // is only visible here.
+    signal?.throwIfAborted();
     if (!resolution) return { status: { state: 'not_connected', source: 'native' } };
     return { status: { state: 'usable', source: 'native' }, apiKey: resolution.auth.apiKey };
   } catch (error) {
