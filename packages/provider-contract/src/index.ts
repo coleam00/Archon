@@ -1,6 +1,6 @@
 /**
- * The provider contract: the shapes every provider emits and the engine, API and console
- * read unchanged. zod is the only dependency, so plugin providers can depend on it too.
+ * SDK-free shapes exchanged by providers, the engine and hosts. zod is the only
+ * dependency, so plugin providers can depend on this contract too.
  * The JSON Schema in `schema/` is generated from these schemas by
  * `src/scripts/generate-schema.ts` (`bun run generate:provider-contract-schema`).
  */
@@ -53,3 +53,48 @@ export {
 } from './events';
 export { providerSettledSchema, type ProviderSettled } from './settled';
 export { providerCapabilitiesSchema, type ProviderCapabilities } from './capabilities';
+
+export {
+  EFFORT_LADDER,
+  isEffortRung,
+  clampEffort,
+  type EffortRung,
+  type AssertNever,
+} from './effort';
+export { mergeTokenUsage } from './result';
+export {
+  isObjectSchemaNode,
+  findStrictSchemaIssues,
+  type StrictSchemaIssue,
+} from './output-schema';
+export {
+  CONTAINER_ENV_DENYLIST,
+  defineNativeToolInputSchema,
+  type MessageChunk,
+  type ResultChunk,
+  type SystemPromptPreset,
+  type SystemPromptInput,
+  type ExecutionContext,
+  type AgentRequestOptions,
+  type NativeToolProperty,
+  type NativeToolInputSchema,
+  type NativeTool,
+  type NodeConfig,
+  type ProviderAdmissionEvent,
+  type SendQueryOptions,
+  type IAgentProvider,
+  type PiExtensionPosture,
+} from './agent-provider';
+export {
+  CREDENTIAL_KINDS,
+  UnknownProviderError,
+  InvalidProviderRunConfigError,
+  type ProviderDefaults,
+  type ProviderConfigScope,
+  type ProviderConfigParser,
+  type ProviderDefaultsMap,
+  type CredentialKind,
+  type CredentialSpec,
+  type ProviderCredentialCatalog,
+  type ProviderRegistration,
+} from './registration';

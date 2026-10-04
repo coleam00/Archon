@@ -38,7 +38,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
-import { isEffortRung } from '@archon/paths/effort';
+import { isEffortRung } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -69,9 +69,9 @@ import type {
   ResolvedModel,
   MessageChunk,
   ExecutionContext,
-  OverlayChangeSummary,
-} from '@archon/providers/types';
-import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
+} from '@archon/provider-contract';
+import type { OverlayChangeSummary } from './container-context';
+import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
@@ -79,10 +79,9 @@ import {
   getProviderCapabilities,
   getRegisteredProviders,
   isRegisteredProvider,
-  findStrictSchemaIssues,
-  type StrictSchemaIssue,
-  validateStructuredOutput,
 } from '@archon/providers';
+import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
+import { validateStructuredOutput } from './structured-output';
 import type {
   DagNode,
   IncludeDirective,

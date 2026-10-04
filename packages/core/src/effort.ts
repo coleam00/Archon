@@ -6,4 +6,4 @@ export {
   isEffortRung,
   type AssertNever,
   type EffortRung,
-} from '@archon/paths/effort';
+} from '@archon/provider-contract';

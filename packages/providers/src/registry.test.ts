@@ -16,7 +16,7 @@ import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider } from './types';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { EFFORT_LADDER } from '@archon/provider-contract';
 
 /** Minimal mock provider for testing registration. */
 function makeMockProvider(id: string): IAgentProvider {

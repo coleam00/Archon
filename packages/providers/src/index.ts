@@ -41,17 +41,6 @@ export {
 // Error
 export { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
 
-// Shared structured-output helpers (cross-provider; the dag-executor validates
-// every provider's output_format result against the declared schema).
-export {
-  compileOutputSchema,
-  validateStructuredOutput,
-  formatSchemaErrors,
-  findStrictSchemaIssues,
-  type StrictSchemaIssue,
-  type StructuredValidationResult,
-} from './shared/structured-output';
-
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
@@ -74,9 +63,6 @@ export {
   type CodexBinarySource,
 } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
-
-// Skills resolution
-export { claudeSkillSearchRoots, findInstalledSkillNames, skillSearchRoots } from './shared/skills';
 
 // Community providers
 export {

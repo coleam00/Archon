@@ -1,10 +1,32 @@
-// CONTRACT LAYER — no SDK imports, no runtime deps beyond SDK-free foundations.
-// @archon/workflows and @archon/core import from this subpath (@archon/providers/types).
-// HARD RULE: This file must never import SDK packages.
-
-import type { CredentialStatus } from '@archon/provider-contract';
-import type { EffortRung } from '@archon/paths/effort';
 import type {
+  EffortRung,
+  PiExtensionPosture,
+  ProviderCapabilities,
+} from '@archon/provider-contract';
+
+export type {
+  MessageChunk,
+  ResultChunk,
+  SystemPromptPreset,
+  SystemPromptInput,
+  ExecutionContext,
+  AgentRequestOptions,
+  NativeToolProperty,
+  NativeToolInputSchema,
+  NativeTool,
+  NodeConfig,
+  ProviderAdmissionEvent,
+  SendQueryOptions,
+  IAgentProvider,
+  ProviderDefaults,
+  ProviderConfigScope,
+  ProviderConfigParser,
+  ProviderDefaultsMap,
+  CredentialKind,
+  CredentialSpec,
+  ProviderCredentialCatalog,
+  ProviderRegistration,
+  PiExtensionPosture,
   ProviderCapabilities,
   ProviderChunk,
   ProviderEvent,
@@ -13,17 +35,12 @@ import type {
   ResolvedModel,
   TokenUsage,
 } from '@archon/provider-contract';
-
-// The contract package owns these shapes; they are re-exported so existing imports keep one type.
-export type {
-  ProviderCapabilities,
-  ProviderChunk,
-  ProviderEvent,
-  ProviderResult,
-  ProviderWarning,
-  ResolvedModel,
-  TokenUsage,
-};
+export {
+  CONTAINER_ENV_DENYLIST,
+  defineNativeToolInputSchema,
+  CREDENTIAL_KINDS,
+  mergeTokenUsage,
+} from '@archon/provider-contract';
 
 // ─── Provider Config Defaults ──────────────────────────────────────────────
 // Canonical definitions — @archon/core/config/config-types.ts imports from here.
@@ -104,37 +121,10 @@ export interface CopilotProviderDefaults {
  * Community provider defaults for Pi (@earendil-works/pi-coding-agent).
  * v1 minimal shape; extend as capabilities are wired in.
  */
-export interface PiProviderDefaults {
+export interface PiProviderDefaults extends PiExtensionPosture {
   [key: string]: unknown;
   /** Default model ref in '<pi-provider-id>/<model-id>' format, e.g. 'google/gemini-2.5-pro' */
   model?: string;
-  /**
-   * Opt-in to Pi's extension discovery (tools + lifecycle hooks from community
-   * packages — see https://shittycodingagent.ai/packages). When true, Pi loads
-   * extensions from `~/.pi/agent/extensions/`, `~/.pi/agent/settings.json`
-   * packages, AND the workflow's cwd (`<cwd>/.pi/extensions/`,
-   * `<cwd>/.pi/settings.json`). The cwd scope is the risky one — a workflow
-   * running against an untrusted repo can auto-load whatever extension code
-   * that repo ships. Disabled by default to preserve the "Archon is source of
-   * truth" trust boundary. Flip to true only on hosts whose workflows run
-   * against repos you trust.
-   * @default false
-   */
-  enableExtensions?: boolean;
-  /**
-   * Bind an `ExtensionUIContext` so extensions see `ctx.hasUI === true` and
-   * `ctx.ui.notify()` forwards into the chunk stream. Ignored unless
-   * `enableExtensions` is true.
-   * @default false
-   */
-  interactive?: boolean;
-  /**
-   * Flag values passed to Pi's ExtensionRunner before `session_start`,
-   * equivalent to `pi --<name>` / `pi --<name>=<value>` on the CLI.
-   * Unknown keys are ignored. Only applied when `enableExtensions` is true.
-   * @default undefined
-   */
-  extensionFlags?: Record<string, boolean | string>;
   /**
    * Environment variables injected into `process.env` at session start so
    * in-process extensions (which read `process.env` directly) pick them up.
@@ -177,481 +167,6 @@ export interface OpencodeProviderDefaults {
   agent?: string;
 }
 
-/** Generic per-provider defaults bag used by config surfaces and UI. */
-export type ProviderDefaults = Record<string, unknown>;
-
-/**
- * Which authored surface a strict provider-config parse is validating.
- *
- * `install` is `assistants.<provider>` in a global or repository
- * `.archon/config.yaml`; `run` is an explicitly selected per-run layer. They
- * share one parser so both paths reject the same bad values, and the scope
- * lets a provider refuse a key whose consumer owns process-lifetime state and
- * therefore cannot be re-decided per run.
- */
-export type ProviderConfigScope = 'install' | 'run';
-
-/** Strict parser for an authored provider config layer. */
-export type ProviderConfigParser = (
-  raw: ProviderDefaults,
-  scope: ProviderConfigScope
-) => ProviderDefaults;
-
-/** Provider-keyed defaults map. Built-ins may refine individual entries. */
-export type ProviderDefaultsMap = Record<string, ProviderDefaults>;
-
-/**
- * Sum usages into one aggregate, keeping every cache figure that was actually reported.
- *
- * `input` and `output` always sum across every entry. Each cache axis sums over only the
- * entries that define it and is emitted when at least one did, so a silent contributor
- * NARROWS the total instead of erasing it; `cachePartial` then marks the result as a floor.
- * Withholding the axis entirely, as this once did, left gross `input` standing beside no
- * cache context at all and read as "nothing was cached" (#2662).
- *
- * An axis no entry reports stays absent, which already encodes "unknown" — that case is not
- * flagged. The two axes are decided independently.
- *
- * Pure by design: callers own validation and logging, because their contexts differ (persisted
- * JSON in @archon/core, non-finite guarding in @archon/workflows). Entries are expected to have
- * finite `input`/`output` already; `total` and `cost` are not aggregated here.
- */
-export function mergeTokenUsage(usages: readonly TokenUsage[]): TokenUsage | undefined {
-  if (usages.length === 0) return undefined;
-  const merged: TokenUsage = {
-    input: usages.reduce((sum, usage) => sum + usage.input, 0),
-    output: usages.reduce((sum, usage) => sum + usage.output, 0),
-  };
-  // A contribution that is itself a floor keeps the whole aggregate a floor.
-  let partial = usages.some(usage => usage.cachePartial === true);
-  for (const axis of ['cacheRead', 'cacheWrite'] as const) {
-    const reporters = usages.filter(usage => usage[axis] !== undefined);
-    if (reporters.length === 0) continue;
-    merged[axis] = reporters.reduce((sum, usage) => sum + (usage[axis] ?? 0), 0);
-    if (reporters.length < usages.length) partial = true;
-  }
-  if (partial && (merged.cacheRead !== undefined || merged.cacheWrite !== undefined)) {
-    merged.cachePartial = true;
-  }
-  return merged;
-}
-
-/**
- * Everything a provider's stream yields, owned by `@archon/provider-contract`: its events,
- * then `result`, then `settled`.
- */
-export type MessageChunk = ProviderChunk;
-
-/**
- * The terminal `result` chunk. Providers build it by assignment on a value of this type
- * rather than from conditional spreads, so a misspelled key fails to compile.
- */
-export type ResultChunk = Extract<MessageChunk, { type: 'result' }>;
-
-/**
- * System prompt input accepted by all providers. Mirrors the Claude Agent SDK
- * preset-with-append shape so callers can opt into cacheable prefix behavior.
- * Hand-written duplicate of the SDK type — see file-header rule forbidding SDK imports here.
- */
-export interface SystemPromptPreset {
-  type: 'preset';
-  preset: 'claude_code';
-  append?: string;
-  excludeDynamicSections?: boolean;
-}
-
-export type SystemPromptInput = string | string[] | SystemPromptPreset;
-
-/**
- * Where a provider turn (or a deterministic bash/script subprocess) runs.
- *  - `host`      — directly on the Archon host process, inheriting its environment.
- *    This is today's behavior and the default everywhere.
- *  - `container` — inside a prepared isolation container (the folder-project
- *    container backend). The provider spawns its CLI via `docker exec` and
- *    receives only the Archon-managed env bag; `containerId` identifies the
- *    running container and `execUser` optionally pins the in-container uid/user.
- *
- * Plain data with zero SDK / `@archon/*` dependencies, so this contract layer
- * (which forbids cross-package imports) can own it while `@archon/isolation`
- * (which produces it) and `@archon/workflows` (which threads it) both import it.
- * Consumed by providers only after the engine's per-node capability fail-fast
- * (Phase B) — a `container` value reaching a provider that can't honor it is a
- * bug the executor prevents, not something the provider silently downgrades.
- */
-export type ExecutionContext =
-  | { kind: 'host' }
-  | { kind: 'container'; containerId: string; execUser?: string };
-
-/**
- * Container write-back contract (folder-project container backend, Phase C).
- *
- * These plain-data shapes describe the overlay diff of a finished container run
- * and the outcome of applying it to the live root. They live in this zero-dep
- * contract layer for the SAME cross-boundary reason as {@link ExecutionContext}:
- * `@archon/isolation` PRODUCES them (the container backend's overlay walk) and
- * `@archon/workflows` CONSUMES them (the engine's write-back gate), and neither
- * package may import the other — so the shared shape can only live here.
- */
-
-/**
- * Summary of the changes an overlay upper layer holds relative to the read-only
- * lower (the live project root). By overlayfs construction the upper layer IS the
- * diff, so this is a directory walk, not a tree comparison. File lists are capped
- * (see `truncated`); `totalCount` is the true total across all three categories.
- */
-export interface OverlayChangeSummary {
-  /** Regular files present in the upper but absent from the lower (new files). */
-  added: string[];
-  /** Regular files present in both (the run overwrote an existing file). */
-  modified: string[];
-  /** Paths whited-out in the upper (the run deleted a lower file). */
-  deleted: string[];
-  /**
-   * Symlinks the run created/changed, shown as `path -> target`. `escapes` marks a
-   * target that resolves outside the project root — apply REFUSES those (reproducing
-   * them would be a foothold / secret-exfiltration vector); the approver sees them
-   * flagged in the summary.
-   */
-  symlinks: { path: string; target: string; escapes: boolean }[];
-  /**
-   * Entries the walk refused to reproduce and apply will skip: special files
-   * (block/char/fifo/socket that aren't overlay whiteouts), escaping symlinks, and
-   * unsafe whiteout names. Surfaced so the summary never over-promises what apply does.
-   */
-  skipped: { path: string; reason: string }[];
-  /** True when any list was capped — more changes exist than are listed. */
-  truncated: boolean;
-  /** True count of changed paths (added + modified + deleted + symlinks), pre-cap. */
-  totalCount: number;
-}
-
-/**
- * Result of `finalize()` — whether the finished run needs a write-back approval
- * gate, plus the change summary to show the reviewer. `requiresApproval` is
- * false when the overlay is empty (no changes → complete without a gate).
- */
-export interface WriteBackFinalizeResult {
-  requiresApproval: boolean;
-  changeSummary?: OverlayChangeSummary;
-}
-
-/**
- * Result of `applyChanges()` — what actually landed on the live root. Reported
- * in the completion message and the `writeback_applied` event. `warnings` carries
- * per-file issues (e.g. an opaque-directory replace overlay-native can't express)
- * without failing the whole apply.
- */
-export interface WriteBackApplySummary {
-  filesApplied: number;
-  filesDeleted: number;
-  warnings: string[];
-}
-
-/**
- * Env keys NEVER forwarded into a container via `docker exec -e` — the runner
- * image sets these correctly and a host/project value would break in-container
- * resolution (PATH must point at the in-container binaries; HOME must be the
- * container user's home). Shared by BOTH container exec paths (the Claude spawn
- * hook and the bash/script deterministic exec) so their env policy can't drift.
- */
-export const CONTAINER_ENV_DENYLIST: ReadonlySet<string> = new Set([
-  'PATH',
-  'HOME',
-  'PWD',
-  'OLDPWD',
-  'SHLVL',
-]);
-
-/**
- * Universal request options accepted by all providers.
- * Provider-specific fields go through `nodeConfig` and `assistantConfig` in SendQueryOptions.
- */
-export interface AgentRequestOptions {
-  model?: string;
-  abortSignal?: AbortSignal;
-  systemPrompt?: SystemPromptInput;
-  outputFormat?: { type: 'json_schema'; schema: Record<string, unknown> };
-  env?: Record<string, string>;
-  /**
-   * Names in `env` whose values Archon injected as credentials rather than
-   * loading from project configuration. Custom provider configuration must not
-   * be allowed to select them.
-   */
-  protectedEnvKeys?: readonly string[];
-  maxBudgetUsd?: number;
-  fallbackModel?: string;
-  /**
-   * Request an immutable fork of `resumeSessionId`. Exact-fork callers such as
-   * named workflow resume must first verify `sessionFork === true`. Legacy session
-   * reuse may still send this flag to resume-only providers, where behavior is
-   * provider-specific and immutability is not guaranteed.
-   */
-  forkSession?: boolean;
-  /**
-   * In-process tools the model may call this turn. Defined once by the caller
-   * (e.g. core's manage_run) and adapted per provider — Claude wraps each via
-   * `createSdkMcpServer`/`tool()`, Pi via `customTools`. Providers without an
-   * in-process tool path (Codex/OpenCode) ignore them. Gated on the
-   * `nativeTools` capability.
-   */
-  nativeTools?: NativeTool[];
-}
-
-/**
- * One property on a native tool's input object. `kind` is the discriminant the
- * provider converters switch on; each variant maps to exactly one SDK schema
- * form. `values` is a non-empty tuple, so an enum with no options is a compile
- * error rather than a provider-side runtime throw.
- */
-export type NativeToolProperty =
-  | { kind: 'string'; description?: string }
-  | { kind: 'enum'; values: readonly [string, ...string[]]; description?: string }
-  | { kind: 'boolean'; description?: string };
-
-/**
- * The closed input shape a native tool may declare: a flat object of string /
- * string-enum / boolean properties, plus the names of the required ones. Every
- * provider maps this to its SDK's schema form, so the supported subset lives
- * here once instead of being re-derived by each converter.
- */
-export interface NativeToolInputSchema {
-  properties: Record<string, NativeToolProperty>;
-  required: readonly string[];
-}
-
-/**
- * Build a NativeToolInputSchema while tying `required` to the property keys: a
- * name that is not a declared property is a compile error, where the erased
- * interface alone would accept any string. Returns the erased shape so
- * `NativeTool` stays non-generic — a `keyof P` constraint on the interface
- * itself would make the schema invariant in `P` and break assignment to
- * `SendQueryOptions.nativeTools`.
- */
-export function defineNativeToolInputSchema<P extends Record<string, NativeToolProperty>>(input: {
-  properties: P;
-  required: readonly (keyof P & string)[];
-}): NativeToolInputSchema {
-  return input;
-}
-
-/**
- * A provider-neutral in-process tool. The handler runs in the host process and
- * closes over whatever live context it needs (DB, operations, conversation), so
- * `@archon/providers` never imports `@archon/core` — the tool crosses the
- * boundary as data + a function on the request options.
- *
- * `inputSchema` is the closed typed shape each provider maps to its SDK's
- * schema form. The handler is expected to return a text result rather than
- * throw — provider adapters add no safety net, so an uncaught throw would
- * surface into the agent loop. (core's `buildManageRunTool` guarantees this with
- * an outer try/catch around its dispatch.)
- */
-export interface NativeTool {
-  name: string;
-  description: string;
-  inputSchema: NativeToolInputSchema;
-  handler: (input: Record<string, unknown>) => Promise<string>;
-}
-
-/**
- * Raw node configuration from workflow YAML.
- * Providers translate fields they understand; unknown fields are ignored.
- */
-export interface NodeConfig {
-  /** Node ID from the workflow DAG — used by providers for per-node isolation (e.g., session dirs). */
-  nodeId?: string;
-  mcp?: string;
-  hooks?: unknown;
-  skills?: string[];
-  /** Exact provider plugin ids the node loads; every other user-installed plugin stays off. */
-  plugins?: string[];
-  /**
-   * Inline sub-agent definitions (keyed by kebab-case agent ID).
-   *
-   * Intentional hand-written duplicate of `agentDefinitionSchema` (authoritative
-   * source: `@archon/workflows/schemas/dag-node`). Normally we follow the
-   * project rule "derive types from Zod via `z.infer`, never write parallel
-   * interfaces" — broken here on purpose: `@archon/providers/types` is the
-   * contract subpath consumed by `@archon/workflows`, so importing from
-   * `@archon/workflows` would create a circular dependency.
-   *
-   * Drift risk: when the schema gains a field, this shape must be updated
-   * by hand. Follow-up work: extract the agent-definition contract to a
-   * lower-tier package so `z.infer` can be used end-to-end (#1276).
-   */
-  agents?: Record<
-    string,
-    {
-      description: string;
-      prompt: string;
-      model?: string;
-      tools?: string[];
-      disallowedTools?: string[];
-      skills?: string[];
-      maxTurns?: number;
-    }
-  >;
-  allowed_tools?: string[];
-  denied_tools?: string[];
-  /**
-   * Portable per-node Pi extension-posture override (issue #2133). Carries the
-   * workflow-YAML `pi:` block — the highest-precedence layer over the
-   * install-level `assistants.pi.nodes.<nodeId>` map (#2124) and assistant-level
-   * defaults. Consumed only by the Pi provider (`resolvePiExtensionSettings`);
-   * other providers ignore it. It is exactly the extension-posture subset of
-   * `PiProviderDefaults`, so we derive it rather than re-declare the fields. The
-   * workflows-side authoring schema (`PiNodeConfig` in @archon/workflows) is a
-   * separate hand-mirror only because that package can't import runtime values
-   * across the @archon/providers/types contract boundary.
-   */
-  pi?: Pick<PiProviderDefaults, 'enableExtensions' | 'interactive' | 'extensionFlags'>;
-  effort?: EffortRung;
-  sandbox?: unknown;
-  betas?: string[];
-  output_format?: Record<string, unknown>;
-  maxBudgetUsd?: number;
-  systemPrompt?: SystemPromptInput;
-  fallbackModel?: string;
-  /**
-   * Per-node override for Claude Code settingSources — which filesystem
-   * setting sources the SDK loads (CLAUDE.md, skills, commands, agents).
-   * Overrides the assistant-level default; falls back to ['project', 'user']
-   * when neither is set. Claude-only; other providers ignore it (the
-   * dag-executor warns via the settingSources capability axis).
-   */
-  settingSources?: ('project' | 'user')[];
-  idle_timeout?: number;
-  /**
-   * Per-node override for Claude's `agentProgressSummaries` flag (Phase 4 of #975).
-   * When unset, workflow nodes default to `true` (so the Web UI gets AI-generated
-   * `summary` fields on running `subtask` events every ~30s). Authors can explicitly set
-   * `false` to opt out for a specific node.
-   */
-  agentProgressSummaries?: boolean;
-  [key: string]: unknown;
-}
-
-/** Typed admission transitions for one capped provider attempt. */
-export interface ProviderAdmissionEvent {
-  state: 'waiting' | 'admitted' | 'released';
-  /** Provider registration ID. */
-  provider: string;
-  /** Slot holder ID; stable from `waiting` through `released` for one attempt. */
-  attemptId: string;
-  capacity: number;
-}
-
-/**
- * Extended options for sendQuery, adding workflow-specific context.
- * The orchestrator path uses base AgentRequestOptions fields only.
- * The workflow path additionally passes nodeConfig and assistantConfig.
- */
-export interface SendQueryOptions extends AgentRequestOptions {
-  /**
-   * Honored by Codex only: titles use empty capability declarations and a read-only
-   * sandbox. Claude and Pi ignore it.
-   */
-  purpose?: 'title-generation';
-  /** Observer for capped-provider admission transitions (queue visibility, #2817). */
-  onAdmission?: (event: ProviderAdmissionEvent) => void;
-  /** Raw YAML node config — provider translates internally to SDK-specific options. */
-  nodeConfig?: NodeConfig;
-  /** Per-provider defaults from .archon/config.yaml assistants section. */
-  assistantConfig?: Record<string, unknown>;
-  /**
-   * Execution target for this turn. Absent / `{ kind: 'host' }` runs the provider
-   * on the Archon host — the only value the engine produces today, so this field
-   * is currently inert plumbing that every provider can safely ignore.
-   * `{ kind: 'container', … }` will (Phase B) tell a capable provider (Claude
-   * first) to spawn its CLI inside the prepared container. Phase B will also add
-   * a provider capability flag plus a pre-dispatch fail-fast so a `container`
-   * value can never reach a provider that cannot honor it.
-   */
-  execContext?: ExecutionContext;
-}
-
-/**
- * How a credential of a given vendor can be connected / detected.
- *  - `api_key`      — a pasteable bearer string, stored encrypted per user.
- *  - `subscription` — an OAuth login (Claude Pro/Max, GitHub Copilot, ChatGPT).
- *  - `ambient`      — cloud credential chains detected from the environment
- *    (AWS for Bedrock, gcloud ADC for Vertex). Never stored, status-only.
- *
- * Exported as a const tuple so API schemas can derive `z.enum(CREDENTIAL_KINDS)`
- * instead of re-listing the literals.
- */
-export const CREDENTIAL_KINDS = ['api_key', 'subscription', 'ambient'] as const;
-export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
-
-/**
- * One upstream-vendor credential an agent provider can consume. `vendor` is the
- * canonical credential id (e.g. 'anthropic', 'openrouter', 'github-copilot') —
- * deliberately NOT the agent provider id: one credential can serve multiple
- * agents (an 'anthropic' key powers Claude Code, Pi's anthropic backend, and
- * OpenCode). Delivery (vendor → env vars / files) is owned by
- * @archon/core/credentials — this spec is only the consumption matrix.
- */
-export interface CredentialSpec {
-  /** Canonical vendor id — used as the storage key in user_provider_keys. */
-  vendor: string;
-  /** Human-readable vendor name for UI display (e.g. 'OpenRouter'). */
-  displayName: string;
-  /** Which connection kinds this vendor supports for this agent (at least one). */
-  kinds: [CredentialKind, ...CredentialKind[]];
-}
-
-/**
- * An agent's credential catalog. `static` lists the vendors up front
- * (Claude/Codex/Copilot/Pi); `dynamic` means the set is only knowable at
- * runtime (OpenCode resolves its models.dev catalog via the embedded server's
- * introspection API and exposes it through a dedicated endpoint).
- */
-export type ProviderCredentialCatalog =
-  | {
-      kind: 'static';
-      specs: CredentialSpec[];
-      vendorFor(model: string | undefined): string | undefined;
-    }
-  | { kind: 'dynamic'; vendorFor(model: string | undefined): undefined };
-
-/**
- * Registration entry for a provider in the provider registry.
- * Each entry carries metadata, a factory, and model-compatibility logic.
- * The registry is the source of truth for provider identity, capabilities, and display.
- */
-export interface ProviderRegistration {
-  /** Unique provider identifier — used in YAML, config, DB */
-  id: string;
-
-  /** Human-readable name for UI display */
-  displayName: string;
-
-  /** Instantiate a provider */
-  factory: () => IAgentProvider;
-
-  /** Static capability declaration — used for dag-executor warnings */
-  capabilities: ProviderCapabilities;
-
-  /** Whether this is a built-in (maintained by core team) or community provider */
-  builtIn: boolean;
-
-  /**
-   * Credentials this agent can consume. Required: registering an agent without
-   * declaring its credential surface is a bug, not a default (#1955) — the
-   * connectable-vendor catalog and the agent→credential matrix in
-   * GET /api/auth/providers are derived from these declarations.
-   */
-  credentials: ProviderCredentialCatalog;
-
-  /**
-   * Validate and normalize authored provider defaults, for `.archon/config.yaml`
-   * and for a per-run config layer alike. Execution-time parsing stays defensive
-   * and tolerant; an authored setting must reject values the provider would
-   * otherwise silently discard.
-   */
-  parseConfig: ProviderConfigParser;
-}
-
 /**
  * API-safe projection of ProviderRegistration (excludes non-serializable fields).
  * Used by GET /api/providers and consumed by the Web UI.
@@ -663,43 +178,4 @@ export interface ProviderInfo {
   builtIn: boolean;
   /** The shared ladder when this provider accepts `effort:`; absent otherwise. */
   effortLevels?: readonly EffortRung[];
-}
-
-/**
- * Generic agent provider interface.
- * Allows supporting multiple agent providers (Claude, Codex, etc.)
- */
-export interface IAgentProvider {
-  /** Check the credential this provider uses when Archon delivers none. */
-  checkCredential(request: {
-    assistantConfig?: SendQueryOptions['assistantConfig'];
-    model?: string;
-    env: Record<string, string>;
-    signal: AbortSignal;
-  }): Promise<CredentialStatus>;
-
-  /**
-   * Send a message and get streaming response.
-   * @param prompt - User message or prompt
-   * @param cwd - Working directory for the provider
-   * @param resumeSessionId - Optional session ID to resume
-   * @param options - Optional request options (universal + nodeConfig + assistantConfig)
-   */
-  sendQuery(
-    prompt: string,
-    cwd: string,
-    resumeSessionId?: string,
-    options?: SendQueryOptions
-  ): AsyncGenerator<MessageChunk>;
-
-  /**
-   * Get the provider type identifier (e.g. 'claude', 'codex').
-   */
-  getType(): string;
-
-  /**
-   * Get the provider's capability flags.
-   * Used by the dag-executor to warn when nodes specify unsupported features.
-   */
-  getCapabilities(): ProviderCapabilities;
 }

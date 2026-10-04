@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mergeTokenUsage, type TokenUsage } from './types';
+import { mergeTokenUsage, type TokenUsage } from './result';
 
 describe('mergeTokenUsage', () => {
   test('returns undefined for no contributions', () => {

@@ -74,13 +74,13 @@ import {
   getProviderCapabilities,
 } from '@archon/providers';
 import type { ProviderFailure } from '@archon/provider-contract';
-import type { SendQueryOptions } from '@archon/providers';
+import type { SendQueryOptions } from '@archon/provider-contract';
 import {
   mergeTokenUsage,
   type MessageChunk,
   type ProviderEvent,
   type TokenUsage,
-} from '@archon/providers/types';
+} from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the

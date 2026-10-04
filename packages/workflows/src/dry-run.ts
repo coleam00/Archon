@@ -2,7 +2,7 @@
 import { z } from '@hono/zod-openapi';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { createLogger, getArchonTempPath } from '@archon/paths';
-import { validateStructuredOutput } from '@archon/providers/structured-output';
+import { validateStructuredOutput } from './structured-output';
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
