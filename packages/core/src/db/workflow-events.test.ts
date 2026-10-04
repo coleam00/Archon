@@ -1354,7 +1354,28 @@ describe('workflow-events', () => {
       }
     );
 
-    test('selects the same reusable outputs as the workflows in-memory store double', async () => {
+    test('selects the same reusable outputs and usage as the workflows in-memory store double', async () => {
+      // Typed rows carry the scope in `accounting`, not the legacy `aggregate` marker.
+      const typedUsage = (accounting: 'node' | 'aggregate', input: number, cost_usd: number) => ({
+        node: { id: 'worker', kind: 'exec', runtime: 'sh' },
+        invocation: {
+          id: `${accounting}-invocation`,
+          startedAt: '2026-09-22T10:00:00Z',
+          loopPath: [],
+        },
+        attempt: { id: `${accounting}-attempt`, startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting,
+        tokens: { input, output: 1 },
+        cost_usd,
+      });
       const rows = [
         { step_name: 'text', event_type: 'node_completed', data: { node_output: 'kept' } },
         { step_name: 'number', event_type: 'node_completed', data: { node_output: 42 } },
@@ -1363,6 +1384,12 @@ describe('workflow-events', () => {
         { step_name: 'missing', event_type: 'node_completed', data: {} },
         { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 'old' } },
         { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 7 } },
+        { step_name: 'own', event_type: 'node_completed', data: typedUsage('node', 3, 0.5) },
+        {
+          step_name: 'rollup',
+          event_type: 'node_completed',
+          data: typedUsage('aggregate', 30, 5),
+        },
       ];
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
 
@@ -1374,6 +1401,10 @@ describe('workflow-events', () => {
 
       expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
       expect(double.completedNodeOutputs).toEqual(production.completedNodeOutputs);
+      expect(production.tokens).toEqual({ input: 3, output: 1 });
+      expect(production.costUsd).toBe(0.5);
+      expect(double.tokens).toEqual(production.tokens);
+      expect(double.costUsd).toBe(production.costUsd);
     });
 
     test('returns an empty snapshot when no events exist', async () => {

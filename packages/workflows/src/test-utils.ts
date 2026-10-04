@@ -14,6 +14,7 @@ import { expandWorkflowIncludes } from './include-expander';
 import { resolveWorkflow } from './graph-plan';
 import type { CapturedSourceOwner } from './executor';
 import { readNodeRecordEvent } from './node-record-reader';
+import { nodeCostScope } from './node-record-serialization';
 import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
 
 const DEFAULT_NODE = { id: 'default', command: 'test-command' };
@@ -140,7 +141,7 @@ export interface InMemoryStoreEvent {
  * Rebuild a DAG resume snapshot from an in-memory event log, for test doubles of
  * `IWorkflowStore.getDagResumeSnapshot`. It models the subset of the real store's fold
  * that workflow-package tests exercise; core's `workflow-events.test.ts` runs the same
- * rows through both so the output selection cannot drift unnoticed.
+ * rows through both so the output selection and usage scope cannot drift unnoticed.
  */
 export function inMemoryDagResumeSnapshot(
   events: readonly InMemoryStoreEvent[],
@@ -173,7 +174,7 @@ export function inMemoryDagResumeSnapshot(
     }
     // A derived row (loop_group roll-up) restates usage other rows already carry, so it
     // contributes output but never usage (#2469).
-    if (e.event_type !== 'node_completed' || e.data?.aggregate === true) continue;
+    if (e.event_type !== 'node_completed' || nodeCostScope(e.data ?? {}) === 'total') continue;
     const eventTokens = e.data?.tokens;
     if (
       typeof eventTokens === 'object' &&
