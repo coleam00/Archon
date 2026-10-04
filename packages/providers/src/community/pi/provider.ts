@@ -401,7 +401,14 @@ async function applyPiEnvOverride(
 
 /**
  * The ModelRuntime a Pi turn authenticates with. The login check builds the same one, so
- * both read the same auth file and models config.
+ * both read the same auth file and models config and see the same model catalog.
+ *
+ * Creating it refreshes the runtime, as Pi itself does. The refresh restores Pi's persisted
+ * model catalog (models newer than the bundled one), which decides whether a model is
+ * catalogued and so how its credential is checked. The refresh also runs Pi's availability
+ * pass, which reads every provider's stored auth.json credential and so runs each stored
+ * `!command` key, not only the selected provider's. Pi caches a stored command's output for
+ * the life of the process. A models.json key command is not run here.
  *
  * Archon delivers per-user credentials (API keys + subscriptions) as a per-run auth.json
  * and points at it via ARCHON_PI_AUTH_PATH, an explicit authPath (not PI_CODING_AGENT_DIR)
@@ -424,8 +431,6 @@ async function createPiModelRuntime(
   options: {
     protectedEnvKeys?: readonly string[];
     signal?: AbortSignal;
-    /** False skips Pi's availability pass, which checks, and so runs the key command of, every provider. */
-    refreshOnCreate?: boolean;
   } = {}
 ): Promise<ModelRuntime> {
   let customProviderModelsPath: string | undefined;
@@ -443,7 +448,6 @@ async function createPiModelRuntime(
       authPath,
       ...(customProviderModelsPath ? { modelsPath: customProviderModelsPath } : {}),
       ...(options.signal ? { signal: options.signal } : {}),
-      ...(options.refreshOnCreate === false ? { refreshOnCreate: false } : {}),
     });
   } finally {
     if (customProviderModelsPath) {
@@ -474,10 +478,7 @@ export class PiProvider implements IAgentProvider {
       ensurePiPackageDirShim();
       const piCodingAgent = await import('@earendil-works/pi-coding-agent');
       const parsed = resolvePiModel(request.model ?? piConfig.model, process.cwd(), piCodingAgent);
-      const runtime = await createPiModelRuntime(piCodingAgent, parsed.provider, env, {
-        signal,
-        refreshOnCreate: false,
-      });
+      const runtime = await createPiModelRuntime(piCodingAgent, parsed.provider, env, { signal });
       await applyPiEnvOverride(runtime, parsed.provider, env);
       const { status } = await resolvePiTurnAuth(
         runtime,

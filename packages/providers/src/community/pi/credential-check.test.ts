@@ -302,19 +302,43 @@ describe('Pi native credentials', () => {
     });
     expect(runCount()).toBe(2);
   });
-  test('checks only the selected provider command-backed key', async () => {
-    const selected = join(root, 'selected');
-    const unrelated = join(root, 'unrelated');
+  test('a model only in the persisted catalog is checked as a turn checks it', async () => {
+    // Pi's refresh restores the persisted pi.dev catalog, where models newer than the
+    // bundled catalog live. A runtime built without it would defer this model to extensions.
     writeFileSync(
-      join(root, 'auth.json'),
+      join(root, 'models-store.json'),
       JSON.stringify({
-        anthropic: { type: 'api_key', key: `!printf ran > '${selected}'; printf '${secret}'` },
-        openai: { type: 'api_key', key: `!printf ran > '${unrelated}'; printf '${secret}'` },
+        anthropic: {
+          lastModified: Number.MAX_SAFE_INTEGER,
+          models: [
+            {
+              id: 'claude-persisted-only',
+              name: 'Persisted only',
+              api: 'anthropic-messages',
+              provider: 'anthropic',
+              baseUrl: 'https://api.anthropic.com',
+              reasoning: false,
+              input: ['text'],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200000,
+              maxTokens: 8192,
+            },
+          ],
+        },
       })
     );
-    expect(await check()).toEqual({ state: 'usable', source: 'native' });
-    expect(existsSync(selected)).toBe(true);
-    expect(existsSync(unrelated)).toBe(false);
+    expect(await check('anthropic/claude-persisted-only')).toEqual({
+      state: 'not_connected',
+      source: 'native',
+    });
+    const chunks = [];
+    for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
+      model: 'anthropic/claude-persisted-only',
+    }))
+      chunks.push(chunk);
+    expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
+      failure: { class: 'auth' },
+    });
   });
   test('typed auth rejection is unusable regardless of its prose', async () => {
     const runtime = await ModelRuntime.create();
