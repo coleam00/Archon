@@ -1,4 +1,4 @@
-import { TIER_NAMES } from '@archon/workflows/model-validation';
+import { isTierName } from '@archon/workflows/model-validation';
 
 /**
  * Validate a custom alias name: must start with '@' and not shadow a tier
@@ -9,7 +9,7 @@ import { TIER_NAMES } from '@archon/workflows/model-validation';
  * keeps the two identical.
  */
 export function validateAliasName(name: string): string | null {
-  if ((TIER_NAMES as readonly string[]).includes(name)) {
+  if (isTierName(name)) {
     return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
   }
   if (!name.startsWith('@')) {
