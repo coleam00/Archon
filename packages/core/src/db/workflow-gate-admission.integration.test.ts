@@ -168,7 +168,7 @@ describe('durable workflow gate admission', () => {
     });
     expect((await queue(id)).active).toBeNull();
     const events = await getDatabase().query<{ event_type: string; data: string }>(
-      'SELECT event_type, data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 ORDER BY id',
+      'SELECT event_type, data FROM remote_agent_workflow_events WHERE workflow_run_id = $1 ORDER BY event_order',
       [id]
     );
     expect(events.rows.filter(row => row.event_type === 'approval_received')).toHaveLength(2);
