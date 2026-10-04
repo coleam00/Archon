@@ -85,6 +85,14 @@ test(
         },
       })
     );
+    const startupDiagnostics = setTimeout(
+      () => {
+        console.error(
+          `Browser: ${browser}\nURL: ${server.url.href}\nRequests: ${requests.join(', ')}\n${diagnostics}`
+        );
+      },
+      testTimeout(15000) - 1000
+    );
     try {
       const outcome = await Promise.race([
         result,
@@ -98,6 +106,7 @@ test(
       expect(outcome).toBe('passed');
     } finally {
       clearTimeout(timeout);
+      clearTimeout(startupDiagnostics);
       child.kill();
       await child.exited;
       await server.stop(true);
