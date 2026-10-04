@@ -321,23 +321,29 @@ export class OutputRefError extends Error {
     { reference: ref, segment, candidates = [] }: OutputRefErrorDetails
   ): string {
     const field = segment ?? pathField;
+    // A reason about the whole reference names a dotted path as a path; one about a
+    // single segment names that segment as a field.
+    const isPath = segment === undefined && pathField.includes('.');
+    const noun = isPath ? 'path' : 'field';
+    const named = isPath ? `path '${pathField}'` : `'${field}'`;
+    const subject = `${noun} '${field}'`;
     switch (reason) {
       case 'not-in-schema':
-        return `'${ref}' references field '${field}', which is not declared in node '${nodeId}'s output_format schema. Add '${field}' to the schema (and mark it optional if it can be absent), or fix the reference.`;
+        return `'${ref}' references ${subject}, which is not declared in node '${nodeId}'s output_format schema. Add '${field}' to the schema (and mark it optional if it can be absent), or fix the reference.`;
       case 'unparseable':
-        return `'${ref}' references field '${field}', but node '${nodeId}'s output is not a JSON object, so the field cannot be read. Emit JSON containing '${field}', or reference '$${nodeId}.output' (whole text) instead.`;
+        return `'${ref}' references ${subject}, but node '${nodeId}'s output is not a JSON object, so the ${noun} cannot be read. Emit JSON containing ${named}, or reference '$${nodeId}.output' (whole text) instead.`;
       case 'array-aggregate':
-        return `'${ref}' references field '${field}', but node '${nodeId}' is a fan-out and its output is a JSON ARRAY of per-child results (each element the child's result value, single-encoded — never a JSON string to parse again), not an object — there is no '${field}' on it and no producer prompt to change, because the array shape is fixed by the engine. Reference '$${nodeId}.output' (the whole array) and read it in a script node, which is also where a failed child's marker ({ archon_failed: true, error, status }) can be handled. See the fan_out docs.`;
+        return `'${ref}' references ${subject}, but node '${nodeId}' is a fan-out and its output is a JSON ARRAY of per-child results (each element the child's result value, single-encoded — never a JSON string to parse again), not an object — there is no ${named} on it and no producer prompt to change, because the array shape is fixed by the engine. Reference '$${nodeId}.output' (the whole array) and read it in a script node, which is also where a failed child's marker ({ archon_failed: true, error, status }) can be handled. See the fan_out docs.`;
       case 'truncated':
-        return `'${ref}' references field '${field}', but node '${nodeId}'s persisted output was clipped at the event size cap and no longer parses as JSON. The node very likely emitted '${field}' correctly — this surfaces on a resumed run, which reads the clipped copy rather than the original. Write the payload to a file under $ARTIFACTS_DIR and read it downstream, or shrink the node's output.`;
+        return `'${ref}' references ${subject}, but node '${nodeId}'s persisted output was clipped at the event size cap and no longer parses as JSON. The node very likely emitted ${named} correctly — this surfaces on a resumed run, which reads the clipped copy rather than the original. Write the payload to a file under $ARTIFACTS_DIR and read it downstream, or shrink the node's output.`;
       case 'non-object-intermediate':
         return `'${ref}' cannot read segment '${field}' because its parent is not an object. Dot paths cannot traverse scalars or arrays.`;
       case 'missing-key':
-        return `'${ref}' references field '${field}', but node '${nodeId}'s JSON output has no such key. Emit '${field}' in the output, or fix the reference.`;
+        return `'${ref}' references ${subject}, but node '${nodeId}'s JSON output has no such key. Emit '${field}' in the output, or fix the reference.`;
       case 'producer-not-run':
-        return `'${ref}' references field '${field}', but node '${nodeId}' did not run (skipped or pending), so it has no output to read. Guard this reference with a 'when:' condition, or fix the dependency.`;
+        return `'${ref}' references ${subject}, but node '${nodeId}' did not run (skipped or pending), so it has no output to read. Guard this reference with a 'when:' condition, or fix the dependency.`;
       case 'producer-failed':
-        return `'${ref}' references field '${field}', but node '${nodeId}' failed, so its output cannot be trusted. Guard this reference with a 'when:' condition, or fix the failure.`;
+        return `'${ref}' references ${subject}, but node '${nodeId}' failed, so its output cannot be trusted. Guard this reference with a 'when:' condition, or fix the failure.`;
       case 'unknown-node': {
         const hint =
           candidates.length > 0

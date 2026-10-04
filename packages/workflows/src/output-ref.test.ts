@@ -204,6 +204,16 @@ describe('resolveNodeOutputField — producer did not run', () => {
 });
 
 describe('resolveNodeOutputField — producer failed (#2713)', () => {
+  it('names a nested reference as a path, not a field', () => {
+    const failed: NodeOutput = { state: 'failed', output: '{}', error: 'boom' };
+    expect(() => resolveField(failed, 'p', 'proposal.action')).toThrow(
+      "references path 'proposal.action', but node 'p' failed"
+    );
+    expect(() => resolveField(completed('not json'), 'p', 'proposal.action')).toThrow(
+      "so the path cannot be read. Emit JSON containing path 'proposal.action'"
+    );
+  });
+
   it("throws producer-failed even when the failed producer's leftover output is real, valid JSON", () => {
     // Mirrors a loop_group's failure paths: lastIterationOutput is real, non-empty text
     // that happens to be valid JSON — exactly the shape that let the failed producer's

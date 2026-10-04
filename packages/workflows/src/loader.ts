@@ -801,10 +801,14 @@ const GATE_ON_A_SHELL_NODE =
  * `enclosingNodes` carries the enclosing loop scope's nodes BY ID rather than just
  * their ids, because a `loop_group` body's `when:` may reference an outer producer and
  * the free-form-AI check needs that producer's type and `output_format`.
+ *
+ * `includeAliases` maps a flattened producer id back to the include alias the author
+ * referenced, so an output-contract error names `$alias.output.x` as written.
  */
 export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
-  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>
+  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>,
+  includeAliases?: ReadonlyMap<string, string>
 ): string | null {
   // Check ID uniqueness
   const nodesById = new Map<string, DagNode | IncludeDirective>();
@@ -1007,8 +1011,15 @@ export function validateDagStructure(
         if (!producer || isIncludeDirective(producer)) continue;
         const paths = definedOutputPaths(producer);
         if (paths === undefined) continue;
+        // `$LOOP_PREV` refs are never rewritten to an include's sink, so only a current
+        // ref can carry an alias.
+        const alias = ref.prior ? undefined : includeAliases?.get(ref.nodeId);
         try {
-          assertDeclaredOutputPath(paths, ref.nodeId, ref.field, ref.reference);
+          if (alias === undefined) {
+            assertDeclaredOutputPath(paths, ref.nodeId, ref.field, ref.reference);
+          } else {
+            assertDeclaredOutputPath(paths, alias, ref.field, outputRefText(alias, ref.field));
+          }
         } catch (error) {
           return `Node '${node.id}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;
         }
@@ -1281,7 +1292,7 @@ export function validateDagStructure(
         ...(enclosingNodes ?? []),
         ...nodesById,
       ]);
-      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes);
+      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes, includeAliases);
       if (bodyError) {
         return `loop_group '${node.id}' body: ${bodyError}`;
       }

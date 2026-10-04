@@ -33729,9 +33729,11 @@ nodes:
     );
 
     const discovered = await discoverWorkflows(testDir, { loadDefaults: false });
+    // The error names the include alias the author wrote, not the flattened sink id.
     expect(discovered.errors.map(e => e.error)).toEqual([
-      expect.stringContaining("'$plan__build.output.tasks' references field 'tasks'"),
+      expect.stringContaining("'$plan.output.tasks' references field 'tasks'"),
     ]);
+    expect(discovered.errors[0]?.error).not.toContain('plan__build');
   });
 });
 

@@ -25,10 +25,9 @@ import type { NodeOutput } from './schemas';
 
 /**
  * Build a NodeOutput fixture for condition tests.
- * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
- * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
- * paths populate it; older providers leave it off). `declaredFields` marks a
- * declared-schema producer (as depth-1 paths) (output_format with properties) for strict-resolution tests.
+ * Omits `structuredOutput` when undefined, matching producers that emit none (only
+ * Pi/Codex/Claude paths populate it). `declaredFields` marks a declared-schema producer
+ * for strict-resolution tests; each field becomes a depth-1 declared path.
  */
 function makeOutput(
   output: string,
