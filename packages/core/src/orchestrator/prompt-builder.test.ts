@@ -239,7 +239,7 @@ describe('workspaces root in the prompt', () => {
       env: { ARCHON_HOME: join('/srv', 'archon-data') },
       root: join('/srv', 'archon-data', 'workspaces'),
     },
-    { install: 'Docker', env: { ARCHON_DOCKER: 'true' }, root: '/.archon/workspaces' },
+    { install: 'Docker', env: { ARCHON_DOCKER: 'true' }, root: join('/.archon', 'workspaces') },
   ])('$install: every prompt names the runtime root', ({ env, root }) => {
     for (const key of envKeys) delete process.env[key];
     Object.assign(process.env, env);
