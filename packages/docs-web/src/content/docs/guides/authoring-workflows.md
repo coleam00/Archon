@@ -495,8 +495,8 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
 
 - `$nodeId.output` references the full output string of a completed node
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
-- Field access stops at one top-level field. `$nodeId.output.a.b` is rejected at load time;
-  flatten the producer's schema or pass `$nodeId.output.a` to a script node and inspect it there.
+- `$nodeId.output.a.b` accesses nested object fields, checked against every declared schema
+  segment. Paths stop at arrays; indexing, wildcards, and expressions are unsupported.
 - A field used in a scalar condition must resolve to a string, number, boolean, or null. A present object or array fails the gated node; expose a scalar decision field or inspect structured data in a script node.
 - `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
   run's `--input`). A name this run does not carry **fails the node** — it never quietly
@@ -578,10 +578,34 @@ Variable substitution order:
 1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
 2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
 
-In fields that substitute node output references, only one top-level field segment is
-supported. A nested reference such as `$nodeId.output.proposal.text` fails workflow
-validation. Flatten the producer's `output_format`, or pass `$nodeId.output.proposal` to a
-script node and inspect it there.
+Output references can follow nested object fields. For example, this gate receives
+`Proposed: add` when `review` emits `{"proposal":{"action":"add"}}`:
+
+```yaml
+nodes:
+  - id: review
+    prompt: Propose an action
+    output_format:
+      type: object
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: { type: string }
+          required: [action]
+      required: [proposal]
+  - id: gate
+    depends_on: [review]
+    approval:
+      message: "Proposed: $review.output.proposal.action"
+    when: "$review.output.proposal.action == 'add'"
+```
+
+A whole-value binding such as `with: { proposal: "$review.output.proposal" }`
+preserves its object value. `$LOOP_PREV.review.output.proposal.action` uses the same
+path rules for a prior loop iteration (empty on the first iteration). Paths contain
+object field names only: no array indexing, wildcards, or expressions. `when:` still
+requires a scalar, and `$node.field` shorthand cannot nest.
 
 A reference to a **failed** producer — fielded or whole-text — fails the node doing the
 substitution instead of splicing in the failed producer's leftover output; a `bash:`/
@@ -631,7 +655,7 @@ nodes:
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
 - **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
-- **Field access is strict and top-level only.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. Nested paths such as `$classify.output.details.type` fail workflow validation. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
+- **Field access is strict at every depth.** Each segment in `$classify.output.details.type` must be an explicit `properties` entry. An undeclared segment, at any depth, fails workflow validation when the local schema is known, and fails the consumer at runtime otherwise. Arrays, `additionalProperties`, `$ref`, and schema combinators do not authorize nested properties. Declared missing/null fields or parents resolve to `''`, after the entire path is checked. A schemaless `bash:`/`script:` producer must emit every nested key and every intermediate value must be an object. Child workflow results carry the selected producer's declared paths through completion and resume; a child result recorded before nested paths carries only its top-level fields, so a nested read from it fails as undeclared until the producer reruns. See [node output references](/reference/variables/#node-output-references).
 
 `output_format` is not AI-only, and it is not only a branching aid: it is how *any* producing node declares the shape of the value it hands downstream, including a workflow's own result. [Result contracts](#result-contracts) is the one description of that ownership — who declares a schema, what an `include:` alias and a `workflow:` sub-run each guarantee, and how a small result points at a large file.
 

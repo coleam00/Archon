@@ -517,7 +517,7 @@ describe('workflow-events', () => {
       });
     });
 
-    test('carries declared_fields back out; rows without it re-derive from the schema (#2453)', async () => {
+    test('carries the path contract back out, reading a legacy declared_fields row as depth-1 paths (#2453)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           {
@@ -529,10 +529,11 @@ describe('workflow-events', () => {
               node_output: '{"green":true}',
               structured_output: { green: true },
               declared_fields: ['green', 'note'],
+              declared_output_paths: [['green'], ['note'], ['note', 'text']],
             },
           },
           {
-            // The resume re-emit copies it forward for a SECOND resume.
+            // Written by an older binary (or its resume re-emit): only the root fields.
             step_name: 'replayed-sub',
             event_type: 'node_skipped_prior_success',
             data: { node_output: '{"n":1}', declared_fields: ['n'] },
@@ -558,17 +559,30 @@ describe('workflow-events', () => {
       expect(result.completedNodeOutputs.get('sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
-        declaredFields: ['green', 'note'],
+        declaredOutputPaths: [['green'], ['note'], ['note', 'text']],
       });
       expect(result.completedNodeOutputs.get('replayed-sub')).toEqual({
         output: '{"n":1}',
-        declaredFields: ['n'],
+        declaredOutputPaths: [['n']],
       });
       expect(result.completedNodeOutputs.get('legacy-sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
       });
       expect(result.completedNodeOutputs.get('corrupt-sub')).toEqual({ output: '{}' });
+    });
+
+    test('rejects malformed persisted nested contracts instead of restoring schemaless output', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'sub',
+            event_type: 'node_completed',
+            data: { node_output: '{}', declared_output_paths: [[]] },
+          },
+        ])
+      );
+      await expect(getDagResumeSnapshot('bad-contract')).rejects.toThrow();
     });
 
     test('reports cache from a mixed run as a floor instead of withholding it', async () => {

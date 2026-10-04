@@ -1,6 +1,11 @@
 /**
  * Zod schemas for workflow run state types.
  */
+import {
+  declaredOutputPathsSchema,
+  outputPathsFromRootFields,
+  type DeclaredOutputPaths,
+} from '../output-ref';
 import { z } from '@hono/zod-openapi';
 import {
   skipCauseSchema,
@@ -204,11 +209,11 @@ export type { NodeState, SkipCause, NodeSkipReason } from './node-state';
  * when the result chunk includes one). Downstream `$nodeId.output.field` substitution and
  * `when:` conditions prefer this object over re-parsing `output`, so providers that emit
  * fence-wrapped or preamble-prefixed JSON (Pi/Minimax) survive the round-trip.
- * `declaredFields` is the property-name set of a producer's `output_format` schema
- * (`Object.keys(output_format.properties)`), captured when the node completes. The
- * consumer uses it to tell a declared-but-optional-absent field (resolves to `''`) from a
- * field not in the contract at all (a typo → throws). Undefined for non-schema producers
- * (bash/script/prose) and schemas without a `properties` map.
+ * `declaredOutputPaths` is every object-field path a producer's `output_format` schema
+ * declares, captured when the node completes. The consumer uses it to tell a
+ * declared-but-optional-absent field (resolves to `''`) from a path not in the contract
+ * at all (a typo → throws). Undefined for non-schema producers (bash/script/prose) and
+ * schemas without a `properties` map.
  */
 export const nodeOutputSchema = z.discriminatedUnion('state', [
   z.object({
@@ -217,7 +222,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     output: z.string(),
     sessionId: z.string().optional(),
     structuredOutput: z.unknown().optional(),
-    declaredFields: z.array(z.string()).optional(),
+    declaredOutputPaths: declaredOutputPathsSchema.optional(),
     /** Session-resume outcome from the provider: false ⇒ a requested resume came
      *  back cold (fresh session). Drives the executor's cold-resume warning.
      *  Absent on 'failed' nodes — the retry path, not this signal, handles those. */
@@ -230,7 +235,7 @@ export const nodeOutputSchema = z.discriminatedUnion('state', [
     sessionId: z.string().optional(),
     error: z.string(),
     structuredOutput: z.unknown().optional(),
-    declaredFields: z.array(z.string()).optional(),
+    declaredOutputPaths: declaredOutputPathsSchema.optional(),
     /** Set by a producer whose failure is a deterministic diagnosis of its own output
      *  (an exec node's stdout missing its declared `output_format`): re-running yields
      *  the same stdout, so the retry loop must not consult the error text, which quotes
@@ -356,13 +361,15 @@ export function pendingWorkflowWaitDeadline(
  * `summary_value`  — additive sibling of `summary` (#2637): the child's terminal
  *                    structured value, stamped at completion alongside the text summary
  *                    so a parent `workflow:` node threads the logical value back.
- * `summary_declared_fields` — additive sibling of `summary_value` (#2453): the top-level
- *                    field names the child's selected `returns:` node declared, so a
- *                    parent reads `$<node>.output.field` under the CHILD's contract — a
+ * `summary_declared_output_paths` — additive sibling of `summary_value`: the field
+ *                    paths the child's selected `returns:` node declared, so a parent
+ *                    reads `$<node>.output.a.b` under the CHILD's contract — a
  *                    `workflow:` node cannot declare a schema of its own. Only the
  *                    derived projection travels; the schema itself stays in captured
- *                    workflow source. Absent on schemaless children and pre-#2453 rows,
- *                    which carry no field contract.
+ *                    workflow source. Absent on schemaless children.
+ * `summary_declared_fields` — the top-level fields of the same contract (#2453), still
+ *                    written for older binaries. A row that has only this key reads as
+ *                    a depth-1 path contract.
  */
 export const SUBRUN_METADATA_KEYS = {
   parentNodeId: 'parent_node_id',
@@ -372,6 +379,7 @@ export const SUBRUN_METADATA_KEYS = {
   inputsValues: 'inputs_values',
   summaryValue: 'summary_value',
   summaryDeclaredFields: 'summary_declared_fields',
+  summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
 
 /** Typed view of the sub-run keys on a run's metadata; each is undefined when unset. */
@@ -381,7 +389,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   fanOutItemHash: string | undefined;
   inputs: Record<string, JsonValue> | undefined;
   summaryValue: unknown;
-  summaryDeclaredFields: string[] | undefined;
+  summaryDeclaredOutputPaths: DeclaredOutputPaths | undefined;
 } {
   const parentNodeId = metadata?.[SUBRUN_METADATA_KEYS.parentNodeId];
   const childIndex = metadata?.[SUBRUN_METADATA_KEYS.childIndex];
@@ -403,14 +411,16 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
     rawLegacy !== undefined && Object.values(rawLegacy).every(v => typeof v === 'string')
       ? (rawLegacy as Record<string, string>)
       : undefined;
-  // A field projection is only usable as a field-access contract when it is exactly an
-  // array of strings. Anything else is corrupt or foreign metadata: degrade to
-  // "no contract" rather than authorize access from a shape nobody wrote.
+  // A path contract this binary wrote must parse; a malformed one fails rather than
+  // authorizing nothing. A legacy field projection is only usable as a contract when it
+  // is exactly an array of strings; anything else degrades to "no contract".
   const rawDeclaredFields = metadata?.[SUBRUN_METADATA_KEYS.summaryDeclaredFields];
-  const summaryDeclaredFields =
-    Array.isArray(rawDeclaredFields) && rawDeclaredFields.every(f => typeof f === 'string')
-      ? rawDeclaredFields
-      : undefined;
+  const summaryDeclaredOutputPaths =
+    metadata && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths)
+      ? declaredOutputPathsSchema.parse(metadata[SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths])
+      : Array.isArray(rawDeclaredFields) && rawDeclaredFields.every(f => typeof f === 'string')
+        ? outputPathsFromRootFields(rawDeclaredFields)
+        : undefined;
   return {
     parentNodeId: typeof parentNodeId === 'string' ? parentNodeId : undefined,
     childIndex: typeof childIndex === 'number' ? childIndex : undefined,
@@ -421,7 +431,7 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
       metadata !== undefined && Object.hasOwn(metadata, SUBRUN_METADATA_KEYS.summaryValue)
         ? metadata[SUBRUN_METADATA_KEYS.summaryValue]
         : undefined,
-    summaryDeclaredFields,
+    summaryDeclaredOutputPaths,
   };
 }
 

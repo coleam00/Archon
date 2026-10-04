@@ -13,7 +13,7 @@
  *
  * Grammar (compound expressions are split into atoms by {@link whenAtoms}):
  *   $nodeId.output            — whole output text of a node
- *   $nodeId.output.field      — a field of a node's JSON output
+ *   $nodeId.output.a.b        — an object-field path of a node's JSON output
  *   $nodeId.field             — shorthand for the line above (cannot nest)
  *   $INPUTS.name              — a named workflow input (#2470)
  *   $LOOP_PREV.node.output    — prior loop-group body output (loop context only)
@@ -21,11 +21,10 @@
  *   number/boolean.
  */
 import {
+  assertSupportedOutputRefs,
   INPUT_NAME_SOURCE,
-  LOOP_PREV_OUTPUT_REF_SOURCE,
   OUTPUT_FIELD_SOURCE,
-  OUTPUT_REF_SOURCE,
-  type UnsupportedNestedOutputReference,
+  OUTPUT_PATH_SOURCE,
 } from './output-ref';
 
 /**
@@ -57,12 +56,6 @@ function isWhenOperator(value: string): value is WhenOperator {
 const NODE_ID_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
 const PATH_SEGMENT_SOURCE = OUTPUT_FIELD_SOURCE;
 
-const NESTED_CANONICAL_WHEN_REF_PATTERN = new RegExp(
-  String.raw`^\s*(${OUTPUT_REF_SOURCE}\.${OUTPUT_FIELD_SOURCE}(?:\.${OUTPUT_FIELD_SOURCE})+)`
-);
-const NESTED_LOOP_PREV_WHEN_REF_PATTERN = new RegExp(
-  String.raw`^\s*(${LOOP_PREV_OUTPUT_REF_SOURCE}\.${OUTPUT_FIELD_SOURCE}(?:\.${OUTPUT_FIELD_SOURCE})+)`
-);
 const NESTED_SHORTHAND_WHEN_REF_PATTERN = new RegExp(
   String.raw`^\s*(\$(${NODE_ID_SOURCE})\.(${OUTPUT_FIELD_SOURCE})(?:\.${OUTPUT_FIELD_SOURCE})+)`
 );
@@ -72,7 +65,7 @@ const NESTED_SHORTHAND_WHEN_REF_PATTERN = new RegExp(
  *   1. inputName   — `$INPUTS.<name>` (the input branch; tried first)
  *   2. nodeId      — `$nodeId`
  *   3. segment1    — first path segment (`output` for canonical refs, else a shorthand field)
- *   4. segment2    — optional second segment (the field name when segment1 is `output`)
+ *   4. segment2    — optional object-field path (when segment1 is `output`)
  *   5. operator
  *   6. quotedValue — single-quoted RHS literal (may be empty)
  *   7. unquotedValue — bare numeric or boolean RHS
@@ -92,14 +85,14 @@ export const WHEN_ATOM_PATTERN = new RegExp(
   '^(?:' +
     String.raw`\$${WHEN_INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
     '|' +
-    String.raw`\$(${NODE_ID_SOURCE})\.(${PATH_SEGMENT_SOURCE})(?:\.(${PATH_SEGMENT_SOURCE}))?` +
+    String.raw`\$(${NODE_ID_SOURCE})\.(${PATH_SEGMENT_SOURCE})(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     ')' +
     String.raw`\s*(${WHEN_OPERATORS.join('|')})\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
 );
 
 const LOOP_PREV_WHEN_ATOM_PATTERN = new RegExp(
-  String.raw`^\$LOOP_PREV\.(${NODE_ID_SOURCE})\.output(?:\.(${PATH_SEGMENT_SOURCE}))?` +
+  String.raw`^\$LOOP_PREV\.(${NODE_ID_SOURCE})\.output(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     String.raw`\s*(${WHEN_OPERATORS.join('|')})\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
 );
@@ -162,32 +155,17 @@ export function whenAtoms(expr: string): string[] {
   return splitOutsideQuotes(expr.trim(), '||').flatMap(clause => splitOutsideQuotes(clause, '&&'));
 }
 
-/** Find a nested output path on the left-hand side of a `when:` atom. */
-export function findUnsupportedNestedWhenRef(
-  expr: string
-): UnsupportedNestedOutputReference | undefined {
+/** Quoted RHS values are literal data, even when they contain reference-shaped text. */
+export function assertSupportedWhenOutputRefs(expr: string): void {
   for (const atom of whenAtoms(expr)) {
-    const loopPrev = NESTED_LOOP_PREV_WHEN_REF_PATTERN.exec(atom);
-    if (loopPrev?.[1] !== undefined && loopPrev[2] !== undefined) {
-      return {
-        reference: loopPrev[1],
-        supportedForms: [
-          `$LOOP_PREV.${loopPrev[2]}.output`,
-          `$LOOP_PREV.${loopPrev[2]}.output.field`,
-        ],
-      };
-    }
+    const quote = atom.indexOf("'");
+    assertSupportedOutputRefs(quote < 0 ? atom : atom.slice(0, quote));
+  }
+}
 
-    const canonical = NESTED_CANONICAL_WHEN_REF_PATTERN.exec(atom);
-    if (canonical?.[1] !== undefined && canonical[2] !== undefined) {
-      const nodeId = canonical[2];
-      if (nodeId === WHEN_INPUTS_SCOPE) continue;
-      return {
-        reference: canonical[1],
-        supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`, `$${nodeId}.field`],
-      };
-    }
-
+/** Find unsupported nested shorthand on the left-hand side of a `when:` atom. */
+export function findUnsupportedNestedWhenRef(expr: string): { reference: string } | undefined {
+  for (const atom of whenAtoms(expr)) {
     const shorthand = NESTED_SHORTHAND_WHEN_REF_PATTERN.exec(atom);
     if (shorthand?.[1] !== undefined && shorthand[2] !== undefined && shorthand[3] !== undefined) {
       const nodeId = shorthand[2];
@@ -196,7 +174,6 @@ export function findUnsupportedNestedWhenRef(
         continue;
       return {
         reference: shorthand[1],
-        supportedForms: [`$${nodeId}.output`, `$${nodeId}.output.field`, `$${nodeId}.field`],
       };
     }
   }
