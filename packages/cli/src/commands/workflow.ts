@@ -3948,14 +3948,6 @@ function listRunEvents(runId: string, rawEvents: boolean): Promise<WorkflowEvent
       });
 }
 
-/** A node in the run's declared graph that no lifecycle event has reached yet. */
-export interface PendingNodeSummary {
-  nodeId: string;
-  state: 'pending';
-}
-
-export type RunNodeSummary = NodeSummary | PendingNodeSummary;
-
 /**
  * Per-node state for `workflow runs --json --verbose`: every node the run declared in
  * its `terminal_graph`, in declared order and `pending` until an event reaches it,
@@ -3967,8 +3959,8 @@ export type RunNodeSummary = NodeSummary | PendingNodeSummary;
 export function buildRunNodes(
   run: Pick<WorkflowRun, 'metadata'>,
   events: WorkflowEventRow[]
-): RunNodeSummary[] {
-  const nodes = new Map<string, RunNodeSummary>();
+): NodeSummary[] {
+  const nodes = new Map<string, NodeSummary>();
   const graph = runGraphSchema.safeParse(run.metadata[RUN_GRAPH_METADATA_KEY]);
   if (graph.success)
     for (const nodeId of graph.data.node_ids) nodes.set(nodeId, { nodeId, state: 'pending' });
@@ -3983,7 +3975,7 @@ export function buildRunNodes(
  */
 async function withRunDetail<
   Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
->(runs: Run[]): Promise<(Run & { nodes: RunNodeSummary[]; attention: RunAttention | null })[]> {
+>(runs: Run[]): Promise<(Run & { nodes: NodeSummary[]; attention: RunAttention | null })[]> {
   const eventsByRun = await workflowEventsDb.listEventsForRuns(
     runs.map(run => run.id),
     NODE_SUMMARY_EVENT_TYPES
