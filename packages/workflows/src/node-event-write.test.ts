@@ -84,7 +84,7 @@ describe('node-event-write', () => {
         node: source.node,
         cache: {
           action: 'replayed',
-          output: { text: 'json', declaredFields: ['proposal'], declaredOutputPaths: paths },
+          output: { text: 'json', declaredOutputPaths: paths },
         },
       }
     );

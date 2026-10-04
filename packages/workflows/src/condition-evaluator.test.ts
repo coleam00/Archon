@@ -28,7 +28,7 @@ import type { NodeOutput } from './schemas';
  * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
  * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
  * paths populate it; older providers leave it off). `declaredFields` marks a
- * declared-schema producer (output_format with properties) for strict-resolution tests.
+ * declared-schema producer (as depth-1 paths) (output_format with properties) for strict-resolution tests.
  */
 function makeOutput(
   output: string,
@@ -42,7 +42,9 @@ function makeOutput(
       output,
       error: 'error',
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...(declaredFields !== undefined
+        ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+        : {}),
     };
   if (state === 'skipped') {
     return { state, output, cause: { kind: 'condition', expr: 'false' } };
@@ -51,7 +53,9 @@ function makeOutput(
     state,
     output,
     ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...(declaredFields !== undefined
+      ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+      : {}),
   };
 }
 

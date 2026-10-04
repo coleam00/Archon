@@ -805,13 +805,6 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
           );
         }
       }
-      // Persisted projections own authorization on resume, especially for a child
-      // result whose schema is not available in the parent's definition.
-      const rawDeclaredFields = data.declared_fields;
-      const declaredFields =
-        Array.isArray(rawDeclaredFields) && rawDeclaredFields.every(f => typeof f === 'string')
-          ? rawDeclaredFields
-          : undefined;
       completedNodeOutputs.set(row.step_name, {
         output,
         ...(outputTruncation !== undefined ? { outputTruncation } : {}),
@@ -821,7 +814,9 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
         ...(data.structured_output !== undefined
           ? { structuredOutput: data.structured_output }
           : {}),
-        ...(declaredFields !== undefined ? { declaredFields } : {}),
+        // The persisted contract owns authorization on resume, especially for a child
+        // result whose schema is not available in the parent's definition. The reader
+        // already turned a legacy `declared_fields` row into depth-1 paths.
         ...(data.declared_output_paths !== undefined
           ? { declaredOutputPaths: data.declared_output_paths }
           : {}),

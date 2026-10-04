@@ -1,4 +1,5 @@
-import { declaredOutputPathsSchema, type DeclaredOutputPaths } from './output-ref';
+import type { DeclaredOutputPaths } from './output-ref';
+import { readNodeRecordEvent } from './node-record-reader';
 import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
@@ -506,7 +507,6 @@ class InMemoryStore implements IWorkflowStore {
       {
         output: string;
         structuredOutput?: unknown;
-        declaredFields?: readonly string[];
         declaredOutputPaths?: DeclaredOutputPaths;
       }
     >();
@@ -519,19 +519,15 @@ class InMemoryStore implements IWorkflowStore {
         typeof e.step_name === 'string'
       ) {
         // Mirrors the real store (#2637): the logical value rides beside the text, and
-        // (#2453) the field contract the node completed under rides beside both.
-        const rawDeclaredFields = e.data?.declared_fields;
+        // (#2453) the field contract the node completed under rides beside both, read
+        // through the real record reader.
+        const declaredOutputPaths = readNodeRecordEvent({ ...e, data: e.data })?.data
+          .declared_output_paths;
         completedNodeOutputs.set(e.step_name, {
           output: String(e.data?.node_output ?? ''),
-          ...(e.data && Object.hasOwn(e.data, 'declared_output_paths')
-            ? { declaredOutputPaths: declaredOutputPathsSchema.parse(e.data.declared_output_paths) }
-            : {}),
+          ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
           ...(e.data?.structured_output !== undefined
             ? { structuredOutput: e.data.structured_output }
-            : {}),
-          ...(Array.isArray(rawDeclaredFields) &&
-          rawDeclaredFields.every(f => typeof f === 'string')
-            ? { declaredFields: rawDeclaredFields as string[] }
             : {}),
         });
         // Mirrors the real store: a derived row (loop_group roll-up) restates usage
@@ -7038,7 +7034,10 @@ nodes:
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
     expect(hydrated).not.toBeNull();
     // The snapshot carries the CHILD's contract; the parent's own definition never had it.
-    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredFields).toEqual(['green', 'note']);
+    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredOutputPaths).toEqual([
+      ['green'],
+      ['note'],
+    ]);
 
     const second = await executeWorkflow(
       deps,
@@ -7657,7 +7656,13 @@ nodes:
     ).toBe(false);
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
     // The parent's own definition never carried the contract; the snapshot does.
-    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredFields).toEqual(['units', 'plan']);
+    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredOutputPaths).toEqual([
+      ['units'],
+      ['plan'],
+      ['plan', 'type'],
+      ['plan', 'run_id'],
+      ['plan', 'path'],
+    ]);
 
     const second = await executeWorkflow(
       deps,

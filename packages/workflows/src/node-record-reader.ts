@@ -10,6 +10,7 @@ import {
   type SerializedNodeData,
   type SerializedNodeEvent,
 } from './node-record-serialization';
+import { outputPathsFromRootFields } from './output-ref';
 
 export interface NodeRecordEventEnvelope {
   workflow_run_id: string;
@@ -57,7 +58,12 @@ function projectSerializedData(raw: Record<string, unknown>): SerializedNodeData
     const parsed = schema.safeParse(raw[key]);
     if (parsed.success) projected[key] = parsed.data;
   }
-  return projected as SerializedNodeData;
+  const data = projected as SerializedNodeData;
+  // A row written before nested paths carries only the root-field projection.
+  if (data.declared_output_paths === undefined && data.declared_fields !== undefined) {
+    data.declared_output_paths = outputPathsFromRootFields(data.declared_fields);
+  }
+  return data;
 }
 
 function lifecycleFor(

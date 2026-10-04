@@ -8,7 +8,7 @@ import {
   PRIOR_OUTPUT_PATH_SOURCE,
   canonicalValueText,
   declaredFieldsFromSchema,
-  outputContractFromSchema,
+  declaredOutputPathsFromSchema,
   assertDeclaredOutputPath,
   jsonValueSchema,
   OutputRefError,
@@ -29,7 +29,9 @@ function completed(
     state: 'completed',
     output,
     ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...(declaredFields !== undefined
+      ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+      : {}),
   };
 }
 
@@ -524,15 +526,14 @@ describe('nested output contract', () => {
       'proposal.action': {},
     },
   };
-  const contract = outputContractFromSchema(schema);
+  const declaredOutputPaths = declaredOutputPathsFromSchema(schema);
   const producer = (value: unknown): NodeOutput => ({
     state: 'completed',
     output: JSON.stringify(value),
-    ...contract,
+    declaredOutputPaths,
   });
   it('projects explicit object properties without conflating dotted literal keys', () => {
-    expect(contract.declaredFields).toEqual(['proposal', 'proposal.action']);
-    expect(contract.declaredOutputPaths).toEqual([
+    expect(declaredOutputPaths).toEqual([
       ['proposal'],
       ['proposal', 'action'],
       ['proposal', 'details'],
@@ -541,11 +542,8 @@ describe('nested output contract', () => {
       ['proposal', 'scalar'],
       ['proposal.action'],
     ]);
-    expect(outputContractFromSchema({ properties: {} })).toEqual({
-      declaredFields: [],
-      declaredOutputPaths: [],
-    });
-    expect(outputContractFromSchema({ type: 'string' })).toEqual({});
+    expect(declaredOutputPathsFromSchema({ properties: {} })).toEqual([]);
+    expect(declaredOutputPathsFromSchema({ type: 'string' })).toBeUndefined();
     expect(() => assertDeclaredOutputPath([['a.b']], 'p', 'a.b')).toThrow("field 'a'");
   });
   it('checks every prefix before accepting an absent or null optional parent', () => {
@@ -607,8 +605,11 @@ describe('nested output contract', () => {
   });
 });
 
-it('accepts absent child path metadata and fails malformed present contracts', () => {
+it('reads child path metadata, a legacy root-field contract, and fails malformed paths', () => {
   expect(readSubrunMetadata({}).summaryDeclaredOutputPaths).toBeUndefined();
+  expect(
+    readSubrunMetadata({ summary_declared_fields: ['green', 'note'] }).summaryDeclaredOutputPaths
+  ).toEqual([['green'], ['note']]);
   expect(
     readSubrunMetadata({ summary_declared_output_paths: [] }).summaryDeclaredOutputPaths
   ).toEqual([]);

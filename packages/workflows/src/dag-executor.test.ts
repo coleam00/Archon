@@ -625,7 +625,9 @@ function makeOutput(
 ): NodeOutput {
   const extra = {
     ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...(declaredFields !== undefined
+      ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+      : {}),
   };
   if (state === 'failed') {
     return { state, output, error: 'error', ...extra } as NodeOutput;
@@ -25535,9 +25537,7 @@ describe('executeDagWorkflow -- loop_group node', () => {
         persistedEvents(store).some(
           event =>
             event.event_type === 'node_failed' &&
-            String(event.data?.error).includes(
-              `$${field.includes('.') ? 'LOOP_PREV.' : ''}work.output.${field}`
-            )
+            String(event.data?.error).includes(`$LOOP_PREV.work.output.${field}`)
         )
       ).toBe(true);
     }

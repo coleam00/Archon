@@ -13,6 +13,7 @@ import {
   isAgentNode,
   isLoopNode,
   isLoopGroupNode,
+  definedOutputPaths,
   loopGroupSoleTerminalSink,
   isGateNode,
   isWaitNode,
@@ -71,7 +72,6 @@ import {
 } from './when-atom';
 import {
   declaredFieldsFromSchema,
-  outputContractFromSchema,
   assertDeclaredOutputPath,
   assertSupportedOutputRefs,
   CURRENT_OUTPUT_PATH_SOURCE,
@@ -759,7 +759,7 @@ function parseDagNode(
  *   'loop-group'     — `loop_group:`: `output_format` survives the transform here too,
  *                      but the group never calls the provider itself — its completion
  *                      returns `output: lastIterationOutput` with no `structuredOutput`
- *                      and no `declaredFields`, so the whole-output channel is still the
+ *                      and no `declaredOutputPaths`, so the whole-output channel is still the
  *                      last iteration's raw text. Declaring a schema cannot make
  *                      `$group.output` a JSON document. This is the one asymmetry left.
  *
@@ -1003,14 +1003,8 @@ export function validateDagStructure(
           : (nodesById.get(ref.nodeId) ??
             enclosingNodes?.get(ref.nodeId) ??
             source.bodyNodes?.find(candidate => candidate.id === ref.nodeId));
-        if (
-          !producer ||
-          isIncludeDirective(producer) ||
-          isWorkflowNode(producer) ||
-          isLoopGroupNode(producer)
-        )
-          continue;
-        const paths = outputContractFromSchema(producer.output_format).declaredOutputPaths;
+        if (!producer || isIncludeDirective(producer)) continue;
+        const paths = definedOutputPaths(producer);
         if (paths === undefined) continue;
         try {
           assertDeclaredOutputPath(paths, ref.nodeId, ref.field, ref.reference);

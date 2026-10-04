@@ -137,7 +137,6 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
 export const executionOutputSchema = z.object({
   text: z.string(),
   structured: z.unknown().optional(),
-  declaredFields: z.array(z.string()).optional(),
   declaredOutputPaths: declaredOutputPathsSchema.optional(),
   persisted: z
     .object({

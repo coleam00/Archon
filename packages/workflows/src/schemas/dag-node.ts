@@ -27,6 +27,8 @@ export type { EffortLevel } from './effort';
 // grammar, everywhere (#2637).
 import {
   declaredFieldsFromSchema,
+  declaredOutputPathsFromSchema,
+  type DeclaredOutputPaths,
   jsonValueSchema,
   parseWholeOutputRef,
   parseWholeInputsRef,
@@ -2022,6 +2024,16 @@ export function isLoopNode(node: DagNode): node is LoopNode {
 /** Type guard: check if a DAG node is a loop_group (cross-node iterative subgraph) node */
 export function isLoopGroupNode(node: DagNode): node is LoopGroupNode {
   return node.kind === 'loop_group';
+}
+
+/**
+ * The field-path contract a node's own definition declares for its output. A
+ * loop_group's `output_format` is not applied to the group's own output, so it declares
+ * none. A `workflow:` node has no schema; its contract is the child's, carried at run
+ * time.
+ */
+export function definedOutputPaths(node: DagNode): DeclaredOutputPaths | undefined {
+  return isLoopGroupNode(node) ? undefined : declaredOutputPathsFromSchema(node.output_format);
 }
 
 /**

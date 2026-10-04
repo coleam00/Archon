@@ -1,4 +1,8 @@
-import { declaredOutputPathsSchema } from './output-ref';
+import {
+  declaredOutputPathsSchema,
+  rootOutputFields,
+  type DeclaredOutputPaths,
+} from './output-ref';
 import { z } from '@hono/zod-openapi';
 import type { TokenUsage } from '@archon/providers/types';
 import { providerFailureSchema } from '@archon/provider-contract';
@@ -127,11 +131,20 @@ function outputFields(
         }
       : {}),
     ...(output.structured !== undefined ? { structured_output: output.structured } : {}),
-    ...(output.declaredFields !== undefined ? { declared_fields: output.declaredFields } : {}),
     ...(output.declaredOutputPaths !== undefined
-      ? { declared_output_paths: output.declaredOutputPaths }
+      ? persistedOutputContract(output.declaredOutputPaths)
       : {}),
   };
+}
+
+/**
+ * The persisted form of a path contract. `declared_fields` is derived and still written
+ * because older binaries opening the same database read only that key.
+ */
+export function persistedOutputContract(
+  paths: DeclaredOutputPaths
+): Pick<SerializedNodeData, 'declared_fields' | 'declared_output_paths'> {
+  return { declared_fields: rootOutputFields(paths), declared_output_paths: paths };
 }
 
 /**
@@ -298,9 +311,6 @@ export function serializeNodeOutput(
       : {}),
     ...(record.output?.declaredOutputPaths !== undefined
       ? { declaredOutputPaths: record.output.declaredOutputPaths }
-      : {}),
-    ...(record.output?.declaredFields !== undefined
-      ? { declaredFields: record.output.declaredFields }
       : {}),
     ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
     ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),

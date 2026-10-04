@@ -244,7 +244,6 @@ export async function recordNodeState(
     state: 'completed',
     output: output.text,
     ...(output.structured !== undefined ? { structuredOutput: output.structured } : {}),
-    ...(output.declaredFields !== undefined ? { declaredFields: output.declaredFields } : {}),
     ...(output.declaredOutputPaths !== undefined
       ? { declaredOutputPaths: output.declaredOutputPaths }
       : {}),

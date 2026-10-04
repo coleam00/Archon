@@ -33,15 +33,14 @@ export type { WorkflowNodeSession, WorkflowRunNodeSession } from './schemas';
  * `structuredOutput` is the logical value the node's `node_completed` event carried
  * under `structured_output`; absent for text-only nodes and rows persisted before
  * the key existed — those degrade to text re-parsing, the pre-#2637 behavior.
- * `declaredFields` preserves the root-field contract. `declaredOutputPaths` carries
- * every declared object prefix for nested access, including child-owned contracts
- * that cannot be recovered from the parent's loaded definition. Old events may
- * omit these projections; local producers can recover them from their own schema.
+ * `declaredOutputPaths` is the field-path contract the node completed under, including
+ * a child-owned contract that cannot be recovered from the parent's loaded definition.
+ * A row with only the legacy `declared_fields` reads as depth-1 paths. Rows without
+ * either degrade to the producer's own loaded schema.
  */
 export interface PersistedNodeOutput {
   output: string;
   structuredOutput?: unknown;
-  declaredFields?: readonly string[];
   declaredOutputPaths?: DeclaredOutputPaths;
   /** Present only when resume recovered a preview rather than the full text.
    * Replay must retain this original provenance instead of certifying the preview. */

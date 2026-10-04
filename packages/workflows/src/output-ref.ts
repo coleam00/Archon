@@ -345,28 +345,40 @@ export function similarNodeIds(nodeId: string, knownIds: Iterable<string>): stri
 }
 
 /**
- * Property-name set of an `output_format` schema, stored on `NodeOutput.declaredFields`
- * when a producer completes. Returns:
+ * Top-level property names of an `output_format` schema, for load-time checks that
+ * name one top-level field (`loop.until_field`, `outcome_field`). Returns:
  *   - the property names (possibly `[]` for an explicit empty `properties: {}`) when
- *     the schema declares an object shape — the consumer then enforces the contract;
+ *     the schema declares an object shape;
  *   - `undefined` when there is no schema or it has no `properties` map (a non-object
- *     schema) — the consumer treats such a producer as schemaless.
+ *     schema).
  */
 export function declaredFieldsFromSchema(
   outputFormat: Record<string, unknown> | undefined
 ): string[] | undefined {
-  return outputContractFromSchema(outputFormat).declaredFields;
+  if (!outputFormat) return undefined;
+  const props = outputFormat.properties;
+  if (props === null || typeof props !== 'object' || Array.isArray(props)) return undefined;
+  return Object.keys(props as Record<string, unknown>);
 }
 
+/**
+ * Every declared object-field path of a producer's output, stored on
+ * `NodeOutput.declaredOutputPaths` when it completes. A single-field reference is a
+ * depth-1 path. `undefined` means the producer has no object schema and is read
+ * schemaless.
+ */
 export const declaredOutputPathsSchema = z.array(z.array(z.string()).min(1));
 export type DeclaredOutputPaths = z.infer<typeof declaredOutputPathsSchema>;
 
-export function outputContractFromSchema(outputFormat: Record<string, unknown> | undefined): {
-  declaredFields?: string[];
-  declaredOutputPaths?: DeclaredOutputPaths;
-} {
+/**
+ * Project an `output_format` schema to its declared paths. A property's children are
+ * paths only when it may be an object; a dotted property name stays one segment.
+ */
+export function declaredOutputPathsFromSchema(
+  outputFormat: Record<string, unknown> | undefined
+): DeclaredOutputPaths | undefined {
   const props = asPlainObject(outputFormat?.properties);
-  if (props === undefined) return {};
+  if (props === undefined) return undefined;
   const paths: DeclaredOutputPaths = [];
   const visit = (properties: Record<string, unknown>, prefix: string[]): void => {
     for (const [key, raw] of Object.entries(properties)) {
@@ -386,7 +398,21 @@ export function outputContractFromSchema(outputFormat: Record<string, unknown> |
     }
   };
   visit(props, []);
-  return { declaredFields: Object.keys(props), declaredOutputPaths: paths };
+  return paths;
+}
+
+/**
+ * The top-level fields of a path contract. Persisted as `declared_fields` beside
+ * `declared_output_paths`, because older binaries opening the same database read only
+ * the former.
+ */
+export function rootOutputFields(paths: DeclaredOutputPaths): string[] {
+  return paths.flatMap(path => (path.length === 1 ? path : []));
+}
+
+/** Read a legacy `declared_fields` projection as the depth-1 path contract it was. */
+export function outputPathsFromRootFields(fields: readonly string[]): DeclaredOutputPaths {
+  return fields.map(field => [field]);
 }
 
 export function assertDeclaredOutputPath(
@@ -494,13 +520,12 @@ export function resolveNodeOutputField(
     );
   }
 
-  const declaredFields = 'declaredFields' in nodeOutput ? nodeOutput.declaredFields : undefined;
+  const paths = nodeOutput.declaredOutputPaths;
   const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
   const structuredObj = asPlainObject(structured);
 
   const segments = field.split('.');
   if (segments.length > 1) {
-    const paths = nodeOutput.declaredOutputPaths;
     if (paths !== undefined) assertDeclaredOutputPath(paths, nodeId, field, reference);
     let value: unknown = structuredObj ?? parseOutputObject(nodeOutput.output);
     if (value === undefined)
@@ -527,10 +552,8 @@ export function resolveNodeOutputField(
   }
 
   // 1. Declared-schema producer — the declared property set IS the contract.
-  if (declaredFields !== undefined) {
-    if (!declaredFields.includes(field)) {
-      throw new OutputRefError(nodeId, field, 'not-in-schema');
-    }
+  if (paths !== undefined) {
+    assertDeclaredOutputPath(paths, nodeId, field, reference);
     // Prefer the parsed payload; fall back to parsing the JSON-serialized output.
     // The fallback covers older NodeOutput rows that predate `structuredOutput`,
     // and resumes of runs persisted before `structured_output` rode along in
@@ -540,7 +563,7 @@ export function resolveNodeOutputField(
     // that did not honour its schema, and it must fail exactly as loudly as the
     // schemaless path below (#2456). Returning empty here made declaring a contract
     // QUIETER than declaring nothing, which is backwards: a `workflow:` node carries no
-    // schema of its own — its declaredFields are the child's `returns:` node projection
+    // schema of its own — its declared paths are the child's `returns:` node projection
     // (#2453) — so every declared field would silently have become ''.
     if (obj === undefined) {
       throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output));
