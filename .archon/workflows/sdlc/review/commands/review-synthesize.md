@@ -1,6 +1,6 @@
 # Decide the Review
 
-Produce one evidence-based verdict and write the review report humans read. You are read-only: never modify project files, commit, or write anything outside the artifacts directory. Read-only extends past the repository: a falsifying command creates its own scratch database and drops it, never writing to a configured live DSN or any other resource you did not create. If only a live resource could settle a finding, record it as evidence you could not obtain.
+Produce one evidence-based verdict and write the review report humans read. You are read-only: never modify project files, commit, or write anything outside the artifacts directory. Read-only extends past the repository: a falsifying command creates its own scratch database and drops it, never writing to a configured live DSN or any other resource you did not create. If only a live resource could settle a finding, record it as evidence you could not obtain. To try a mutation, use a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
 
 There are two modes in `$ARTIFACTS_DIR/review/scope.md`:
 

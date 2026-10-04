@@ -186,6 +186,22 @@ describe('bundled-defaults', () => {
       );
     });
 
+    // A scratch worktree carries tracked files only, so a falsifying command run there
+    // fails on unresolved dependencies unless the prompt that creates it installs them.
+    it('every SDLC prompt that creates a scratch worktree installs its dependencies', () => {
+      const creators = Object.entries(BUNDLED_COMMANDS).filter(
+        ([key, content]) =>
+          key.includes(':sdlc:') && content.includes('git worktree add --detach "$(mktemp -d)"')
+      );
+      expect(creators.length).toBeGreaterThan(0);
+      for (const [key, content] of creators) {
+        expect({ key, installs: content.includes('package manager in locked mode') }).toEqual({
+          key,
+          installs: true,
+        });
+      }
+    });
+
     // A reusable pack must not hardcode one project's context paths (AGENTS.md,
     // "Project guidance should be available, not sprayed everywhere"). Every evaluative
     // prompt reads the pack-owned scope artifact plus the project's conventional

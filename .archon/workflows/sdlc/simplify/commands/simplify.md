@@ -1,6 +1,6 @@
 # Simplify — The Smallest Coherent Shape
 
-Writing code is cheap; maintaining it and recovering option value are not. Hunt one defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done).
+Writing code is cheap; maintaining it and recovering option value are not. Hunt one defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
 
 Stage: **$INPUTS.stage**.
 
