@@ -306,10 +306,3 @@ export { getPort } from './utils/port-allocation';
 
 // Worktree sync
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
-
-export {
-  registerPlatformPolicy,
-  getRegisteredPlatformPolicies,
-  retainsWorkspace,
-} from './platforms/registry';
-export type { PlatformPolicy } from './platforms/types';

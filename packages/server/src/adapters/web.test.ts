@@ -76,6 +76,16 @@ beforeEach(() => {
   mockLogger.error.mockClear();
 });
 
+describe('WebAdapter capabilities', () => {
+  test.each([
+    ['messagePersistence', 'adapter'],
+    ['defaultWorkflowDispatch', 'background'],
+  ] as const)('declares %s as %s', (capability, expected) => {
+    const adapter = makeAdapter().adapter;
+    expect(adapter.capabilities[capability]).toBe(expected);
+  });
+});
+
 describe('WebAdapter.sendStructuredEvent — provider results', () => {
   test('does not emit a provider session id on SSE', async () => {
     const { adapter, emitted } = makeAdapter();

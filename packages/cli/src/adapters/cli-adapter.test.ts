@@ -50,6 +50,13 @@ describe('CLIAdapter', () => {
     consoleSpy.mockRestore();
   });
 
+  it.each([
+    ['messagePersistence', 'core'],
+    ['defaultWorkflowDispatch', 'foreground'],
+  ] as const)('declares %s as %s', (capability, expected) => {
+    expect(adapter.capabilities[capability]).toBe(expected);
+  });
+
   describe('constructor', () => {
     it('should default to batch mode', () => {
       const defaultAdapter = new CLIAdapter();

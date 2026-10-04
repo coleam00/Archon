@@ -1078,7 +1078,7 @@ remote_agent_codebases
 
 remote_agent_conversations
 ├── id (UUID)
-├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'gitea' | 'gitlab' | 'cli'
+├── platform_type (VARCHAR) -- lowercase kebab-case platform identifier, at most 32 characters
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
 ├── cwd (VARCHAR) -- Explicit working-directory override, usually null (set by worktree create/remove; effective cwd falls back to codebase.default_cwd)
@@ -1156,7 +1156,7 @@ remote_agent_users
 remote_agent_user_identities
 ├── id (UUID)
 ├── user_id (UUID -> remote_agent_users.id, ON DELETE CASCADE)
-├── platform (VARCHAR) -- 'slack' | 'telegram' | 'discord' | 'github' | 'gitea' | 'gitlab' | 'web' | 'cli'
+├── platform (VARCHAR) -- lowercase kebab-case platform identifier, at most 32 characters
 ├── platform_user_id (VARCHAR) -- Slack U-id, Telegram chat id, Discord snowflake, GitHub login, ...
 ├── platform_display_name (VARCHAR) -- Cached per-platform display name
 └── UNIQUE(platform, platform_user_id)

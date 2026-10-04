@@ -94,6 +94,14 @@ function startThreadOptions(startThread: Mock<StartThread>): StartThreadOptions 
 }
 
 describe('DiscordAdapter', () => {
+  test.each([
+    ['messagePersistence', 'core'],
+    ['defaultWorkflowDispatch', 'foreground'],
+  ] as const)('declares %s as %s', (capability, expected) => {
+    const adapter = new DiscordAdapter('fake-token-for-testing');
+    expect(adapter.capabilities[capability]).toBe(expected);
+  });
+
   beforeEach(() => {
     mockChannelSend.mockClear();
     mockChannelsFetch.mockClear();

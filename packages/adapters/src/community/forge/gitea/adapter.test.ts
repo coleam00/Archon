@@ -193,6 +193,13 @@ describe('GiteaAdapter', () => {
     globalThis.fetch = originalFetch;
   });
 
+  test.each([
+    ['messagePersistence', 'core'],
+    ['defaultWorkflowDispatch', 'foreground'],
+  ] as const)('declares %s as %s', (capability, expected) => {
+    expect(adapter.capabilities[capability]).toBe(expected);
+  });
+
   describe('streaming mode', () => {
     test('should always return batch mode', () => {
       expect(adapter.getStreamingMode()).toBe('batch');

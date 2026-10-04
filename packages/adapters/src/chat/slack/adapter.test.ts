@@ -103,6 +103,14 @@ import { SlackAdapter } from './adapter';
 import type { SlackMessageEvent } from './types';
 
 describe('SlackAdapter', () => {
+  test.each([
+    ['messagePersistence', 'core'],
+    ['defaultWorkflowDispatch', 'foreground'],
+  ] as const)('declares %s as %s', (capability, expected) => {
+    const adapter = new SlackAdapter('xoxb-fake', 'xapp-fake');
+    expect(adapter.capabilities[capability]).toBe(expected);
+  });
+
   beforeEach(() => {
     mockPostMessage.mockClear();
   });
