@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'bun:test';
-import { toRunEvent, countTerminalNodes, foldNodeRuns } from './event';
+import {
+  toRunEvent,
+  countTerminalNodes,
+  foldNodeRuns,
+  type RunEvent,
+  type RunNodeState,
+} from './event';
 
 type Raw = Parameters<typeof toRunEvent>[0];
 
@@ -289,48 +295,27 @@ describe('toRunEvent — fallback', () => {
 });
 
 describe('countTerminalNodes', () => {
-  // Build a normalized node-transition RunEvent for `nodeId` via toRunEvent.
-  const node = (nodeId: string | null, eventType: string) =>
-    toRunEvent(raw({ event_type: eventType, step_name: nodeId }));
-
-  test('empty event list → 0/0', () => {
+  test('no nodes → 0/0', () => {
     expect(countTerminalNodes([])).toEqual({ completed: 0, total: 0 });
   });
 
-  test('only started (in-flight) nodes are excluded from the total', () => {
-    expect(countTerminalNodes([node('a', 'node_started'), node('b', 'node_started')])).toEqual({
-      completed: 0,
-      total: 0,
-    });
+  test('pending and running nodes are excluded from the total', () => {
+    expect(
+      countTerminalNodes([
+        { node_id: 'a', state: 'pending' },
+        { node_id: 'b', state: 'running' },
+      ])
+    ).toEqual({ completed: 0, total: 0 });
   });
 
   test('completed counts toward completed+total; failed/skipped only toward total', () => {
-    const events = [
-      node('a', 'node_completed'),
-      node('b', 'node_failed'),
-      node('c', 'node_skipped'),
-    ];
-    expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 3 });
-  });
-
-  test('a node seen as completed then resume-skipped counts ONCE, still completed (dedup regression)', () => {
-    // A resumed run reuses one run id: the node has its original node_completed AND a
-    // later node_skipped_prior_success. Raw counting would report 2/2; dedup → 1/1.
-    const events = [node('a', 'node_completed'), node('a', 'node_skipped_prior_success')];
-    expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 1 });
-  });
-
-  test('non-node_transition events are ignored', () => {
-    const events = [
-      node('a', 'node_completed'),
-      toRunEvent(raw({ event_type: 'workflow_artifact', data: { label: 'pr' } })),
-      toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
-    ];
-    expect(countTerminalNodes(events)).toEqual({ completed: 1, total: 1 });
-  });
-
-  test('a terminal event with a null nodeId is skipped (can not be deduped)', () => {
-    expect(countTerminalNodes([node(null, 'node_completed')])).toEqual({ completed: 0, total: 0 });
+    expect(
+      countTerminalNodes([
+        { node_id: 'a', state: 'completed' },
+        { node_id: 'b', state: 'failed' },
+        { node_id: 'c', state: 'skipped' },
+      ])
+    ).toEqual({ completed: 1, total: 3 });
   });
 });
 
@@ -341,13 +326,17 @@ describe('foldNodeRuns', () => {
     eventType: string,
     over: { created_at?: string; data?: Record<string, unknown> } = {}
   ) => toRunEvent(raw({ event_type: eventType, step_name: nodeId, ...over }));
-
-  test('empty events → no runs', () => {
-    expect(foldNodeRuns([])).toEqual([]);
+  const state = (node_id: string, nodeState: RunNodeState['state']): RunNodeState => ({
+    node_id,
+    state: nodeState,
   });
 
-  test('a node with only node_started folds to one running run (no duration/end)', () => {
-    const runs = foldNodeRuns([node('plan', 'node_started')]);
+  test('no events → no runs', () => {
+    expect(foldNodeRuns([], [state('plan', 'pending')])).toEqual([]);
+  });
+
+  test('a running node has no duration or end', () => {
+    const runs = foldNodeRuns([node('plan', 'node_started')], [state('plan', 'running')]);
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       nodeId: 'plan',
@@ -357,14 +346,17 @@ describe('foldNodeRuns', () => {
     });
   });
 
-  test('started + completed folds to ONE completed run carrying duration + cost/turns/stop', () => {
-    const runs = foldNodeRuns([
-      node('plan', 'node_started', { created_at: at('0') }),
-      node('plan', 'node_completed', {
-        created_at: at('5'),
-        data: { duration_ms: 11370, cost_usd: 0.1399, num_turns: 3, stop_reason: 'end_turn' },
-      }),
-    ]);
+  test('started + completed renders ONE completed run carrying duration + cost/turns/stop', () => {
+    const runs = foldNodeRuns(
+      [
+        node('plan', 'node_started', { created_at: at('0') }),
+        node('plan', 'node_completed', {
+          created_at: at('5'),
+          data: { duration_ms: 11370, cost_usd: 0.1399, num_turns: 3, stop_reason: 'end_turn' },
+        }),
+      ],
+      [state('plan', 'completed')]
+    );
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       nodeId: 'plan',
@@ -378,25 +370,108 @@ describe('foldNodeRuns', () => {
     });
   });
 
-  test('completed then resume node_skipped_prior_success folds to ONE completed run (dedup)', () => {
-    const runs = foldNodeRuns([
-      node('plan', 'node_completed', { created_at: at('1'), data: { duration_ms: 900 } }),
-      node('plan', 'node_skipped_prior_success', {
-        created_at: at('9'),
-        data: { reason: 'prior_success' },
-      }),
-    ]);
+  // The engine's state wins over anything the transitions suggest: these are the
+  // histories a client-side "ever completed wins" fold got wrong after a resume.
+  test('a completed node reset on resume whose re-run failed shows failed', () => {
+    const runs = foldNodeRuns(
+      [
+        node('prepare', 'node_completed', {
+          created_at: at('1'),
+          data: { duration_ms: 900, cost_usd: 0.05 },
+        }),
+        node('prepare', 'node_always_run_reset', { created_at: at('4') }),
+        node('prepare', 'node_started', { created_at: at('5') }),
+        node('prepare', 'node_failed', { created_at: at('8'), data: { duration_ms: 10 } }),
+      ],
+      [state('prepare', 'failed')]
+    );
     expect(runs).toHaveLength(1);
-    expect(runs[0]?.status).toBe('completed');
-    expect(runs[0]?.durationMs).toBe(900);
+    expect(runs[0]).toMatchObject({
+      status: 'failed',
+      startedAt: at('1'),
+      endedAt: at('8'),
+      durationMs: 10,
+      // The earlier completion's spend belongs to an attempt the state no longer reflects.
+      costUsd: null,
+      numTurns: null,
+      stopReason: null,
+    });
+  });
+
+  test('a completed node reset to pending shows no end and no earlier cost', () => {
+    const runs = foldNodeRuns(
+      [
+        node('prepare', 'node_completed', {
+          created_at: at('1'),
+          data: { duration_ms: 900, cost_usd: 0.12, num_turns: 4, stop_reason: 'end_turn' },
+        }),
+        node('prepare', 'node_always_run_reset', { created_at: at('4') }),
+      ],
+      [state('prepare', 'pending')]
+    );
+    expect(runs[0]).toMatchObject({
+      status: 'pending',
+      endedAt: null,
+      durationMs: null,
+      costUsd: null,
+      numTurns: null,
+      stopReason: null,
+    });
+  });
+
+  test('a node replayed from a prior success keeps the completion it replays', () => {
+    const runs = foldNodeRuns(
+      [
+        node('plan', 'node_started', { created_at: at('0') }),
+        node('plan', 'node_completed', {
+          created_at: at('3'),
+          data: { duration_ms: 3000, cost_usd: 0.12, num_turns: 2 },
+        }),
+        node('plan', 'node_skipped_prior_success', {
+          created_at: at('7'),
+          data: { reason: 'prior_success' },
+        }),
+      ],
+      [state('plan', 'completed')]
+    );
+    expect(runs[0]).toMatchObject({
+      status: 'completed',
+      endedAt: at('3'),
+      durationMs: 3000,
+      costUsd: 0.12,
+      numTurns: 2,
+      skipReason: null,
+    });
+  });
+
+  test('a node completed only by a prior-success replay ends at the replay', () => {
+    const runs = foldNodeRuns(
+      [
+        node('plan', 'node_skipped_prior_success', {
+          created_at: at('7'),
+          data: { reason: 'prior_success' },
+        }),
+      ],
+      [state('plan', 'completed')]
+    );
+    expect(runs[0]).toMatchObject({
+      status: 'completed',
+      endedAt: at('7'),
+      durationMs: null,
+      costUsd: null,
+      skipReason: null,
+    });
   });
 
   test('a skipped node carries reason + expr and skipped status', () => {
-    const runs = foldNodeRuns([
-      node('web-research', 'node_skipped', {
-        data: { reason: 'when_condition', expr: "$classify.output.type != 'bug'" },
-      }),
-    ]);
+    const runs = foldNodeRuns(
+      [
+        node('web-research', 'node_skipped', {
+          data: { reason: 'when_condition', expr: "$classify.output.type != 'bug'" },
+        }),
+      ],
+      [state('web-research', 'skipped')]
+    );
     expect(runs[0]).toMatchObject({
       nodeId: 'web-research',
       status: 'skipped',
@@ -405,24 +480,18 @@ describe('foldNodeRuns', () => {
     });
   });
 
-  test('a failed node folds to failed status', () => {
-    const runs = foldNodeRuns([
-      node('build', 'node_started', { created_at: at('0') }),
-      node('build', 'node_failed', { created_at: at('3'), data: { duration_ms: 42 } }),
-    ]);
-    expect(runs[0]?.status).toBe('failed');
-    expect(runs[0]?.durationMs).toBe(42);
-  });
-
-  test('failed THEN a later completed (retry) folds to completed — duration/cost from the completion', () => {
-    const runs = foldNodeRuns([
-      node('build', 'node_started', { created_at: at('0') }),
-      node('build', 'node_failed', { created_at: at('2'), data: { duration_ms: 42 } }),
-      node('build', 'node_completed', {
-        created_at: at('8'),
-        data: { duration_ms: 900, cost_usd: 0.05, num_turns: 2 },
-      }),
-    ]);
+  test('a retried node that completed takes duration/cost from the completion', () => {
+    const runs = foldNodeRuns(
+      [
+        node('build', 'node_started', { created_at: at('0') }),
+        node('build', 'node_failed', { created_at: at('2'), data: { duration_ms: 42 } }),
+        node('build', 'node_completed', {
+          created_at: at('8'),
+          data: { duration_ms: 900, cost_usd: 0.05, num_turns: 2 },
+        }),
+      ],
+      [state('build', 'completed')]
+    );
     expect(runs).toHaveLength(1);
     expect(runs[0]).toMatchObject({
       status: 'completed',
@@ -432,36 +501,32 @@ describe('foldNodeRuns', () => {
     });
   });
 
-  test('completed THEN a later failed still folds to completed (ever-completed wins)', () => {
-    const runs = foldNodeRuns([
-      node('build', 'node_completed', {
-        created_at: at('2'),
-        data: { duration_ms: 900, cost_usd: 0.05 },
-      }),
-      node('build', 'node_failed', { created_at: at('8'), data: { duration_ms: 10 } }),
-    ]);
-    expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ status: 'completed', durationMs: 900, costUsd: 0.05 });
-  });
-
   test('multiple nodes are returned sorted by startedAt', () => {
-    const runs = foldNodeRuns([
-      node('second', 'node_started', { created_at: at('5') }),
-      node('first', 'node_started', { created_at: at('1') }),
-    ]);
+    const runs = foldNodeRuns(
+      [
+        node('second', 'node_started', { created_at: at('5') }),
+        node('first', 'node_started', { created_at: at('1') }),
+      ],
+      [state('second', 'running'), state('first', 'running')]
+    );
     expect(runs.map(r => r.nodeId)).toEqual(['first', 'second']);
   });
 
-  test('transitions with a null nodeId are excluded (can not be keyed)', () => {
-    expect(foldNodeRuns([node(null, 'node_completed')])).toEqual([]);
+  test('transitions for a node the engine does not list are not rendered', () => {
+    expect(
+      foldNodeRuns([node(null, 'node_completed'), node('ghost', 'node_completed')], [])
+    ).toEqual([]);
   });
 
   test('non-node_transition events are ignored', () => {
-    const runs = foldNodeRuns([
-      node('plan', 'node_completed'),
-      toRunEvent(raw({ event_type: 'workflow_artifact', data: { label: 'pr' } })),
-      toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
-    ]);
+    const runs = foldNodeRuns(
+      [
+        node('plan', 'node_completed'),
+        toRunEvent(raw({ event_type: 'workflow_artifact', data: { label: 'pr' } })),
+        toRunEvent(raw({ event_type: 'workflow_completed', data: {} })),
+      ],
+      [state('plan', 'completed')]
+    );
     expect(runs).toHaveLength(1);
     expect(runs[0]?.nodeId).toBe('plan');
   });
@@ -470,12 +535,18 @@ describe('foldNodeRuns', () => {
 describe('foldNodeRuns — cost scope', () => {
   const completed = (stepName: string, data: Record<string, unknown>) =>
     toRunEvent(raw({ event_type: 'node_completed', step_name: stepName, data }));
+  // Each row is its node's only completion, so the engine reports every node completed.
+  const foldCompleted = (events: RunEvent[]) =>
+    foldNodeRuns(
+      events,
+      events.map(e => ({ node_id: e.nodeId ?? '', state: 'completed' as const }))
+    );
 
   test('a composed fan-out: only own-scope costs count, and they sum to the run total', () => {
     // Shape of the durable rows a two-item compose_fan_out writes at $0.02 per call
     // (#3657): leaves own their spend, instance terminals and the wrapper restate it.
     const runTotal = 0.04;
-    const runs = foldNodeRuns([
+    const runs = foldCompleted([
       completed('fan__0__leaf', { cost_usd: 0.02, accounting: 'node' }),
       completed('fan__1__leaf', { cost_usd: 0.02, accounting: 'node' }),
       completed('fan__0', { cost_usd: 0.02, accounting: 'instance', aggregate: true }),
@@ -497,17 +568,17 @@ describe('foldNodeRuns — cost scope', () => {
   });
 
   test('an amendment row restates its attempts', () => {
-    const [run] = foldNodeRuns([completed('build', { cost_usd: 0.05, accounting: 'amendment' })]);
+    const [run] = foldCompleted([completed('build', { cost_usd: 0.05, accounting: 'amendment' })]);
     expect(run?.costScope).toBe('total');
   });
 
   test('a row recorded before `accounting` existed reads as own spend', () => {
-    const [run] = foldNodeRuns([completed('plan', { cost_usd: 0.1 })]);
+    const [run] = foldCompleted([completed('plan', { cost_usd: 0.1 })]);
     expect(run).toMatchObject({ costUsd: 0.1, costScope: 'own' });
   });
 
   test('a row with only the older `aggregate` marker still reads as a total', () => {
-    const [run] = foldNodeRuns([completed('loop', { cost_usd: 0.3, aggregate: true })]);
+    const [run] = foldCompleted([completed('loop', { cost_usd: 0.3, aggregate: true })]);
     expect(run?.costScope).toBe('total');
   });
 });

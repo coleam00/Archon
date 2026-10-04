@@ -118,7 +118,7 @@ export function ConsoleWorkflowResultCard({
     );
   }
 
-  const { completed, total } = countTerminalNodes(data?.events ?? []);
+  const { completed, total } = countTerminalNodes(data?.nodes ?? []);
   const glyph = RESULT_GLYPH[run.status] ?? '•';
   const label = RESULT_LABEL[run.status] ?? `Workflow ${statusLabel[run.status].toLowerCase()}`;
   const duration = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));

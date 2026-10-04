@@ -2482,7 +2482,10 @@ The record preserves execution status, authored outcome, node states and skip ca
 the selected `returns:` value when available, and an artifact manifest. Execution
 status and authored outcome remain independent; the engine does not infer a delivery
 verdict from filenames or output prose. Runs created before this support may have no
-record. Resumed active runs expose `null` until their next terminal transition.
+record. Resumed active runs expose `null` until their next terminal transition. The same
+response's `run.nodes` carries the engine's node states for every run: the record's when it
+exists, otherwise the same fold over the events recorded so far. Active, resumed, and older
+runs therefore show each node's current state.
 
 The manifest contains file metadata, not content previews. Its `limitations` identify
 incomplete observations. Cancellation can record pending or running nodes and files

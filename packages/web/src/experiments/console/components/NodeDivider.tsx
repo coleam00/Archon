@@ -1,4 +1,5 @@
 import type { ReactElement } from 'react';
+import type { NodeRun } from '../primitives/event';
 import { formatElapsed, formatRelativeToBaseline, formatClock } from '../lib/format';
 import { useStreamContext } from '../lib/stream-context';
 import type { CostScope } from '../primitives/event';
@@ -7,8 +8,8 @@ interface NodeDividerProps {
   /** `step_name` — the scroll-anchor target for the graph panel. */
   nodeId: string;
   nodeName: string;
-  /** Folded lifecycle status; `running` = the node is still in-flight. */
-  status: 'running' | 'completed' | 'failed' | 'skipped';
+  /** The engine's state for the node. */
+  status: NodeRun['status'];
   durationMs: number | null;
   timestamp: string;
   /** From `node_completed` — surfaced inline so per-node spend is visible. */
@@ -26,6 +27,7 @@ interface NodeDividerProps {
 }
 
 const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
+  pending: 'pending',
   running: 'running',
   completed: 'completed',
   failed: 'failed',
@@ -33,6 +35,7 @@ const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
 };
 
 const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
+  pending: 'text-text-tertiary',
   running: 'text-text-tertiary',
   completed: 'text-success',
   failed: 'text-error',
@@ -40,8 +43,7 @@ const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
 };
 
 /**
- * Thin divider heading one DAG node — exactly one per node, folded from its
- * transitions (started + terminal, plus any resume-time skip).
+ * Thin divider heading one DAG node — exactly one per node.
  *   left gutter:  relative timestamp (mono)
  *   left label:   node name in mono
  *   right label:  status + duration (when terminal)

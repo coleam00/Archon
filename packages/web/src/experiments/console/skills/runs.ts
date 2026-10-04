@@ -1,6 +1,6 @@
 import { requestJson } from '../lib/http';
 import { toRun, type Run } from '../primitives/run';
-import { toRunEvent, type RunEvent } from '../primitives/event';
+import { toRunEvent, type RunEvent, type RunNodeState } from '../primitives/event';
 import type { RunStatus } from '../lib/run-status';
 import type { components } from '@/lib/api.generated';
 
@@ -61,15 +61,19 @@ export async function listGlobalCounts(): Promise<RunCounts> {
 }
 
 interface RunDetailResponse {
-  run: Parameters<typeof toRun>[0];
+  run: Parameters<typeof toRun>[0] &
+    Pick<components['schemas']['WorkflowRunDetail']['run'], 'nodes'>;
   events: Parameters<typeof toRunEvent>[0][];
 }
 
-export async function getRun(id: string): Promise<{ run: Run; events: RunEvent[] }> {
+export async function getRun(
+  id: string
+): Promise<{ run: Run; events: RunEvent[]; nodes: RunNodeState[] }> {
   const res = await requestJson<RunDetailResponse>(`/api/workflows/runs/${encodeURIComponent(id)}`);
   return {
     run: toRun(res.run),
     events: res.events.map(toRunEvent),
+    nodes: res.run.nodes,
   };
 }
 

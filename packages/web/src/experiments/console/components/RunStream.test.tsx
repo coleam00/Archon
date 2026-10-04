@@ -152,6 +152,7 @@ describe('RunStream tool rendering', () => {
         <RunStream
           messages={[message]}
           events={[nodeStarted]}
+          nodes={[{ node_id: 'implement', state: 'running' }]}
           providerEvents={providerEvents}
           showToolCalls
           showSystem={false}
@@ -194,12 +195,13 @@ describe('RunStream tool rendering', () => {
       ],
     ]);
     const finished: NodeTransitionEvent = { ...nodeStarted, id: 'n2', transition: 'completed' };
-    const html = (events: NodeTransitionEvent[]): string =>
+    const html = (events: NodeTransitionEvent[], state: 'running' | 'completed'): string =>
       renderToStaticMarkup(
         <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
           <RunStream
             messages={[]}
             events={events}
+            nodes={[{ node_id: 'implement', state }]}
             providerEvents={lostUpdate}
             showToolCalls
             showSystem={false}
@@ -208,8 +210,8 @@ describe('RunStream tool rendering', () => {
         </StreamContextProvider>
       );
 
-    expect(html([nodeStarted])).not.toContain('no result recorded');
-    expect(html([nodeStarted, finished])).toContain('no result recorded');
+    expect(html([nodeStarted], 'running')).not.toContain('no result recorded');
+    expect(html([nodeStarted, finished], 'completed')).toContain('no result recorded');
   });
 
   test('falls back to message-inline tools for a run that recorded no tool events', () => {

@@ -1,4 +1,7 @@
-import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
+import {
+  runNodeStateSchema,
+  terminalRecordSchema,
+} from '@archon/workflows/schemas/terminal-record';
 import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@archon/workflows/schemas/provider-event';
 /**
  * Zod schemas for workflow API endpoints.
@@ -173,6 +176,10 @@ export const workflowRunDetailSchema = z
       parent_platform_id: z.string().optional(),
       conversation_platform_id: z.string().nullable(),
       terminal_record: terminalRecordSchema.nullable(),
+      nodes: z.array(runNodeStateSchema).openapi({
+        description:
+          "The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far.",
+      }),
     }),
     events: z.array(workflowEventSchema),
   })
