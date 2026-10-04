@@ -7,8 +7,7 @@
  *
  * Nested paths authorize every prefix against `declaredOutputPaths` before reading
  * values. Declared absent/null parents resolve empty; schemaless traversal requires
- * own object properties at every segment. Root-only legacy contracts cannot authorize
- * nested reads and require a producer rerun.
+ * own object properties at every segment.
  *
  * Single-field resolution table for a known producer:
  *   0. Producer's `state` is `'failed'` → THROW ('producer-failed', #2713), before any
@@ -274,7 +273,6 @@ export function resolveExecutionCheckoutStart(
  * sites run inside the dag-executor's per-node try/catch).
  */
 export type OutputRefErrorReason =
-  | 'contract-unavailable'
   | 'not-in-schema'
   | 'unparseable'
   | 'truncated'
@@ -308,8 +306,6 @@ export class OutputRefError extends Error {
     const ref = pathDetails?.reference ?? `$${nodeId}.output.${field}`;
     field = pathDetails?.segment ?? field;
     switch (reason) {
-      case 'contract-unavailable':
-        return `'${ref}' cannot authorize nested segment '${field}': node '${nodeId}' has only a legacy root-field contract. Rerun the producer with the current binary to record its nested contract.`;
       case 'not-in-schema':
         return `'${ref}' references field '${field}', which is not declared in node '${nodeId}'s output_format schema. Add '${field}' to the schema (and mark it optional if it can be absent), or fix the reference.`;
       case 'unparseable':
@@ -506,12 +502,6 @@ export function resolveNodeOutputField(
   if (segments.length > 1) {
     const paths = nodeOutput.declaredOutputPaths;
     if (paths !== undefined) assertDeclaredOutputPath(paths, nodeId, field, reference);
-    else if (declaredFields !== undefined) {
-      throw new OutputRefError(nodeId, field, 'contract-unavailable', [], {
-        reference,
-        segment: segments[1],
-      });
-    }
     let value: unknown = structuredObj ?? parseOutputObject(nodeOutput.output);
     if (value === undefined)
       throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), [], {

@@ -605,17 +605,6 @@ describe('nested output contract', () => {
       )
     ).toEqual({ kind: 'value', value: null });
   });
-  it('fails old schema-owned results with rerun guidance while preserving single-field reads', () => {
-    const node: NodeOutput = {
-      state: 'completed',
-      output: '{"proposal":{"action":"add"}}',
-      declaredFields: ['proposal'],
-    };
-    expect(() =>
-      resolveNodeOutputField(node, 'p', 'proposal.action', '$LOOP_PREV.p.output.proposal.action')
-    ).toThrow("'$LOOP_PREV.p.output.proposal.action' cannot authorize nested segment 'action'");
-    expect(resolveNodeOutputField(node, 'p', 'proposal').kind).toBe('value');
-  });
 });
 
 it('accepts absent child path metadata and fails malformed present contracts', () => {
