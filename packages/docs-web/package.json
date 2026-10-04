@@ -20,6 +20,9 @@
   "testGroups": [
     [
       "src/data/plugins.test.ts"
+    ],
+    [
+      "src/reverse-proxy.test.ts"
     ]
   ]
 }

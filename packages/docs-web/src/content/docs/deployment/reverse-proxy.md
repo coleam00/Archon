@@ -32,7 +32,7 @@ Keep the upstream private so clients cannot bypass the proxy. For a proxy on the
 
 In GitHub App mode, `POST /internal/git-credential` hands out live installation tokens. It is registered only when the GitHub adapter is in App mode. The server refuses a non-loopback bind in App mode unless `ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND=1` explicitly acknowledges it. **That flag does not protect the endpoint.** Set it only when the topology requires a non-loopback upstream, the upstream is private, and the proxy already denies `/internal/*`.
 
-The Caddy reference's catch-all forwards other paths; **add the denial from [Internal endpoint security](/adapters/github-app-setup/#internal-endpoint-security--required) before using it in App mode**. Follow that guide's Docker port restrictions and external **POST** probe, too. A GET returning 404 does not prove that the credential endpoint is blocked.
+The Caddy reference denies `/internal/*` with a proxy-generated 404 before its catch-all forwards other paths. **Keep that denial in your deployed configuration.** Follow [Internal endpoint security](/adapters/github-app-setup/#internal-endpoint-security--required) for the Docker port restrictions and external **POST** probe, too. A GET returning 404 does not prove that the credential endpoint is blocked.
 
 ### Webhooks: preserve the signed payload
 
