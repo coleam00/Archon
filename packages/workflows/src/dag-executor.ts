@@ -171,8 +171,8 @@ import {
   resolveExecutionCheckoutStart,
   parseWholeInputsRef,
   substituteInputRefs,
-  SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
-  SUPPORTED_OUTPUT_REF_SOURCE,
+  PRIOR_OUTPUT_PATH_SOURCE,
+  CURRENT_OUTPUT_PATH_SOURCE,
   assertSupportedOutputRefs,
   type JsonValue,
 } from './output-ref';
@@ -1319,7 +1319,7 @@ export function substituteNodeOutputRefs(
 ): string {
   assertSupportedOutputRefs(prompt);
   return prompt.replace(
-    new RegExp(SUPPORTED_OUTPUT_REF_SOURCE, 'g'),
+    new RegExp(CURRENT_OUTPUT_PATH_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
@@ -1495,7 +1495,7 @@ export function substituteLoopPrevRefs(
     return prompt;
   }
   return prompt.replace(
-    new RegExp(SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE, 'g'),
+    new RegExp(PRIOR_OUTPUT_PATH_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
       if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {

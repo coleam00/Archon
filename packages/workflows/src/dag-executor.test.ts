@@ -1498,6 +1498,14 @@ describe('substituteNodeOutputRefs', () => {
     expect(substituteNodeOutputRefs('Fix $a.output.type issue', outputs)).toBe('Fix BUG issue');
   });
 
+  it('keeps literal text that touches a reference', () => {
+    const outputs = new Map([['x', makeOutput('completed', '{"f":"ok"}')]]);
+    expect(substituteNodeOutputRefs('**$x.output.f**', outputs)).toBe('**ok**');
+    expect(substituteNodeOutputRefs('$x.outputs', outputs)).toBe('{"f":"ok"}s');
+    expect(substituteNodeOutputRefs('$x.output_text', outputs)).toBe('{"f":"ok"}_text');
+    expect(substituteNodeOutputRefs('Done: $x.output.', outputs)).toBe('Done: {"f":"ok"}.');
+  });
+
   it('substitutes the complete nested output path', () => {
     const outputs = new Map([
       [

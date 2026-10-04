@@ -74,8 +74,8 @@ import {
   outputContractFromSchema,
   assertDeclaredOutputPath,
   assertSupportedOutputRefs,
-  SUPPORTED_OUTPUT_REF_SOURCE,
-  SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
+  CURRENT_OUTPUT_PATH_SOURCE,
+  PRIOR_OUTPUT_PATH_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
   OUTPUT_REF_SOURCE,
   parseWholeExecutionCheckoutRef,
@@ -986,8 +986,8 @@ export function validateDagStructure(
         }
       } else {
         for (const [pattern, prior] of [
-          [SUPPORTED_OUTPUT_REF_SOURCE, false],
-          [SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE, true],
+          [CURRENT_OUTPUT_PATH_SOURCE, false],
+          [PRIOR_OUTPUT_PATH_SOURCE, true],
         ] as const) {
           for (const match of source.text.matchAll(new RegExp(pattern, 'g'))) {
             refs.push({ nodeId: match[1], field: match[2], reference: match[0], prior });

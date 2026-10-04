@@ -4,8 +4,8 @@ import { describe, it, expect } from 'bun:test';
 import {
   assertProducerNotFailed,
   assertSupportedOutputRefs,
-  SUPPORTED_OUTPUT_REF_SOURCE,
-  SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
+  CURRENT_OUTPUT_PATH_SOURCE,
+  PRIOR_OUTPUT_PATH_SOURCE,
   canonicalValueText,
   declaredFieldsFromSchema,
   outputContractFromSchema,
@@ -95,20 +95,19 @@ describe('output reference token boundaries', () => {
     expect(() => assertSupportedOutputRefs('$INPUTS.outputMode')).not.toThrow();
   });
   for (const [prefix, source] of [
-    ['$review', SUPPORTED_OUTPUT_REF_SOURCE],
-    ['$LOOP_PREV.review', SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE],
+    ['$review', CURRENT_OUTPUT_PATH_SOURCE],
+    ['$LOOP_PREV.review', PRIOR_OUTPUT_PATH_SOURCE],
   ] as const) {
-    it(`never scans a valid prefix of unsupported ${prefix} syntax`, () => {
+    it(`rejects unsupported ${prefix} syntax before any prefix is substituted`, () => {
       for (const suffix of ['[0]', '.*', '..action', '.0', '(value)', '+1', '?.action']) {
         const reference = `${prefix}.output.proposal.action${suffix}`;
-        expect(new RegExp(source, 'g').exec(reference)).toBeNull();
         expect(() => assertSupportedOutputRefs(reference)).toThrow(reference);
       }
     });
 
     it(`preserves punctuation and literal suffixes around ${prefix} paths`, () => {
       const reference = `${prefix}.output.proposal.action`;
-      for (const suffix of ['.', ', next', '!', '?', '-suffix', '/file', '-$INPUTS.item']) {
+      for (const suffix of ['.', ', next', '!', '?', '**', '-suffix', '/file', '-$INPUTS.item']) {
         const template = `${reference}${suffix}`;
         expect(() => assertSupportedOutputRefs(template)).not.toThrow();
         expect(new RegExp(source, 'g').exec(template)?.[0]).toBe(reference);

@@ -143,18 +143,16 @@ export const OUTPUT_FIELD_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
 
 export const OUTPUT_PATH_SOURCE = `${OUTPUT_FIELD_SOURCE}(?:\\.${OUTPUT_FIELD_SOURCE})*`;
 
-// A sentence-ending dot and ordinary template suffixes remain literal punctuation.
+/** Current-output form, with capture 1 = node id and capture 2 = optional field path. */
+export const CURRENT_OUTPUT_PATH_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
+
+/** Prior-iteration form, with capture 1 = node id and capture 2 = optional field path. */
+export const PRIOR_OUTPUT_PATH_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
+
 // Indexing, calls, wildcards, malformed segments, and attached arithmetic are not paths.
-const UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE = String.raw`(?:\w|\.(?=[\w.*\[])|[\[(*+]|\?\.)`;
-const OUTPUT_REF_BOUNDARY_SOURCE = `(?!${UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE})`;
-const CURRENT_OUTPUT_PATH_SOURCE = `${OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
-const PRIOR_OUTPUT_PATH_SOURCE = `${LOOP_PREV_OUTPUT_REF_SOURCE}(?:\\.(${OUTPUT_PATH_SOURCE}))?`;
-
-/** Supported current-output form, with capture 1 = node id and capture 2 = optional field path. */
-export const SUPPORTED_OUTPUT_REF_SOURCE = `${CURRENT_OUTPUT_PATH_SOURCE}${OUTPUT_REF_BOUNDARY_SOURCE}`;
-
-/** Supported prior-iteration form, with capture 1 = node id and capture 2 = optional field path. */
-export const SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE = `${PRIOR_OUTPUT_PATH_SOURCE}${OUTPUT_REF_BOUNDARY_SOURCE}`;
+// Anything else after a reference is literal text: a sentence-ending dot, markdown
+// emphasis (`**$x.output.f**`), or a word suffix (`$x.outputs`).
+const UNSUPPORTED_OUTPUT_CONTINUATION_SOURCE = String.raw`(?:\.(?=[\w.*\[])|[\[(+]|\?\.)`;
 
 /** Reject unsupported continuations before any valid prefix can be substituted. */
 export function assertSupportedOutputRefs(text: string): void {
@@ -213,7 +211,7 @@ export function substituteInputRefs(
 }
 
 /** Anchored whole-value form: the ENTIRE (trimmed) string is one `$id.output[.path]` ref. */
-const WHOLE_OUTPUT_REF_PATTERN = new RegExp(`^${SUPPORTED_OUTPUT_REF_SOURCE}$`);
+const WHOLE_OUTPUT_REF_PATTERN = new RegExp(`^${CURRENT_OUTPUT_PATH_SOURCE}$`);
 
 /**
  * Parse a string that is exactly one whole `$node.output[.path]` reference
