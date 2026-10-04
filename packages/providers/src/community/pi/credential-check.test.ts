@@ -271,36 +271,44 @@ describe('Pi native credentials', () => {
     const runs = join(root, 'runs');
     const runCount = (): number =>
       existsSync(runs) ? readFileSync(runs, 'utf8').trim().split('\n').length : 0;
-    writeFileSync(
-      join(root, 'models.json'),
-      JSON.stringify({
-        providers: {
-          local: {
-            // Port 9 is unbound, so the turn's request fails after Pi resolves its key.
-            baseUrl: 'http://127.0.0.1:9/v1',
-            api: 'openai-completions',
-            apiKey: `!printf 'run\\n' >> '${runs}'; printf '${secret}'`,
-            models: [{ id: 'model', name: 'Local' }],
-          },
-        },
-      })
-    );
-    // Each retry resolves the key again; one attempt keeps the count about the node.
-    writeFileSync(join(root, 'settings.json'), JSON.stringify({ retry: { enabled: false } }));
-
-    expect(await check('local/model')).toEqual({ state: 'usable', source: 'native' });
-    expect(runCount()).toBe(1);
-
-    const chunks = [];
-    for await (const chunk of new PiProvider().sendQuery('test', root, undefined, {
-      model: 'local/model',
-    }))
-      chunks.push(chunk);
-    // The request was sent with the resolved key; only the unbound port failed it.
-    expect(chunks.find(chunk => chunk.type === 'result')).toMatchObject({
-      errors: ['Connection error.'],
+    const authorizations: (string | null)[] = [];
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        authorizations.push(request.headers.get('authorization'));
+        return Response.json({ error: { message: 'fixture rejection' } }, { status: 401 });
+      },
     });
-    expect(runCount()).toBe(2);
+    try {
+      writeFileSync(
+        join(root, 'models.json'),
+        JSON.stringify({
+          providers: {
+            local: {
+              baseUrl: `http://127.0.0.1:${server.port}/v1`,
+              api: 'openai-completions',
+              apiKey: `!printf 'run\\n' >> '${runs}'; printf '${secret}'`,
+              models: [{ id: 'model', name: 'Local' }],
+            },
+          },
+        })
+      );
+      // Each retry resolves the key again; one attempt keeps the count about the node.
+      writeFileSync(join(root, 'settings.json'), JSON.stringify({ retry: { enabled: false } }));
+
+      expect(await check('local/model')).toEqual({ state: 'usable', source: 'native' });
+      expect(runCount()).toBe(1);
+
+      for await (const _chunk of new PiProvider().sendQuery('test', root, undefined, {
+        model: 'local/model',
+      }));
+      // The request carried the key the command printed, and the command ran once more.
+      expect(authorizations.length).toBeGreaterThan(0);
+      expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
+      expect(runCount()).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
   });
   test('a model only in the persisted catalog is checked as a turn checks it', async () => {
     // Pi's refresh restores the persisted pi.dev catalog, where models newer than the
