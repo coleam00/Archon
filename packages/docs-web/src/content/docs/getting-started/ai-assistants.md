@@ -292,7 +292,7 @@ Archon always runs OpenCode as a **managed embedded runtime** — it spawns and 
 
 ### Install
 
-OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+`bun install` pulls in `@opencode-ai/sdk` through `@archon/providers`, but the SDK does not include the `opencode` executable. Install the [OpenCode CLI](https://opencode.ai/docs/#install) separately and put it on the Archon process's `PATH`, including for Docker installs. Run `archon doctor --full` to check both dependencies without starting the server.
 
 ### Authenticate
 

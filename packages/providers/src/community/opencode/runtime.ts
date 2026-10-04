@@ -1,6 +1,8 @@
 import { createLogger } from '@archon/paths';
 import { execSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { statSync } from 'node:fs';
+import { join } from 'node:path';
 
 const OPENCODE_START_TIMEOUT_MS = 5000;
 const OPENCODE_START_MAX_RETRIES = 3;
@@ -304,18 +306,44 @@ export async function disposeInstanceForDirectory(
   }
 }
 
-/**
- * Cheap availability probe for `archon doctor` — resolves the embedded
- * OpenCode SDK module WITHOUT starting the server.
- *
- * `acquireEmbeddedRuntime` spawns a child process and binds a port, which is
- * far too heavy for a diagnostic. This only confirms the SDK is installed and
- * its `createOpencode` entrypoint is present, so doctor can report runtime
- * readiness without the boot. Throws if the module cannot be resolved.
- */
-export async function probeOpencodeRuntimeModule(): Promise<boolean> {
+/** Check SDK and executable availability without starting a server or binding a port. */
+export async function probeOpencodeRuntime(): Promise<
+  'ready' | 'sdk-entrypoint-missing' | 'executable-missing'
+> {
   const mod = await import('@opencode-ai/sdk');
-  return typeof (mod as { createOpencode?: unknown }).createOpencode === 'function';
+  if (typeof mod.createOpencode !== 'function') return 'sdk-entrypoint-missing';
+
+  // The SDK uses cross-spawn: POSIX inherits PATH; Windows also searches cwd
+  // and PATHEXT (including extensionless files on its second lookup).
+  // Bun's spawn falls back to _PATH_DEFPATH when inherited PATH is empty or absent.
+  const defaultSearchPath =
+    process.platform === 'darwin' ? '/usr/bin:/bin:/usr/sbin:/sbin' : '/usr/bin:/bin';
+  const executablePresent =
+    process.platform === 'win32'
+      ? isOpencodeExecutableOnWindows()
+      : Bun.which('opencode', { PATH: process.env.PATH || defaultSearchPath }) !== null;
+  return executablePresent ? 'ready' : 'executable-missing';
+}
+
+function isOpencodeExecutableOnWindows(): boolean {
+  const pathKey = Object.keys(process.env)
+    .sort()
+    .reverse()
+    .find(key => key.toUpperCase() === 'PATH');
+  const searchPath = (pathKey ? process.env[pathKey] : undefined) || process.env.PATH || '';
+  const extensions = (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';');
+  for (const directory of [process.cwd(), ...searchPath.split(';')]) {
+    const unquotedDirectory =
+      directory.startsWith('"') && directory.endsWith('"') ? directory.slice(1, -1) : directory;
+    for (const extension of [...extensions, '']) {
+      try {
+        if (statSync(join(unquotedDirectory, `opencode${extension}`)).isFile()) return true;
+      } catch {
+        // cross-spawn treats failed executable lookups as unresolved.
+      }
+    }
+  }
+  return false;
 }
 
 /** Reset the embedded runtime state. For testing only. */
