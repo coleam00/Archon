@@ -146,6 +146,36 @@ describe('node record serializers', () => {
     });
   });
 
+  it('names a node by its bare command name on progress surfaces and keeps the qualified reference durable', () => {
+    const packaged = '__archon_pack__installed:Wirasm.archon-video:make::hooks';
+    const nameOf = (node: NodeExecutionRecord['node']) => {
+      const event = serializeNodeEmitter({ ...record(), node });
+      return event && 'nodeName' in event ? event.nodeName : undefined;
+    };
+
+    expect(
+      nameOf({ id: 'hooks-node', kind: 'agent', source: { kind: 'command', name: packaged } })
+    ).toBe('hooks');
+    expect(
+      nameOf({ id: 'review', kind: 'agent', source: { kind: 'command', name: 'review-pr' } })
+    ).toBe('review-pr');
+    expect(nameOf({ id: 'build', kind: 'exec', runtime: 'sh' })).toBe('build');
+
+    const source: NodeExecutionRecord = {
+      ...record(),
+      node: { id: 'hooks-node', kind: 'agent', source: { kind: 'command', name: packaged } },
+      diagnostics: { command: packaged },
+    };
+    expect(serializeNodeStateRecord(source)).toMatchObject({
+      step_name: 'group.review',
+      data: { command: packaged },
+    });
+    expect(serializeNodeTranscript(source)).toMatchObject({
+      step: 'hooks-node',
+      content: packaged,
+    });
+  });
+
   it('writes the full session id to the durable row only, for completed and failed attempts', () => {
     const sessionId = '0123456789abcdef-full-session-id';
     const finished = [

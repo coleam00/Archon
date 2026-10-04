@@ -10,11 +10,14 @@ import {
   executionSpendSchema,
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
+  type NodeDescriptor,
   type NodeExecutionRecord,
   type NodeStateRecord,
   type ExecutionOutput,
 } from './schemas/node-execution';
 import { executionMetadata } from './node-execution';
+import { unqualifiedResourceName } from './packaged-workflow';
+import type { DagNode } from './schemas';
 
 /** Existing flat wire keys remain readable by older binaries. */
 export const serializedNodeDataSchema = z.object({
@@ -304,10 +307,14 @@ export function serializeNodeOutput(
   }
 }
 
-export function nodeRecordName(record: NodeStateRecord): string {
-  return record.node.kind === 'agent' && record.node.source.kind === 'command'
-    ? record.node.source.name
-    : record.node.id;
+/**
+ * The label progress surfaces show for a node: the command name for a command node, else
+ * the node id. A packaged command's internal reference is reduced to its bare name; the
+ * qualified reference stays in persisted `data.command` and transcript content.
+ */
+export function nodeDisplayName(node: NodeDescriptor | DagNode): string {
+  if (node.kind !== 'agent' || node.source.kind !== 'command') return node.id;
+  return unqualifiedResourceName(node.source.name);
 }
 
 export function serializeNodeTranscript(
@@ -359,7 +366,11 @@ export function serializeNodeTranscript(
 export function serializeNodeEmitter(
   record: NodeStateRecord
 ): import('./event-emitter').WorkflowEmitterEvent | undefined {
-  const base = { runId: record.runId, nodeId: record.node.id, nodeName: nodeRecordName(record) };
+  const base = {
+    runId: record.runId,
+    nodeId: record.node.id,
+    nodeName: nodeDisplayName(record.node),
+  };
   if ('cache' in record)
     return record.cache.action === 'replayed'
       ? { ...base, type: 'node_skipped_prior_success' }

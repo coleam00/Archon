@@ -1,16 +1,10 @@
 # Archon Studio Builder
 
 The in-console visual workflow builder and its surrounding capabilities (authoring,
-persistence, marketplace submission, and AI-assisted authoring). This glossary fixes the
+persistence and AI-assisted authoring). This glossary fixes the
 language used across the builder PR series so the same concept never travels under two names.
 
 ## Language
-
-**Marketplace Submission**:
-The act of publishing a workflow you authored to the community marketplace registry so other
-users can discover and install it. A submission results in a registry entry pointing at the
-workflow's source, frozen to a specific version.
-_Avoid_: publish, share, upload, contribute (these all appear in CONTRIBUTING.md for the same act — "Marketplace Submission" is canonical here)
 
 **Builder Copilot**:
 The AI chat assistant embedded in the workflow builder. It converses with the author and emits

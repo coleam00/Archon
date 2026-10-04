@@ -9,7 +9,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
-import { buildNodeSummaries } from './workflow';
+import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
+import { NODE_SUMMARY_EVENT_TYPES, buildNodeSummaries, buildRunNodes } from './workflow';
 
 function event(
   id: string,
@@ -314,6 +315,49 @@ describe('buildNodeSummaries resume resets', () => {
   }
 });
 
+describe('buildRunNodes', () => {
+  const graph = { terminal_graph: { node_ids: ['plan', 'implement', 'review'] } };
+
+  it('lists every declared node in declared order, pending until an event reaches it', () => {
+    const nodes = buildRunNodes({ metadata: graph }, [
+      event('implement-started', 'node_started', 'implement', '2026-09-27T10:00:05.000Z'),
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:00.000Z'),
+      event('plan-completed', 'node_completed', 'plan', '2026-09-27T10:00:04.000Z'),
+    ]);
+
+    expect(nodes.map(node => [node.nodeId, node.state])).toEqual([
+      ['plan', 'completed'],
+      ['implement', 'running'],
+      ['review', 'pending'],
+    ]);
+    expect(nodes[2]).toEqual({ nodeId: 'review', state: 'pending' });
+  });
+
+  it('appends a node that ran without being declared after the declared ones', () => {
+    const nodes = buildRunNodes({ metadata: graph }, [
+      event('loop-body', 'node_started', 'plan.step', '2026-09-27T10:00:00.000Z'),
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:01.000Z'),
+    ]);
+
+    expect(nodes.map(node => [node.nodeId, node.state])).toEqual([
+      ['plan', 'running'],
+      ['implement', 'pending'],
+      ['review', 'pending'],
+      ['plan.step', 'running'],
+    ]);
+  });
+
+  it('reports only the folded nodes when the run recorded no graph', () => {
+    const nodes = buildRunNodes({ metadata: {} }, [
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:00.000Z'),
+    ]);
+
+    expect(nodes).toEqual([
+      { nodeId: 'plan', state: 'running', startedAt: '2026-09-27T10:00:00.000Z' },
+    ]);
+  });
+});
+
 describe('buildNodeSummaries session ids', () => {
   const at = (second: number): string => `2026-10-03T10:00:${String(second).padStart(2, '0')}.000Z`;
 
@@ -354,5 +398,24 @@ describe('buildNodeSummaries session ids', () => {
       event('2', 'node_completed', 'plan', at(1), { node_output: 'done' }),
     ]);
     expect(summary).not.toHaveProperty('sessionIds');
+  });
+});
+
+describe('NODE_SUMMARY_EVENT_TYPES', () => {
+  it('names every event type the fold reads: fetching only those changes nothing', () => {
+    // One row of every event type, each carrying fields the fold would pick up.
+    const log = WORKFLOW_EVENT_TYPES.map((type, i) =>
+      event(String(i), type, 'work', `2026-10-03T10:00:${String(i).padStart(2, '0')}.000Z`, {
+        session_id: `session-${type}`,
+        iteration: 1,
+        node_output: 'out',
+        error: 'boom',
+      })
+    );
+    const read = new Set<string>(NODE_SUMMARY_EVENT_TYPES);
+
+    expect(buildNodeSummaries(log.filter(row => read.has(row.event_type)))).toEqual(
+      buildNodeSummaries(log)
+    );
   });
 });

@@ -68,6 +68,7 @@ mock.module('./openai-oauth', () => ({
   exchangeOpenAiAuthorizationCode: (code: string, verifier: string) => exchangeImpl(code, verifier),
   // Imported by user-provider-key-store (loaded transitively via connect-service);
   // unused by the bridge itself.
+  OpenAiTokenError: class OpenAiTokenError extends Error {},
   mintOpenAiOAuthApiKey: async (creds: Record<string, unknown>) => ({
     newCredentials: creds,
     apiKey: 'k',

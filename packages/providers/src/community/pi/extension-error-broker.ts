@@ -1,8 +1,6 @@
 import { createLogger } from '@archon/paths';
 import type { ExtensionError } from '@earendil-works/pi-coding-agent';
 
-import { Semaphore } from './semaphore';
-
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi.extension-error-broker');
@@ -19,34 +17,69 @@ export interface PiExtensionTurn {
   close(): void;
 }
 
+const failureEvidence = new WeakMap<Error, string>();
 interface ActiveTurn {
   readonly extensionPaths: readonly string[];
-  readonly turn: PiExtensionTurn;
+  /** Names the turn in logs; the workflow node id when the turn has one. */
+  readonly owner: string | undefined;
 }
 
-const gate = new Semaphore(1);
-const failureEvidence = new WeakMap<Error, string>();
-let activeTurn: ActiveTurn | undefined;
+/** Turns that still accept process errors. */
+const activeTurns = new Map<PiExtensionTurn, ActiveTurn>();
+
+// Pi's crash-log.findExtensionStackMatches is the reference; its matcher is not
+// exported through the SDK. Normalize here without importing Pi at startup.
+function normalizeStackPath(value: string): string {
+  return value
+    .replace(/\\/g, '/')
+    .replace(/file:\/\/([^\s)]+)/gi, (_url, pathname: string) => {
+      const location = /:\d+(?::\d+)?$/.exec(pathname)?.[0] ?? '';
+      let path = pathname.slice(0, pathname.length - location.length);
+      try {
+        path = decodeURIComponent(path);
+      } catch {
+        // Some stack URLs contain a literal, unescaped percent sign.
+      }
+      return path.replace(/^\/(?=[a-z]:\/)/i, '') + location;
+    })
+    .replace(/\b[A-Z](?=:\/)/g, drive => drive.toLowerCase());
+}
+
+/**
+ * A frame names a path only where the path ends: at its line/column, a closing paren,
+ * whitespace, the frame end, or a `/` into a directory extension. A bare substring
+ * would let `/x/ext.ts` claim a frame in `/x/ext.tsx`.
+ */
+function frameNamesPath(frame: string, path: string): boolean {
+  for (let index = frame.indexOf(path); index !== -1; index = frame.indexOf(path, index + 1)) {
+    const next = frame.charAt(index + path.length);
+    if (next === '' || next === ':' || next === ')' || next === '/' || next.trim() === '') {
+      return true;
+    }
+  }
+  return false;
+}
 
 function matchingExtensionPath(
   error: Error,
   extensionPaths: readonly string[]
 ): string | undefined {
-  const stackFrames = error.stack?.split('\n').slice(1);
+  const stackFrames = error.stack?.split('\n').slice(1).map(normalizeStackPath);
   if (!stackFrames) return undefined;
-  return extensionPaths.find(path => stackFrames.some(frame => frame.includes(path)));
+  return extensionPaths.find(path => {
+    const normalizedPath = normalizeStackPath(path);
+    return stackFrames.some(frame => frameNamesPath(frame, normalizedPath));
+  });
 }
 
 /**
- * Start one extension-enabled Pi turn. These turns are process-serialized because
- * two sessions can load the same extension path, making a detached process error
- * impossible to attribute safely while both are active.
+ * Start one extension-enabled Pi turn. Turns run concurrently: a detached process
+ * error is routed by the extension paths in its stack (see claimPiExtensionProcessError).
  */
-export async function beginPiExtensionTurn(
-  extensionPaths: readonly string[]
-): Promise<PiExtensionTurn> {
-  await gate.acquire();
-
+export function beginPiExtensionTurn(
+  extensionPaths: readonly string[],
+  owner?: string
+): PiExtensionTurn {
   let failed: Error | undefined;
   let closed = false;
   const listeners = new Set<(error: Error) => void>();
@@ -84,34 +117,60 @@ export async function beginPiExtensionTurn(
       if (failed) throw failed;
     },
     stopAccepting() {
-      if (activeTurn?.turn === turn) activeTurn = undefined;
+      activeTurns.delete(turn);
     },
     close() {
       if (closed) return;
       closed = true;
       listeners.clear();
       turn.stopAccepting();
-      gate.release();
     },
   };
 
-  activeTurn = {
+  activeTurns.set(turn, {
     extensionPaths: [...new Set(extensionPaths.filter(path => path.length > 0))],
-    turn,
-  };
+    owner,
+  });
   return turn;
 }
 
 /**
  * Route a process error only when its stack contains a loaded extension path.
  * Returning false leaves the process owner responsible for the fatal fallback.
+ *
+ * A detached error carries no session identity, and concurrent sessions usually load
+ * the same extension files. When several active turns match, the owner is one of them
+ * but nothing says which, so each fails with an error that states the ambiguity. That
+ * is narrower than the fatal fallback, which ends every node in the process and leaves
+ * the run without an owner.
  */
 export function claimPiExtensionProcessError(reason: unknown): boolean {
-  if (!(reason instanceof Error) || !activeTurn) return false;
-  const extensionPath = matchingExtensionPath(reason, activeTurn.extensionPaths);
-  if (!extensionPath) return false;
-  activeTurn.turn.report(reason, extensionPath);
-  return true;
+  if (!(reason instanceof Error)) return false;
+  const candidates: [PiExtensionTurn, string, string | undefined][] = [];
+  for (const [turn, { extensionPaths, owner }] of activeTurns) {
+    const extensionPath = matchingExtensionPath(reason, extensionPaths);
+    if (extensionPath) candidates.push([turn, extensionPath, owner]);
+  }
+  if (candidates.length === 1) {
+    const [turn, extensionPath] = candidates[0];
+    turn.report(reason, extensionPath);
+  } else if (candidates.length > 1) {
+    getLog().error(
+      {
+        err: reason,
+        candidates: candidates.map(([, extensionPath, owner]) => ({ owner, extensionPath })),
+      },
+      'pi.extension_error_ambiguous'
+    );
+    for (const [turn, extensionPath] of candidates) {
+      const ambiguous = new Error(
+        `Pi extension '${extensionPath}' failed in a detached callback while ${String(candidates.length)} concurrent Pi turns had it loaded; the failing turn cannot be identified, so each of them fails: ${reason.message}`,
+        { cause: reason }
+      );
+      turn.report(ambiguous, extensionPath, reason.stack ?? reason.message);
+    }
+  }
+  return candidates.length > 0;
 }
 
 /** Failure evidence for errors the broker attributed to a Pi extension. */

@@ -1,16 +1,7 @@
 /**
- * Codex SDK wrapper
- * Provides async generator interface for streaming Codex responses
+ * Codex provider: one Codex turn per `sendQuery`, driven over the `codex app-server`
+ * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
-import {
-  Codex,
-  type CodexOptions,
-  type ThreadOptions,
-  type TurnOptions,
-  type TurnCompletedEvent,
-  type ThreadItem,
-  type ThreadStartedEvent,
-} from '@openai/codex-sdk';
 import type {
   IAgentProvider,
   SendQueryOptions,
@@ -32,15 +23,31 @@ import { failureClassOfThrown, failureResult } from '../shared/failure';
 import { clampEffort } from '@archon/paths/effort';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
-import { resolveCodexBinaryPath } from './binary-resolver';
-import { createLogger } from '@archon/paths';
+import { resolveCodexBinary } from './binary-resolver';
+import { BUNDLED_VERSION, createLogger } from '@archon/paths';
 import { loadMcpConfig } from '../mcp/config';
 import {
   hasOpenAdditionalProperties,
   normalizeJsonSchemaForOpenAiStrict,
 } from '../shared/structured-output';
-import { withResumedOutcome, resumedOutcome } from '../shared/resumed';
 import { closeOpenToolCalls } from '../shared/tool-calls';
+import {
+  AppServerConnection,
+  ConnectionClosedError,
+  JsonRpcError,
+  settlesWithin,
+  type ParamsOf,
+  type Spawner,
+} from './app-server';
+import { classifyTurnError, describeErrorInfo } from './turn-error';
+import { applyNodeScope, checkThreadMcpScope, readCodexInventory } from './scope';
+import type { JsonValue } from './protocol/serde_json/JsonValue';
+import type { ThreadItem } from './protocol/v2/ThreadItem';
+import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
+import type { ThreadTokenUsage } from './protocol/v2/ThreadTokenUsage';
+import type { TokenUsageBreakdown } from './protocol/v2/TokenUsageBreakdown';
+import type { Turn } from './protocol/v2/Turn';
+import type { TurnError } from './protocol/v2/TurnError';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -49,41 +56,16 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-type CodexConfigOverrides = NonNullable<CodexOptions['config']>;
-type CodexConfigValue = CodexConfigOverrides[string];
-
-// Singleton Codex instance (async because binary path resolution is async)
-let codexInstance: Codex | null = null;
-let codexInitPromise: Promise<Codex> | null = null;
-
-/** Reset singleton state. Exported for tests only. */
-export function resetCodexSingleton(): void {
-  codexInstance = null;
-  codexInitPromise = null;
-}
+type CodexConfig = Record<string, JsonValue>;
 
 /**
- * Get or create Codex SDK instance.
+ * How long the app-server gets to answer a cancel's interrupt, then to exit after stdin
+ * closes, then again after SIGTERM.
  */
-async function getCodex(configCodexBinaryPath?: string): Promise<Codex> {
-  if (codexInstance) return codexInstance;
-
-  if (!codexInitPromise) {
-    codexInitPromise = (async (): Promise<Codex> => {
-      const codexPathOverride = await resolveCodexBinaryPath(configCodexBinaryPath);
-      const instance = new Codex({ codexPathOverride });
-      codexInstance = instance;
-      return instance;
-    })().catch(err => {
-      codexInitPromise = null;
-      throw err;
-    });
-  }
-  return codexInitPromise;
-}
+const SHUTDOWN_GRACE_MS = 3000;
 
 /**
- * Resolve Codex's `modelReasoningEffort` from Archon's inputs.
+ * Resolve Codex's reasoning effort from Archon's inputs.
  *
  * Precedence: `nodeConfig.effort` > `assistants.codex.modelReasoningEffort`
  * from config.yaml — mirroring Copilot's `resolveCopilotReasoning`, so a workflow's
@@ -112,41 +94,12 @@ function resolveModelReasoningEffort(
   return clamped;
 }
 
-/**
- * Build thread options for Codex SDK
- */
-function buildThreadOptions(
-  cwd: string,
-  model?: string,
-  assistantConfig?: Record<string, unknown>,
-  nodeConfig?: NodeConfig
-): ThreadOptions {
-  const config = parseCodexConfig(assistantConfig ?? {});
-  return {
-    workingDirectory: cwd,
-    skipGitRepoCheck: true,
-    sandboxMode: 'danger-full-access',
-    networkAccessEnabled: true,
-    approvalPolicy: 'never',
-    model: model ?? config.model,
-    modelReasoningEffort: resolveModelReasoningEffort(nodeConfig, config.modelReasoningEffort),
-    webSearchMode: config.webSearchMode,
-    additionalDirectories: config.additionalDirectories,
-  };
-}
-
-function buildCodexEnv(requestEnv: Record<string, string>): Record<string, string> {
+/** The process env with the request env on top: managed project env wins on collisions. */
+function buildCodexEnv(requestEnv?: Record<string, string>): Record<string, string> {
   const baseEnv = Object.fromEntries(
     Object.entries(process.env).filter((entry): entry is [string, string] => entry[1] !== undefined)
   );
-  // Managed project env intentionally overrides inherited process env for project-scoped execution.
   return { ...baseEnv, ...requestEnv };
-}
-
-function buildMcpEnvSource(
-  requestEnv?: Record<string, string>
-): Record<string, string | undefined> {
-  return requestEnv ? { ...process.env, ...requestEnv } : process.env;
 }
 
 const CODEX_MCP_PASSTHROUGH_KEYS = [
@@ -174,63 +127,40 @@ const CODEX_MCP_PASSTHROUGH_KEYS = [
   'tools',
 ] as const;
 
-function toCodexConfigValue(value: unknown): CodexConfigValue | undefined {
+function toJsonValue(value: unknown): JsonValue | undefined {
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
     return value;
   }
-
   if (Array.isArray(value)) {
-    const result: CodexConfigValue[] = [];
-    for (const item of value) {
-      const converted = toCodexConfigValue(item);
-      if (converted !== undefined) result.push(converted);
-    }
-    return result;
+    return value.map(toJsonValue).filter((item): item is JsonValue => item !== undefined);
   }
-
   if (typeof value === 'object' && value !== null) {
-    const result: CodexConfigOverrides = {};
+    const result: CodexConfig = {};
     for (const [key, nestedValue] of Object.entries(value)) {
-      const converted = toCodexConfigValue(nestedValue);
+      const converted = toJsonValue(nestedValue);
       if (converted !== undefined) result[key] = converted;
     }
     return result;
   }
-
   return undefined;
 }
 
-function setCodexConfigValue(target: CodexConfigOverrides, key: string, value: unknown): void {
-  const converted = toCodexConfigValue(value);
-  if (converted !== undefined) {
-    target[key] = converted;
-  }
-}
-
-function convertMcpServerConfigForCodex(
-  serverConfig: Record<string, unknown>
-): CodexConfigOverrides {
-  const result: CodexConfigOverrides = {};
-
+function convertMcpServerConfigForCodex(serverConfig: Record<string, unknown>): CodexConfig {
+  const result: CodexConfig = {};
   for (const key of CODEX_MCP_PASSTHROUGH_KEYS) {
-    if (key in serverConfig) {
-      setCodexConfigValue(result, key, serverConfig[key]);
-    }
+    const converted = key in serverConfig ? toJsonValue(serverConfig[key]) : undefined;
+    if (converted !== undefined) result[key] = converted;
   }
-
   // Archon's MCP JSON format uses `headers`; Codex config uses `http_headers`.
   if ('headers' in serverConfig && !('http_headers' in result)) {
-    setCodexConfigValue(result, 'http_headers', serverConfig.headers);
+    const converted = toJsonValue(serverConfig.headers);
+    if (converted !== undefined) result.http_headers = converted;
   }
-
   return result;
 }
 
-function buildCodexMcpConfigOverrides(
-  servers: Record<string, unknown>
-): CodexConfigOverrides | undefined {
-  const mcpServers: CodexConfigOverrides = {};
-
+function buildCodexMcpServers(servers: Record<string, unknown>): CodexConfig | undefined {
+  const mcpServers: CodexConfig = {};
   for (const [serverName, serverConfig] of Object.entries(servers)) {
     if (typeof serverConfig !== 'object' || serverConfig === null || Array.isArray(serverConfig)) {
       getLog().warn(
@@ -239,15 +169,10 @@ function buildCodexMcpConfigOverrides(
       );
       continue;
     }
-
     const converted = convertMcpServerConfigForCodex(serverConfig as Record<string, unknown>);
-    if (Object.keys(converted).length > 0) {
-      mcpServers[serverName] = converted;
-    }
+    if (Object.keys(converted).length > 0) mcpServers[serverName] = converted;
   }
-
-  if (Object.keys(mcpServers).length === 0) return undefined;
-  return { mcp_servers: mcpServers };
+  return Object.keys(mcpServers).length > 0 ? mcpServers : undefined;
 }
 
 function isWorkflowNode(requestOptions?: SendQueryOptions): boolean {
@@ -255,25 +180,29 @@ function isWorkflowNode(requestOptions?: SendQueryOptions): boolean {
   return typeof nodeId === 'string' && nodeId.trim().length > 0;
 }
 
-function withWorkflowSkillCatalogDisabled(config?: CodexConfigOverrides): CodexConfigOverrides {
-  return {
-    ...(config ?? {}),
-    skills: { include_instructions: false },
+/**
+ * The config overrides a thread starts with. Codex merges them over the user's own
+ * config.toml; it never replaces it.
+ */
+function buildThreadConfig(
+  codexConfig: CodexProviderDefaults,
+  mcpServers: CodexConfig | undefined,
+  scoped: boolean
+): CodexConfig {
+  const config: CodexConfig = {
+    sandbox_workspace_write: {
+      network_access: true,
+      ...(codexConfig.additionalDirectories?.length
+        ? { writable_roots: codexConfig.additionalDirectories }
+        : {}),
+    },
   };
-}
-
-function isWorkflowSkillCatalogConfigUnsupported(errorMessage: string): boolean {
-  const normalized = errorMessage.toLowerCase();
-  const namesCatalogSetting =
-    normalized.includes('skills.include_instructions') ||
-    normalized.includes('include_instructions');
-  const isConfigRejection =
-    normalized.includes('config') ||
-    normalized.includes('unknown field') ||
-    normalized.includes('unknown key') ||
-    normalized.includes('unrecognized') ||
-    normalized.includes('failed to parse');
-  return namesCatalogSetting && isConfigRejection;
+  if (codexConfig.webSearchMode) config.web_search = codexConfig.webSearchMode;
+  if (mcpServers) config.mcp_servers = mcpServers;
+  // Scoped requests must not advertise ambient skills. Direct chat keeps the user's setting.
+  // An older Codex ignores the key with a config warning rather than failing.
+  if (scoped) config.skills = { include_instructions: false };
+  return config;
 }
 
 // Maps slugs that ChatGPT-plan accounts now reject (previously shipped as Archon
@@ -284,6 +213,8 @@ const CODEX_MODEL_FALLBACKS: Record<string, string> = {
   'gpt-5.2': 'gpt-5.6-sol',
 };
 
+// A display-only heuristic over vendor text: it decides whether the operator sees
+// model-access advice, never the failure class.
 function isModelAccessError(errorMessage: string): boolean {
   const m = errorMessage.toLowerCase();
   const hasModel = m.includes('model');
@@ -308,35 +239,16 @@ function buildModelAccessMessage(model?: string): string {
   return `❌ Model "${selectedModel}" is not available for your account.\n\n${fixLine}\n\n${workflowLine}`;
 }
 
-function extractUsageFromCodexEvent(event: TurnCompletedEvent): TokenUsage | undefined {
-  if (!event.usage) {
-    getLog().warn({ eventType: event.type }, 'codex.usage_null_on_turn_completed');
-    return undefined;
-  }
-  return {
-    input: event.usage.input_tokens,
-    output: event.usage.output_tokens,
-    cacheRead: event.usage.cached_input_tokens,
-    cacheWrite: event.usage.cache_write_input_tokens,
-  };
-}
-
-// ─── Turn Options Builder ────────────────────────────────────────────────
-
-/**
- * Build turn options for a single Codex turn.
- * Handles output schema from both requestOptions and nodeConfig (workflow path).
- */
-function buildTurnOptions(requestOptions?: SendQueryOptions): {
-  turnOptions: TurnOptions;
+/** The output schema a turn sends, and whether its final message is parsed as JSON. */
+function buildOutputSchema(requestOptions?: SendQueryOptions): {
+  outputSchema: JsonValue | undefined;
   hasOutputFormat: boolean;
 } {
-  const turnOptions: TurnOptions = {};
   // Preserve the original precedence: an explicit `outputFormat` wins over
   // `nodeConfig.output_format` even when its `.schema` is undefined. Note the
   // resulting asymmetry: if `outputFormat` is set but `.schema` is undefined,
-  // `rawSchema` is undefined (no schema sent) yet `hasOutputFormat` is still
-  // true — the stream accumulator runs and JSON.parses the response text.
+  // no schema is sent yet `hasOutputFormat` is still true — the final message
+  // is still JSON.parsed.
   const rawSchema =
     requestOptions?.outputFormat !== undefined
       ? requestOptions.outputFormat.schema
@@ -344,36 +256,27 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
   const hasOutputFormat = !!(
     requestOptions?.outputFormat ?? requestOptions?.nodeConfig?.output_format
   );
-  if (rawSchema !== undefined) {
-    // OpenAI Structured Outputs strict-mode requires additionalProperties:false
-    // on every object schema (HTTP 400 invalid_json_schema otherwise). Workflow
-    // authors write portable output_format schemas, so normalize here before
-    // handing the schema to the Codex SDK. See issue #1843.
-    if (hasOpenAdditionalProperties(rawSchema)) {
-      // The normalizer is about to rewrite an open-record `additionalProperties`
-      // (e.g. `{ type: 'string' }` or `true`) to `false`. OpenAI would 400 the
-      // open form anyway, but the author never declared a closed object — warn
-      // so the silent narrowing is visible rather than a surprise at runtime.
-      getLog().warn({ schema: rawSchema }, 'codex.output_format_open_record_closed');
-    }
-    turnOptions.outputSchema = normalizeJsonSchemaForOpenAiStrict(rawSchema);
+  if (rawSchema === undefined) return { outputSchema: undefined, hasOutputFormat };
+  // OpenAI Structured Outputs strict-mode requires additionalProperties:false
+  // on every object schema (HTTP 400 invalid_json_schema otherwise). Workflow
+  // authors write portable output_format schemas, so normalize here before
+  // handing the schema to Codex. See issue #1843.
+  if (hasOpenAdditionalProperties(rawSchema)) {
+    // The normalizer is about to rewrite an open-record `additionalProperties`
+    // (e.g. `{ type: 'string' }` or `true`) to `false`. OpenAI would 400 the
+    // open form anyway, but the author never declared a closed object — warn
+    // so the silent narrowing is visible rather than a surprise at runtime.
+    getLog().warn({ schema: rawSchema }, 'codex.output_format_open_record_closed');
   }
-  // Signal assignment is intentionally per-attempt (in sendQuery's retry
-  // loop), not here. Reusing a single AbortSignal across retries can poison
-  // later attempts once any earlier attempt's subprocess is SIGTERM'd.
-  // See issue #1266.
-  return { turnOptions, hasOutputFormat };
+  return {
+    outputSchema: toJsonValue(normalizeJsonSchemaForOpenAiStrict(rawSchema)),
+    hasOutputFormat,
+  };
 }
 
-// ─── Effective Prompt Builder ────────────────────────────────────────────
-
 /**
- * Fold the request/node-level systemPrompt into the user prompt.
- *
- * The Codex SDK (verified at @openai/codex-sdk 0.144.5) exposes NO
- * instructions/system-prompt channel on ThreadOptions or TurnOptions, so the
- * only delivery mechanism is prepending to the prompt string, separated by
- * the same `---` delimiter augmentPromptForJsonSchema uses. See issue #1837.
+ * Fold the request/node-level systemPrompt into the user prompt, separated by the
+ * same `---` delimiter augmentPromptForJsonSchema uses. See issue #1837.
  *
  * Precedence mirrors the Pi provider: request-level systemPrompt wins over
  * node-level. Only string / string[] are supported; SystemPromptPreset
@@ -382,10 +285,7 @@ function buildTurnOptions(requestOptions?: SendQueryOptions): {
  *
  * The prepend intentionally repeats on EVERY turn, including resumed
  * threads: the provider cannot know whether a resumed session's earlier
- * turns carried the instructions (the session may predate this fix), and
- * both the resume-failure fallback and cold retry attempts start fresh
- * threads where first-turn-only logic would drop the instructions exactly
- * when they are most needed. This matches Claude, which receives the
+ * turns carried the instructions. This matches Claude, which receives the
  * systemPrompt on every query.
  */
 function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions): string {
@@ -413,15 +313,27 @@ function buildEffectivePrompt(prompt: string, requestOptions?: SendQueryOptions)
 
 type ToolCallEvent = Extract<ProviderEvent, { type: 'tool_call' }>;
 type ToolCallUpdateEvent = Extract<ProviderEvent, { type: 'tool_call_update' }>;
+type ToolItem = Extract<
+  ThreadItem,
+  { type: 'commandExecution' | 'webSearch' | 'mcpToolCall' | 'fileChange' }
+>;
+
+function isToolItem(item: ThreadItem): item is ToolItem {
+  return (
+    item.type === 'commandExecution' ||
+    item.type === 'webSearch' ||
+    item.type === 'mcpToolCall' ||
+    item.type === 'fileChange'
+  );
+}
 
 /**
- * The `tool_call` for an item that runs a tool, or `undefined` for an item that does not.
- * `title` is what the operator reads (the command, the query, `server/tool`); `name` is the
- * kind of tool.
+ * The `tool_call` for an item that runs a tool. `title` is what the operator reads (the
+ * command, the query, `server/tool`); `name` is the kind of tool.
  */
-function toolCallOf(item: ThreadItem): ToolCallEvent | undefined {
+function toolCallOf(item: ToolItem): ToolCallEvent {
   switch (item.type) {
-    case 'command_execution':
+    case 'commandExecution':
       return {
         type: 'tool_call',
         toolCallId: item.id,
@@ -429,7 +341,7 @@ function toolCallOf(item: ThreadItem): ToolCallEvent | undefined {
         title: item.command,
         rawInput: { command: item.command },
       };
-    case 'web_search':
+    case 'webSearch':
       return {
         type: 'tool_call',
         toolCallId: item.id,
@@ -437,7 +349,7 @@ function toolCallOf(item: ThreadItem): ToolCallEvent | undefined {
         title: item.query,
         rawInput: { query: item.query },
       };
-    case 'mcp_tool_call': {
+    case 'mcpToolCall': {
       const call: ToolCallEvent = {
         type: 'tool_call',
         toolCallId: item.id,
@@ -449,351 +361,399 @@ function toolCallOf(item: ThreadItem): ToolCallEvent | undefined {
       }
       return call;
     }
-    case 'file_change':
+    case 'fileChange':
       return {
         type: 'tool_call',
         toolCallId: item.id,
         name: 'file_change',
         rawInput: { changes: item.changes },
       };
-    default:
-      return undefined;
   }
 }
 
+/** A tool item that ran and failed, or that Codex refused to run. */
+function itemFailed(item: ToolItem): boolean {
+  if (item.type === 'webSearch') return false;
+  if (item.status === 'failed' || item.status === 'declined') return true;
+  return item.type === 'commandExecution' && item.exitCode !== null && item.exitCode !== 0;
+}
+
 /** The `tool_call_update` that closes a completed tool item. */
-function toolCallUpdateOf(
-  item: Extract<
-    ThreadItem,
-    { type: 'command_execution' | 'web_search' | 'mcp_tool_call' | 'file_change' }
-  >
-): ToolCallUpdateEvent {
+function toolCallUpdateOf(item: ToolItem): ToolCallUpdateEvent {
+  const update: ToolCallUpdateEvent = {
+    type: 'tool_call_update',
+    toolCallId: item.id,
+    status: itemFailed(item) ? 'failed' : 'completed',
+  };
   switch (item.type) {
-    case 'command_execution': {
-      const update: ToolCallUpdateEvent = {
-        type: 'tool_call_update',
-        toolCallId: item.id,
-        status:
-          item.status === 'failed' || (item.exit_code !== undefined && item.exit_code !== 0)
-            ? 'failed'
-            : item.status === 'completed'
-              ? 'completed'
-              : 'cancelled',
-        ...truncateToolOutput(item.aggregated_output),
-      };
-      if (item.exit_code !== undefined) update.exitCode = item.exit_code;
-      return update;
-    }
-    case 'web_search':
-      return { type: 'tool_call_update', toolCallId: item.id, status: 'completed' };
-    case 'mcp_tool_call':
+    case 'commandExecution':
+      if (item.exitCode !== null) update.exitCode = item.exitCode;
+      return { ...update, ...truncateToolOutput(item.aggregatedOutput ?? '') };
+    case 'mcpToolCall':
       if (item.status === 'failed') {
-        return {
-          type: 'tool_call_update',
-          toolCallId: item.id,
-          status: 'failed',
-          ...truncateToolOutput(item.error?.message ?? 'MCP tool failed'),
-        };
+        return { ...update, ...truncateToolOutput(item.error?.message ?? 'MCP tool failed') };
       }
       return {
-        type: 'tool_call_update',
-        toolCallId: item.id,
-        status: 'completed',
+        ...update,
         ...truncateToolOutput(item.result?.content ? JSON.stringify(item.result.content) : ''),
       };
-    case 'file_change': {
-      if (item.status !== 'failed') {
-        return { type: 'tool_call_update', toolCallId: item.id, status: 'completed' };
-      }
-      // The SDK's type omits it, but a failed change can carry the reason.
-      const rawError = 'error' in item ? (item as { error?: unknown }).error : undefined;
-      const reason =
-        typeof rawError === 'string'
-          ? rawError
-          : typeof rawError === 'object' && rawError !== null && 'message' in rawError
-            ? String((rawError as { message: unknown }).message)
-            : undefined;
-      const failed: ToolCallUpdateEvent = {
-        type: 'tool_call_update',
-        toolCallId: item.id,
-        status: 'failed',
-      };
-      return reason ? { ...failed, ...truncateToolOutput(reason) } : failed;
-    }
+    case 'webSearch':
+    case 'fileChange':
+      return update;
   }
 }
 
 /**
- * Normalize raw Codex SDK events into Archon MessageChunks.
- * Handles structured output normalization (Codex returns JSON inline in text).
+ * The turn's usage: the thread's cumulative total at the end less the total before the
+ * turn's first request (`total - last` of the turn's first snapshot), clamped at zero as
+ * Codex clamps its own per-turn figure (a context overflow resets the total). Codex reports
+ * reasoning tokens inside `outputTokens`, so they are not added again.
  */
-async function* streamCodexEvents(
-  events: AsyncIterable<Record<string, unknown>>,
-  hasOutputFormat: boolean,
-  threadId: string | null | undefined,
-  abortSignal?: AbortSignal
-): AsyncGenerator<MessageChunk> {
-  const startedToolItemIds = new Set<string>();
-  const completedToolItemIds = new Set<string>();
-  let accumulatedText = '';
+function turnUsageOf(first: ThreadTokenUsage, end: TokenUsageBreakdown): TokenUsage {
+  const used = (key: keyof TokenUsageBreakdown): number =>
+    Math.max(0, end[key] - (first.total[key] - first.last[key]));
+  return {
+    input: used('inputTokens'),
+    output: used('outputTokens'),
+    cacheRead: used('cachedInputTokens'),
+    cacheWrite: used('cacheWriteInputTokens'),
+  };
+}
 
-  // A new thread's id is assigned during the run via the `thread.started` event
-  // (the SDK emits it only for new threads), not synchronously on startThread().
-  // Capture it so the terminal result chunk surfaces a resumable sessionId —
-  // persist_session and suspend/resume depend on it. A resumed thread keeps the
-  // snapshot id (no thread.started fires), so the seeded value stays correct.
-  let resolvedThreadId: string | null | undefined = threadId;
+/** A string at `value[key]`, or undefined: responses are read narrowly, not trusted whole. */
+function idAt(value: unknown, key: 'thread' | 'turn'): string | undefined {
+  const nested =
+    typeof value === 'object' && value !== null
+      ? (value as Record<string, unknown>)[key]
+      : undefined;
+  const id =
+    typeof nested === 'object' && nested !== null ? (nested as { id?: unknown }).id : undefined;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
 
-  if (abortSignal?.aborted) {
-    getLog().info('query_aborted_before_stream');
-    throw new Error('Query aborted');
+/** The Codex home the app-server reports in its `initialize` response, for error messages. */
+function codexHomeOf(initializeResponse: unknown): string {
+  const home =
+    typeof initializeResponse === 'object' && initializeResponse !== null
+      ? (initializeResponse as { codexHome?: unknown }).codexHome
+      : undefined;
+  return typeof home === 'string' && home.length > 0 ? home : 'the Codex home';
+}
+
+interface TurnRequest {
+  connection: AppServerConnection;
+  apiKey: string | undefined;
+  cwd: string;
+  resumeSessionId: string | undefined;
+  threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
+  turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
+  /**
+   * Declared workflow plugins, or an empty list for titles. Undefined for direct chat,
+   * which keeps the user's setup. Scoped threads also restrict MCP servers (`./scope`).
+   */
+  nodePlugins: readonly string[] | undefined;
+  hasOutputFormat: boolean;
+  model: string | undefined;
+  /** Receives the thread id as soon as it exists, so a failure can still carry it. */
+  onThread: (threadId: string) => void;
+  /** Receives the turn id as soon as it exists, so cancel can interrupt it. */
+  onTurn: (turnId: string) => void;
+}
+
+/**
+ * Runs one turn and yields its events, then its one result. A JSON-RPC error or the
+ * process ending before `turn/completed` is thrown for `sendQuery` to classify.
+ */
+async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
+  const { connection, nodePlugins } = request;
+  const initialized = await connection.request('initialize', {
+    clientInfo: { name: 'archon', title: 'Archon', version: BUNDLED_VERSION },
+    capabilities: null,
+  });
+  connection.notify('initialized');
+  if (request.apiKey) {
+    // The key stays in this process's memory: the app-server was started with the
+    // ephemeral credential store, so nothing reaches the user's CODEX_HOME.
+    await connection.request('account/login/start', { type: 'apiKey', apiKey: request.apiKey });
   }
 
-  // If the iterator closes without a terminal event (e.g. the model was
-  // rejected before the turn even started), we synthesize a fail-stop result
-  // after the loop so the dag-executor's `msg.isError` branch catches it
-  // — matching Claude's contract. Both terminal branches below `return`,
-  // so reaching the post-loop block can only mean no terminal fired.
-  const streamErrors: string[] = [];
+  let { threadParams } = request;
+  let declared: string[] | undefined;
+  if (nodePlugins) {
+    const inventory = await readCodexInventory(connection, {
+      cwd: request.cwd,
+      plugins: nodePlugins,
+      codexHome: codexHomeOf(initialized),
+    });
+    const scope = applyNodeScope(threadParams.config ?? {}, inventory, nodePlugins);
+    threadParams = { ...threadParams, config: scope.config };
+    declared = scope.declared;
+  }
+  // A resumed thread needs the same config: Codex does not store it with the thread.
+  const threadResponse = request.resumeSessionId
+    ? await connection.request('thread/resume', {
+        threadId: request.resumeSessionId,
+        cwd: request.cwd,
+        ...threadParams,
+        excludeTurns: true,
+      })
+    : await connection.request('thread/start', { cwd: request.cwd, ...threadParams });
+  const threadId = idAt(threadResponse, 'thread');
+  if (!threadId) throw new Error('Codex app-server returned a thread without an id');
+  request.onThread(threadId);
+  if (declared) await checkThreadMcpScope(connection, threadId, declared);
+  getLog().debug(
+    { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
+    'codex.thread_ready'
+  );
 
-  for await (const event of events) {
-    if (abortSignal?.aborted) {
-      getLog().info('query_aborted_between_events');
-      throw new Error('Query aborted');
-    }
+  const turnResponse = await connection.request('turn/start', {
+    threadId,
+    ...request.turnParams,
+  });
+  const turnId = idAt(turnResponse, 'turn');
+  if (!turnId) throw new Error('Codex app-server returned a turn without an id');
+  request.onTurn(turnId);
 
-    if (event.type === 'thread.started') {
-      // Capture the new thread's id. Its SDK doc comment reads: "The identifier
-      // of the new thread. Can be used to resume the thread later." This is the
-      // only place a new thread's id surfaces. `continue` — the event carries no
-      // user-facing content, only this metadata.
-      const startedThreadId = (event as ThreadStartedEvent).thread_id;
-      if (startedThreadId) {
-        resolvedThreadId = startedThreadId;
-        getLog().info(
-          { sessionIdPreview: sessionPreview(startedThreadId) },
-          'codex.thread_started'
+  const startedToolIds = new Set<string>();
+  const errors: string[] = [];
+  let lastAgentMessage = '';
+  // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
+  // is the change in the thread's `total`. A resumed thread's total already includes earlier
+  // turns and is not replayed before the turn starts, so the first snapshot sets the baseline.
+  // If that first snapshot is a re-send rather than a request (a local compaction or a
+  // usage-limit failure before the first request), a resumed turn over-counts by one earlier
+  // request; Codex sends no pre-turn total on this resume path to correct it.
+  let usageSpan: { first: ThreadTokenUsage; end: TokenUsageBreakdown } | undefined;
+  let rateLimits: RateLimitSnapshot | undefined;
+  let retries = 0;
+
+  for await (const notification of connection.notifications()) {
+    switch (notification.method) {
+      case 'account/rateLimits/updated':
+        rateLimits = notification.params.rateLimits;
+        break;
+
+      case 'thread/tokenUsage/updated':
+        // Usage reported for another turn of the thread is not this turn's.
+        if (notification.params.turnId === turnId) {
+          const { tokenUsage } = notification.params;
+          usageSpan = { first: usageSpan?.first ?? tokenUsage, end: tokenUsage.total };
+        }
+        break;
+
+      case 'error': {
+        // `willRetry` errors are Codex reconnecting on its own; the turn's outcome is
+        // decided by `turn/completed`. They are kept as evidence for a turn that never
+        // completes.
+        const { error, willRetry } = notification.params;
+        getLog().debug(
+          { willRetry, codexErrorInfo: error.codexErrorInfo },
+          'codex.turn_error_notification'
         );
-      } else {
-        // The SDK types thread_id as a non-empty string, so this should never
-        // fire. If it does, a new thread would surface sessionId: undefined and
-        // the dag-executor would treat the run as session-less — silently
-        // dropping any persist_session continuity. Warn rather than degrade
-        // quietly (CLAUDE.md: Fail Fast + Explicit Errors).
-        getLog().warn(
-          {
-            ...(resolvedThreadId
-              ? { snapshotSessionIdPreview: sessionPreview(resolvedThreadId) }
-              : {}),
-          },
-          'codex.thread_started_missing_id'
-        );
+        errors.push(error.message);
+        if (willRetry) {
+          // Reported so a turn that waits out a reconnect does not look stuck. The count
+          // is Archon's: the notification carries no attempt number outside its prose.
+          retries += 1;
+          const cause = describeErrorInfo(error.codexErrorInfo);
+          yield {
+            type: 'warning',
+            code: 'codex.will_retry',
+            message: `Codex is retrying the model call (retry ${String(retries)} this turn${cause ? `, ${cause}` : ''})`,
+          };
+        }
+        break;
       }
-      continue;
-    }
 
-    if (event.type === 'item.started') {
-      const item = event.item as ThreadItem;
-      getLog().debug(
-        { eventType: event.type, itemType: item.type, itemId: item.id },
-        'item_started'
-      );
-      const call = toolCallOf(item);
-      if (call && !startedToolItemIds.has(item.id)) {
-        startedToolItemIds.add(item.id);
-        yield call;
+      case 'item/started': {
+        const { item } = notification.params;
+        if (isToolItem(item) && !startedToolIds.has(item.id)) {
+          startedToolIds.add(item.id);
+          yield toolCallOf(item);
+        }
+        break;
       }
-      continue;
-    }
 
-    if (event.type === 'error') {
-      const errorEvent = event as { message: string };
-      getLog().error({ message: errorEvent.message }, 'stream_error');
-      // Whether an error is fatal is decided when the stream terminates: turn.completed
-      // means the SDK recovered (Codex retries MCP client errors internally), so the
-      // operator sees nothing; loop closure without a terminal makes every error the
-      // failure's evidence. The message is prose, so no error is singled out as the cause.
-      streamErrors.push(errorEvent.message);
-      continue;
-    }
-
-    if (event.type === 'turn.failed') {
-      const errorObj = (event as { error?: { message?: string } }).error;
-      const errorMessage = errorObj?.message ?? 'Unknown error';
-      getLog().error({ errorMessage }, 'turn_failed');
-      yield codexFailureResult('unknown', 'codex_turn_failed', errorMessage, resolvedThreadId);
-      return;
-    }
-
-    if (event.type === 'item.completed') {
-      const item = event.item as ThreadItem;
-      const logContext: Record<string, unknown> = {
-        eventType: event.type,
-        itemType: item.type,
-        itemId: item.id,
-      };
-      if (item.type === 'command_execution') logContext.command = item.command;
-      getLog().debug(logContext, 'item_completed');
-
-      switch (item.type) {
-        case 'agent_message':
-          if (item.text) {
-            // Multiple agent_message items can arrive in one turn (preamble + answer);
-            // keep only the last — it's the authoritative structured-output candidate.
-            if (hasOutputFormat) accumulatedText = item.text;
-            yield { type: 'agent_message_chunk', text: item.text };
+      case 'item/completed': {
+        const { item } = notification.params;
+        getLog().debug({ itemType: item.type, itemId: item.id }, 'item_completed');
+        if (isToolItem(item)) {
+          // A file change is reported only once it is applied: open the call here so its
+          // update always has one.
+          if (!startedToolIds.has(item.id)) {
+            startedToolIds.add(item.id);
+            yield toolCallOf(item);
           }
-          break;
-
-        case 'reasoning':
-          if (item.text) yield { type: 'agent_thought_chunk', text: item.text };
-          break;
-
-        case 'command_execution':
-        case 'web_search':
-        case 'mcp_tool_call':
-        case 'file_change': {
-          if (completedToolItemIds.has(item.id)) {
-            getLog().warn(
-              { itemId: item.id, itemType: item.type },
-              'tool_item_duplicate_completion'
-            );
-            break;
-          }
-          completedToolItemIds.add(item.id);
-          // A file change is reported only once it is applied, and a start can be missed:
-          // open the call here so its update always has one.
-          if (!startedToolItemIds.has(item.id)) {
-            startedToolItemIds.add(item.id);
-            const call = toolCallOf(item);
-            if (call) yield call;
-          }
-          if (item.type === 'mcp_tool_call' && item.status === 'failed') {
+          if (item.type === 'mcpToolCall' && item.status === 'failed') {
             getLog().warn(
               { server: item.server, tool: item.tool, error: item.error, itemId: item.id },
               'mcp_tool_call_failed'
             );
           }
           yield toolCallUpdateOf(item);
-          break;
+        } else if (item.type === 'agentMessage' && item.text) {
+          // A turn can hold several messages (preamble + answer); the last is the
+          // structured-output candidate.
+          lastAgentMessage = item.text;
+          yield { type: 'agent_message_chunk', text: item.text };
+        } else if (item.type === 'reasoning') {
+          const text = item.summary.join('\n\n');
+          if (text) yield { type: 'agent_thought_chunk', text };
         }
-
-        default:
-          // todo_list and error items have no reader; they stay in the debug log above.
-          break;
-      }
-    }
-
-    if (event.type === 'turn.completed') {
-      getLog().debug('turn_completed');
-      const usage = extractUsageFromCodexEvent(event as TurnCompletedEvent);
-
-      // Codex returns structured output inline in agent_message text.
-      // Normalize: parse as JSON and put on structuredOutput so the
-      // dag-executor can handle all providers uniformly.
-      let structuredOutput: unknown;
-      if (hasOutputFormat && accumulatedText) {
-        try {
-          structuredOutput = JSON.parse(accumulatedText);
-          getLog().debug('codex.structured_output_parsed');
-        } catch {
-          getLog().warn(
-            { outputPreview: accumulatedText.slice(0, 200) },
-            'codex.structured_output_not_json'
-          );
-          yield {
-            type: 'warning',
-            code: 'codex.structured_output_not_json',
-            message:
-              'Structured output requested but Codex returned non-JSON text. ' +
-              'Downstream $nodeId.output.field references may not evaluate correctly.',
-          };
-        }
+        break;
       }
 
-      // Built by assignment on a typed value so a misspelled key fails to compile.
-      const result: ResultChunk = { type: 'result' };
-      if (resolvedThreadId) result.sessionId = resolvedThreadId;
-      if (usage) result.tokens = usage;
-      if (structuredOutput !== undefined) result.structuredOutput = structuredOutput;
-      yield result;
-      return;
+      case 'turn/completed': {
+        const { turn } = notification.params;
+        if (turn.id !== turnId) break;
+        yield* completeTurn(turn.status, turn.error, request, {
+          threadId,
+          usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
+          rateLimits,
+          lastAgentMessage,
+        });
+        return;
+      }
+
+      default:
+        break;
     }
   }
+  throw connection.closedError(await connection.ended, errors);
+}
 
-  // Reaching here means the iterator closed without yielding turn.completed
-  // or turn.failed (both branches `return` immediately). Common cause: model
-  // rejected by the API (model not supported, auth refused) before the turn
-  // started. Surface as a fail-stop. The dag-executor's `msg.isError` branch
-  // (dag-executor.ts: throws `Node '<id>' failed: SDK returned <subtype>`)
-  // turns this into a thrown node failure — distinct from the empty-output
-  // guard further down, which returns `{ state: 'failed' }` for AI nodes
-  // that streamed nothing but never raised an isError.
-  const message =
-    streamErrors.length > 0
-      ? streamErrors.join('\n')
-      : 'Codex stream closed without turn.completed or turn.failed';
-  getLog().error({ message }, 'stream_incomplete');
-  yield codexFailureResult('unknown', 'codex_stream_incomplete', message, resolvedThreadId);
+function* completeTurn(
+  status: Turn['status'],
+  error: TurnError | null,
+  request: TurnRequest,
+  state: {
+    threadId: string;
+    usage: TokenUsage | undefined;
+    rateLimits: RateLimitSnapshot | undefined;
+    lastAgentMessage: string;
+  }
+): Generator<MessageChunk> {
+  let result: ResultChunk;
+  if (status === 'completed') {
+    result = { type: 'result' };
+    if (request.hasOutputFormat && state.lastAgentMessage) {
+      // Codex returns structured output as the final message's text. Parse it onto
+      // structuredOutput so the dag-executor handles all providers uniformly.
+      try {
+        result.structuredOutput = JSON.parse(state.lastAgentMessage);
+      } catch {
+        getLog().warn(
+          { outputPreview: state.lastAgentMessage.slice(0, 200) },
+          'codex.structured_output_not_json'
+        );
+        yield {
+          type: 'warning',
+          code: 'codex.structured_output_not_json',
+          message:
+            'Structured output requested but Codex returned non-JSON text. ' +
+            'Downstream $nodeId.output.field references may not evaluate correctly.',
+        };
+      }
+    }
+  } else if (status === 'failed' && error) {
+    const { failureClass, resetAt } = classifyTurnError(error.codexErrorInfo, state.rateLimits);
+    const vendorText = [error.message, error.additionalDetails].filter(Boolean).join('\n');
+    getLog().error({ failureClass, codexErrorInfo: error.codexErrorInfo }, 'codex.turn_failed');
+    result = failureResult(
+      failureClass,
+      'codex_turn_failed',
+      withModelAccessAdvice(vendorText, request.model)
+    );
+    if (resetAt && result.failure) result.failure.resetAt = resetAt;
+  } else {
+    // An interrupt Archon did not send, or a failed status with no error attached.
+    getLog().error({ status }, 'codex.turn_ended_without_completion');
+    result = failureResult('unknown', 'codex_turn_failed', `Codex turn ended ${status}`);
+  }
+  result.sessionId = state.threadId;
+  if (state.usage) result.tokens = state.usage;
+  // Reaching a turn means `thread/resume` succeeded.
+  if (request.resumeSessionId) result.resumed = true;
+  yield result;
 }
 
 /**
- * A failed Codex turn; the thread id rides along for resume. The Codex SDK reports
- * failures as message strings (`turn.failed`, `error` events and its own thrown errors
- * carry no code, status or error type), so they are `unknown`. Only a failure Archon's
- * setup checks classified, or a spawn errno, has a class of its own.
+ * @param scanned the text that decides whether the advice applies: Codex's own message,
+ *   never a stderr tail, whose log lines can mention a model for unrelated reasons.
  */
-function codexFailureResult(
-  failureClass: ProviderFailureClass,
-  errorSubtype: string,
+function withModelAccessAdvice(
   evidence: string,
-  sessionId: string | null | undefined
-): ResultChunk {
-  const result = failureResult(failureClass, errorSubtype, evidence);
-  if (sessionId) result.sessionId = sessionId;
-  return result;
+  model: string | undefined,
+  scanned = evidence
+): string {
+  return isModelAccessError(scanned)
+    ? `${buildModelAccessMessage(model)}\n\n${evidence}`
+    : evidence;
+}
+
+/**
+ * Spawn errnos that fail the same way every time: the binary path is missing, not
+ * executable, the wrong architecture, not a file, blocked by policy, too long or a
+ * symlink loop, or the environment is too large to exec. Others, such as EMFILE, EAGAIN
+ * and ENOMEM, are the machine running short and may clear.
+ */
+const MISCONFIGURED_SPAWN_ERRNOS: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'EACCES',
+  'ENOEXEC',
+  'EISDIR',
+  'ENOTDIR',
+  'EPERM',
+  'E2BIG',
+  'ENAMETOOLONG',
+  'ELOOP',
+]);
+
+/**
+ * The class of a failure that ended a turn before `turn/completed`, from how the process
+ * ended. A process that exits on its own before answering any request never ran a turn:
+ * the binary has no `app-server` or rejects a flag, and another attempt fails the same
+ * way. Any other process end is a process failure, which is what `transient` names.
+ *
+ * JSON-RPC errors are not classified by code, because one code covers setups that need
+ * different classes. Probed against Codex 0.160.0 on 2026-10-03, every one of these came
+ * back as -32600 with only the message differing: an unknown method ("Invalid request:
+ * unknown variant ..."), `thread/resume` of a missing thread ("no rollout found for
+ * thread id ..."), a malformed thread id ("invalid session id: ..."), and `thread/start`
+ * with an unparseable config.toml ("failed to load configuration: ...").
+ */
+function failureClassOfStop(error: unknown): ProviderFailureClass {
+  if (!(error instanceof ConnectionClosedError)) return failureClassOfThrown(error);
+  const { end } = error;
+  if (end.kind === 'spawn_failed') {
+    return end.error.code !== undefined && MISCONFIGURED_SPAWN_ERRNOS.has(end.error.code)
+      ? 'misconfigured'
+      : 'transient';
+  }
+  return error.beforeFirstResponse && end.signal === null ? 'misconfigured' : 'transient';
 }
 
 // ─── Codex Provider ──────────────────────────────────────────────────────
 
-/**
- * Codex AI agent provider.
- * Implements IAgentProvider with Codex SDK integration.
- *
- * sendQuery orchestrates the following internal helpers:
- * - buildThreadOptions: SDK thread configuration
- * - buildTurnOptions: per-turn configuration (output schema, abort signal)
- * - buildEffectivePrompt: systemPrompt delivery via prompt prepend (no SDK channel)
- * - streamCodexEvents: raw SDK event normalization into MessageChunks
- * - codexFailureResult: the typed failure a Codex error becomes
- */
 export class CodexProvider implements IAgentProvider {
-  private async createCodexClient(
-    configCodexBinaryPath: string | undefined,
-    requestEnv?: Record<string, string>,
-    codexConfigOverrides?: CodexConfigOverrides
-  ): Promise<Codex> {
-    if ((!requestEnv || Object.keys(requestEnv).length === 0) && !codexConfigOverrides) {
-      return getCodex(configCodexBinaryPath);
-    }
-    const codexOptions: CodexOptions = {
-      codexPathOverride: await resolveCodexBinaryPath(configCodexBinaryPath),
-      ...(requestEnv && Object.keys(requestEnv).length > 0
-        ? { env: buildCodexEnv(requestEnv) }
-        : {}),
-      ...(codexConfigOverrides ? { config: codexConfigOverrides } : {}),
-    };
-    return new Codex(codexOptions);
-  }
+  /**
+   * @param spawner starts the app-server process; tests pass a fake.
+   * @param shutdownGraceMs each cancel and shutdown wait; tests shorten it.
+   */
+  constructor(
+    private readonly spawner?: Spawner,
+    private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS
+  ) {}
 
   getCapabilities(): ProviderCapabilities {
     return CODEX_CAPABILITIES;
   }
 
   /**
-   * One call is one Codex turn. A failure ends in a `result` carrying a typed `failure`,
-   * and the engine decides whether to try again. Every turn ends in `settled`. Only
-   * cancellation throws.
+   * One call is one Codex turn on its own app-server process. A failure ends in a
+   * `result` carrying a typed `failure`, and the engine decides whether to try again.
+   * Every turn ends in `settled`. Only cancellation throws.
    */
   async *sendQuery(
     prompt: string,
@@ -803,25 +763,52 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const abortSignal = requestOptions?.abortSignal;
     let resultReported = false;
-    let threadId: string | null | undefined;
+    let threadId: string | undefined;
+    let turnId: string | undefined;
+    let connection: AppServerConnection | undefined;
+
+    // Cancel: interrupt the turn so Codex stops its command, then end the process. The
+    // stream below sees the process end and throws `Query aborted`. A Codex that does not
+    // answer the interrupt within the grace period is shut down anyway.
+    const onAbort = (): void => {
+      const open = connection;
+      if (!open) return;
+      const interrupt =
+        threadId && turnId
+          ? open.request('turn/interrupt', { threadId, turnId }).catch((error: unknown) => {
+              getLog().debug({ err: error }, 'codex.interrupt_failed');
+            })
+          : Promise.resolve();
+      void settlesWithin(interrupt, this.shutdownGraceMs).then(answered => {
+        if (!answered) {
+          getLog().warn(
+            { sessionIdPreview: threadId && sessionPreview(threadId), turnId },
+            'codex.interrupt_unanswered'
+          );
+        }
+        return open.shutdown(this.shutdownGraceMs);
+      });
+    };
+
+    const codexConfig = parseCodexConfig(requestOptions?.assistantConfig ?? {});
+    const model = requestOptions?.model ?? codexConfig.model;
+    const titleRequest = requestOptions?.purpose === 'title-generation';
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     try {
       if (abortSignal?.aborted) {
         throw new Error('Query aborted');
       }
-      const assistantConfig = requestOptions?.assistantConfig ?? {};
-      const codexConfig = parseCodexConfig(assistantConfig);
       const providerWarnings: ProviderWarning[] = [];
-      let declaredMcpConfigOverrides: CodexConfigOverrides | undefined;
+      let mcpServers: CodexConfig | undefined;
 
-      if (requestOptions?.nodeConfig?.mcp) {
+      if (!titleRequest && requestOptions?.nodeConfig?.mcp) {
         const mcpPath = requestOptions.nodeConfig.mcp;
-        const { servers, serverNames, missingVars } = await loadMcpConfig(
-          mcpPath,
-          cwd,
-          buildMcpEnvSource(requestOptions.env)
-        );
-        declaredMcpConfigOverrides = buildCodexMcpConfigOverrides(servers);
+        const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd, {
+          ...process.env,
+          ...requestOptions.env,
+        });
+        mcpServers = buildCodexMcpServers(servers);
         getLog().info({ serverNames, mcpPath }, 'codex.mcp_config_loaded');
         if (missingVars.length > 0) {
           const uniqueVars = [...new Set(missingVars)];
@@ -832,160 +819,103 @@ export class CodexProvider implements IAgentProvider {
           });
         }
       }
-
-      const suppressWorkflowSkillCatalog = isWorkflowNode(requestOptions);
-      const initialConfigOverrides = suppressWorkflowSkillCatalog
-        ? withWorkflowSkillCatalogDisabled(declaredMcpConfigOverrides)
-        : declaredMcpConfigOverrides;
-
       for (const warning of providerWarnings) {
         yield { type: 'warning', ...warning };
       }
 
-      // 1. Initialize SDK and build thread options
-      let codex = await this.createCodexClient(
-        codexConfig.codexBinaryPath,
-        requestOptions?.env,
-        initialConfigOverrides
+      const binary = await resolveCodexBinary(codexConfig.codexBinaryPath);
+      const env = buildCodexEnv(requestOptions?.env);
+      // `CODEX_API_KEY` opts a turn into API-key auth. Without it Codex uses the user's
+      // own login in their CODEX_HOME. The ephemeral store keeps the key out of that home.
+      const apiKey = env.CODEX_API_KEY || undefined;
+      const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
+      const effort = resolveModelReasoningEffort(
+        requestOptions?.nodeConfig,
+        codexConfig.modelReasoningEffort
       );
-      const threadOptions = buildThreadOptions(
+
+      const workflowNode = isWorkflowNode(requestOptions);
+      const nodePlugins = titleRequest
+        ? []
+        : workflowNode
+          ? (requestOptions?.nodeConfig?.plugins ?? [])
+          : undefined;
+      connection = AppServerConnection.start(
+        binary,
+        [
+          ...(apiKey ? ['-c', 'cli_auth_credentials_store="ephemeral"'] : []),
+          // A user who turned plugins off globally gets an empty `plugin/installed`, so a
+          // node that names plugins could not find them. This process serves only this
+          // node's thread, and the thread config switches off every plugin it does not name.
+          ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
+        ],
+        env,
+        this.spawner
+      );
+      // An abort while the setup above awaited found no process to stop.
+      if (abortSignal?.aborted) throw new Error('Query aborted');
+
+      const stream = streamTurn({
+        connection,
+        apiKey,
         cwd,
-        requestOptions?.model,
-        assistantConfig,
-        requestOptions?.nodeConfig
-      );
-
-      // 2. Create or resume thread
-      let sessionResumeFailed = false;
-      let thread;
-      if (resumeSessionId) {
-        getLog().debug({ sessionIdPreview: sessionPreview(resumeSessionId) }, 'resuming_thread');
-        try {
-          thread = codex.resumeThread(resumeSessionId, threadOptions);
-        } catch (error) {
-          getLog().error(
-            { err: error, sessionIdPreview: sessionPreview(resumeSessionId) },
-            'resume_thread_failed'
-          );
-          thread = codex.startThread(threadOptions);
-          sessionResumeFailed = true;
+        resumeSessionId,
+        threadParams: {
+          sandbox: titleRequest ? 'read-only' : 'danger-full-access',
+          approvalPolicy: 'never',
+          ...(model ? { model } : {}),
+          config: buildThreadConfig(codexConfig, mcpServers, nodePlugins !== undefined),
+        },
+        turnParams: {
+          input: [
+            { type: 'text', text: buildEffectivePrompt(prompt, requestOptions), text_elements: [] },
+          ],
+          ...(effort ? { effort } : {}),
+          ...(outputSchema !== undefined ? { outputSchema } : {}),
+        },
+        nodePlugins,
+        hasOutputFormat,
+        model,
+        onThread: id => {
+          threadId = id;
+        },
+        onTurn: id => {
+          turnId = id;
+        },
+      });
+      // A Codex turn has no background work: its result ends it.
+      for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
+        if (chunk.type === 'result') {
+          // An interrupted turn completes before its process ends; a cancel is not a result.
+          if (abortSignal?.aborted) throw new Error('Query aborted');
+          resultReported = true;
         }
-      } else {
-        getLog().debug({ cwd }, 'starting_new_thread');
-        thread = codex.startThread(threadOptions);
-      }
-      threadId = thread.id;
-
-      if (sessionResumeFailed) {
-        yield {
-          type: 'warning',
-          code: 'codex.resume_failed',
-          message: 'Could not resume previous session. Starting fresh conversation.',
-        };
-      }
-
-      // 3. Build turn options and the effective prompt (systemPrompt prepend).
-      const { turnOptions, hasOutputFormat } = buildTurnOptions(requestOptions);
-      const effectivePrompt = buildEffectivePrompt(prompt, requestOptions);
-      if (abortSignal) turnOptions.signal = abortSignal;
-
-      // 4. Run and consume the streamed turn. Codex starts its subprocess lazily while
-      // events are iterated, so a binary that rejects the skill-catalog override fails
-      // here. That one config probe is re-run once without the override, and only
-      // before any event was emitted, so no output is ever streamed twice.
-      let providerEventEmitted = false;
-      let skillCatalogCompatibilityFallbackUsed = false;
-      while (true) {
-        try {
-          const result = await thread.runStreamed(effectivePrompt, turnOptions);
-          for await (const chunk of withResumedOutcome(
-            closeOpenToolCalls(
-              streamCodexEvents(
-                result.events as AsyncIterable<Record<string, unknown>>,
-                hasOutputFormat,
-                thread.id,
-                abortSignal
-              ),
-              // A Codex turn has no background work: its result ends it.
-              { resultEndsTurn: true }
-            ),
-            resumedOutcome(resumeSessionId, !sessionResumeFailed)
-          )) {
-            providerEventEmitted = true;
-            if (chunk.type === 'result') resultReported = true;
-            yield chunk;
-          }
-          break;
-        } catch (error) {
-          const err = error as Error;
-          if (
-            providerEventEmitted ||
-            !suppressWorkflowSkillCatalog ||
-            skillCatalogCompatibilityFallbackUsed ||
-            !isWorkflowSkillCatalogConfigUnsupported(err.message)
-          ) {
-            throw error;
-          }
-
-          skillCatalogCompatibilityFallbackUsed = true;
-          getLog().warn(
-            { err, nodeId: requestOptions?.nodeConfig?.nodeId },
-            'codex.workflow_skill_catalog_suppression_unsupported'
-          );
-          yield {
-            type: 'warning',
-            code: 'codex.skill_catalog_suppression_unsupported',
-            message:
-              'This Codex binary does not support suppressing the automatic skill catalog. Continuing with native skill discovery enabled.',
-          };
-
-          codex = await this.createCodexClient(
-            codexConfig.codexBinaryPath,
-            requestOptions?.env,
-            declaredMcpConfigOverrides
-          );
-          if (resumeSessionId) {
-            try {
-              thread = codex.resumeThread(resumeSessionId, threadOptions);
-            } catch (resumeError) {
-              getLog().error(
-                { err: resumeError, sessionIdPreview: sessionPreview(resumeSessionId) },
-                'resume_thread_failed'
-              );
-              thread = codex.startThread(threadOptions);
-              sessionResumeFailed = true;
-              yield {
-                type: 'warning',
-                code: 'codex.resume_failed',
-                message: 'Could not resume previous session. Starting fresh conversation.',
-              };
-            }
-          } else {
-            thread = codex.startThread(threadOptions);
-          }
-          threadId = thread.id;
-        }
+        yield chunk;
       }
     } catch (error) {
-      const err = error as Error;
       if (abortSignal?.aborted === true) {
         throw new Error('Query aborted');
       }
-      getLog().error({ err, resultReported }, 'query_error');
-      // The turn already reported its one result; an error while the subprocess shut
-      // down afterwards does not change that outcome.
+      getLog().error({ err: error, resultReported }, 'query_error');
       if (!resultReported) {
-        // The model-access advice is written for the operator; the vendor text follows it.
-        const evidence = isModelAccessError(err.message)
-          ? `${buildModelAccessMessage(requestOptions?.model)}\n\n${err.message}`
-          : err.message;
-        // The SDK spawns the binary without a cwd, so ENOENT means the binary is missing.
-        const failureClass =
-          (err as NodeJS.ErrnoException).code === 'ENOENT'
-            ? 'misconfigured'
-            : failureClassOfThrown(err);
-        yield codexFailureResult(failureClass, 'codex_query_failed', evidence, threadId);
+        const failureClass = failureClassOfStop(error);
+        const subtype =
+          error instanceof JsonRpcError ? 'codex_request_failed' : 'codex_query_failed';
+        const result = failureResult(
+          failureClass,
+          subtype,
+          withModelAccessAdvice(
+            error instanceof ConnectionClosedError ? error.evidence : (error as Error).message,
+            model,
+            (error as Error).message
+          )
+        );
+        if (threadId) result.sessionId = threadId;
+        yield result;
       }
+    } finally {
+      abortSignal?.removeEventListener('abort', onAbort);
+      await connection?.shutdown(this.shutdownGraceMs);
     }
     // A Codex turn has no background work: once its result is in, nothing more runs.
     yield { type: 'settled' };

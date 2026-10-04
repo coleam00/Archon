@@ -1,5 +1,6 @@
 import { providerChunkSchema, subtaskTerminalStatusSchema, type ProviderChunk } from './events';
 import type { ProviderCapabilities } from './capabilities';
+import { credentialStatusSchema, type CredentialStatus } from './credential-status';
 import { providerFailureSchema, type ProviderFailureClass } from './failure';
 
 /**
@@ -270,6 +271,52 @@ async function checkToolTurnShape(toolTurn: ProviderTurnCase): Promise<string[]>
     : [
         `${toolTurn.name}: the tool turn needs two tool calls and one cancelled, got ${String(calls)} and ${String(cancelled)}`,
       ];
+}
+
+/** One credential setup, the state its check must report, and the secret it must never echo. */
+export interface CredentialStatusCase {
+  name: string;
+  expected: CredentialStatus['state'];
+  /** A credential value planted in the setup. The status must not contain it anywhere. */
+  secret: string;
+  /** Runs the check against the case's setup. */
+  check: () => Promise<unknown>;
+}
+
+/**
+ * A credential check reports a status that parses, carries the expected state, and never
+ * contains the credential it checked: a status reaches logs, run messages and `archon doctor`.
+ */
+export async function checkCredentialStatuses(
+  cases: readonly CredentialStatusCase[]
+): Promise<string[]> {
+  const violations: string[] = [];
+  for (const statusCase of cases) {
+    let status: unknown;
+    try {
+      status = await statusCase.check();
+    } catch (error) {
+      violations.push(
+        `${statusCase.name}: threw instead of reporting a status (${(error as Error).message})`
+      );
+      continue;
+    }
+    const parsed = credentialStatusSchema.safeParse(status);
+    if (!parsed.success) {
+      violations.push(`${statusCase.name}: status is malformed (${parsed.error.message})`);
+      continue;
+    }
+    if (parsed.data.state !== statusCase.expected) {
+      violations.push(
+        `${statusCase.name}: reported ${parsed.data.state}, expected ${statusCase.expected}`
+      );
+    }
+    // The raw value, not the parsed one: parsing strips unknown keys a secret could hide in.
+    if (JSON.stringify(status).includes(statusCase.secret)) {
+      violations.push(`${statusCase.name}: status contains the credential value`);
+    }
+  }
+  return violations;
 }
 
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
