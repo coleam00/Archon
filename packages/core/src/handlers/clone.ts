@@ -443,6 +443,7 @@ export async function cloneRepository(repoUrl: string): Promise<RegisterResult> 
  * Register an existing local repository in the database (no git clone).
  */
 export async function registerRepository(localPath: string): Promise<RegisterResult> {
+  localPath = await canonicalizeProjectPath(localPath);
   // Validate path exists and is a git repo
   try {
     await execFileAsync('git', ['-C', localPath, 'rev-parse', '--git-dir']);
@@ -568,8 +569,7 @@ export async function registerFolder(localPath: string, name?: string): Promise<
   // `canonicalizeProjectPath` is the one canonicalizer for `default_cwd`; the CLI
   // gate, `archon doctor` and `/register-project` all resolve through it, so a
   // symlinked root (macOS `/tmp` → `/private/tmp`) or a Windows 8.3 short path
-  // registers under exactly the string those lookups will ask for (#2927). Repo
-  // projects are immune because git canonicalizes the repo root on both sides.
+  // registers under exactly the string those lookups will ask for (#2927).
   const resolvedPath = await canonicalizeProjectPath(localPath);
 
   // The stat below is the existence gate: canonicalization is fail-safe and

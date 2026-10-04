@@ -67,7 +67,7 @@ function label(pr: QualifiedPr | undefined): string {
 }
 
 try {
-  const source = forgeSource(process.env.ARCHON_SDLC_FORGE);
+  const source = forgeSource();
   const verdict = {
     ready: JSON.parse(text(process.env.INPUTS_READY)) as boolean,
     action: text(process.env.INPUTS_ACTION),

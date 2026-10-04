@@ -102,6 +102,10 @@ In DAG workflows, nodes can reference the output of any completed upstream node.
 | `$nodeId.output` | Full output string of the referenced node | The node must be a declared dependency (in `depends_on`) |
 | `$nodeId.output.field` | A specific JSON field from the node's output | Works on any JSON-object output; `output_format` adds stricter validation — see notes below |
 
+On output-reference surfaces, dot access supports exactly one top-level field. A deeper path
+such as `$nodeId.output.proposal.text` fails workflow validation. Flatten the producer's
+`output_format`, or pass `$nodeId.output.proposal` to a script node and inspect the object there.
+
 A `.field` reference **fails the consuming node** when the producer's output is not a JSON object — whether or not the producer declared an `output_format`. Declaring a schema buys you a stricter check on the field *name* (an undeclared field fails the consuming node with a named error rather than resolving to a silent empty), and lets a declared-but-absent field resolve to `''`; it never makes a broken producer quieter. For a `workflow:` sub-run node the contract is the child's own: the `output_format` on the child's `returns:` node certifies the value and its declared field names travel back with the result, so `$sub.output.field` is strict under the child's schema. Declaring `output_format` on the `workflow:` node itself is a load error — the result contract belongs to the child's `returns:` node.
 
 During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful bash events retain only a 32 KiB UTF-8 audit preview, so after a process boundary a resumed run rehydrates that persisted preview rather than the full output. If a large gate verdict must survive a restart intact, store it through a deliberately managed artifact contract instead of relying on the event preview.
@@ -188,7 +192,8 @@ An object value is reserved for the **binding directive** `{ from, if_skipped }`
 one whole `$node.output[.field]` reference, and when that producer was **skipped** (a
 `when:`-false branch reached through `trigger_rule: all_done`) the binding takes `if_skipped`
 instead. A skipped producer with no `if_skipped` fails the node with the fix named — a
-binding never silently resolves to an empty string.
+binding never silently resolves to an empty string. `if_skipped` is literal data, so
+reference-looking text there is neither substituted nor validated as an output reference.
 
 ```yaml
   - id: join

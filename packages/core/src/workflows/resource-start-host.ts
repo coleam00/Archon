@@ -75,6 +75,7 @@ import * as workflowDb from '../db/workflows';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
 import { registerRepository } from '../handlers/clone';
 import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
+import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
 import { createChildWorktreeResolver } from './child-isolation-resolver';
 import { createWorkflowDeps } from './store-adapter';
@@ -91,11 +92,12 @@ interface BindingIdentity {
 }
 
 async function findOrRegisterCodebase(cwd: string): Promise<Codebase> {
-  const found =
-    (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
-    (await codebaseDb.findCodebaseByPathPrefix(cwd));
-  if (found) return found;
   const repoRoot = await findRepoRoot(cwd);
+  const found = repoRoot
+    ? await findCodebaseForCheckoutPath(repoRoot)
+    : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
+      (await codebaseDb.findCodebaseByPathPrefix(cwd)));
+  if (found) return found;
   const registered = repoRoot
     ? await codebaseDb.getCodebase((await registerRepository(repoRoot)).codebaseId)
     : null;

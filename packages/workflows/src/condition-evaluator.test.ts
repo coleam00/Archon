@@ -20,7 +20,7 @@ mock.module('@archon/paths', () => ({
 
 import { evaluateCondition, InputRefError } from './condition-evaluator';
 import { OutputRefError } from './output-ref';
-import { parseWhenAtom, whenAtoms } from './when-atom';
+import { findUnsupportedNestedWhenRef, parseWhenAtom, whenAtoms } from './when-atom';
 import type { NodeOutput } from './schemas';
 
 /**
@@ -83,6 +83,16 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$classify.output.type == 'FEATURE'", outputs).result).toBe(false);
   });
 
+  it('rejects a nested canonical output path loudly', () => {
+    const outputs = new Map([
+      ['review', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
+    ]);
+
+    expect(() => evaluateCondition("$review.output.proposal.action == 'add'", outputs)).toThrow(
+      "Reference '$review.output.proposal.action'"
+    );
+  });
+
   it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
     mockLogFn.mockClear();
     const jsonOutput = JSON.stringify({ items: ['todo', 'fix'], count: 2 });
@@ -130,6 +140,18 @@ describe('evaluateCondition', () => {
       },
       'dag.condition_field_not_primitive'
     );
+  });
+
+  it('rejects a nested prior-iteration output path loudly', () => {
+    const priorOutputs = new Map([
+      ['work', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
+    ]);
+
+    expect(() =>
+      evaluateCondition("$LOOP_PREV.work.output.proposal.action == 'add'", new Map(), undefined, {
+        loopPrevOutputs: priorOutputs,
+      })
+    ).toThrow("Reference '$LOOP_PREV.work.output.proposal.action'");
   });
 
   it('dot notation: throws on a field ref when schemaless output is not JSON (no-silent-drop)', () => {
@@ -628,11 +650,9 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$score.confidence >= '0.99'", outputs).result).toBe(false);
   });
 
-  it('shorthand path: rejects a sub-field ($node.field.subfield) fail-closed', () => {
+  it('shorthand path: rejects a sub-field ($node.field.subfield) loudly', () => {
     const outputs = new Map([['n', makeOutput(JSON.stringify({ a: { b: 'x' } }))]]);
-    const res = evaluateCondition("$n.a.b == 'x'", outputs);
-    expect(res.result).toBe(false);
-    expect(res.parsed).toBe(false);
+    expect(() => evaluateCondition("$n.a.b == 'x'", outputs)).toThrow("Reference '$n.a.b'");
   });
 
   it('shorthand path: throws on a missing key in a schemaless JSON node (no-silent-drop)', () => {
@@ -829,6 +849,12 @@ describe('whenAtoms', () => {
 
   it('does not split on separators inside a quoted literal', () => {
     expect(whenAtoms("$a.output == 'x && y'")).toEqual(["$a.output == 'x && y'"]);
+  });
+
+  it('does not treat a nested-reference-shaped quoted value as a live reference', () => {
+    expect(
+      findUnsupportedNestedWhenRef("$a.output == '$review.output.proposal.action'")
+    ).toBeUndefined();
   });
 });
 

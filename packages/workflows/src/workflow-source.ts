@@ -200,6 +200,7 @@ export function workflowSourceConfigFrom(config: WorkflowConfig): WorkflowSource
     load_default_workflows: config.defaults?.loadDefaultWorkflows ?? true,
     load_default_commands: config.defaults?.loadDefaultCommands ?? true,
     ...(config.commands?.folder !== undefined ? { command_folder: config.commands.folder } : {}),
+    ...(config.envVars !== undefined ? { env_var_names: Object.keys(config.envVars) } : {}),
   };
 }
 

@@ -1696,6 +1696,81 @@ nodes:
   });
 
   describe('discoverWorkflowsWithConfig', () => {
+    it("treats config.yaml's env: as supplied, suppressing the unbound-env-read warning", async () => {
+      const scriptsDir = join(testDir, '.archon', 'scripts');
+      const workflowsDir = join(testDir, '.archon', 'workflows');
+      await mkdir(scriptsDir, { recursive: true });
+      await mkdir(workflowsDir, { recursive: true });
+      await writeFile(join(scriptsDir, 'verify.ts'), 'console.log(process.env.NAME)\n');
+      await writeFile(
+        join(workflowsDir, 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      const mockLoadConfig = mock(async () => ({
+        envVars: { NAME: 'value' },
+      }));
+
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+
+      expect(result.errors).toEqual([]);
+      const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
+      expect(entry).toBeDefined();
+      expect(entry?.parseWarnings ?? []).toEqual([]);
+    });
+
+    it("still treats config.yaml's env: as supplied once discovery runs from a frozen capture", async () => {
+      const scriptsDir = join(testDir, '.archon', 'scripts');
+      const workflowsDir = join(testDir, '.archon', 'workflows');
+      await mkdir(scriptsDir, { recursive: true });
+      await mkdir(workflowsDir, { recursive: true });
+      await writeFile(join(scriptsDir, 'verify.ts'), 'console.log(process.env.NAME)\n');
+      await writeFile(
+        join(workflowsDir, 'uses-configured-env.yaml'),
+        `name: uses-configured-env
+description: Reads a variable supplied by config.yaml's env section
+inputs:
+  declared: {}
+nodes:
+  - id: verify
+    script: verify
+    runtime: bun
+`
+      );
+      const { captureWorkflowSource, capturedSourceRoots, DEFAULT_WORKFLOW_SOURCE_CONFIG } =
+        await import('./workflow-source');
+      const capture = await captureWorkflowSource({
+        sourceRoot: testDir,
+        captureRoot: join(testDir, 'home', 'staged-source', 'run-1'),
+        sourceConfig: { ...DEFAULT_WORKFLOW_SOURCE_CONFIG, env_var_names: ['NAME'] },
+      });
+      // A run that already froze its source never calls loadConfig again (see
+      // discoverWorkflowsWithConfig) — proving this stays unbound-env-clean without it is
+      // what distinguishes this test from the live-config one above.
+      const loadConfigShouldNotRun = mock(async () => {
+        throw new Error('loadConfig must not run once a frozen source config is already known');
+      });
+
+      const result = await discoverWorkflowsWithConfig(
+        testDir,
+        loadConfigShouldNotRun,
+        capturedSourceRoots(capture.anchor)
+      );
+
+      expect(loadConfigShouldNotRun).not.toHaveBeenCalled();
+      expect(result.errors).toEqual([]);
+      const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
+      expect(entry).toBeDefined();
+      expect(entry?.parseWarnings ?? []).toEqual([]);
+    });
+
     it('should pass loadDefaults from config to discoverWorkflows', async () => {
       const { discoverWorkflowsWithConfig } = await import('./workflow-discovery');
       const mockLoadConfig = mock(async () => ({
@@ -2750,6 +2825,89 @@ nodes:
   });
 
   describe('DAG output ref validation', () => {
+    it('rejects nested output paths in approval messages before execution', () => {
+      const result = parseWorkflow(
+        `
+name: nested-approval-output
+description: Nested structured output in a gate
+nodes:
+  - id: review
+    prompt: Review the proposal
+    output_format:
+      type: object
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: { type: string }
+            text: { type: string }
+          required: [action, text]
+      required: [proposal]
+  - id: gate
+    approval:
+      message: |
+        Proposed: $review.output.proposal.action
+        $review.output.proposal.text
+    depends_on: [review]
+`,
+        'nested-approval-output.yaml'
+      );
+
+      expect(result.workflow).toBeNull();
+      expect(result.error?.error).toContain("Node 'gate' field 'approval.message'");
+      expect(result.error?.error).toContain('$review.output.proposal.action');
+      expect(result.error?.error).toContain("'$review.output' or '$review.output.field'");
+    });
+
+    it('rejects nested canonical output paths in when conditions', () => {
+      const result = parseWorkflow(
+        `
+name: nested-when-output
+description: Nested structured output in a condition
+nodes:
+  - id: review
+    bash: echo review
+  - id: apply
+    bash: echo apply
+    depends_on: [review]
+    when: "$review.output.proposal.action == 'add'"
+`,
+        'nested-when-output.yaml'
+      );
+
+      expect(result.workflow).toBeNull();
+      expect(result.error?.error).toContain("Node 'apply' field 'when'");
+      expect(result.error?.error).toContain('$review.output.proposal.action');
+      expect(result.error?.error).toContain("'$review.output.field'");
+    });
+
+    it('rejects nested prior-iteration output paths in loop-group conditions', () => {
+      const result = parseWorkflow(
+        `
+name: nested-loop-prev-output
+description: Nested structured output from a prior iteration
+nodes:
+  - id: refine
+    loop_group:
+      until: DONE
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo work
+        - id: guarded
+          bash: echo guarded
+          depends_on: [work]
+          when: "$LOOP_PREV.work.output.proposal.action == 'add'"
+`,
+        'nested-loop-prev-output.yaml'
+      );
+
+      expect(result.workflow).toBeNull();
+      expect(result.error?.error).toContain("Node 'guarded' field 'when'");
+      expect(result.error?.error).toContain('$LOOP_PREV.work.output.proposal.action');
+      expect(result.error?.error).toContain("'$LOOP_PREV.work.output.field'");
+    });
+
     it('should reject a workflow where when: references an unknown node output', async () => {
       await writeWorkflowFile(
         testDir,

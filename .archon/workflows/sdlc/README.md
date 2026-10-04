@@ -93,7 +93,7 @@ back — so "the write failed" and "the write may have landed" stay different
 outcomes, in the pack as in the forge contract.
 
 That split is also what keeps the source switch out of the prompts. A prompt that
-branched on `ARCHON_SDLC_FORGE` would be an invented protocol; the scripts read it
+branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it
 and the agents never see it.
 
 ## Deterministic scripts

@@ -1,6 +1,7 @@
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { Hono, type Context } from 'hono';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager, User } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
 import { validationErrorHook } from './openapi-defaults';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
@@ -41,14 +42,16 @@ mock.module('../auth', () => ({
 }));
 
 // --- Identity resolution ---
-const mockFindOrCreateUser = mock(async (_platform: string, platformUserId: string) => ({
-  id: `user-from-${platformUserId}`,
-  display_name: null,
-  email: null,
-  role: 'admin' as const,
-  created_at: new Date(),
-  updated_at: new Date(),
-}));
+const mockFindOrCreateUser = mock(
+  async (_platform: string, platformUserId: string, _displayName?: string): Promise<User> => ({
+    id: `user-from-${platformUserId}`,
+    display_name: null,
+    email: null,
+    role: 'admin',
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
 
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
@@ -140,7 +143,7 @@ mock.module('@archon/core/utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-import { registerApiRoutes } from './api';
+import { registerApiRoutes, resolveAuthContext, resolveWebUserId, requireWebUser } from './api';
 
 function makeApp(): OpenAPIHono {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
@@ -366,4 +369,138 @@ describe('?mine filter — non-enforcing', () => {
     expect(mockFindOrCreateUser).toHaveBeenCalledWith('web', 'fallback-user', 'fallback-user');
     expect(mockListWorkflowRuns.mock.calls[0]?.[0]?.userId).toBe('user-from-fallback-user');
   });
+});
+
+describe('per-request auth helpers', () => {
+  async function request(headers?: RequestInit['headers']): Promise<Context> {
+    let context: Context | undefined;
+    const app = new Hono();
+    app.get('/api/auth/providers', c => {
+      context = c;
+      return c.text('');
+    });
+    await app.request('/api/auth/providers', { headers });
+    if (!context) throw new Error('Request did not reach the test handler');
+    return context;
+  }
+  const originalHeader = process.env.ARCHON_WEB_AUTH_HEADER;
+
+  beforeEach(() => {
+    authEnabled = false;
+    authInstance = null;
+    delete process.env.ARCHON_WEB_AUTH_HEADER;
+    mockFindOrCreateUser.mockClear();
+  });
+
+  afterEach(() => {
+    if (originalHeader === undefined) delete process.env.ARCHON_WEB_AUTH_HEADER;
+    else process.env.ARCHON_WEB_AUTH_HEADER = originalHeader;
+  });
+
+  for (const enabled of [false, true]) {
+    test(`no identity with web auth ${enabled ? 'enabled' : 'disabled'} preserves unattributed requests`, async () => {
+      authEnabled = enabled;
+      if (enabled) authInstance = { api: { getSession: async () => null } };
+      const c = await request();
+      expect(await resolveAuthContext(c)).toBeUndefined();
+      expect(await resolveWebUserId(c)).toBeUndefined();
+      const result = await requireWebUser(c, 'Login to manage keys');
+      expect(result).toHaveProperty('error');
+      if (!('error' in result)) throw new Error('Expected authentication refusal');
+      expect(result.error.status).toBe(401);
+      expect(await result.error.json()).toEqual({ error: 'Login to manage keys' });
+      expect(mockFindOrCreateUser).not.toHaveBeenCalled();
+    });
+  }
+
+  test('session identity wins over a conflicting header for all three helpers', async () => {
+    authEnabled = true;
+    const getSession = mock(async (_args: unknown) => ({
+      user: { id: 'session-user', name: 'Session Name', email: 'session@example.test' },
+    }));
+    authInstance = { api: { getSession } };
+    const c = await request({ 'X-Archon-User': 'another-user', Cookie: 'session=test' });
+    const expected = { userId: 'user-from-session-user', role: 'admin' as const };
+    expect(await resolveAuthContext(c)).toEqual(expected);
+    expect(await resolveWebUserId(c)).toBe(expected.userId);
+    expect(await requireWebUser(c)).toEqual(expected);
+    expect(getSession).toHaveBeenCalledWith({ headers: c.req.raw.headers });
+    expect(mockFindOrCreateUser.mock.calls).toEqual([
+      ['web', 'session-user', 'Session Name'],
+      ['web', 'session-user', 'Session Name'],
+      ['web', 'session-user', 'Session Name'],
+    ]);
+  });
+
+  test('configured proxy header is trimmed and works without Better Auth', async () => {
+    process.env.ARCHON_WEB_AUTH_HEADER = 'X-Trusted-User';
+    const c = await request({ 'X-Trusted-User': '  proxy-user  ', 'X-Archon-User': 'ignored' });
+    const expected = { userId: 'user-from-proxy-user', role: 'admin' as const };
+    expect(await resolveAuthContext(c)).toEqual(expected);
+    expect(await resolveWebUserId(c)).toBe(expected.userId);
+    expect(await requireWebUser(c)).toEqual(expected);
+    expect(mockFindOrCreateUser).toHaveBeenCalledWith('web', 'proxy-user', 'proxy-user');
+    expect(await resolveAuthContext(await request({ 'X-Trusted-User': '   ' }))).toBeUndefined();
+  });
+
+  test('missing Better Auth session falls back to the trusted proxy for all three helpers', async () => {
+    authEnabled = true;
+    const getSession = mock(async (_args: unknown) => null);
+    authInstance = { api: { getSession } };
+    process.env.ARCHON_WEB_AUTH_HEADER = 'X-Trusted-User';
+    const c = await request({ 'X-Trusted-User': 'proxy-user', 'X-Archon-User': 'ignored' });
+    const expected = { userId: 'user-from-proxy-user', role: 'admin' as const };
+    expect(await resolveAuthContext(c)).toEqual(expected);
+    expect(await resolveWebUserId(c)).toBe(expected.userId);
+    expect(await requireWebUser(c)).toEqual(expected);
+    expect(getSession).toHaveBeenCalledTimes(3);
+    expect(getSession).toHaveBeenCalledWith({ headers: c.req.raw.headers });
+    expect(mockFindOrCreateUser.mock.calls).toEqual([
+      ['web', 'proxy-user', 'proxy-user'],
+      ['web', 'proxy-user', 'proxy-user'],
+      ['web', 'proxy-user', 'proxy-user'],
+    ]);
+  });
+
+  test('session outage permits soft proxy attribution but strict identity returns 503', async () => {
+    authInstance = {
+      api: {
+        getSession: async () => {
+          throw new Error('session unavailable');
+        },
+      },
+    };
+    const c = await request({ 'X-Archon-User': 'proxy-user' });
+    expect(await resolveAuthContext(c)).toEqual({ userId: 'user-from-proxy-user', role: 'admin' });
+    expect(await resolveWebUserId(c)).toBe('user-from-proxy-user');
+    mockFindOrCreateUser.mockClear();
+    const result = await requireWebUser(c);
+    if (!('error' in result)) throw new Error('Expected backend refusal');
+    expect(result.error.status).toBe(503);
+    expect(await result.error.json()).toEqual({
+      error: 'Could not verify session — backend unavailable',
+    });
+    expect(mockFindOrCreateUser).not.toHaveBeenCalled();
+    expect(await resolveAuthContext(await request())).toBeUndefined();
+    expect(await resolveWebUserId(await request())).toBeUndefined();
+  });
+
+  for (const source of ['session', 'header']) {
+    test(`${source} identity storage outage is unattributed for soft helpers and 503 for strict`, async () => {
+      if (source === 'session')
+        authInstance = { api: { getSession: async () => ({ user: { id: 'session-user' } }) } };
+      const c = await request(source === 'header' ? { 'X-Archon-User': 'proxy-user' } : undefined);
+      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      expect(await resolveAuthContext(c)).toBeUndefined();
+      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      expect(await resolveWebUserId(c)).toBeUndefined();
+      mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+      const result = await requireWebUser(c);
+      if (!('error' in result)) throw new Error('Expected backend refusal');
+      expect(result.error.status).toBe(503);
+      expect(await result.error.json()).toEqual({
+        error: 'Could not verify web identity — backend unavailable',
+      });
+    });
+  }
 });

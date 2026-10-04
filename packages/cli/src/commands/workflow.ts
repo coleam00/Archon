@@ -6,6 +6,7 @@ import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import type { NodeState } from '@archon/workflows/schemas/node-state';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -1508,11 +1509,9 @@ export async function workflowListCommand(
 /**
  * Resolve the project this run belongs to: look it up, else register it.
  *
- * Exact `default_cwd` match first, then a path-prefix lookup so a subdirectory or
- * worktree UNDER a registered root resolves to its covering codebase. Without the
- * prefix fallback, resume/approve re-enter with cwd = the run's worktree
- * working_path, miss the exact match, and fall through to auto-registration —
- * which trips the source-symlink guard for an already-covered path (#2127).
+ * Git paths resolve at the nearest repository root, with linked worktrees mapped
+ * to their registered source through Git checkout identity. Only non-Git paths
+ * use ancestor-prefix lookup, so a registered parent cannot capture a nested repo.
  *
  * One implementation because two callers need the same answer: the `--detach`
  * pre-flight, which must resolve the project before it can create the run row or
@@ -1540,10 +1539,12 @@ async function resolveRunCodebase(
   let lookupError: Error | null = null;
   let registrationError: Error | null = null;
   let registeredFolder: { name: string; defaultCwd: string } | undefined;
+  const repoRoot = await git.findRepoRoot(cwd);
   try {
-    codebase =
-      (await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
-      (await codebaseDb.findCodebaseByPathPrefix(cwd));
+    codebase = repoRoot
+      ? await findCodebaseForCheckoutPath(repoRoot)
+      : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
+        (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   } catch (error) {
     const err = error as Error;
     lookupError = err;
@@ -1577,7 +1578,6 @@ async function resolveRunCodebase(
 
   // Auto-register unregistered repos (creates project structure for artifacts/logs)
   if (!codebase && !lookupError) {
-    const repoRoot = await git.findRepoRoot(cwd);
     if (repoRoot) {
       try {
         const result = await registerRepository(repoRoot);
@@ -3754,7 +3754,7 @@ function formatDuration(ms: number): string {
 
 export interface NodeSummary {
   nodeId: string;
-  state: 'running' | 'completed' | 'failed' | 'skipped';
+  state: NodeState;
   startedAt?: string;
   durationMs?: number;
   outputPreview?: string;
@@ -3805,7 +3805,9 @@ export const NODE_SUMMARY_EVENT_TYPES = [
  * Derive per-node summaries from a run's workflow events.
  * Processes node_started / node_completed / node_failed / node_skipped /
  * node_skipped_prior_success events — the last two mean opposite things and are
- * handled separately — and loop iterations' session ids.
+ * handled separately — loop iterations' session ids, and the resume resets
+ * (node_always_run_reset, node_prior_cache_invalidated) that send a node back
+ * to pending, as the run's terminal record does.
  */
 export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
@@ -3842,6 +3844,12 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           startedAt: event.created_at,
           ...(execution === undefined ? {} : { execution }),
         });
+        break;
+      }
+      case 'node_always_run_reset':
+      case 'node_prior_cache_invalidated': {
+        startTimes.delete(nodeId);
+        summaries.set(nodeId, { nodeId, state: 'pending' });
         break;
       }
       case 'node_suspended': {
@@ -3901,8 +3909,10 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         // these into `skipped` reported completed work as never run, and the last
         // write erased the original duration and output (#2973). The earlier
         // node_completed summary is the truth about the run, so never overwrite it.
-        if (summaries.has(nodeId)) break;
-        // No summary means the original node_completed is not in this log. The
+        // A reset left nothing to keep: the prior attempt's details went with it.
+        const existing = summaries.get(nodeId);
+        if (existing !== undefined && existing.state !== 'pending') break;
+        // The original node_completed is not in this log or was reset. The
         // replay still carries the prior output, so report the success it
         // describes; there is no start time to derive a duration from.
         summaries.set(nodeId, {
@@ -3934,14 +3944,6 @@ function listRunEvents(runId: string, rawEvents: boolean): Promise<WorkflowEvent
       });
 }
 
-/** A node in the run's declared graph that no lifecycle event has reached yet. */
-export interface PendingNodeSummary {
-  nodeId: string;
-  state: 'pending';
-}
-
-export type RunNodeSummary = NodeSummary | PendingNodeSummary;
-
 /**
  * Per-node state for `workflow runs --json --verbose`: every node the run declared in
  * its `terminal_graph`, in declared order and `pending` until an event reaches it,
@@ -3953,8 +3955,8 @@ export type RunNodeSummary = NodeSummary | PendingNodeSummary;
 export function buildRunNodes(
   run: Pick<WorkflowRun, 'metadata'>,
   events: WorkflowEventRow[]
-): RunNodeSummary[] {
-  const nodes = new Map<string, RunNodeSummary>();
+): NodeSummary[] {
+  const nodes = new Map<string, NodeSummary>();
   const graph = runGraphSchema.safeParse(run.metadata[RUN_GRAPH_METADATA_KEY]);
   if (graph.success)
     for (const nodeId of graph.data.node_ids) nodes.set(nodeId, { nodeId, state: 'pending' });
@@ -3969,7 +3971,7 @@ export function buildRunNodes(
  */
 async function withRunDetail<
   Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
->(runs: Run[]): Promise<(Run & { nodes: RunNodeSummary[]; attention: RunAttention | null })[]> {
+>(runs: Run[]): Promise<(Run & { nodes: NodeSummary[]; attention: RunAttention | null })[]> {
   const eventsByRun = await workflowEventsDb.listEventsForRuns(
     runs.map(run => run.id),
     NODE_SUMMARY_EVENT_TYPES
@@ -4010,15 +4012,17 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
   if (nodes.length === 0) return;
   console.log('  Nodes:');
   for (const node of nodes) {
-    const iconMap: Record<string, string> = {
+    const iconMap: Record<NodeSummary['state'], string> = {
       completed: '✓',
       failed: '✗',
       skipped: '-',
       running: '◌',
+      pending: '○',
     };
-    const icon = iconMap[node.state] ?? '◌';
+    const icon = iconMap[node.state];
     const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-    const stateLabel = node.state === 'running' ? ' (running)' : '';
+    const stateLabel =
+      node.state === 'running' || node.state === 'pending' ? ` (${node.state})` : '';
     const skipCause = node.cause ? ` (${formatSkipCause(node.cause)})` : '';
     console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}${skipCause}`);
     if (node.outputPreview !== undefined) {

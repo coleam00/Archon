@@ -255,6 +255,66 @@ describe('buildNodeSummaries durations', () => {
   });
 });
 
+// A resume writes the reset before the node's new node_started; a process that dies
+// between the two leaves the reset as the node's last word.
+describe('buildNodeSummaries resume resets', () => {
+  for (const reset of ['node_always_run_reset', 'node_prior_cache_invalidated'] as const) {
+    describe(`after ${reset}`, () => {
+      const completedThenReset = [
+        event('1', 'node_started', 'prepare', '2026-10-03T10:00:00.000Z'),
+        event('2', 'node_completed', 'prepare', '2026-10-03T10:00:01.000Z', {
+          node_output: 'prepared',
+        }),
+        event('3', reset, 'prepare', '2026-10-03T10:05:00.000Z', { prior_output: 'prepared' }),
+      ];
+
+      it('reports the node pending, without the prior attempt’s details', () => {
+        expect(buildNodeSummaries(completedThenReset)).toEqual([
+          { nodeId: 'prepare', state: 'pending' },
+        ]);
+      });
+
+      it('follows the re-run to running and completed', () => {
+        const started = [
+          ...completedThenReset,
+          event('4', 'node_started', 'prepare', '2026-10-03T10:05:01.000Z'),
+        ];
+        expect(buildNodeSummaries(started)).toEqual([
+          { nodeId: 'prepare', state: 'running', startedAt: '2026-10-03T10:05:01.000Z' },
+        ]);
+        expect(
+          buildNodeSummaries([
+            ...started,
+            event('5', 'node_completed', 'prepare', '2026-10-03T10:05:03.000Z', {
+              node_output: 'prepared again',
+            }),
+          ])
+        ).toEqual([
+          {
+            nodeId: 'prepare',
+            state: 'completed',
+            startedAt: '2026-10-03T10:05:01.000Z',
+            durationMs: 2_000,
+            outputPreview: 'prepared again',
+          },
+        ]);
+      });
+
+      it('reports a later prior-success replay as completed', () => {
+        expect(
+          buildNodeSummaries([
+            ...completedThenReset,
+            event('4', 'node_skipped_prior_success', 'prepare', '2026-10-03T10:05:01.000Z', {
+              reason: 'prior_success',
+              node_output: 'prepared',
+            }),
+          ])
+        ).toEqual([{ nodeId: 'prepare', state: 'completed', outputPreview: 'prepared' }]);
+      });
+    });
+  }
+});
+
 describe('buildRunNodes', () => {
   const graph = { terminal_graph: { node_ids: ['plan', 'implement', 'review'] } };
 

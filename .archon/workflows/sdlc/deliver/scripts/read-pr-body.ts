@@ -17,7 +17,7 @@ import { forgeSource, parsePrRecord } from '../../.shared/forge.ts';
 import { artifactsDir, emit, refuse, text } from '../../.shared/io.ts';
 
 try {
-  const source = forgeSource(process.env.ARCHON_SDLC_FORGE);
+  const source = forgeSource();
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
   const view = viewPr(pr, source);
   const path = join(artifactsDir(), 'pr-body-current.md');

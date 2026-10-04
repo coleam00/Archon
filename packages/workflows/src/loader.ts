@@ -61,17 +61,25 @@ import type {
 } from './schemas/workflow';
 import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
-import { parseLoopPrevWhenAtom, parseWhenAtom, whenAtoms, WHEN_INPUTS_SCOPE } from './when-atom';
+import {
+  findUnsupportedNestedWhenRef,
+  parseLoopPrevWhenAtom,
+  parseWhenAtom,
+  whenAtoms,
+  WHEN_INPUTS_SCOPE,
+} from './when-atom';
 import {
   declaredFieldsFromSchema,
   EXECUTION_CHECKOUT_REF_SOURCE,
+  findUnsupportedNestedOutputRef,
   OUTPUT_REF_SOURCE,
   parseWholeExecutionCheckoutRef,
   parseWholeOutputRef,
+  unsupportedNestedOutputRefMessage,
 } from './output-ref';
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
-import { visitNodeTemplateSlots } from './template-walker';
+import { visitNodeTemplateSlots, type TemplateSurface } from './template-walker';
 import { validateInlineExecInputs } from './exec-input-validation';
 import { z } from '@hono/zod-openapi';
 
@@ -926,6 +934,7 @@ export function validateDagStructure(
     const sources: {
       field: string;
       text: string;
+      surface: TemplateSurface;
       bodyNodes?: readonly (DagNode | IncludeDirective)[];
     }[] = [];
     if (!isIncludeDirective(node)) {
@@ -936,6 +945,7 @@ export function validateDagStructure(
           sources.push({
             field: slot.path,
             text: slot.value,
+            surface: slot.surface,
             ...(slot.path === 'loop_group.until_bash' && isLoopGroupNode(node)
               ? { bodyNodes: node.loop_group.nodes }
               : {}),
@@ -945,6 +955,14 @@ export function validateDagStructure(
       );
     }
     for (const source of sources) {
+      const nestedRef =
+        source.surface === 'condition'
+          ? findUnsupportedNestedWhenRef(source.text)
+          : findUnsupportedNestedOutputRef(source.text);
+      if (nestedRef) {
+        return `Node '${node.id}' field '${source.field}' contains an unsupported output reference. ${unsupportedNestedOutputRefMessage(nestedRef)}`;
+      }
+
       let m: RegExpExecArray | null;
       outputRefPattern.lastIndex = 0; // reset stateful g-flag regex before each new source string
       while ((m = outputRefPattern.exec(source.text)) !== null) {
@@ -1374,7 +1392,11 @@ export type ParseResult =
 /**
  * Parse and validate a workflow YAML file
  */
-export function parseWorkflow(content: string, filename: string): ParseResult {
+export function parseWorkflow(
+  content: string,
+  filename: string,
+  configuredEnvNames?: ReadonlySet<string>
+): ParseResult {
   try {
     const raw = parseYaml(content) as Record<string, unknown>;
 
@@ -2090,7 +2112,7 @@ export function parseWorkflow(content: string, filename: string): ParseResult {
       ...(outcomeField !== undefined ? { outcome_field: outcomeField } : {}),
       ...(deprecated !== undefined ? { deprecated } : {}),
     };
-    const execInputValidation = validateInlineExecInputs(workflow);
+    const execInputValidation = validateInlineExecInputs(workflow, configuredEnvNames);
     parseWarnings.push(...execInputValidation.warnings);
     if (execInputValidation.errors.length > 0) {
       return {
