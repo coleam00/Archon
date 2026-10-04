@@ -78,7 +78,7 @@ function resolveOutputRef(
   field: string | undefined,
   nodeOutputs: ReadonlyMap<string, NodeOutput>,
   exprSnippet: string,
-  reference?: string
+  reference: string
 ): string {
   const nodeOutput = nodeOutputs.get(nodeId);
   if (!nodeOutput) {
@@ -88,12 +88,10 @@ function resolveOutputRef(
     // `substituteNodeOutputRefs` in dag-executor). A whole-text `$id.output` stays
     // lenient ('').
     if (field) {
-      throw new OutputRefError(
-        nodeId,
-        field,
-        'unknown-node',
-        similarNodeIds(nodeId, nodeOutputs.keys())
-      );
+      throw new OutputRefError(nodeId, field, 'unknown-node', {
+        reference,
+        candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
+      });
     }
     getLog().warn({ nodeId }, 'condition_output_ref_unknown_node');
     return '';

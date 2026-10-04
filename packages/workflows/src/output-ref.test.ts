@@ -20,6 +20,11 @@ import {
 import { buildTruncationMarker, hasTruncationMarker } from './utils/output-truncation';
 import type { NodeOutput } from './schemas';
 
+/** Resolve with the canonical reference text, as a `$node.output.field` template would. */
+function resolveField(node: NodeOutput, nodeId: string, field: string) {
+  return resolveNodeOutputField(node, nodeId, field, `$${nodeId}.output.${field}`);
+}
+
 function completed(
   output: string,
   structuredOutput?: unknown,
@@ -162,7 +167,7 @@ describe('declaredFieldsFromSchema', () => {
 describe('resolveNodeOutputField — producer did not run', () => {
   it('throws producer-not-run for a skipped producer (clear message, not "unparseable")', () => {
     try {
-      resolveNodeOutputField(
+      resolveField(
         { state: 'skipped', output: '', cause: { kind: 'condition', expr: 'false' } },
         'n',
         'field'
@@ -175,7 +180,7 @@ describe('resolveNodeOutputField — producer did not run', () => {
   });
 
   it('throws producer-not-run for a pending producer', () => {
-    expect(() => resolveNodeOutputField({ state: 'pending', output: '' }, 'n', 'field')).toThrow(
+    expect(() => resolveField({ state: 'pending', output: '' }, 'n', 'field')).toThrow(
       OutputRefError
     );
   });
@@ -192,7 +197,7 @@ describe('resolveNodeOutputField — producer failed (#2713)', () => {
       error: 'loop failed at max_iterations',
     };
     try {
-      resolveNodeOutputField(failed, 'corrections', 'ready');
+      resolveField(failed, 'corrections', 'ready');
       throw new Error('expected throw');
     } catch (e) {
       expect(e).toBeInstanceOf(OutputRefError);
@@ -208,7 +213,7 @@ describe('resolveNodeOutputField — producer failed (#2713)', () => {
       error: 'boom',
       structuredOutput: { ready: true },
     };
-    expect(() => resolveNodeOutputField(failed, 'corrections', 'ready')).toThrow(OutputRefError);
+    expect(() => resolveField(failed, 'corrections', 'ready')).toThrow(OutputRefError);
   });
 });
 
@@ -252,45 +257,33 @@ describe('resolveNodeOutputField — declared-schema producer', () => {
   const declared = ['type', 'note'];
 
   it('resolves a present declared field from structuredOutput', () => {
-    const r = resolveNodeOutputField(
-      completed('{"type":"BUG"}', { type: 'BUG' }, declared),
-      'n',
-      'type'
-    );
+    const r = resolveField(completed('{"type":"BUG"}', { type: 'BUG' }, declared), 'n', 'type');
     expect(r).toEqual({ kind: 'value', value: 'BUG' });
   });
 
   it('declared-optional absent field → empty (not a throw)', () => {
-    const r = resolveNodeOutputField(
-      completed('{"type":"BUG"}', { type: 'BUG' }, declared),
-      'n',
-      'note'
-    );
+    const r = resolveField(completed('{"type":"BUG"}', { type: 'BUG' }, declared), 'n', 'note');
     expect(r).toEqual({ kind: 'empty' });
   });
 
   it('explicit null on a declared field → empty', () => {
-    const r = resolveNodeOutputField(
-      completed('{"type":null}', { type: null }, declared),
-      'n',
-      'type'
-    );
+    const r = resolveField(completed('{"type":null}', { type: null }, declared), 'n', 'type');
     expect(r).toEqual({ kind: 'empty' });
   });
 
   it('field not in the declared schema → throws not-in-schema', () => {
     expect(() =>
-      resolveNodeOutputField(completed('{"type":"BUG"}', { type: 'BUG' }, ['type']), 'n', 'tpye')
+      resolveField(completed('{"type":"BUG"}', { type: 'BUG' }, ['type']), 'n', 'tpye')
     ).toThrow(OutputRefError);
     try {
-      resolveNodeOutputField(completed('{"type":"BUG"}', { type: 'BUG' }, ['type']), 'n', 'tpye');
+      resolveField(completed('{"type":"BUG"}', { type: 'BUG' }, ['type']), 'n', 'tpye');
     } catch (e) {
       expect((e as OutputRefError).reason).toBe('not-in-schema');
     }
   });
 
   it('falls back to parsing output when structuredOutput is absent (legacy declared row)', () => {
-    const r = resolveNodeOutputField(completed('{"type":"BUG"}', undefined, ['type']), 'n', 'type');
+    const r = resolveField(completed('{"type":"BUG"}', undefined, ['type']), 'n', 'type');
     expect(r).toEqual({ kind: 'value', value: 'BUG' });
   });
 
@@ -300,9 +293,9 @@ describe('resolveNodeOutputField — declared-schema producer', () => {
   // validated) silently turned every declared field into ''.
   it('unparseable output → throws, exactly like the schemaless path (#2456)', () => {
     const broken = completed('I could not produce JSON, sorry.', undefined, declared);
-    expect(() => resolveNodeOutputField(broken, 'n', 'type')).toThrow(OutputRefError);
+    expect(() => resolveField(broken, 'n', 'type')).toThrow(OutputRefError);
     try {
-      resolveNodeOutputField(broken, 'n', 'type');
+      resolveField(broken, 'n', 'type');
     } catch (e) {
       expect((e as OutputRefError).reason).toBe('unparseable');
     }
@@ -310,9 +303,8 @@ describe('resolveNodeOutputField — declared-schema producer', () => {
 
   it('declaring a schema is never quieter than declaring none (#2456)', () => {
     const text = 'not json at all';
-    const withSchema = (): unknown =>
-      resolveNodeOutputField(completed(text, undefined, ['f']), 'n', 'f');
-    const withoutSchema = (): unknown => resolveNodeOutputField(completed(text), 'n', 'f');
+    const withSchema = (): unknown => resolveField(completed(text, undefined, ['f']), 'n', 'f');
+    const withoutSchema = (): unknown => resolveField(completed(text), 'n', 'f');
     // Both throw, and for the same reason — that symmetry IS the contract.
     expect(withSchema).toThrow(OutputRefError);
     expect(withoutSchema).toThrow(OutputRefError);
@@ -330,7 +322,7 @@ describe('resolveNodeOutputField — declared-schema producer', () => {
   // The leniency that SURVIVES: a declared-optional field missing from a payload that
   // genuinely parsed. Only "no parseable object at all" changed.
   it('still lenient for a missing key inside a parsed object (#2456 scope guard)', () => {
-    const r = resolveNodeOutputField(completed('{"type":"BUG"}', undefined, declared), 'n', 'note');
+    const r = resolveField(completed('{"type":"BUG"}', undefined, declared), 'n', 'note');
     expect(r).toEqual({ kind: 'empty' });
   });
 });
@@ -352,7 +344,7 @@ describe('resolveNodeOutputField — output clipped before persistence', () => {
   it('reports truncated, not unparseable, on the declared-schema path', () => {
     const node = completed(clipped(bigPayload), undefined, ['verdict', 'blob']);
     try {
-      resolveNodeOutputField(node, 'gen', 'verdict');
+      resolveField(node, 'gen', 'verdict');
       throw new Error('expected a throw');
     } catch (e) {
       expect(e).toBeInstanceOf(OutputRefError);
@@ -362,7 +354,7 @@ describe('resolveNodeOutputField — output clipped before persistence', () => {
 
   it('reports truncated on the schemaless path too — both paths stay symmetric', () => {
     try {
-      resolveNodeOutputField(completed(clipped(bigPayload)), 'gen', 'verdict');
+      resolveField(completed(clipped(bigPayload)), 'gen', 'verdict');
       throw new Error('expected a throw');
     } catch (e) {
       expect((e as OutputRefError).reason).toBe('truncated');
@@ -374,7 +366,7 @@ describe('resolveNodeOutputField — output clipped before persistence', () => {
     // plain producer error — otherwise this branch would misdiagnose in reverse.
     const prose = 'the log said … [truncated; original output was 5 bytes] and then stopped';
     try {
-      resolveNodeOutputField(completed(prose, undefined, ['verdict']), 'gen', 'verdict');
+      resolveField(completed(prose, undefined, ['verdict']), 'gen', 'verdict');
       throw new Error('expected a throw');
     } catch (e) {
       expect((e as OutputRefError).reason).toBe('unparseable');
@@ -382,7 +374,9 @@ describe('resolveNodeOutputField — output clipped before persistence', () => {
   });
 
   it('says the producer was probably right, and points at the artifacts dir', () => {
-    const err = new OutputRefError('gen', 'verdict', 'truncated');
+    const err = new OutputRefError('gen', 'verdict', 'truncated', {
+      reference: '$gen.output.verdict',
+    });
     expect(err.message).toContain('clipped');
     expect(err.message).toContain('$ARTIFACTS_DIR');
     // The old advice was actively wrong here — the node DID emit the field.
@@ -399,41 +393,41 @@ describe('resolveNodeOutputField — output clipped before persistence', () => {
 
 describe('resolveNodeOutputField — structuredOutput without a declared schema (lenient)', () => {
   it('resolves a present field', () => {
-    const r = resolveNodeOutputField(completed('prose', { type: 'BUG' }), 'n', 'type');
+    const r = resolveField(completed('prose', { type: 'BUG' }), 'n', 'type');
     expect(r).toEqual({ kind: 'value', value: 'BUG' });
   });
 
   it('absent field → empty (no throw — cannot enforce a contract we do not have)', () => {
-    const r = resolveNodeOutputField(completed('prose', { type: 'BUG' }), 'n', 'missing');
+    const r = resolveField(completed('prose', { type: 'BUG' }), 'n', 'missing');
     expect(r).toEqual({ kind: 'empty' });
   });
 
   it('present null is kept as a value (callers stringify to "null")', () => {
-    const r = resolveNodeOutputField(completed('prose', { type: null }), 'n', 'type');
+    const r = resolveField(completed('prose', { type: null }), 'n', 'type');
     expect(r).toEqual({ kind: 'value', value: null });
   });
 
   it('non-object structuredOutput falls through to the schemaless path', () => {
     // structuredOutput is an array → not a usable object → parse output instead.
-    const r = resolveNodeOutputField(completed('{"type":"BUG"}', [1, 2, 3]), 'n', 'type');
+    const r = resolveField(completed('{"type":"BUG"}', [1, 2, 3]), 'n', 'type');
     expect(r).toEqual({ kind: 'value', value: 'BUG' });
   });
 });
 
 describe('resolveNodeOutputField — schemaless producer (bash/script/prose)', () => {
   it('resolves a present key from JSON output', () => {
-    const r = resolveNodeOutputField(completed('{"status":"done"}'), 'n', 'status');
+    const r = resolveField(completed('{"status":"done"}'), 'n', 'status');
     expect(r).toEqual({ kind: 'value', value: 'done' });
   });
 
   it('strips a code fence before parsing', () => {
-    const r = resolveNodeOutputField(completed('```json\n{"status":"done"}\n```'), 'n', 'status');
+    const r = resolveField(completed('```json\n{"status":"done"}\n```'), 'n', 'status');
     expect(r).toEqual({ kind: 'value', value: 'done' });
   });
 
   it('non-JSON output → throws unparseable', () => {
     try {
-      resolveNodeOutputField(completed('just prose'), 'n', 'status');
+      resolveField(completed('just prose'), 'n', 'status');
       throw new Error('expected throw');
     } catch (e) {
       expect(e).toBeInstanceOf(OutputRefError);
@@ -443,7 +437,7 @@ describe('resolveNodeOutputField — schemaless producer (bash/script/prose)', (
 
   it('valid JSON but missing key → throws missing-key', () => {
     try {
-      resolveNodeOutputField(completed('{"status":"done"}'), 'n', 'other');
+      resolveField(completed('{"status":"done"}'), 'n', 'other');
       throw new Error('expected throw');
     } catch (e) {
       expect(e).toBeInstanceOf(OutputRefError);
@@ -452,13 +446,15 @@ describe('resolveNodeOutputField — schemaless producer (bash/script/prose)', (
   });
 
   it('top-level JSON array → throws unparseable (no named fields)', () => {
-    expect(() => resolveNodeOutputField(completed('[1,2,3]'), 'n', 'x')).toThrow(OutputRefError);
+    expect(() => resolveField(completed('[1,2,3]'), 'n', 'x')).toThrow(OutputRefError);
   });
 });
 
 describe('OutputRefError — unknown-node', () => {
   it('names the unknown id and the whole ref', () => {
-    const e = new OutputRefError('typo', 'field', 'unknown-node');
+    const e = new OutputRefError('typo', 'field', 'unknown-node', {
+      reference: '$typo.output.field',
+    });
     expect(e.reason).toBe('unknown-node');
     expect(e.message).toContain("'typo'");
     expect(e.message).toContain('$typo.output.field');
@@ -467,14 +463,20 @@ describe('OutputRefError — unknown-node', () => {
   });
 
   it('appends a did-you-mean hint when candidates are supplied', () => {
-    const e = new OutputRefError('analze', 'type', 'unknown-node', ['analyze', 'classify']);
+    const e = new OutputRefError('analze', 'type', 'unknown-node', {
+      reference: '$analze.output.type',
+      candidates: ['analyze', 'classify'],
+    });
     expect(e.message).toContain('Did you mean');
     expect(e.message).toContain("'analyze'");
     expect(e.message).toContain("'classify'");
   });
 
   it('omits the did-you-mean hint when no candidates are close', () => {
-    const e = new OutputRefError('zzz', 'field', 'unknown-node', []);
+    const e = new OutputRefError('zzz', 'field', 'unknown-node', {
+      reference: '$zzz.output.field',
+      candidates: [],
+    });
     expect(e.message).not.toContain('Did you mean');
   });
 });
@@ -502,7 +504,7 @@ describe('nested output acceptance', () => {
       field: 'proposal.action',
     });
     expect(
-      resolveNodeOutputField(
+      resolveField(
         { state: 'completed', output: '{"proposal":{"action":"add"}}' },
         'review',
         'proposal.action'
@@ -544,16 +546,16 @@ describe('nested output contract', () => {
     ]);
     expect(declaredOutputPathsFromSchema({ properties: {} })).toEqual([]);
     expect(declaredOutputPathsFromSchema({ type: 'string' })).toBeUndefined();
-    expect(() => assertDeclaredOutputPath([['a.b']], 'p', 'a.b')).toThrow("field 'a'");
+    expect(() => assertDeclaredOutputPath([['a.b']], 'p', 'a.b', '$p.output.a.b')).toThrow(
+      "field 'a'"
+    );
   });
   it('checks every prefix before accepting an absent or null optional parent', () => {
     for (const value of [{}, { proposal: null }, { proposal: {} }]) {
-      expect(resolveNodeOutputField(producer(value), 'p', 'proposal.action')).toEqual({
+      expect(resolveField(producer(value), 'p', 'proposal.action')).toEqual({
         kind: 'empty',
       });
-      expect(() => resolveNodeOutputField(producer(value), 'p', 'proposal.typo')).toThrow(
-        "field 'typo'"
-      );
+      expect(() => resolveField(producer(value), 'p', 'proposal.typo')).toThrow("field 'typo'");
     }
     for (const path of [
       'typo.action',
@@ -561,20 +563,16 @@ describe('nested output contract', () => {
       'proposal.items.length',
       'proposal.scalar.invalid',
     ]) {
-      expect(() => resolveNodeOutputField(producer({}), 'p', path)).toThrow('not declared');
+      expect(() => resolveField(producer({}), 'p', path)).toThrow('not declared');
     }
   });
   it('preserves scalar and aggregate logical values', () => {
     expect(
-      resolveNodeOutputField(
-        producer({ proposal: { details: { count: 0 } } }),
-        'p',
-        'proposal.details.count'
-      )
+      resolveField(producer({ proposal: { details: { count: 0 } } }), 'p', 'proposal.details.count')
     ).toEqual({ kind: 'value', value: 0 });
     for (const value of [false, { count: 0 }, [1, 2]]) {
       expect(
-        resolveNodeOutputField(producer({ proposal: { details: value } }), 'p', 'proposal.details')
+        resolveField(producer({ proposal: { details: value } }), 'p', 'proposal.details')
       ).toEqual({ kind: 'value', value });
     }
   });
@@ -593,10 +591,10 @@ describe('nested output contract', () => {
         output: JSON.stringify(value),
         structuredOutput: value,
       };
-      expect(() => resolveNodeOutputField(node, 'p', 'proposal.action')).toThrow(OutputRefError);
+      expect(() => resolveField(node, 'p', 'proposal.action')).toThrow(OutputRefError);
     }
     expect(
-      resolveNodeOutputField(
+      resolveField(
         { state: 'completed', output: '{"proposal":{"action":null}}' },
         'p',
         'proposal.action'

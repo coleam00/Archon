@@ -283,28 +283,33 @@ export type OutputRefErrorReason =
   | 'producer-failed'
   | 'unknown-node';
 
+export interface OutputRefErrorDetails {
+  /** The reference as the author wrote it, e.g. `$LOOP_PREV.work.output.a.b`. */
+  reference: string;
+  /** The path segment that failed, when the reason concerns one segment of a nested path. */
+  segment?: string;
+  /** Nearby known node ids for a did-you-mean hint (only used by 'unknown-node'). */
+  candidates?: readonly string[];
+}
+
 export class OutputRefError extends Error {
   constructor(
     public readonly nodeId: string,
     public readonly field: string,
     public readonly reason: OutputRefErrorReason,
-    /** Nearby known node ids for a did-you-mean hint (only used by 'unknown-node'). */
-    public readonly candidates: readonly string[] = [],
-    public readonly pathDetails?: { reference: string; segment: string }
+    details: OutputRefErrorDetails
   ) {
-    super(OutputRefError.messageFor(nodeId, field, reason, candidates, pathDetails));
+    super(OutputRefError.messageFor(nodeId, field, reason, details));
     this.name = 'OutputRefError';
   }
 
   private static messageFor(
     nodeId: string,
-    field: string,
+    pathField: string,
     reason: OutputRefErrorReason,
-    candidates: readonly string[],
-    pathDetails?: { reference: string; segment: string }
+    { reference: ref, segment, candidates = [] }: OutputRefErrorDetails
   ): string {
-    const ref = pathDetails?.reference ?? `$${nodeId}.output.${field}`;
-    field = pathDetails?.segment ?? field;
+    const field = segment ?? pathField;
     switch (reason) {
       case 'not-in-schema':
         return `'${ref}' references field '${field}', which is not declared in node '${nodeId}'s output_format schema. Add '${field}' to the schema (and mark it optional if it can be absent), or fix the reference.`;
@@ -419,7 +424,7 @@ export function assertDeclaredOutputPath(
   paths: DeclaredOutputPaths,
   nodeId: string,
   field: string,
-  reference = `$${nodeId}.output.${field}`
+  reference: string
 ): void {
   const segments = field.split('.');
   for (let depth = 1; depth <= segments.length; depth++) {
@@ -428,7 +433,7 @@ export function assertDeclaredOutputPath(
         path => path.length === depth && path.every((segment, index) => segment === segments[index])
       )
     ) {
-      throw new OutputRefError(nodeId, field, 'not-in-schema', [], {
+      throw new OutputRefError(nodeId, field, 'not-in-schema', {
         reference,
         segment: segments[depth - 1],
       });
@@ -489,20 +494,14 @@ export function resolveNodeOutputField(
   nodeOutput: NodeOutput,
   nodeId: string,
   field: string,
-  reference = `$${nodeId}.output.${field}`
+  reference: string
 ): FieldResolution {
   // A producer that did not run (skipped) or has not settled (pending) has no
   // output to read a field from. Surface that directly rather than letting it
   // fall through to the schemaless path and throw the misleading "not a JSON
   // object" error on its empty output.
   if (nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
-    throw new OutputRefError(
-      nodeId,
-      field,
-      'producer-not-run',
-      [],
-      field.includes('.') ? { reference, segment: field.split('.')[0] } : undefined
-    );
+    throw new OutputRefError(nodeId, field, 'producer-not-run', { reference });
   }
 
   // A failed producer never resolves a field, however JSON-shaped its leftover
@@ -511,13 +510,7 @@ export function resolveNodeOutputField(
   // as if the group had succeeded — the same class of bug #2696/#2710 fixed for
   // the `{ from, if_skipped }` binding directive.
   if (nodeOutput.state === 'failed') {
-    throw new OutputRefError(
-      nodeId,
-      field,
-      'producer-failed',
-      [],
-      field.includes('.') ? { reference, segment: field.split('.')[0] } : undefined
-    );
+    throw new OutputRefError(nodeId, field, 'producer-failed', { reference });
   }
 
   const paths = nodeOutput.declaredOutputPaths;
@@ -529,21 +522,17 @@ export function resolveNodeOutputField(
     if (paths !== undefined) assertDeclaredOutputPath(paths, nodeId, field, reference);
     let value: unknown = structuredObj ?? parseOutputObject(nodeOutput.output);
     if (value === undefined)
-      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), [], {
+      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), {
         reference,
-        segment: segments[0],
       });
     for (const segment of segments) {
       if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
       const object = asPlainObject(value);
       if (object === undefined)
-        throw new OutputRefError(nodeId, field, 'non-object-intermediate', [], {
-          reference,
-          segment,
-        });
+        throw new OutputRefError(nodeId, field, 'non-object-intermediate', { reference, segment });
       if (!Object.hasOwn(object, segment)) {
         if (paths !== undefined) return { kind: 'empty' };
-        throw new OutputRefError(nodeId, field, 'missing-key', [], { reference, segment });
+        throw new OutputRefError(nodeId, field, 'missing-key', { reference, segment });
       }
       value = object[segment];
     }
@@ -566,7 +555,7 @@ export function resolveNodeOutputField(
     // schema of its own — its declared paths are the child's `returns:` node projection
     // (#2453) — so every declared field would silently have become ''.
     if (obj === undefined) {
-      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output));
+      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), { reference });
     }
     const value = obj[field];
     // Required fields are guaranteed present (the producer validated post-parse),
@@ -590,9 +579,9 @@ export function resolveNodeOutputField(
   //    JSON carrying that key is expected; anything else is a drop they must see.
   const obj = parseOutputObject(nodeOutput.output);
   if (obj === undefined) {
-    throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output));
+    throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), { reference });
   }
-  if (!(field in obj)) throw new OutputRefError(nodeId, field, 'missing-key');
+  if (!(field in obj)) throw new OutputRefError(nodeId, field, 'missing-key', { reference });
   return { kind: 'value', value: obj[field] };
 }
 

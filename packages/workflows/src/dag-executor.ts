@@ -341,7 +341,8 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
 function wholeRefLogicalValue(
   producer: NodeOutput,
   nodeId: string,
-  field: string | undefined
+  field: string | undefined,
+  reference: string
 ): JsonValue {
   if (field === undefined) {
     assertProducerNotFailed(
@@ -358,7 +359,7 @@ function wholeRefLogicalValue(
   }
   // A failed producer's fielded form is rejected inside resolveNodeOutputField itself
   // (#2713) — the same 'producer-failed' guard as the unfielded branch above.
-  const resolution = resolveNodeOutputField(producer, nodeId, field);
+  const resolution = resolveNodeOutputField(producer, nodeId, field, reference);
   return resolution.kind === 'empty' ? '' : (resolution.value as JsonValue);
 }
 
@@ -403,15 +404,13 @@ function resolveWorkflowValue(
   if (wholeRef !== undefined) {
     const producer = ctx.nodeOutputs.get(wholeRef.nodeId);
     if (producer !== undefined) {
-      return wholeRefLogicalValue(producer, wholeRef.nodeId, wholeRef.field);
+      return wholeRefLogicalValue(producer, wholeRef.nodeId, wholeRef.field, rawValue.trim());
     }
     if (wholeRef.field !== undefined) {
-      throw new OutputRefError(
-        wholeRef.nodeId,
-        wholeRef.field,
-        'unknown-node',
-        similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys())
-      );
+      throw new OutputRefError(wholeRef.nodeId, wholeRef.field, 'unknown-node', {
+        reference: rawValue.trim(),
+        candidates: similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys()),
+      });
     }
     if (strictWholeRef) {
       const candidates = similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys());
@@ -530,7 +529,7 @@ function resolveBindingDirective(
       `failure, or guard '${consumerId}' with a 'when:' condition that excludes the ` +
       'failed branch.'
   );
-  return wholeRefLogicalValue(producer, ref.nodeId, ref.field);
+  return wholeRefLogicalValue(producer, ref.nodeId, ref.field, directive.from.trim());
 }
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -1328,12 +1327,10 @@ export function substituteNodeOutputRefs(
         // `until_bash` opts into requiredContext because empty text would become an
         // input to a completion decision rather than merely missing display text.
         if (field) {
-          const error = new OutputRefError(
-            nodeId,
-            field,
-            'unknown-node',
-            similarNodeIds(nodeId, nodeOutputs.keys())
-          );
+          const error = new OutputRefError(nodeId, field, 'unknown-node', {
+            reference: match,
+            candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
+          });
           throw requiredContext
             ? requiredOutputRefError(requiredContext, match, error.message)
             : error;
@@ -1504,13 +1501,10 @@ export function substituteLoopPrevRefs(
             // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
             // alone cannot tell a typo from a legitimate first-pass absence.
             if (field) {
-              throw new OutputRefError(
-                nodeId,
-                field,
-                'unknown-node',
-                similarNodeIds(nodeId, knownBodyIds),
-                field.includes('.') ? { reference: match, segment: field.split('.')[0] } : undefined
-              );
+              throw new OutputRefError(nodeId, field, 'unknown-node', {
+                reference: match,
+                candidates: similarNodeIds(nodeId, knownBodyIds),
+              });
             }
           } else if (directBodyIds && !directBodyIds.has(nodeId)) {
             // Known id owned by a NESTED loop_group, not this group's own body. Leave the
@@ -11298,7 +11292,12 @@ export async function executeDagWorkflow(
     const selectedOutput = nodeOutputs.get(returns);
     if (selectedOutput?.state !== 'completed') return;
 
-    const resolution = resolveNodeOutputField(selectedOutput, returns, field);
+    const resolution = resolveNodeOutputField(
+      selectedOutput,
+      returns,
+      field,
+      `$${returns}.output.${field}`
+    );
     if (resolution.kind !== 'value' || typeof resolution.value !== 'boolean') {
       throw new Error(
         `Workflow outcome_field '${field}' on returns node '${returns}' did not resolve to a boolean`
