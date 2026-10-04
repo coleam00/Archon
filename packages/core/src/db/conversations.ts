@@ -2,7 +2,7 @@
  * Database operations for conversations
  */
 import { pool, getDialect } from './connection';
-import type { Conversation } from '../types';
+import type { Codebase, Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
 import { loadConfig } from '../config/config-loader';
@@ -98,40 +98,26 @@ export async function getOrCreateConversation(
   // Use provided codebase or inherited codebase
   const finalCodebaseId = codebaseId ?? inheritedCodebaseId;
 
-  // Determine assistant type from codebase if provided (overrides inherited)
+  let projectCwd: string | undefined;
+
+  // An explicitly scoped project overrides the parent conversation provider.
   if (codebaseId) {
-    const codebase = await pool.query<{ ai_assistant_type: string }>(
-      'SELECT ai_assistant_type FROM remote_agent_codebases WHERE id = $1',
+    const codebase = await pool.query<Pick<Codebase, 'ai_assistant_type' | 'default_cwd'>>(
+      'SELECT ai_assistant_type, default_cwd FROM remote_agent_codebases WHERE id = $1',
       [codebaseId]
     );
     if (codebase.rows[0]) {
-      assistantType = codebase.rows[0].ai_assistant_type;
+      assistantType = codebase.rows[0].ai_assistant_type ?? undefined;
+      projectCwd = codebase.rows[0].default_cwd;
     }
   }
 
-  // No parent or codebase signal: resolve the configured default assistant
-  // instead of hard-defaulting to Claude (#2241). loadConfig() owns the
-  // fallback chain — explicit config (repo assistant > global defaultAssistant)
-  // > DEFAULT_AI_ASSISTANT env > first registered built-in provider. The
-  // per-user default assistant (#1998) deliberately stays OUT of this row: the
-  // orchestrator applies it per turn (userAiPrefs.defaultProvider ??
-  // conversation.ai_assistant_type), sender-first (#1982), so a personal
-  // preference is never baked into a shared conversation.
+  // Personal defaults are applied per turn, so shared conversations store only
+  // the project choice or configured default. Configuration errors must surface
+  // rather than recording a different provider that could spend on later turns.
   if (assistantType === undefined) {
-    try {
-      const config = await loadConfig();
-      assistantType = config.assistant;
-    } catch (err) {
-      // Intentional fallback: a broken config (e.g. an unregistered
-      // DEFAULT_AI_ASSISTANT value makes loadConfig throw) must not block
-      // conversation creation — the turn itself surfaces config errors.
-      getLog().warn(
-        { err: err instanceof Error ? err.message : String(err) },
-        'db.conversation_default_assistant_config_load_failed'
-      );
-    }
+    assistantType = (await loadConfig(projectCwd)).assistant;
   }
-  assistantType ??= 'claude';
 
   const created = await pool.query<Conversation>(
     'INSERT INTO remote_agent_conversations (platform_type, platform_conversation_id, ai_assistant_type, codebase_id, cwd, user_id) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',

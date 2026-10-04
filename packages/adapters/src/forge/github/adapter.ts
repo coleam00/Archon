@@ -43,7 +43,6 @@ import {
   signalWorkflowWait,
   type WorkflowEventSignalCandidate,
 } from '@archon/core/db/workflows';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { createLogger } from '@archon/paths';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
@@ -905,7 +904,6 @@ export class GitHubAdapter implements IPlatformAdapter {
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');

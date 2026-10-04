@@ -3,6 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
+import { loadConfig } from '../config/config-loader';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import {
@@ -21,13 +22,13 @@ type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
 /**
  * Format a single project for the orchestrator prompt.
  */
-export function formatProjectSection(codebase: Codebase): string {
+export async function formatProjectSection(codebase: Codebase): Promise<string> {
   let section = `### ${codebase.name}\n`;
   if (codebase.repository_url) {
     section += `- Repository: ${codebase.repository_url}\n`;
   }
   section += `- Directory: ${codebase.default_cwd}\n`;
-  section += `- AI Provider: ${codebase.ai_assistant_type}\n`;
+  section += `- AI Provider: ${codebase.ai_assistant_type ?? (await loadConfig(codebase.default_cwd)).assistant}\n`;
   return section;
 }
 
@@ -308,10 +309,10 @@ IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user
  * Build the full orchestrator system prompt.
  * Includes all registered projects, available workflows, and routing instructions.
  */
-export function buildOrchestratorPrompt(
+export async function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
   workflows: readonly PromptWorkflow[]
-): string {
+): Promise<string> {
   let prompt = `# Archon Orchestrator
 
 You are Archon, an intelligent coding assistant that manages multiple projects.
@@ -327,7 +328,7 @@ You can answer questions directly or invoke workflows for structured development
       'No projects registered yet. Ask the user to add a project or clone a repository.\n\n';
   } else {
     for (const codebase of codebases) {
-      prompt += formatProjectSection(codebase);
+      prompt += await formatProjectSection(codebase);
       prompt += '\n';
     }
   }
@@ -345,11 +346,11 @@ You can answer questions directly or invoke workflows for structured development
  * The scoped project is shown prominently; other projects are listed separately.
  * Routing rules default to the scoped project when ambiguous.
  */
-export function buildProjectScopedPrompt(
+export async function buildProjectScopedPrompt(
   scopedCodebase: Codebase,
   allCodebases: readonly Codebase[],
   workflows: readonly PromptWorkflow[]
-): string {
+): Promise<string> {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
   let prompt = `# Archon Orchestrator
@@ -362,13 +363,13 @@ This conversation is scoped to **${scopedCodebase.name}**. Use this project for 
 
 ## Active Project
 
-${formatProjectSection(scopedCodebase)}
+${await formatProjectSection(scopedCodebase)}
 `;
 
   if (otherCodebases.length > 0) {
     prompt += '## Other Registered Projects\n\n';
     for (const codebase of otherCodebases) {
-      prompt += formatProjectSection(codebase);
+      prompt += await formatProjectSection(codebase);
       prompt += '\n';
     }
   }
@@ -421,11 +422,11 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
  * appended here — the orchestrator adds it conditionally (project-scoped + non-nativeTools
  * providers) via buildRunManagementSection().
  */
-export function buildOrchestratorSystemAppend(
+export async function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
   workflows: readonly PromptWorkflow[]
-): string {
+): Promise<string> {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;

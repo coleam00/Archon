@@ -76,6 +76,7 @@ describe('codebases', () => {
       const codebaseWithoutOptional: Codebase = {
         ...mockCodebase,
         repository_url: null,
+        ai_assistant_type: null,
       };
       mockQuery.mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
 
@@ -87,38 +88,8 @@ describe('codebases', () => {
       expect(result).toEqual(codebaseWithoutOptional);
       expect(mockQuery).toHaveBeenCalledWith(
         'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-        ['test-project', null, '/workspace/test-project', null, 'claude', 'repo']
+        ['test-project', null, '/workspace/test-project', null, null, 'repo']
       );
-    });
-
-    test('defaults ai_assistant_type to claude when no env var set', async () => {
-      delete process.env.DEFAULT_AI_ASSISTANT;
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(['claude'])
-      );
-    });
-
-    test('reads DEFAULT_AI_ASSISTANT env var when ai_assistant_type omitted', async () => {
-      process.env.DEFAULT_AI_ASSISTANT = 'codex';
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([{ ...mockCodebase, ai_assistant_type: 'codex' }])
-      );
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['codex']));
-      delete process.env.DEFAULT_AI_ASSISTANT;
     });
 
     test('explicit ai_assistant_type takes priority over env var', async () => {

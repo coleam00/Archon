@@ -33,7 +33,6 @@ import {
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as userDb from '@archon/core/db/users';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGitLabUserAuthorized, verifyWebhookToken } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { GitLabWebhookEvent, GitLabIssue, GitLabMergeRequest } from './types';
@@ -582,7 +581,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       name: projectPath,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'gitlab.codebase_created');

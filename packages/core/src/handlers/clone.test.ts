@@ -111,16 +111,6 @@ mock.module('@archon/paths', () => ({
   getFolderProjectRoot: mock((slug: string) => `/home/test/.archon/workspaces/_folder/${slug}`),
 }));
 
-// ── config-loader mock ──────────────────────────────────────────────────────
-const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
-mock.module('../config/config-loader', () => ({
-  loadConfig: mockLoadConfig,
-  // Nothing here calls it, but this factory replaces the module process-wide and
-  // child-isolation-resolver.ts imports it by name — omitting it breaks that
-  // import at module-eval for anything in the same batch that pulls it in.
-  loadRepoConfig: mock(() => Promise.resolve(null)),
-}));
-
 // ── utils/commands mock ─────────────────────────────────────────────────────
 const mockFindCommandFiles = mock<typeof Commands.findCommandFiles>(() => Promise.resolve([]));
 mock.module('../utils/commands', () => ({
@@ -190,8 +180,6 @@ function clearMocks(): void {
   mockCreateProjectSourceSymlink.mockClear();
   mockEnsureProjectStructure.mockClear();
   mockFindCommandFiles.mockReset();
-  mockLoadConfig.mockReset();
-  mockLoadConfig.mockResolvedValue({ assistant: 'claude' });
   mockLogger.info.mockClear();
   mockLogger.debug.mockClear();
   mockLogger.warn.mockClear();
@@ -912,7 +900,7 @@ describe('cloneRepository', () => {
   // ── Command auto-loading ───────────────────────────────────────────────
   describe('command auto-loading', () => {
     test('loads commands when .archon/commands directory exists with markdown files', async () => {
-      // access(): .git → ENOENT (proceed to clone), everything else → success (assistant + commands)
+      // access(): .git → ENOENT (proceed to clone), everything else → success (commands)
       spyFsAccess.mockImplementation((path: string) => {
         if (typeof path === 'string' && path.endsWith('.git')) {
           return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
@@ -957,95 +945,6 @@ describe('cloneRepository', () => {
 
       expect(result.commandCount).toBe(0);
       expect(mockUpdateCodebaseCommands.mock.calls.length).toBe(0);
-    });
-  });
-
-  // ── Assistant type detection ───────────────────────────────────────────
-  describe('assistant type detection', () => {
-    test('detects codex assistant when .codex folder exists', async () => {
-      // access(): first call is for .git (does not exist), then .codex (exists), then command search
-      let callIndex = 0;
-      spyFsAccess.mockImplementation((path: string) => {
-        if (typeof path === 'string' && path.endsWith('.codex')) {
-          return Promise.resolve(undefined);
-        }
-        if (typeof path === 'string' && path.endsWith('.git')) {
-          callIndex++;
-          // First call is the .git existence check (must REJECT to proceed to clone)
-          if (callIndex === 1)
-            return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-        }
-        return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      });
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'codex' }) as ReturnType<typeof makeCodebase>
-      );
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      const createCall = mockCreateCodebase.mock.calls[0] as [
-        {
-          name: string;
-          ai_assistant_type: string;
-        },
-      ];
-      expect(createCall[0].ai_assistant_type).toBe('codex');
-    });
-
-    test('defaults to claude when neither .codex nor .claude folder exists', async () => {
-      spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
-      );
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
-      expect(createCall[0].ai_assistant_type).toBe('claude');
-    });
-
-    test('uses configured provider when no .codex or .claude folder exists', async () => {
-      mockLoadConfig.mockResolvedValue({ assistant: 'pi' });
-      spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'pi' }) as ReturnType<typeof makeCodebase>
-      );
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
-      expect(createCall[0].ai_assistant_type).toBe('pi');
-    });
-
-    test('falls back to claude when loadConfig fails', async () => {
-      mockLoadConfig.mockRejectedValue(new Error('config load failed'));
-      spyFsAccess.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
-      );
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
-      expect(createCall[0].ai_assistant_type).toBe('claude');
-    });
-
-    test('detects claude assistant when .claude folder exists but .codex does not', async () => {
-      spyFsAccess.mockImplementation((path: string) => {
-        // .codex → ENOENT, .claude → exists, .git → ENOENT, commands → ENOENT
-        if (typeof path === 'string' && path.endsWith('.claude')) {
-          return Promise.resolve(undefined);
-        }
-        return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-      });
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ ai_assistant_type: 'claude' }) as ReturnType<typeof makeCodebase>
-      );
-
-      await cloneRepository('https://github.com/owner/repo');
-
-      const createCall = mockCreateCodebase.mock.calls[0] as [{ ai_assistant_type: string }];
-      expect(createCall[0].ai_assistant_type).toBe('claude');
     });
   });
 });

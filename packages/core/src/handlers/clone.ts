@@ -30,7 +30,6 @@ import {
 } from '@archon/paths';
 import { findCommandFiles } from '../utils/commands';
 import { createLogger } from '@archon/paths';
-import { resolveDefaultAssistant } from '../config/resolve-assistant';
 import { resolveGitHubTokenFromEnv } from '../github-auth/config';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -204,7 +203,6 @@ async function registerRepoAtPath(
   repositoryUrl: string | null,
   existing: Codebase | null
 ): Promise<RegisterResult> {
-  const suggestedAssistant = await resolveDefaultAssistant(targetPath);
   const detectedBranch = await detectCurrentGitBranch(targetPath);
 
   if (existing) {
@@ -268,7 +266,6 @@ async function registerRepoAtPath(
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
     default_branch: detectedBranch,
-    ai_assistant_type: suggestedAssistant,
   });
 
   // Auto-load commands if found
@@ -607,11 +604,9 @@ export async function registerFolder(localPath: string, name?: string): Promise<
   // no worktrees/ — folder projects are never git-isolated).
   await ensureFolderProjectStructure(slug);
 
-  const suggestedAssistant = await resolveDefaultAssistant(resolvedPath);
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: resolvedPath,
-    ai_assistant_type: suggestedAssistant,
     kind: 'folder',
   });
 

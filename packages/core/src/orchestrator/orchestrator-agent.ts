@@ -2406,7 +2406,7 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    let systemAppend = await buildOrchestratorSystemAppend(conversation, codebases, workflows);
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the
@@ -3353,9 +3353,6 @@ async function handleRegisterProject(
     return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
   }
 
-  // Use config default provider instead of hardcoding 'claude'
-  const config = await loadConfig();
-
   // Detect whether the path is a git repository. Non-git paths (multi-repo roots
   // or plain ops folders) register as folder projects — run-in-place, no branch.
   // findRepoRoot returns null ONLY for a definitive "not a git repository"; it
@@ -3380,7 +3377,6 @@ async function handleRegisterProject(
     name: projectName,
     default_cwd: canonicalPath,
     default_branch: detectedBranch,
-    ai_assistant_type: config.assistant,
     kind,
   });
 
