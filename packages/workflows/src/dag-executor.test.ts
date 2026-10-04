@@ -30505,6 +30505,68 @@ describe('executeDagWorkflow -- container write-back gate', () => {
   });
 });
 
+describe('executeDagWorkflow -- concurrent gate admission (#2180)', () => {
+  it('durably suspends both independent gates and presents only the selected gate', async () => {
+    const testDir = join(tmpdir(), `dag-concurrent-gates-${crypto.randomUUID()}`);
+    await mkdir(testDir, { recursive: true });
+    const run = makeWorkflowRun();
+    const store = createMockStore();
+    const trace: string[] = [];
+    store.getWorkflowRun = mock(async () => ({ ...run, metadata: { ...run.metadata } }));
+    store.getWorkflowRunStatus = mock(async () => run.status);
+    store.pauseWorkflowRun = mock(async (_id, approval, extraMetadata) => {
+      trace.push(`pause:${approval.nodeId}:${run.status}`);
+      if (run.status !== 'running') {
+        throw new Error(`Workflow run not found or not in running state (id: ${run.id})`);
+      }
+      run.status = 'paused';
+      run.metadata = { ...run.metadata, ...extraMetadata, approval: { ...approval } };
+    });
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (_conversationId, message) => {
+      trace.push(`message:${run.status}:${message}`);
+    });
+    const admitted: string[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => {
+      if (event.type === 'approval_pending' && event.runId === run.id) admitted.push(event.nodeId);
+    });
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          conversationId: 'conv-concurrent-gates',
+          cwd: testDir,
+          workflowRun: run,
+          workflow: {
+            name: 'concurrent-gates',
+            nodes: ['first', 'second'].map(id =>
+              dagNodeSchema.parse({
+                id,
+                approval: { message: `Review ${id}` },
+              })
+            ),
+          },
+        })
+      );
+      const suspended = store.createWorkflowEvent.mock.calls
+        .map(([event]) => event)
+        .filter(event => event.event_type === 'node_suspended')
+        .map(event => event.step_name);
+      // Both decisions must remain recoverable even though just one is actionable.
+      expect({ suspended, admitted, trace, metadata: run.metadata }).toMatchObject({
+        suspended: ['first', 'second'],
+        admitted: ['first'],
+      });
+      expect(trace.some(entry => entry.startsWith('message:running:⏸'))).toBe(false);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    } finally {
+      unsubscribe();
+      await removeTempTree(testDir);
+    }
+  });
+});
+
 describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () => {
   let testDir: string;
 

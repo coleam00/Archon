@@ -751,6 +751,72 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
+  it('#2180 retains both concurrent child gates behind one parent admission slot', async () => {
+    await writeWorkflow(
+      'concurrent-gated-child',
+      `
+name: concurrent-gated-child
+description: read-only governed child
+mutates_checkout: false
+nodes:
+  - id: review
+    approval:
+      message: Review child
+`
+    );
+    await writeWorkflow(
+      'concurrent-gated-parent',
+      `
+name: concurrent-gated-parent
+description: concurrent governed children
+nodes:
+  - id: first
+    workflow: concurrent-gated-child
+  - id: second
+    workflow: concurrent-gated-child
+`
+    );
+    const store = new InMemoryStore();
+    const trace: string[] = [];
+    const pause = store.pauseWorkflowRun;
+    store.pauseWorkflowRun = (id, context, extraMetadata) => {
+      const row = store.runs.get(id);
+      trace.push(`pause:${id}:${context.nodeId}:${row?.status}`);
+      if (row?.status !== 'running') {
+        return Promise.reject(
+          new Error(`Workflow run not found or not in running state (id: ${id})`)
+        );
+      }
+      return pause(id, context, extraMetadata);
+    };
+    const platform = makePlatform();
+    platform.sendMessage = mock(async (_conversationId, message) => {
+      trace.push(`message:${message}`);
+    });
+    const result = await executeWorkflow(
+      makeDeps(store),
+      platform,
+      'conv-plat',
+      cwd,
+      await discover('concurrent-gated-parent'),
+      'goal',
+      'conv-db'
+    );
+    const parent = store.runs.get(result.workflowRunId!);
+    const children = [...store.runs.values()].filter(row => row.parent_run_id === parent?.id);
+    expect(children).toHaveLength(2);
+    expect(children.map(row => row.status)).toEqual(['paused', 'paused']);
+    const suspended = store.events
+      .filter(
+        event => event.workflow_run_id === parent?.id && event.event_type === 'node_suspended'
+      )
+      .map(event => event.step_name);
+    expect({ suspended, trace, metadata: parent?.metadata }).toMatchObject({
+      suspended: ['first', 'second'],
+    });
+    expect(store.events.filter(event => event.event_type === 'approval_requested')).toHaveLength(1);
+  });
+
   it("pins a pre-change run's source settings on its row at the first resume", async () => {
     // A row written before `source_config` lived beside the digest carries only the
     // digest. The manifest holding the settings is outside that digest, so until they are
