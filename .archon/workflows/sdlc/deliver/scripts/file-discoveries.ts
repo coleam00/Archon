@@ -1,8 +1,9 @@
 /**
  * File every accepted discovery as a tracker issue, once.
  *
- * Review consolidates work it proved but that is unrelated to this change into
- * `discoveries.json`. A record nobody files is lost the moment the run ends, so
+ * Review consolidates work it proved but this change does not do (unrelated
+ * defects, a fix an operator-stated boundary stopped, a note the owner declined)
+ * into `discoveries.json`. A record nobody files is lost the moment the run ends, so
  * delivery files one issue per record, linking back to the run and the pull
  * request. Each record gains the `issue` URL it now lives at, written back as
  * soon as the issue exists, so a resumed run files nothing twice and the

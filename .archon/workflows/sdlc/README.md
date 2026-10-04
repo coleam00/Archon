@@ -84,8 +84,8 @@ forge source is for host execution: a container execution receives neither
 An agent judges and authors; the node after it performs the one public write and
 proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
 applies the resync, `publish-review` upserts the one marked review comment,
-`flip-ready` flips it out of draft, and `file-discoveries` files each unrelated
-discovery the review accepted as a tracker issue. The forge contract has no issue
+`flip-ready` flips it out of draft, and `file-discoveries` files each discovery
+the review accepted as a tracker issue. The forge contract has no issue
 operation yet, so that one — like triage's labels — goes through `gh` whichever
 source the run selected. Each takes a recorded intent from the agent
 before it, writes through the selected source, and fails unless the result reads

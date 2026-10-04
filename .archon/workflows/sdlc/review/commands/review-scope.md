@@ -64,7 +64,7 @@ When a prior-report path is supplied, read it in full. The cursor is the previou
 
 Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
-1. **Accepted contract** — the source you read it from (the originating contract, and the work order, PR body, or requested scope/repository contracts that led there); the required outcome; then three subsections, **Acceptance**, **Invariants**, and **Steering**, each holding its numbered quoted items or the sentence that the contract states none of that kind or that its items could not be read; then explicit non-goals or boundaries and any recorded narrowing.
+1. **Accepted contract** — the source you read it from (the originating contract, and the work order, PR body, or requested scope/repository contracts that led there); the required outcome; then three subsections, **Acceptance**, **Invariants**, and **Steering**, each holding its numbered quoted items or the sentence that the contract states none of that kind or that its items could not be read; then explicit non-goals or boundaries, each naming its source — the operator's originating contract, or the derived document that inferred it — and any recorded narrowing.
 2. **Target** — PR reference or "working diff", base branch, and the **head SHA under review**: the commit under review, in full.
 3. **Mode** — full review, or light (delta since `<cursor>`).
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).

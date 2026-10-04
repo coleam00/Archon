@@ -51,7 +51,7 @@ When findings keep expanding across correction rounds, do not reveal one nearby 
 - **Adversarially verify before accepting**: for each blocking finding, check its cited `file:line` evidence yourself and run the smallest falsifying command when practical. Invoke it the way this repository documents its own commands — the package scripts and invocation rules its steering files name, never an ad-hoc variant one of them warns against — and treat an environment-dependent failure as suspect until you reproduce it that documented way. Record a disproved finding with the reason rather than silently dropping it.
 - Assign stable IDs (`R1`, `R2`, …).
 - Label every finding by the severity rule below, whichever lens raised it and whatever the lens said about it.
-- Judge findings against scope.md's accepted contract. A defect that touches the change — on its path, made reachable or visible by it, or a claim it makes false — is a finding, labelled by the severity rule below, even when the contract never named it; only work unrelated to the change is a discovery. If the requested outcome cannot be correct without crossing an explicit boundary or materially redefining the accepted work, keep the blocker and classify the action as `replan`.
+- Judge findings against scope.md's accepted contract. A defect that touches the change — on its path, made reachable or visible by it, or a claim it makes false — is a finding, labelled by the severity rule below, even when the contract never named it; work unrelated to the change is a discovery, as is a fix an operator-stated boundary stops (see Severity). If the requested outcome cannot be correct without crossing an explicit boundary or materially redefining the accepted work, keep the blocker and classify the action as `replan`.
 
 ## Severity
 
@@ -68,11 +68,13 @@ A finding is **blocking** when merging would leave something wrong, untrue, undo
 
 Unneeded and doubly owned block only when the smaller shape preserves behavior and the evidence proves it; one nobody could falsify is a note.
 
+Scope does not demote them. An unneeded or doubly owned finding on the touched path — the code the change edits, or structure it extends — stays blocking when its fix reaches a file outside the scope the work order lists. Only a boundary the operator stated in the originating contract can stop that fix; a boundary a plan, triage, or work order inferred cannot. When an operator-stated boundary does stop it, the finding becomes a `scope_conflict` discovery, which delivery files as an issue, never a note the owner can quietly decline.
+
 A **note** is a real, evidence-backed improvement that fails that test: a smaller shape that changes observable behavior or could not be falsified, a speculative one, small local duplication the project's own documents allow, naming and wording, test-local tidying, tests or docs beyond what the change adds or claims. A note never blocks.
 
 Not a finding at all: taste the project's own documents do not back, defense against a failure with no named reachable path, and pre-existing work the change did not touch, which is a discovery.
 
-**Declining.** The owner judges every finding: fixes it, declines it, or names it unrelated to the change. A note may be declined for any stated reason; record it `declined`. A blocking finding may be declined only with evidence that it is not a finding — it is wrong, already satisfied, or its smaller shape changes behavior — which you record as `disproved` when the evidence holds. Taste is never a reason to decline a blocking finding: a finding of one of the kinds above is not taste. When fixing a blocking finding would cross an explicit boundary, the answer is `replan`, not a decline.
+**Declining.** The owner judges every finding: fixes it, declines it, or names it unrelated to the change. A note may be declined for any stated reason; record it `declined`. A note declined as out of scope, unrelated, or because of a boundary is also preserved as a discovery. A blocking finding may be declined only with evidence that it is not a finding — it is wrong, already satisfied, or its smaller shape changes behavior — which you record as `disproved` when the evidence holds. Taste is never a reason to decline a blocking finding: a finding of one of the kinds above is not taste. When fixing a blocking finding would cross an explicit boundary — one the operator stated in the originating contract — the answer is `replan`, not a decline; an unneeded or doubly owned finding becomes a `scope_conflict` discovery instead, as above.
 
 ## Complete a proved causal class
 
@@ -96,7 +98,7 @@ When scope.md says the contract states no acceptance, invariants, or steering, t
 
 ## Consolidate discoveries
 
-Validate each raw discovery against its cited evidence. Reject unsupported or speculative entries. A record that touches the change is not a discovery: raise it as a finding instead. Group genuine duplicates through your own judgment, preserving the source nodes and evidence.
+Validate each raw discovery against its cited evidence. Reject unsupported or speculative entries. A record that touches the change is not a discovery: raise it as a finding instead. Two records touch the change and stay discoveries: a fix an operator-stated boundary stopped, and a note the owner declined as out of scope, unrelated, or because of a boundary. Group genuine duplicates through your own judgment, preserving the source nodes and evidence.
 
 Create parent directories as needed, then write both:
 

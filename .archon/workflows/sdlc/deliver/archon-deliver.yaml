@@ -3,7 +3,7 @@ description: |
   The delivery tail, autonomous on its green path: implement the work, gate on
   green, simplify it before anything is public, open a draft PR, review it at the
   depth its risk earns, correct the findings the owner judges worth fixing, file
-  unrelated discoveries as issues, wait for checks to clear, then flip the PR
+  discoveries as issues, wait for checks to clear, then flip the PR
   ready for review. Late CI red that
   the branch did not introduce pauses for an explicit rerun and resume. There
   is no in-run approval gate — the human gate is PR review and merge on GitHub,
@@ -363,10 +363,11 @@ nodes:
       review_action: "$review.output.action"
       correction_action: { from: "$corrections.output.action", if_skipped: null }
 
-  # Unrelated work the review proved becomes tracker issues, one per record, each
-  # linking back to this run and the pull request. Off the flip's path: a failed
-  # filing never holds a delivered change back, but it does end the run failed
-  # after the flip, so the unfiled records reach the operator.
+  # Work the review proved but this change does not do becomes tracker issues,
+  # one per record, each linking back to this run and the pull request. Off the
+  # flip's path: a failed filing never holds a delivered change back, but it
+  # does end the run failed after the flip, so the unfiled records reach the
+  # operator.
   - id: file-discoveries
     script: file-discoveries
     runtime: bun
