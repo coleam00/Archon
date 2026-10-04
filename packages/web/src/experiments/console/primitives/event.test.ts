@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'bun:test';
-import { toRunEvent, countTerminalNodes, foldNodeRuns, type RunNodeState } from './event';
+import {
+  toRunEvent,
+  countTerminalNodes,
+  foldNodeRuns,
+  type RunEvent,
+  type RunNodeState,
+} from './event';
 
 type Raw = Parameters<typeof toRunEvent>[0];
 
@@ -529,12 +535,18 @@ describe('foldNodeRuns', () => {
 describe('foldNodeRuns — cost scope', () => {
   const completed = (stepName: string, data: Record<string, unknown>) =>
     toRunEvent(raw({ event_type: 'node_completed', step_name: stepName, data }));
+  // Each row is its node's only completion, so the engine reports every node completed.
+  const foldCompleted = (events: RunEvent[]) =>
+    foldNodeRuns(
+      events,
+      events.map(e => ({ node_id: e.nodeId ?? '', state: 'completed' as const }))
+    );
 
   test('a composed fan-out: only own-scope costs count, and they sum to the run total', () => {
     // Shape of the durable rows a two-item compose_fan_out writes at $0.02 per call
     // (#3657): leaves own their spend, instance terminals and the wrapper restate it.
     const runTotal = 0.04;
-    const runs = foldNodeRuns([
+    const runs = foldCompleted([
       completed('fan__0__leaf', { cost_usd: 0.02, accounting: 'node' }),
       completed('fan__1__leaf', { cost_usd: 0.02, accounting: 'node' }),
       completed('fan__0', { cost_usd: 0.02, accounting: 'instance', aggregate: true }),
@@ -556,17 +568,17 @@ describe('foldNodeRuns — cost scope', () => {
   });
 
   test('an amendment row restates its attempts', () => {
-    const [run] = foldNodeRuns([completed('build', { cost_usd: 0.05, accounting: 'amendment' })]);
+    const [run] = foldCompleted([completed('build', { cost_usd: 0.05, accounting: 'amendment' })]);
     expect(run?.costScope).toBe('total');
   });
 
   test('a row recorded before `accounting` existed reads as own spend', () => {
-    const [run] = foldNodeRuns([completed('plan', { cost_usd: 0.1 })]);
+    const [run] = foldCompleted([completed('plan', { cost_usd: 0.1 })]);
     expect(run).toMatchObject({ costUsd: 0.1, costScope: 'own' });
   });
 
   test('a row with only the older `aggregate` marker still reads as a total', () => {
-    const [run] = foldNodeRuns([completed('loop', { cost_usd: 0.3, aggregate: true })]);
+    const [run] = foldCompleted([completed('loop', { cost_usd: 0.3, aggregate: true })]);
     expect(run?.costScope).toBe('total');
   });
 });
