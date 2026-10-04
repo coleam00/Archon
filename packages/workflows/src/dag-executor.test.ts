@@ -30924,45 +30924,61 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     expect(store.completeWorkflowRun).not.toHaveBeenCalled();
   });
 
-  it('gate pause failure with the run still running stays a genuine node failure', async () => {
-    const store = createMockStore();
-    // Pause fails but the run is still 'running' (default mock) — a real store
-    // failure, not an external transition. Legacy behavior must hold: the node
-    // fails and the run is marked failed.
-    store.pauseWorkflowRun = mock(() => Promise.reject(new Error('database connection lost')));
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
+  it.each([false, true])(
+    'gate pause failure retains its cause (status unavailable: %s)',
+    async statusUnavailable => {
+      const store = createMockStore();
+      let pauseAttempted = false;
+      let statusUnreadable = statusUnavailable;
+      store.pauseWorkflowRun = mock(async () => {
+        pauseAttempted = true;
+        throw new Error('database connection lost');
+      });
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (pauseAttempted && statusUnreadable) {
+          statusUnreadable = false;
+          throw new Error('status lookup failed');
+        }
+        return 'running';
+      });
+      const mockDeps = createMockDeps(store);
+      const platform = createMockPlatform();
+      const workflowRun = makeWorkflowRun();
 
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-pause-genuine-failure',
-        cwd: testDir,
-        workflow: {
-          name: 'pause-genuine-failure',
-          nodes: [
-            {
-              id: 'review',
-              kind: 'gate',
-              message: 'Approve this plan?',
-              decisions: [{ id: 'approve' }, { id: 'reject' }],
-              captureResponse: false,
-              decisionsAuthored: false,
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform,
+          conversationId: 'conv-pause-genuine-failure',
+          cwd: testDir,
+          workflow: {
+            name: 'pause-genuine-failure',
+            nodes: [
+              {
+                id: 'review',
+                kind: 'gate',
+                message: 'Approve this plan?',
+                decisions: [{ id: 'approve' }, { id: 'reject' }],
+                captureResponse: false,
+                decisionsAuthored: false,
+              },
+            ],
+          },
+          workflowRun,
+        })
+      );
 
-    const events = (
-      store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
-    ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
-    expect(events).toContain('node_failed');
-    expect(store.failWorkflowRun).toHaveBeenCalled();
-  });
+      const events = (
+        store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+      ).mock.calls.map((c: unknown[]) => (c[0] as { event_type: string }).event_type);
+      expect(events).toContain('node_failed');
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      const failedNode = store.createWorkflowEvent.mock.calls.find(
+        ([event]) => event.event_type === 'node_failed'
+      )?.[0];
+      expect(failedNode?.data?.error).toContain('database connection lost');
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

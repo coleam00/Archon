@@ -6549,7 +6549,9 @@ async function pauseGateRespectingExternalTransition(
     admission = await deps.store.pauseWorkflowRun(runId, approvalContext, options.extraMetadata);
   } catch (error) {
     if (options.failClosed) throw error;
-    const status = await deps.store.getWorkflowRunStatus(runId);
+    const status = await deps.store.getWorkflowRunStatus(runId).catch(() => {
+      throw error;
+    });
     if (status === 'running' || status === 'paused' || status === 'pending') throw error;
     getLog().warn(
       { err: error, workflowRunId: runId, status },
