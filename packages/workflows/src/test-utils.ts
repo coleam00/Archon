@@ -15,6 +15,7 @@ import { resolveWorkflow } from './graph-plan';
 import type { CapturedSourceOwner } from './executor';
 import { readNodeRecordEvent } from './node-record-reader';
 import { nodeCostScope } from './node-record-serialization';
+import { NODE_STATE_EVENT_TYPES } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
 
 const DEFAULT_NODE = { id: 'default', command: 'test-command' };
@@ -153,12 +154,14 @@ export function inMemoryDagResumeSnapshot(
   for (const e of events) {
     if (
       e.workflow_run_id !== workflowRunId ||
-      (e.event_type !== 'node_completed' && e.event_type !== 'node_skipped_prior_success') ||
+      !NODE_STATE_EVENT_TYPES.some(type => type === e.event_type) ||
       typeof e.step_name !== 'string'
     )
       continue;
-    // A later completion supersedes an earlier one even when it carries no text output.
+    // Every later node state supersedes reusable success; only a success restores it.
     completedNodeOutputs.delete(e.step_name);
+    if (e.event_type !== 'node_completed' && e.event_type !== 'node_skipped_prior_success')
+      continue;
     if (typeof e.data?.node_output === 'string') {
       // The logical value rides beside the text (#2637), and the field contract the
       // node completed under rides beside both (#2453), read through the real reader.

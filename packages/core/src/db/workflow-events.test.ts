@@ -1384,6 +1384,10 @@ describe('workflow-events', () => {
         { step_name: 'missing', event_type: 'node_completed', data: {} },
         { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 'old' } },
         { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 7 } },
+        { step_name: 'restarted', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'restarted', event_type: 'node_started', data: {} },
+        { step_name: 'failed', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'failed', event_type: 'node_failed', data: { error: 'boom' } },
         { step_name: 'own', event_type: 'node_completed', data: typedUsage('node', 3, 0.5) },
         {
           step_name: 'rollup',
