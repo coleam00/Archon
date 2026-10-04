@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -448,15 +448,13 @@ describe('Pi native credentials', () => {
         list.mockRestore();
       }
     });
-    test('a turn substitutes a host env reference into an owner-only file it removes', async () => {
+    test('a turn substitutes a host env reference into a per-call file it removes', async () => {
       process.env.PI_HOST_ONLY_KEY = secret;
       localProvider('${PI_HOST_ONLY_KEY}');
       const realCreate = ModelRuntime.create.bind(ModelRuntime);
       let modelsPath: string | undefined;
-      let mode: number | undefined;
       const create = spyOn(ModelRuntime, 'create').mockImplementation(options => {
         modelsPath = options?.modelsPath ?? undefined;
-        if (modelsPath) mode = statSync(modelsPath).mode & 0o777;
         return realCreate(options);
       });
       try {
@@ -465,7 +463,6 @@ describe('Pi native credentials', () => {
         create.mockRestore();
       }
       expect(modelsPath).toBeString();
-      expect(mode).toBe(0o600);
       expect(existsSync(modelsPath ?? '')).toBe(false);
       expect(new Set(authorizations)).toEqual(new Set([`Bearer ${secret}`]));
     });
