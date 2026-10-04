@@ -1,38 +1,31 @@
 /**
- * Strict resolution for `$nodeId.output.field` references (no-silent-drop).
+ * Strict resolution for `$nodeId.output.<path>` references (no-silent-drop).
  *
  * Shared by both consumers — prompt/script substitution (`substituteNodeOutputRefs`
  * in dag-executor) and `when:` evaluation (`resolveOutputRef` in condition-evaluator)
  * — so the contract is identical in both.
  *
- * Nested paths authorize every prefix against `declaredOutputPaths` before reading
- * values. Declared absent/null parents resolve empty; schemaless traversal requires
- * own object properties at every segment.
- *
- * Single-field resolution table for a known producer:
- *   0. Producer's `state` is `'failed'` → THROW ('producer-failed', #2713), before any
- *      of the branches below ever run — a failed producer's leftover output is never
- *      trusted, however JSON-shaped or non-empty it looks.
- *   1. Producer HAS `declaredFields` (an `output_format` with `properties`) — enforce it:
- *        field ∈ declaredFields, value present      → value
- *        field ∈ declaredFields, value absent/null  → '' (declared-optional / explicit null)
- *        field ∉ declaredFields                      → THROW (typo / not in the contract)
- *        output is not a JSON object at all          → THROW (#2456 — a declared schema is
- *                                                      never quieter than no schema; the
- *                                                      leniency above covers a missing KEY
- *                                                      in a parsed object, not a missing object)
- *
- *   Either THROW-on-unparseable above reports reason 'truncated' instead of
- *   'unparseable' when the output carries the persistence truncation marker — same
- *   parse failure, but the producer was right and a resumed run is reading a clipped
- *   copy, so the author needs opposite advice. See utils/output-truncation.ts.
- *   2. Has a `structuredOutput` object but NO `declaredFields` (legacy rows, or a
- *      non-object schema) — prefer it, but stay LENIENT: with no declared schema we
- *      can't tell optional-absent from a typo, so:
- *        key present → value ;  key absent → '' (no throw — backward compatible)
- *   3. Schemaless (bash/script/prose) — the author wrote `.field`, so JSON with that
- *      key is expected; anything else is a drop they must see:
- *        output not a JSON object → THROW ;  key present → value ;  key absent → THROW
+ * A path is one or more object-field segments; a single field is a depth-1 path.
+ * Resolution for a known producer, in order:
+ *   1. Producer skipped or pending → THROW 'producer-not-run'.
+ *   2. Producer failed → THROW 'producer-failed' (#2713). A failed producer's leftover
+ *      output is never trusted, however JSON-shaped or non-empty it looks.
+ *   3. Producer has `declaredOutputPaths` (an `output_format` with `properties`): every
+ *      prefix of the path must be declared, else THROW 'not-in-schema' naming the first
+ *      undeclared segment.
+ *   4. Read the object: `structuredOutput` when it is an object, else the output text
+ *      parsed as JSON. No object at all → THROW 'unparseable' (#2456 — a declared schema
+ *      is never quieter than no schema). The reason is 'truncated' when the persisted
+ *      copy was clipped (see utils/output-truncation.ts) and 'array-aggregate' for a
+ *      fan-out array, because each needs different advice.
+ *   5. Walk the segments over OWN properties only:
+ *        parent is not an object                       → THROW 'non-object-intermediate'
+ *        key absent, declared contract                 → '' (declared optional)
+ *        key absent, structured payload, no contract,
+ *          single field                                → '' (legacy leniency)
+ *        key absent otherwise                          → THROW 'missing-key'
+ *        value null, declared contract                 → '' (declared optional / explicit null)
+ *        otherwise                                     → the value
  *
  * The whole-text `$node.output` form (no `.field`) is never routed through THIS
  * function — but it is no longer unconditionally lenient: every caller (#2713) now
@@ -513,76 +506,45 @@ export function resolveNodeOutputField(
     throw new OutputRefError(nodeId, field, 'producer-failed', { reference });
   }
 
+  // The declared contract authorizes the whole path before any value is read.
   const paths = nodeOutput.declaredOutputPaths;
-  const structured = 'structuredOutput' in nodeOutput ? nodeOutput.structuredOutput : undefined;
-  const structuredObj = asPlainObject(structured);
+  if (paths !== undefined) assertDeclaredOutputPath(paths, nodeId, field, reference);
 
-  const segments = field.split('.');
-  if (segments.length > 1) {
-    if (paths !== undefined) assertDeclaredOutputPath(paths, nodeId, field, reference);
-    let value: unknown = structuredObj ?? parseOutputObject(nodeOutput.output);
-    if (value === undefined)
-      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), {
-        reference,
-      });
-    for (const segment of segments) {
-      if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
-      const object = asPlainObject(value);
-      if (object === undefined)
-        throw new OutputRefError(nodeId, field, 'non-object-intermediate', { reference, segment });
-      if (!Object.hasOwn(object, segment)) {
-        if (paths !== undefined) return { kind: 'empty' };
-        throw new OutputRefError(nodeId, field, 'missing-key', { reference, segment });
-      }
-      value = object[segment];
-    }
-    if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
-    return { kind: 'value', value };
-  }
-
-  // 1. Declared-schema producer — the declared property set IS the contract.
-  if (paths !== undefined) {
-    assertDeclaredOutputPath(paths, nodeId, field, reference);
-    // Prefer the parsed payload; fall back to parsing the JSON-serialized output.
-    // The fallback covers older NodeOutput rows that predate `structuredOutput`,
-    // and resumes of runs persisted before `structured_output` rode along in
-    // `node_completed` events (#2637) — current resumes rehydrate the payload.
-    const obj = structuredObj ?? parseOutputObject(nodeOutput.output);
-    // No parseable object AT ALL is not a declared-optional field — it is a producer
-    // that did not honour its schema, and it must fail exactly as loudly as the
-    // schemaless path below (#2456). Returning empty here made declaring a contract
-    // QUIETER than declaring nothing, which is backwards: a `workflow:` node carries no
-    // schema of its own — its declared paths are the child's `returns:` node projection
-    // (#2453) — so every declared field would silently have become ''.
-    if (obj === undefined) {
-      throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), { reference });
-    }
-    const value = obj[field];
-    // Required fields are guaranteed present (the producer validated post-parse),
-    // so a missing/explicit-null value here is a declared-optional field → empty.
-    if (value === undefined || value === null) return { kind: 'empty' };
-    return { kind: 'value', value };
-  }
-
-  // 2. Structured payload without a declared schema (legacy rows / non-object
-  //    schema): prefer it, but stay lenient — with no schema we cannot tell an
-  //    optional-absent field from a typo, so an absent field is '' (not a throw).
-  //    A present null value is kept (callers stringify it to "null"), matching
-  //    the historical structuredOutput-preference behavior.
-  if (structuredObj !== undefined) {
-    const value = structuredObj[field];
-    if (value === undefined) return { kind: 'empty' };
-    return { kind: 'value', value };
-  }
-
-  // 3. Schemaless producer (bash/script/prose). The author wrote `.field`, so
-  //    JSON carrying that key is expected; anything else is a drop they must see.
-  const obj = parseOutputObject(nodeOutput.output);
-  if (obj === undefined) {
+  // Prefer the parsed payload; fall back to parsing the JSON-serialized output. The
+  // fallback covers schemaless producers, older rows that predate `structuredOutput`,
+  // and resumes of runs persisted before `structured_output` rode along in
+  // `node_completed` events (#2637).
+  const structured = asPlainObject(nodeOutput.structuredOutput);
+  const root = structured ?? parseOutputObject(nodeOutput.output);
+  // No parseable object at all is never a declared-optional field: a declared schema
+  // must fail exactly as loudly as no schema (#2456). Otherwise a `workflow:` node,
+  // whose declared paths are the child's `returns:` projection (#2453), would turn
+  // every declared field into ''.
+  if (root === undefined) {
     throw new OutputRefError(nodeId, field, unparseableReason(nodeOutput.output), { reference });
   }
-  if (!(field in obj)) throw new OutputRefError(nodeId, field, 'missing-key', { reference });
-  return { kind: 'value', value: obj[field] };
+
+  const segments = field.split('.');
+  // Under a declared contract an absent key is a declared-optional field. A structured
+  // payload with no contract (legacy rows, an object schema without `properties`) stays
+  // lenient for a single field, because nothing tells an optional field from a typo.
+  const absentIsEmpty = paths !== undefined || (structured !== undefined && segments.length === 1);
+  let value: unknown = root;
+  for (const segment of segments) {
+    const object = asPlainObject(value);
+    if (object === undefined) {
+      throw new OutputRefError(nodeId, field, 'non-object-intermediate', { reference, segment });
+    }
+    if (!Object.hasOwn(object, segment)) {
+      if (absentIsEmpty) return { kind: 'empty' };
+      throw new OutputRefError(nodeId, field, 'missing-key', { reference, segment });
+    }
+    value = object[segment];
+    // Required fields were validated present, so a declared null is an optional value
+    // left empty, at any depth.
+    if (paths !== undefined && (value === undefined || value === null)) return { kind: 'empty' };
+  }
+  return { kind: 'value', value };
 }
 
 /**

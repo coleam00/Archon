@@ -420,6 +420,11 @@ describe('resolveNodeOutputField — schemaless producer (bash/script/prose)', (
     expect(r).toEqual({ kind: 'value', value: 'done' });
   });
 
+  it('never reads an inherited property as a key', () => {
+    expect(() => resolveField(completed('{}'), 'n', 'toString')).toThrow('has no such key');
+    expect(resolveField(completed('{}', {}), 'n', 'toString')).toEqual({ kind: 'empty' });
+  });
+
   it('strips a code fence before parsing', () => {
     const r = resolveField(completed('```json\n{"status":"done"}\n```'), 'n', 'status');
     expect(r).toEqual({ kind: 'value', value: 'done' });
