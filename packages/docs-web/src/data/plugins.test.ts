@@ -22,7 +22,7 @@ function fixture() {
   };
 }
 
-test('topic search lists independent root and nested plugins at a frozen commit', async () => {
+test('topic search includes tagged forks and lists root and nested plugins at a frozen commit', async () => {
   const { options, requests, messages } = fixture();
   const plugins = await discoverPlugins(options);
   expect(plugins.map(plugin => plugin.id)).toEqual([

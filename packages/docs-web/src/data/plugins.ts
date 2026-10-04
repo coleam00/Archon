@@ -71,7 +71,7 @@ export async function discoverPlugins({
   for (let page = 1; ; page++) {
     const result = searchSchema.parse(
       await github(
-        `/search/repositories?q=topic%3Aarchon-plugin+is%3Apublic&per_page=100&page=${page}`
+        `/search/repositories?q=topic%3Aarchon-plugin+is%3Apublic+fork%3Atrue&per_page=100&page=${page}`
       )
     );
     if (result.incomplete_results || result.total_count > 1000) {

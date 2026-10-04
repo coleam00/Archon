@@ -16,13 +16,13 @@ export const commit = 'a'.repeat(40);
 export function fixtureResponse(url) {
   const { pathname, searchParams } = new URL(url);
   if (pathname === '/search/repositories') {
-    if (searchParams.get('q') !== 'topic:archon-plugin is:public')
+    if (searchParams.get('q') !== 'topic:archon-plugin is:public fork:true')
       throw new Error('Expected topic search');
     return {
       total_count: 3,
       incomplete_results: false,
       items: [
-        { full_name: 'test-author/test-pack', default_branch: 'main', archived: false },
+        { full_name: 'test-author/test-pack', default_branch: 'main', archived: false, fork: true },
         { full_name: 'test-author/invalid-pack', default_branch: 'main', archived: false },
         { full_name: 'test-author/archived-forge', default_branch: 'main', archived: true },
       ],
