@@ -7,7 +7,6 @@ import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
-import type { resumeWorkflow } from '@archon/core/operations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
@@ -408,19 +407,6 @@ mock.module('@archon/core/utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-// The direct in-process resume fallback used when a run has no parent
-// conversation to dispatch a chat message through.
-const mockResumeWorkflow = mock<typeof resumeWorkflow>(async runId => {
-  const source =
-    runId.includes('paused') || runId.includes('auto-resume') ? MOCK_PAUSED_RUN : MOCK_FAILED_RUN;
-  return {
-    ...source,
-    id: runId,
-    conversation_id: source.conversation_id ?? 'conv-uuid-1',
-    last_activity_at: source.last_activity_at ?? null,
-    working_path: `/tmp/worktrees/${runId}`,
-  };
-});
 const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
   ok: true,
   workflow: makeTestResolvedWorkflow({ name: 'deploy' }),
@@ -436,9 +422,6 @@ mock.module('@archon/core/services/run-owner-stop', () => ({
   DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
 }));
 
-mock.module('@archon/core/operations', () => ({
-  resumeWorkflow: mockResumeWorkflow,
-}));
 mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
   resolveRunWorkflow: mockResolveRunWorkflow,
 }));
@@ -1936,7 +1919,6 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     mockGetWorkflowRun.mockReset();
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
-    mockResumeWorkflow.mockClear();
     mockResolveRunWorkflow.mockClear();
     mockHydrateResumableRun.mockClear();
     mockExecuteWorkflow.mockClear();
@@ -1966,7 +1948,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     // A CLI-launched run has no parent conversation to dispatch a chat
     // message through — it now resumes directly, in-process, instead of
     // being stranded until someone runs the CLI.
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: null,
       working_path: '/tmp/worktrees/run-uuid-4',
@@ -1990,7 +1972,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   test('returns 400 with CLI hint when the run has no parent conversation and cannot be resolved headlessly', async () => {
     // Safe degrade: the workflow source is unresolvable (e.g. deleted) —
     // falls back to the existing CLI-hint response instead of a silent 500.
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: null,
       working_path: '/tmp/worktrees/run-uuid-4',
@@ -2007,6 +1989,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('archon workflow resume run-uuid-4');
     expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockResolveRunWorkflow).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
@@ -3221,7 +3204,6 @@ describe('approve/reject auto-resume', () => {
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
     mockCancelWorkflowRun.mockReset();
-    mockResumeWorkflow.mockClear();
     mockResolveRunWorkflow.mockClear();
     mockHydrateResumableRun.mockClear();
     mockExecuteWorkflow.mockClear();

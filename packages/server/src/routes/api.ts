@@ -110,6 +110,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
+import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { findCommandFiles } from '@archon/core/utils/commands';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 
@@ -1000,12 +1001,6 @@ const resumeWorkflowRunRoute = createRoute({
   },
 });
 
-const signalWorkflowWaitBodySchema = z.object({
-  event: z.string().min(1),
-  resumeAt: z.string().datetime(),
-  payload: z.unknown().optional(),
-});
-
 const signalWorkflowWaitRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/signal',
@@ -1017,7 +1012,7 @@ const signalWorkflowWaitRoute = createRoute({
       required: true,
       content: {
         'application/json': {
-          schema: signalWorkflowWaitBodySchema,
+          schema: signalWorkflowWaitRequestSchema,
         },
       },
     },
@@ -3800,7 +3795,7 @@ export function registerApiRoutes(
 
   registerOpenApiRoute(signalWorkflowWaitRoute, async c => {
     const runId = c.req.param('runId') ?? '';
-    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitBodySchema);
+    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');

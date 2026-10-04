@@ -391,6 +391,15 @@ async function main(): Promise<number> {
       });
     }
 
+    if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
+      const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
+      const { workflowContinuationCommand } = await loadRoute(
+        () => import('./commands/workflow-continuations'),
+        { providers: !schedule, database: !schedule }
+      );
+      return await workflowContinuationCommand(subcommand, positionals.slice(2), values);
+    }
+
     const configOutsideRun = rejectConfigOutsideRun(command, subcommand, values.config);
     if (configOutsideRun) {
       console.error(configOutsideRun);
@@ -1090,7 +1099,7 @@ async function main(): Promise<number> {
                 : `Unknown workflow subcommand: ${subcommand}`;
             return await fail(
               jsonFlag,
-              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, cleanup, reset-sessions, event`
+              `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, cleanup, reset-sessions, event, wake, signal`
             );
           }
         }

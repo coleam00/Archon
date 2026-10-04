@@ -76,9 +76,6 @@
       "src/adapters/web.test.ts"
     ],
     [
-      "src/adapters/headless.test.ts"
-    ],
-    [
       "src/adapters/web/dashboard-event-poller.test.ts"
     ],
     [
@@ -132,6 +129,9 @@
     ],
     [
       "src/static-cache.test.ts"
+    ],
+    [
+      "src/services/workflow-continuation-scheduler.test.ts"
     ]
   ]
 }
