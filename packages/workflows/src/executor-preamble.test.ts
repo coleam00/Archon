@@ -94,6 +94,23 @@ import { executeWorkflow } from './executor';
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
+    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
+      throw new Error('Unexpected resolveApprovalGate');
+    }),
+    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
+      throw new Error('Unexpected resolveAndCancelApprovalGate');
+    }),
+    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
+      () => {
+        throw new Error('Unexpected cancelResumableRunsForConversation');
+      }
+    ),
+    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
+      throw new Error('Unexpected deleteWorkflowNodeSessions');
+    }),
+    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
+      throw new Error('Unexpected listWorkflowRuns');
+    }),
     getActiveWorkflowRunByPath: mock(async () => null),
     findChildRuns: mock(async () => []),
     getRunAncestry: mock(async () => []),

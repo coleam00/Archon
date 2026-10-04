@@ -160,23 +160,16 @@ import {
   isTerminalRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import {
-  approveWorkflow,
-  rejectWorkflow,
-  respondToWorkflow,
-  resumeWorkflow as resumeWorkflowOp,
-  abandonWorkflow,
-  cancelWorkflow,
   CancelRefusedError,
   ChildRunRedirectError,
   workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
-  getWorkflowStatus,
-  resetWorkflowNodeSessions,
   assertApprovable,
   assertRejectable,
   assertRespondable,
 } from '@archon/core/operations/workflow-operations';
+import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -4091,6 +4084,8 @@ export async function workflowStatusCommand(
   cwd: string,
   opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
 ): Promise<void> {
+  const { getWorkflowStatus } = createSqlWorkflowOperations();
+
   let codebase = null;
   if (!opts.all) {
     try {
@@ -5486,6 +5481,8 @@ export async function workflowResumeCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { resumeWorkflow: resumeWorkflowOp } = createSqlWorkflowOperations();
+
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
   // then let a detached child re-invoke the blocking resume and own all mutation
   // + execution, so a reaped launching shell can't wedge the run mid-resume.
@@ -5591,6 +5588,8 @@ export async function workflowAbandonCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
+  const { abandonWorkflow } = createSqlWorkflowOperations();
+
   // The container reclaim (M2) and the live-owner stop both live in the shared
   // `abandonWorkflow` op, so EVERY surface does them — the CLI reports the outcome.
   // Keeps `--json` a clean one-line contract (no reclaim text before the payload).
@@ -5663,6 +5662,8 @@ export async function workflowCancelCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
+  const { cancelWorkflow } = createSqlWorkflowOperations();
+
   const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
     const resolvedId = await resolveRunIdArg(runId, cwd);
     try {
@@ -5736,6 +5737,8 @@ export async function workflowApproveCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { approveWorkflow } = createSqlWorkflowOperations();
+
   // --detach: hand the approve AND its inline auto-resume to a detached child
   // (same argv minus --detach/--json). Handled BEFORE any state change — the
   // parent only validates read-only, so the approval is recorded exactly once,
@@ -5865,6 +5868,8 @@ export async function workflowRejectCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { rejectWorkflow } = createSqlWorkflowOperations();
+
   // --detach: hand the reject AND its inline on_reject rework to a detached child,
   // exactly as approve does. Without it, reject hosts the executor in the calling
   // shell — a reaped shell (harness task, closed terminal) leaves the run wedged
@@ -6006,6 +6011,8 @@ export async function workflowRespondCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { respondToWorkflow } = createSqlWorkflowOperations();
+
   if (decision === 'approve') return workflowApproveCommand(runId, text, json, cwd, detach);
   if (decision === 'reject') return workflowRejectCommand(runId, text, json, cwd, detach);
 
@@ -6129,6 +6136,8 @@ export async function workflowResetSessionsCommand(
   workflowName: string,
   options: { scope?: string; node?: string; yes?: boolean; json?: boolean }
 ): Promise<void> {
+  const { resetWorkflowNodeSessions } = createSqlWorkflowOperations();
+
   if (!options.scope && !options.yes) {
     throw new Error(
       `Refusing to delete every persisted session for workflow '${workflowName}' across all scopes without confirmation.\n` +

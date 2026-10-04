@@ -1,3 +1,4 @@
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
 /**
  * Orchestrator Agent - Main entry point for AI-powered message routing
  *
@@ -2486,6 +2487,7 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and

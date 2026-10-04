@@ -215,6 +215,21 @@ interface StoreEvent {
 }
 
 class InMemoryStore implements IWorkflowStore {
+  resolveApprovalGate: IWorkflowStore['resolveApprovalGate'] = () => {
+    throw new Error('Unexpected resolveApprovalGate');
+  };
+  resolveAndCancelApprovalGate: IWorkflowStore['resolveAndCancelApprovalGate'] = () => {
+    throw new Error('Unexpected resolveAndCancelApprovalGate');
+  };
+  cancelResumableRunsForConversation: IWorkflowStore['cancelResumableRunsForConversation'] = () => {
+    throw new Error('Unexpected cancelResumableRunsForConversation');
+  };
+  deleteWorkflowNodeSessions: IWorkflowStore['deleteWorkflowNodeSessions'] = () => {
+    throw new Error('Unexpected deleteWorkflowNodeSessions');
+  };
+  listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
+    throw new Error('Unexpected listWorkflowRuns');
+  };
   runs = new Map<string, WorkflowRun>();
   events: StoreEvent[] = [];
   private seq = 0;

@@ -303,3 +303,5 @@ export type {
 
 // DagWorkflow — alias kept for backward compatibility
 export type { WorkflowDefinition as DagWorkflow } from './workflow';
+
+export * from './workflow-run-listing';

@@ -714,6 +714,40 @@ async function finishStartupWindow(
   await commandPromise;
 }
 
+const { createWorkflowOperations } = await import('@archon/core/operations/workflow-operations');
+const operationWorkflowDb = await import('@archon/core/db/workflows');
+const operationSessionDb = await import('@archon/core/db/workflow-node-sessions');
+const operationIsolationDb = await import('@archon/core/db/isolation-environments');
+mock.module('@archon/core/workflows/sql-host', () => ({
+  createSqlWorkflowOperations: () =>
+    createWorkflowOperations({
+      store: {
+        getWorkflowRun: (...args) => operationWorkflowDb.getWorkflowRun(...args),
+        findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
+        getRunAncestry: (...args) => operationWorkflowDb.getRunAncestry(...args),
+        cancelWorkflowRun: (...args) => operationWorkflowDb.cancelWorkflowRun(...args),
+        resolveApprovalGate: (...args) => operationWorkflowDb.resolveApprovalGate(...args),
+        resolveAndCancelApprovalGate: (...args) =>
+          operationWorkflowDb.resolveAndCancelApprovalGate(...args),
+        cancelResumableRunsForConversation: (...args) =>
+          operationWorkflowDb.cancelResumableRunsForConversation(...args),
+        deleteWorkflowNodeSessions: (...args) =>
+          operationSessionDb.deleteWorkflowNodeSessions(...args),
+        listWorkflowRuns: (...args) => operationWorkflowDb.listDashboardRuns(...args),
+      },
+      hostStore: {
+        isolation: {
+          ...operationIsolationDb.createIsolationStore(),
+          getById: (...args) => operationIsolationDb.getById(...args),
+        },
+      },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess: () => false,
+      isRunOwnerAnswering: mockIsRunOwnerAnswering,
+      reclaimContainerEnv: mockReclaimContainerEnv,
+    }),
+}));
+
 describe('workflowListCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
   let stdoutSpy: ReturnType<typeof spyOn>;
@@ -10526,7 +10560,10 @@ describe('workflowCancelCommand', () => {
       'reclaim-container',
     ]);
     expect(mockReclaimContainerEnv).toHaveBeenCalledTimes(2);
-    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('container-env-1');
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith(
+      'container-env-1',
+      expect.objectContaining({ getById: expect.any(Function) })
+    );
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
       ok: true,
       processStopped: true,

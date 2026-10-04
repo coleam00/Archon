@@ -4,6 +4,7 @@ import { toBranchName } from '@archon/git';
 import type {
   ContainerBackend,
   IIsolationProvider,
+  IIsolationStore,
   IsolationEnvironmentRow,
 } from '@archon/isolation';
 import type { Codebase, Conversation, Session } from '../types';
@@ -193,7 +194,13 @@ mock.module('../isolation', () => ({
 }));
 const mockGetPrState = mock<typeof Isolation.getPrState>(() => Promise.resolve(NO_PR));
 const mockContainerDestroy = mock<ContainerBackend['destroy']>(() => Promise.resolve());
+const mockContainerOptions = mock(
+  (options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) => options
+);
 class MockContainerBackend {
+  constructor(options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) {
+    mockContainerOptions(options);
+  }
   destroy = mockContainerDestroy;
 }
 mock.module('@archon/isolation', () => ({
@@ -294,8 +301,28 @@ import {
   removeEnvironment,
   onConversationClosed,
   cleanupContainerEnvironments,
+  reclaimContainerEnv,
   SESSION_RETENTION_DAYS,
 } from './cleanup-service';
+
+describe('reclaimContainerEnv', () => {
+  test('uses the supplied isolation store and preserves destroy failures', async () => {
+    const store: IIsolationStore = {
+      getById: async () => null,
+      findActiveByWorkflow: async () => null,
+      create: async () => {
+        throw new Error('Unexpected create');
+      },
+      updateStatus: async () => {},
+      countActiveByCodebase: async () => 0,
+    };
+    await reclaimContainerEnv('supplied-env', store);
+    expect(mockContainerOptions.mock.calls.at(-1)?.[0].store).toBe(store);
+    expect(mockContainerDestroy).toHaveBeenLastCalledWith('supplied-env');
+    mockContainerDestroy.mockRejectedValueOnce(new Error('Docker unavailable'));
+    await expect(reclaimContainerEnv('supplied-env', store)).rejects.toThrow('Docker unavailable');
+  });
+});
 
 describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () => {
   const oldRow = makeContainerEnvironment({

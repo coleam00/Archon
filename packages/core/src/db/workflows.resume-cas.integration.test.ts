@@ -88,7 +88,27 @@ const {
   failWorkflowRun,
   WorkflowNotResumableError,
 } = await import('./workflows');
-const { approveWorkflow, rejectWorkflow } = await import('../operations/workflow-operations');
+const workflowDb = await import('./workflows');
+const { createWorkflowOperations } = await import('../operations/workflow-operations');
+const { createIsolationStore } = await import('./isolation-environments');
+const { requestDetachedRunStop } = await import('../services/run-owner-stop');
+const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
+const { approveWorkflow, rejectWorkflow } = createWorkflowOperations({
+  store: {
+    ...workflowDb,
+    listWorkflowRuns: workflowDb.listDashboardRuns,
+    deleteWorkflowNodeSessions: async () => {
+      throw new Error('Unexpected session deletion');
+    },
+  },
+  hostStore: { isolation: createIsolationStore() },
+  requestDetachedRunStop,
+  isRunOwnedByThisProcess,
+  isRunOwnerAnswering,
+  reclaimContainerEnv: async () => {
+    throw new Error('Unexpected container cleanup');
+  },
+});
 
 // workflow_runs.conversation_id is NOT NULL with an enforced FK — seed a parent.
 await db.query(

@@ -278,17 +278,12 @@ import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
-  abandonWorkflow,
   AbandonOwnerNotStoppedError,
-  cancelWorkflow,
   CancelRefusedError,
   describeAbandonOwner,
-  approveWorkflow,
-  rejectWorkflow,
-  respondToWorkflow,
   assertRespondable,
-  resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
+import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
@@ -1749,6 +1744,15 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[]
 ): void {
+  const {
+    abandonWorkflow,
+    cancelWorkflow,
+    approveWorkflow,
+    rejectWorkflow,
+    respondToWorkflow,
+    resetWorkflowNodeSessions,
+  } = createSqlWorkflowOperations();
+
   app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
 
   /**

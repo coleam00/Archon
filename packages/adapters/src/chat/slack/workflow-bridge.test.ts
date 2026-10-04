@@ -84,14 +84,19 @@ const mockGetWorkflowRun = mock<
 import { CancelRefusedError } from '@archon/core/operations/workflow-operations';
 mock.module('@archon/core', () => ({
   workflowOperations: {
-    approveWorkflow: mockApproveWorkflow,
-    rejectWorkflow: mockRejectWorkflow,
-    cancelWorkflow: mockCancelWorkflow,
     CancelRefusedError,
   },
   workflowDb: {
     getWorkflowRun: mockGetWorkflowRun,
   },
+}));
+
+mock.module('@archon/core/workflows/sql-host', () => ({
+  createSqlWorkflowOperations: () => ({
+    approveWorkflow: mockApproveWorkflow,
+    rejectWorkflow: mockRejectWorkflow,
+    cancelWorkflow: mockCancelWorkflow,
+  }),
 }));
 
 // Imports must come AFTER mock.module setup.

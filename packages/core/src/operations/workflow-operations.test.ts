@@ -16,18 +16,17 @@ import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
-import type * as WorkflowDb from '../db/workflows';
-import type * as WorkflowEventDb from '../db/workflow-events';
-import type * as WorkflowNodeSessionDb from '../db/workflow-node-sessions';
-import type * as CleanupService from '../services/cleanup-service';
+import type { IWorkflowStore } from '@archon/workflows/store';
+import type { WorkflowOperationsDeps, WorkflowOperations } from './workflow-operations';
+import type { IIsolationStore } from '@archon/isolation';
 import { createServer } from 'node:net';
 import { runLiveOwnerPath, startRunLiveOwner } from '../services/run-live-owner';
 
 // ---------------------------------------------------------------------------
-// Mock DB modules before importing the module under test
+// Supplied persistence and host effects
 // ---------------------------------------------------------------------------
 
-const mockGetWorkflowRun = mock<typeof WorkflowDb.getWorkflowRun>(() => Promise.resolve(null));
+const mockGetWorkflowRun = mock<IWorkflowStore['getWorkflowRun']>(() => Promise.resolve(null));
 const EMPTY_COUNTS = {
   all: 0,
   running: 0,
@@ -37,79 +36,43 @@ const EMPTY_COUNTS = {
   pending: 0,
   paused: 0,
 };
-const mockListDashboardRuns = mock<typeof WorkflowDb.listDashboardRuns>(() =>
+const mockListWorkflowRuns = mock<IWorkflowStore['listWorkflowRuns']>(() =>
   Promise.resolve({ runs: [], total: 0, counts: EMPTY_COUNTS })
 );
-const mockUpdateWorkflowRun = mock<typeof WorkflowDb.updateWorkflowRun>(() => Promise.resolve());
-const mockCancelWorkflowRun = mock<typeof WorkflowDb.cancelWorkflowRun>(() =>
+const mockCancelWorkflowRun = mock<IWorkflowStore['cancelWorkflowRun']>(() =>
   Promise.resolve({ cancelled: true })
 );
 const mockCancelResumableRunsForConversation = mock<
-  typeof WorkflowDb.cancelResumableRunsForConversation
+  IWorkflowStore['cancelResumableRunsForConversation']
 >(() => Promise.resolve([]));
-const mockFindChildRuns = mock<typeof WorkflowDb.findChildRuns>(() => Promise.resolve([]));
-const mockGetRunAncestry = mock<typeof WorkflowDb.getRunAncestry>(() => Promise.resolve([]));
+const mockFindChildRuns = mock<IWorkflowStore['findChildRuns']>(() => Promise.resolve([]));
+const mockGetRunAncestry = mock<IWorkflowStore['getRunAncestry']>(() => Promise.resolve([]));
 // CAS gate resolvers (#2113): default to "won the race". Tests that simulate a
 // concurrent loser override with mockResolvedValueOnce({ resolved: false }).
 // resolveApprovalGate = stay-paused resolution (approve, reject stage-rework);
 // resolveAndCancelApprovalGate = atomic resolve + cancel (reject terminal paths).
-const mockResolveApprovalGate = mock<typeof WorkflowDb.resolveApprovalGate>(() =>
+const mockResolveApprovalGate = mock<IWorkflowStore['resolveApprovalGate']>(() =>
   Promise.resolve({ resolved: true })
 );
-const mockResolveAndCancelApprovalGate = mock<typeof WorkflowDb.resolveAndCancelApprovalGate>(() =>
+const mockResolveAndCancelApprovalGate = mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() =>
   Promise.resolve({ resolved: true })
 );
 
-mock.module('../db/workflows', () => ({
-  getWorkflowRun: mockGetWorkflowRun,
-  listDashboardRuns: mockListDashboardRuns,
-  updateWorkflowRun: mockUpdateWorkflowRun,
-  cancelWorkflowRun: mockCancelWorkflowRun,
-  cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
-  findChildRuns: mockFindChildRuns,
-  getRunAncestry: mockGetRunAncestry,
-  resolveApprovalGate: mockResolveApprovalGate,
-  resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
-}));
+const mockDeleteWorkflowNodeSessions = mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() =>
+  Promise.resolve({ deleted: 0 })
+);
 
-const mockCreateWorkflowEvent = mock<typeof WorkflowEventDb.createWorkflowEvent>(() =>
+const mockReclaimContainerEnv = mock<WorkflowOperationsDeps['reclaimContainerEnv']>(() =>
   Promise.resolve()
 );
 
-mock.module('../db/workflow-events', () => ({
-  createWorkflowEvent: mockCreateWorkflowEvent,
-}));
-
-const mockDeleteWorkflowNodeSessions = mock<
-  typeof WorkflowNodeSessionDb.deleteWorkflowNodeSessions
->(() => Promise.resolve({ deleted: 0 }));
-
-mock.module('../db/workflow-node-sessions', () => ({
-  deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
-}));
-
-// abandonWorkflow lazily imports cleanup-service to reclaim a container run's
-// resources (M2). Mock it so the dynamic import doesn't pull the docker chain.
-const mockReclaimContainerEnv = mock<typeof CleanupService.reclaimContainerEnv>(() =>
-  Promise.resolve()
-);
-mock.module('../services/cleanup-service', () => ({
-  reclaimContainerEnv: mockReclaimContainerEnv,
-}));
-
-// Capture the real class before mock.module replaces the module, so the mock
-// can re-export it without a hand-declared copy that would silently drift.
-import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
+import { DetachedRunOwnerUnavailableError } from '../services/run-owner-stop';
 /** What the stop path reports when nothing listens at the run's endpoint. */
 function noOwnerAnswers(): Promise<never> {
-  return Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable'));
+  return Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable'));
 }
 const mockRequestDetachedRunStop =
   mock<typeof import('../services/run-owner-stop').requestDetachedRunStop>(noOwnerAnswers);
-mock.module('../services/run-owner-stop', () => ({
-  requestDetachedRunStop: mockRequestDetachedRunStop,
-  DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
-}));
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -125,7 +88,42 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-// Import AFTER mocks
+const {
+  createWorkflowOperations,
+  AbandonOwnerNotStoppedError,
+  CancelRefusedError,
+  describeAbandonOwner,
+  assertApprovable,
+  assertRejectable,
+  ChildRunRedirectError,
+} = await import('./workflow-operations');
+const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
+const isolationStore: IIsolationStore = {
+  getById: mock(async () => null),
+  findActiveByWorkflow: () => {
+    throw new Error('Unexpected isolation lookup');
+  },
+  create: () => {
+    throw new Error('Unexpected isolation creation');
+  },
+  updateStatus: () => {
+    throw new Error('Unexpected isolation update');
+  },
+  countActiveByCodebase: () => {
+    throw new Error('Unexpected isolation count');
+  },
+};
+const store: WorkflowOperationsDeps['store'] = {
+  getWorkflowRun: mockGetWorkflowRun,
+  listWorkflowRuns: mockListWorkflowRuns,
+  cancelWorkflowRun: mockCancelWorkflowRun,
+  cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
+  findChildRuns: mockFindChildRuns,
+  getRunAncestry: mockGetRunAncestry,
+  resolveApprovalGate: mockResolveApprovalGate,
+  resolveAndCancelApprovalGate: mockResolveAndCancelApprovalGate,
+  deleteWorkflowNodeSessions: mockDeleteWorkflowNodeSessions,
+};
 const {
   approveWorkflow,
   rejectWorkflow,
@@ -133,16 +131,17 @@ const {
   getWorkflowStatus,
   resumeWorkflow,
   abandonWorkflow,
-  AbandonOwnerNotStoppedError,
   cancelWorkflow,
-  CancelRefusedError,
-  describeAbandonOwner,
   abandonResumableRunsForConversation,
   resetWorkflowNodeSessions,
-  assertApprovable,
-  assertRejectable,
-  ChildRunRedirectError,
-} = await import('./workflow-operations');
+} = createWorkflowOperations({
+  store,
+  hostStore: { isolation: isolationStore },
+  requestDetachedRunStop: mockRequestDetachedRunStop,
+  isRunOwnedByThisProcess,
+  isRunOwnerAnswering,
+  reclaimContainerEnv: mockReclaimContainerEnv,
+});
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -204,8 +203,6 @@ describe('approveWorkflow', () => {
   beforeEach(() => {
     mockCaptureApprovalResolved.mockClear();
     mockGetWorkflowRun.mockClear();
-    mockCreateWorkflowEvent.mockClear();
-    mockUpdateWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockCancelWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockResolvedValue({ cancelled: true });
@@ -229,7 +226,6 @@ describe('approveWorkflow', () => {
 
     // Operations no longer writes events directly — node_completed + approval_received
     // ride the CAS transaction as its 3rd argument (#2146).
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
 
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
@@ -432,7 +428,6 @@ describe('approveWorkflow', () => {
     expect(result.type).toBe('interactive_loop');
 
     // Operations no longer writes events directly.
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     // Only approval_received rides the CAS — NOT node_completed (the executor
     // writes that on the real completion signal / at resume).
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -549,9 +544,7 @@ describe('approveWorkflow', () => {
     );
     // Fast-path: the in-memory read blocks before any CAS / events / telemetry
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
-    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
   });
 
   test('concurrent loser (CAS miss) writes NO events or telemetry (#2113)', async () => {
@@ -566,7 +559,6 @@ describe('approveWorkflow', () => {
 
     // The CAS was attempted (unlike the fast-path guard) but lost — no side effects.
     expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
   });
 
@@ -719,7 +711,6 @@ describe('approveWorkflow', () => {
     // Nothing resolved, nothing stamped — a fall-through here would write a bogus
     // node_completed for the workflow node and orphan the paused child.
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
   });
 
   test('an unrecognized gate type fails loudly instead of resolving as a plain approval (#2489)', async () => {
@@ -747,8 +738,6 @@ describe('rejectWorkflow', () => {
   beforeEach(() => {
     mockCaptureApprovalResolved.mockClear();
     mockGetWorkflowRun.mockClear();
-    mockCreateWorkflowEvent.mockClear();
-    mockUpdateWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
     mockResolveApprovalGate.mockClear();
     mockResolveAndCancelApprovalGate.mockClear();
@@ -821,9 +810,7 @@ describe('rejectWorkflow', () => {
     );
     // Fast-path: the in-memory read blocks before any CAS / events / cancel
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
-    expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
@@ -847,7 +834,6 @@ describe('rejectWorkflow', () => {
     );
 
     expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -1080,7 +1066,6 @@ describe('rejectWorkflow', () => {
     );
 
     expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
-    expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).not.toHaveBeenCalled();
   });
 
@@ -1585,7 +1570,7 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
 
 describe('getWorkflowStatus', () => {
   beforeEach(() => {
-    mockListDashboardRuns.mockClear();
+    mockListWorkflowRuns.mockClear();
   });
 
   test('returns running and paused runs', async () => {
@@ -1593,7 +1578,7 @@ describe('getWorkflowStatus', () => {
       makeDashboardRun({ status: 'running', active_nodes: ['plan', 'implement'] }),
       makeDashboardRun({ id: 'run-2', status: 'paused' }),
     ];
-    mockListDashboardRuns.mockResolvedValueOnce({
+    mockListWorkflowRuns.mockResolvedValueOnce({
       runs,
       total: 2,
       counts: { ...EMPTY_COUNTS, all: 2, running: 1, paused: 1 },
@@ -1603,14 +1588,14 @@ describe('getWorkflowStatus', () => {
 
     expect(result.runs).toHaveLength(2);
     expect(result.runs[0]?.active_nodes).toEqual(['plan', 'implement']);
-    expect(mockListDashboardRuns).toHaveBeenCalledWith({
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({
       status: ['running', 'paused'],
       limit: 50,
     });
   });
 
   test('passes an explicit codebase scope to the active-run query', async () => {
-    mockListDashboardRuns.mockResolvedValueOnce({
+    mockListWorkflowRuns.mockResolvedValueOnce({
       runs: [],
       total: 0,
       counts: EMPTY_COUNTS,
@@ -1618,7 +1603,7 @@ describe('getWorkflowStatus', () => {
 
     await getWorkflowStatus({ codebaseId: 'cb-project-a' });
 
-    expect(mockListDashboardRuns).toHaveBeenCalledWith({
+    expect(mockListWorkflowRuns).toHaveBeenCalledWith({
       status: ['running', 'paused'],
       limit: 50,
       codebaseId: 'cb-project-a',
@@ -1812,7 +1797,7 @@ describe('abandonWorkflow', () => {
       })
     );
     await abandonWorkflow('run-1');
-    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9');
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('env-9', isolationStore);
   });
 
   test('does not reclaim for a non-container run', async () => {
@@ -1930,7 +1915,7 @@ describe('abandonWorkflow', () => {
     test(`an owner endpoint that answered (${String(reason)}) leaves the run unchanged`, async () => {
       mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
       mockRequestDetachedRunStop.mockImplementationOnce(() =>
-        Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', reason))
+        Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', reason))
       );
 
       const error = await abandonWorkflow('run-1').then(
@@ -1979,6 +1964,76 @@ describe('abandonWorkflow', () => {
     expect(cancelled).toBe(true);
     expect(owner.kind).toBe('no_owner_answered');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
+  });
+});
+
+describe('supplied stores', () => {
+  test('two operation instances keep their run stores separate', async () => {
+    const firstRun = makePausedRun({ id: 'first' });
+    const secondRun = makePausedRun({ id: 'second' });
+    const makeOperations = (run: WorkflowRun): WorkflowOperations =>
+      createWorkflowOperations({
+        store: { ...store, getWorkflowRun: async () => run },
+        hostStore: { isolation: isolationStore },
+        requestDetachedRunStop: mockRequestDetachedRunStop,
+        isRunOwnedByThisProcess,
+        isRunOwnerAnswering,
+        reclaimContainerEnv: mockReclaimContainerEnv,
+      });
+    const first = makeOperations(firstRun);
+    const second = makeOperations(secondRun);
+    expect(await first.resumeWorkflow('first')).toBe(firstRun);
+    expect(await second.resumeWorkflow('second')).toBe(secondRun);
+    expect(await first.resumeWorkflow('first')).toBe(firstRun);
+  });
+
+  test('container cancellation reads and reclaims through the same supplied isolation store', async () => {
+    const run = makePausedRun({
+      status: 'running',
+      metadata: { isolation: 'container', isolation_env_id: 'supplied-env' },
+    });
+    const getById = mock<IIsolationStore['getById']>(async () => ({
+      id: 'supplied-env',
+      codebase_id: 'codebase',
+      workflow_type: 'task',
+      workflow_id: run.id,
+      provider: 'container',
+      working_path: '/workspace',
+      branch_name: 'task',
+      status: 'active',
+      created_at: new Date(),
+      created_by_platform: 'test',
+      created_by_user_id: null,
+      metadata: {},
+    }));
+    const isolation = { ...isolationStore, getById };
+    const cleanup = mock<WorkflowOperationsDeps['reclaimContainerEnv']>(async () => {});
+    const cancelled = mock<IWorkflowStore['cancelWorkflowRun']>(async () => ({ cancelled: true }));
+    const stop = mock(async () => {});
+    const operations = createWorkflowOperations({
+      store: {
+        ...store,
+        getWorkflowRun: async () => run,
+        findChildRuns: async () => [],
+        cancelWorkflowRun: cancelled,
+      },
+      hostStore: { isolation },
+      requestDetachedRunStop: async () => ({ pid: 42, stop, release: () => {} }),
+      isRunOwnedByThisProcess: () => false,
+      isRunOwnerAnswering: async () => false,
+      reclaimContainerEnv: cleanup,
+    });
+    const result = await operations.cancelWorkflow(run.id);
+    expect(result.kind).toBe('stopped');
+    expect(getById).toHaveBeenCalledWith('supplied-env');
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledWith('supplied-env', isolation);
+    expect(cancelled).toHaveBeenCalledTimes(1);
+
+    cleanup.mockRejectedValueOnce(new Error('Docker unavailable'));
+    cancelled.mockClear();
+    await expect(operations.cancelWorkflow(run.id)).rejects.toThrow('Docker unavailable');
+    expect(cancelled).not.toHaveBeenCalled();
   });
 });
 
@@ -2105,7 +2160,7 @@ describe('cancelWorkflow', () => {
       makePausedRun({ status: 'running', parent_run_id: 'root-run' })
     );
     mockRequestDetachedRunStop.mockImplementationOnce(() =>
-      Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', 'not_detached'))
+      Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', 'not_detached'))
     );
 
     const error = await refusal();
@@ -2186,7 +2241,7 @@ describe('cancelWorkflow', () => {
     test(`an owner endpoint that answered (${String(reason)}) is refused unchanged`, async () => {
       mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
       mockRequestDetachedRunStop.mockImplementationOnce(() =>
-        Promise.reject(new RealDetachedRunOwnerUnavailableError('run-1', 'detail', reason))
+        Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', reason))
       );
 
       const error = await refusal();
