@@ -85,7 +85,7 @@ import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-st
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
-import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
+import { createCodebaseChildResolver } from '../workflows/child-isolation-resolver';
 import { resolveWorkflowAdoption, WorkflowAdoptionError } from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
@@ -806,21 +806,12 @@ async function dispatchOrchestratorWorkflowOwned(
     );
   }
 
-  // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
-  // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
-  // codebases only — a folder project can't make worktrees, so the engine fails
-  // such a node fast (no resolver injected). Shared across every dispatch below.
-  const resolveChildIsolation =
-    codebase.kind !== 'folder'
-      ? createChildWorktreeResolver({
-          codebaseId: codebase.id,
-          codebaseName: codebase.name,
-          canonicalRepoPath: codebase.default_cwd,
-          baseBranch: codebaseBaseBranch,
-          createdByPlatform: platform.getPlatformType(),
-          createdByUserId: userId,
-        })
-      : undefined;
+  // Shared across every dispatch below.
+  const resolveChildIsolation = createCodebaseChildResolver(codebase, {
+    baseBranch: codebaseBaseBranch,
+    createdByPlatform: platform.getPlatformType(),
+    createdByUserId: userId,
+  });
 
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
   //

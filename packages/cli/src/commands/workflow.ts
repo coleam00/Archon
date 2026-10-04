@@ -75,7 +75,7 @@ import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { toHydratedTimestamp } from '@archon/core/db/timestamps';
-import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
+import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
@@ -3229,20 +3229,13 @@ async function runWorkflowWithOwnedSource(
             ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
           }
         : undefined;
-    // Per-child isolation resolver (#2121 slice 2, PR-A): built for git-repo codebases
-    // only — a folder project can't make worktrees, so a `workflow:` node requesting
-    // `isolation: 'worktree'` there fails fast in the engine (no resolver injected).
-    const resolveChildIsolation =
-      codebase && codebase.kind !== 'folder'
-        ? createChildWorktreeResolver({
-            codebaseId: codebase.id,
-            codebaseName: codebase.name,
-            canonicalRepoPath: codebase.default_cwd,
-            baseBranch: codebaseDefaultBranch,
-            createdByPlatform: 'cli',
-            createdByUserId: cliUserId,
-          })
-        : undefined;
+    const resolveChildIsolation = codebase
+      ? createCodebaseChildResolver(codebase, {
+          baseBranch: codebaseDefaultBranch,
+          createdByPlatform: 'cli',
+          createdByUserId: cliUserId,
+        })
+      : undefined;
     const commonOptions = {
       codebaseId: codebase?.id,
       source: workflowSource,
