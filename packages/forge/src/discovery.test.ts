@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, test as bunTest } from 'bun:test';
 import { link, mkdir, mkdtemp, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { removeTempTree, skipCompiledBinaryTests, testTimeout } from '@archon/paths/test-utils';
+import { removeTempTree, skipCompiledBinaryTests } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { compileDiscoveryPlugin } from './fixtures/compile-discovery-plugin';
 import { dispatchForge } from './dispatch';
@@ -16,13 +16,15 @@ let compiledFixture: string;
 const skipCompiled = skipCompiledBinaryTests();
 const test = bunTest.skipIf(skipCompiled);
 
-// One compile for the file; installing the binary under a name is a hard link. On
-// windows-latest the compile alone took 0.7-8 s, so the hook carries an explicit budget.
+// One compile for the file; installing the binary under a name is a hard link. This suite
+// starts alongside every other package's suite, and on windows-latest the hook plus the first
+// test took 6-13 s while the compile alone twice ran past the 20 s floor, so the hook gets a
+// compile-sized budget rather than the floor.
 beforeAll(async () => {
   if (skipCompiled) return;
   buildRoot = await mkdtemp(join(tmpdir(), 'forge-fixture-build-'));
   compiledFixture = compileDiscoveryPlugin(buildRoot);
-}, testTimeout(20_000));
+}, 60_000);
 
 afterAll(async () => {
   if (skipCompiled) return;

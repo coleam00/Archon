@@ -1,6 +1,7 @@
 import type { Codebase } from '../types';
 import * as codebaseDb from '../db/codebases';
 import { resolve } from 'node:path';
+import { canonicalizeProjectPath } from '@archon/paths';
 import {
   CanonicalRepoPathUnavailableError,
   getCanonicalRepoPath,
@@ -34,13 +35,16 @@ export async function findCodebaseForCheckoutPath(
   cwd: string,
   deps: CodebaseCheckoutResolverDeps = defaultDeps
 ): Promise<Codebase | null> {
+  cwd = await canonicalizeProjectPath(cwd);
   const exact = await deps.findCodebaseByDefaultCwd(cwd);
   if (exact) return exact;
 
   try {
     const canonicalCwd = await deps.getCanonicalRepoPath(cwd);
     if (canonicalCwd === cwd) return null;
-    return await deps.findCodebaseByDefaultCwd(canonicalCwd);
+    // The primary path comes from `git worktree list` (forward slashes on
+    // Windows); `default_cwd` is stored in canonical form.
+    return await deps.findCodebaseByDefaultCwd(await canonicalizeProjectPath(canonicalCwd));
   } catch (error) {
     if (!(error instanceof CanonicalRepoPathUnavailableError)) throw error;
   }

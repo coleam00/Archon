@@ -495,6 +495,8 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
 
 - `$nodeId.output` references the full output string of a completed node
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
+- Field access stops at one top-level field. `$nodeId.output.a.b` is rejected at load time;
+  flatten the producer's schema or pass `$nodeId.output.a` to a script node and inspect it there.
 - A field used in a scalar condition must resolve to a string, number, boolean, or null. A present object or array fails the gated node; expose a scalar decision field or inspect structured data in a script node.
 - `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
   run's `--input`). A name this run does not carry **fails the node** — it never quietly
@@ -576,6 +578,11 @@ Variable substitution order:
 1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
 2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
 
+In fields that substitute node output references, only one top-level field segment is
+supported. A nested reference such as `$nodeId.output.proposal.text` fails workflow
+validation. Flatten the producer's `output_format`, or pass `$nodeId.output.proposal` to a
+script node and inspect it there.
+
 A reference to a **failed** producer — fielded or whole-text — fails the node doing the
 substitution instead of splicing in the failed producer's leftover output; a `bash:`/
 `prompt:`/`command:` body must not assume a dependency succeeded just because it was
@@ -624,7 +631,7 @@ nodes:
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
 - **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
-- **Field access is strict.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
+- **Field access is strict and top-level only.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. Nested paths such as `$classify.output.details.type` fail workflow validation. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
 
 `output_format` is not AI-only, and it is not only a branching aid: it is how *any* producing node declares the shape of the value it hands downstream, including a workflow's own result. [Result contracts](#result-contracts) is the one description of that ownership — who declares a schema, what an `include:` alias and a `workflow:` sub-run each guarantee, and how a small result points at a large file.
 
@@ -1107,6 +1114,8 @@ coalescing decision ("ready if either branch said so") stays in the consuming sc
 is the YAML-coordinates / code-computes split. A skipped producer with **no**
 `if_skipped` fails the node with the
 binding, producer, and fix named — a binding never silently resolves to `''`.
+`if_skipped` is literal data, so reference-looking text there is neither substituted nor
+validated as an output reference.
 
 `if_skipped` covers a producer that completed as **skipped**, including an exec node that
 ran until an opted-in timeout. A producer that **failed** always fails the binding too,
@@ -1900,7 +1909,11 @@ Workflow JSONL `node_complete.tokens` and persisted `node_completed.data.tokens`
 `input`, `output`, and optional `cacheRead` / `cacheWrite` fields. `input` is gross prompt
 input, including cache reads and cache writes. When both cache fields are present,
 uncached input is `input - cacheRead - cacheWrite`. An absent cache field means the
-provider did not report it; `0` means the provider reported zero. Run metadata exposes the
+provider did not report it; `0` means the provider reported zero. Which rows carry the
+field at all depends on the sink: the transcript carries it only on a row that reports its
+own spend, while the persisted row carries it on every `node_completed` row except a
+`loop_group` roll-up. So a sum over `node_completed.data.tokens` counts a composed fan-out's
+scope once per level, and `data.accounting` names each row's role. Run metadata exposes the
 same totals as `total_tokens_in`, `total_tokens_out`, `total_cache_read_tokens`, and
 `total_cache_write_tokens`. A cache total sums every contributing node that reported that
 axis; when at least one node did not, the total is a **floor** and the aggregate carries
@@ -1911,19 +1924,30 @@ before this contract cannot be recovered.
 
 Read cost from `cost_usd`, not from the token counts. Because `input` is gross, pricing a
 node by hand means getting four axes and the cache rates right; `cost_usd` is the number the
-provider itself reported. JSONL `node_complete.cost_usd` and persisted
-`node_completed.data.cost_usd` carry it for a node. JSONL `workflow_complete` carries the
-successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal `workflow_error`
-carries the same aggregate when work reported usage before failure. These match run metadata
-`total_cost_usd` and `total_tokens_*`. An absent `cost_usd` means the provider reported no
-cost — Codex reports none — while `0` means it reported zero. Claude reports a session's
-running total, so Archon subtracts the total it last saw for the session a node resumes or
-forks. When that session was created by an earlier Archon process, for example before
-`archon workflow resume` or across `persist_session` invocations, the earlier total is
-unknown and the node's `cost_usd` is absent rather than over-counted. A run that spent nothing on AI,
-such as a bash-only workflow, carries no `cost_usd` rather than `0`. Successful loop nodes and
-governance nodes do not yet have complete terminal transcript-row coverage, so read usage from
-the rows that exist rather than treating an absent row as zero spend.
+provider itself reported. A row reports it as its own only when the row's `accounting` is
+`node`, and no row restates another row's spend, so summing the cost the transcript's rows
+report as their own reproduces the run's own cost. Count error rows in that sum: a retried
+attempt that already spent reports on its own `node_error` row. A row that restates spend its
+scope already reports elsewhere in the same run — a `loop_group` roll-up over its body rows, a
+composed fan-out wrapper over its instances, an instance terminal over its own leaves — omits
+both usage fields from its transcript row and names itself in `execution.accounting` instead.
+The persisted `node_completed` row keeps `cost_usd` on every row and marks a restatement with
+`data.aggregate: true`; a resume skips a marked row because its scope's own rows already
+carry that spend, except a composed-instance terminal, which the resume keeps as the
+authoritative source for its scope (#3508). JSONL `workflow_complete`
+carries the successful run's totals as `cost_usd` and `tokens`; a DAG-owned terminal
+`workflow_error` carries the same aggregate when work reported usage before failure. These
+match run metadata `total_cost_usd` and `total_tokens_*`. On a row that reports its own spend,
+an absent `cost_usd` means the provider reported no cost — Codex reports none — while `0` means
+it reported zero. On a restatement row an absent `cost_usd` means the scope's spend is on the
+rows that row names. Claude reports a session's running total, so Archon subtracts the total it
+last saw for the session a node resumes or forks. When that session was created by an earlier
+Archon process, for example before `archon workflow resume` or across `persist_session`
+invocations, the earlier total is unknown and the node's `cost_usd` is absent rather than
+over-counted. A run that spent nothing on AI, such as a bash-only workflow, carries no
+`cost_usd` rather than `0`. Governance nodes do not yet have complete terminal
+transcript-row coverage, so read usage from the rows that exist rather than treating
+an absent row as zero spend.
 
 ### Choosing the child's checkout with `isolation:`
 

@@ -231,7 +231,7 @@ function isWorkflowNode(requestOptions?: SendQueryOptions): boolean {
 function buildThreadConfig(
   codexConfig: CodexProviderDefaults,
   mcpServers: CodexConfig | undefined,
-  workflowNode: boolean
+  scoped: boolean
 ): CodexConfig {
   const config: CodexConfig = {
     sandbox_workspace_write: {
@@ -243,10 +243,9 @@ function buildThreadConfig(
   };
   if (codexConfig.webSearchMode) config.web_search = codexConfig.webSearchMode;
   if (mcpServers) config.mcp_servers = mcpServers;
-  // Workflow nodes invoke skills explicitly (`$skill-name`); the automatic catalog stays
-  // off so undeclared skills are not advertised. Direct chat keeps the user's setting.
+  // Scoped requests must not advertise ambient skills. Direct chat keeps the user's setting.
   // An older Codex ignores the key with a config warning rather than failing.
-  if (workflowNode) config.skills = { include_instructions: false };
+  if (scoped) config.skills = { include_instructions: false };
   return config;
 }
 
@@ -493,8 +492,8 @@ interface TurnRequest {
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
   /**
-   * The plugins a workflow node names, which scopes its thread to them and its declared
-   * MCP servers (`./scope`). Undefined for direct chat, which keeps the user's setup.
+   * Declared workflow plugins, or an empty list for titles. Undefined for direct chat,
+   * which keeps the user's setup. Scoped threads also restrict MCP servers (`./scope`).
    */
   nodePlugins: readonly string[] | undefined;
   hasOutputFormat: boolean;
@@ -523,7 +522,6 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   }
 
   let { threadParams } = request;
-  // Set only for a workflow node: the MCP server names its thread may run.
   let declared: string[] | undefined;
   if (nodePlugins) {
     const inventory = await readCodexInventory(connection, {
@@ -912,6 +910,7 @@ export class CodexProvider implements IAgentProvider {
     const launch = codexLaunch(requestOptions?.assistantConfig, requestOptions?.env);
     const codexConfig = launch.config;
     const model = requestOptions?.model ?? codexConfig.model;
+    const titleRequest = requestOptions?.purpose === 'title-generation';
     abortSignal?.addEventListener('abort', onAbort, { once: true });
 
     try {
@@ -921,7 +920,7 @@ export class CodexProvider implements IAgentProvider {
       const providerWarnings: ProviderWarning[] = [];
       let mcpServers: CodexConfig | undefined;
 
-      if (requestOptions?.nodeConfig?.mcp) {
+      if (!titleRequest && requestOptions?.nodeConfig?.mcp) {
         const mcpPath = requestOptions.nodeConfig.mcp;
         const { servers, serverNames, missingVars } = await loadMcpConfig(mcpPath, cwd, {
           ...process.env,
@@ -953,7 +952,11 @@ export class CodexProvider implements IAgentProvider {
       );
 
       const workflowNode = isWorkflowNode(requestOptions);
-      const nodePlugins = workflowNode ? (requestOptions?.nodeConfig?.plugins ?? []) : undefined;
+      const nodePlugins = titleRequest
+        ? []
+        : workflowNode
+          ? (requestOptions?.nodeConfig?.plugins ?? [])
+          : undefined;
       connection = AppServerConnection.start(
         binary,
         [
@@ -975,10 +978,10 @@ export class CodexProvider implements IAgentProvider {
         cwd,
         resumeSessionId,
         threadParams: {
-          sandbox: 'danger-full-access',
+          sandbox: titleRequest ? 'read-only' : 'danger-full-access',
           approvalPolicy: 'never',
           ...(model ? { model } : {}),
-          config: buildThreadConfig(codexConfig, mcpServers, workflowNode),
+          config: buildThreadConfig(codexConfig, mcpServers, nodePlugins !== undefined),
         },
         turnParams: {
           input: [

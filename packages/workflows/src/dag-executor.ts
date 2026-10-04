@@ -163,11 +163,15 @@ import {
   OutputRefError,
   similarNodeIds,
   canonicalValueText,
+  findUnsupportedNestedOutputRef,
   parseWholeOutputRef,
   parseWholeExecutionCheckoutRef,
   resolveExecutionCheckoutStart,
   parseWholeInputsRef,
   substituteInputRefs,
+  SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
+  SUPPORTED_OUTPUT_REF_SOURCE,
+  unsupportedNestedOutputRefMessage,
   type JsonValue,
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
@@ -377,6 +381,8 @@ function resolveWorkflowValue(
   strictWholeRef: boolean
 ): JsonValue {
   if (typeof rawValue !== 'string') return rawValue;
+  const nestedRef = findUnsupportedNestedOutputRef(rawValue);
+  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
   const inputsName = parseWholeInputsRef(rawValue);
   if (inputsName !== undefined) {
     const name = inputsName;
@@ -489,6 +495,8 @@ function resolveBindingDirective(
   directive: BindingDirective,
   ctx: ShellInputContext
 ): JsonValue {
+  const nestedRef = findUnsupportedNestedOutputRef(directive.from);
+  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
   const ref = parseWholeOutputRef(directive.from);
   if (ref === undefined) {
     throw new Error(
@@ -1305,8 +1313,15 @@ export function substituteNodeOutputRefs(
   artifactsDir?: string,
   requiredContext?: RequiredOutputRefContext
 ): string {
+  const nestedRef = findUnsupportedNestedOutputRef(prompt);
+  if (nestedRef) {
+    const detail = unsupportedNestedOutputRefMessage(nestedRef);
+    throw requiredContext
+      ? requiredOutputRefError(requiredContext, nestedRef.reference, detail)
+      : new Error(detail);
+  }
   return prompt.replace(
-    /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
+    new RegExp(SUPPORTED_OUTPUT_REF_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
@@ -1474,6 +1489,10 @@ export function substituteLoopPrevRefs(
   knownBodyIds?: ReadonlySet<string>,
   directBodyIds?: ReadonlySet<string>
 ): string {
+  const nestedRef = findUnsupportedNestedOutputRef(prompt, 'loop_prev');
+  if (nestedRef) {
+    throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
+  }
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
   // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
@@ -1481,7 +1500,7 @@ export function substituteLoopPrevRefs(
     return prompt;
   }
   return prompt.replace(
-    /\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
+    new RegExp(SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
       if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {

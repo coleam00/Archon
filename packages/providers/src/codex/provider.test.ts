@@ -678,6 +678,53 @@ describe('CodexProvider', () => {
     });
   });
 
+  describe('title request scope', () => {
+    test('fresh and resumed titles use empty scope and read-only, overriding node declarations', async () => {
+      for (const nodeConfig of [
+        undefined,
+        { nodeId: 'implement', plugins: ['alpha@fixture'], mcp: 'nonexistent.json' },
+      ]) {
+        const options: SendQueryOptions = { purpose: 'title-generation', nodeConfig };
+        const { provider, server } = providerWith({ configuredServers: ['posthog'] });
+        for (const resumeId of [undefined, 'existing-thread']) {
+          expect(resultOf(await run(provider, options, resumeId)).failure).toBeUndefined();
+          const method = resumeId ? 'thread/resume' : 'thread/start';
+          expect(server.processes.at(-1)?.methods).toEqual([
+            'initialize',
+            'config/read',
+            method,
+            'mcpServerStatus/list',
+            'turn/start',
+          ]);
+          expect(server.processes.at(-1)?.args).toEqual(['app-server']);
+          expect(paramsOf(server, method)).toMatchObject({
+            sandbox: 'read-only',
+            approvalPolicy: 'never',
+            config: {
+              skills: { include_instructions: false },
+              features: { apps: false, plugins: false },
+              mcp_servers: { posthog: { enabled: false } },
+            },
+          });
+        }
+      }
+    });
+
+    test('titles fail closed when inventory rejects or an undeclared server is live', async () => {
+      for (const script of [
+        {
+          errors: { 'config/read': { code: -32600, message: 'Invalid request: unknown variant' } },
+        },
+        { mcpStatusPages: [[{ name: 'posthog', pluginId: null, runtimeStatus: 'connected' }]] },
+      ] satisfies FakeTurnScript[]) {
+        const { provider, server } = providerWith(script);
+        const options: SendQueryOptions = { purpose: 'title-generation' };
+        expect(resultOf(await run(provider, options)).failure?.class).toBe('misconfigured');
+        expect(server.processes[0].methods).not.toContain('turn/start');
+      }
+    });
+  });
+
   describe('workflow node scope', () => {
     const node = { nodeConfig: { nodeId: 'implement' } } satisfies SendQueryOptions;
 

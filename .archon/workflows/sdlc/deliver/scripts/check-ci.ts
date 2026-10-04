@@ -38,7 +38,6 @@ import { emit, refuse } from '../../.shared/io.ts';
 
 /** The recorded pull request, so no read ever falls back to the ambient branch. */
 const boundPr = process.env.INPUTS_PR;
-const selected = process.env.ARCHON_SDLC_FORGE;
 
 function classify(read: CheckRead): void {
   const at = atRevision(read);
@@ -83,7 +82,7 @@ function classify(read: CheckRead): void {
 
 function probe(): void {
   const pr = parseQualifiedPr(boundPr);
-  const first = readPrChecks(pr, selected);
+  const first = readPrChecks(pr);
   if (first.units.length > 0) {
     classify(first);
     return;
@@ -96,7 +95,7 @@ function probe(): void {
   // grace interval, then skip with the reason: starting gated CI is a maintainer's
   // power, not this run's.
   Bun.sleepSync(60_000);
-  const second = readPrChecks(pr, selected);
+  const second = readPrChecks(pr);
   if (second.units.length > 0) {
     classify(second);
     return;
