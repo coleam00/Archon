@@ -75,6 +75,30 @@ describe('missing registered project directory', () => {
       expect(await readdir(root)).toEqual([]);
     }
   );
+
+  test.each([
+    ['is a regular file', 'source'],
+    ['has a regular file as an ancestor', join('source', 'repo')],
+  ])('treats a path that %s as missing', async (_shape, relativeRepoPath) => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-missing-workspace-')));
+    await writeFile(join(root, 'source'), 'not a directory');
+    const repoPath = join(root, relativeRepoPath);
+    const provider = new WorktreeProvider(() => {
+      throw new Error('config must not load for a missing project');
+    });
+    const error = await provider
+      .create({
+        codebaseId: 'cb-missing',
+        codebaseName: CODEBASE_NAME,
+        canonicalRepoPath: toRepoPath(repoPath),
+        workflowType: 'issue',
+        identifier: '1778',
+      })
+      .catch((error: unknown) => error);
+
+    expect(error).toBeInstanceOf(MissingProjectDirectoryError);
+    expect(await readdir(root)).toEqual(['source']);
+  });
 });
 
 describe('WorktreeProvider against real git', () => {
