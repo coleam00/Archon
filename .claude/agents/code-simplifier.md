@@ -37,7 +37,7 @@ Do not touch code outside scope unless it directly affects the simplification.
 ### Step 1: Identify Target Code
 
 1. Get the diff or specified files
-2. Read project guidelines (CLAUDE.md or equivalent)
+2. Read project guidelines (AGENTS.md or equivalent)
 3. Identify recently modified sections
 4. Note the original behavior to preserve
 
@@ -56,7 +56,7 @@ Do not touch code outside scope unless it directly affects the simplification.
 
 ### Step 3: Apply Project Standards
 
-Check and apply project-specific patterns from CLAUDE.md:
+Check and apply project-specific patterns from AGENTS.md:
 
 | Category | What to Standardize |
 |----------|---------------------|
