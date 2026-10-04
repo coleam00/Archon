@@ -127,9 +127,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readTokens(value: unknown): TokenUsage | null {
   if (!isRecord(value)) return null;
-  if (!('input' in value) || typeof value.input !== 'number') return null;
-  if (!('output' in value) || typeof value.output !== 'number') return null;
-  return { input: value.input, output: value.output };
+  const input = readNumberOrNull(value, 'input');
+  const output = readNumberOrNull(value, 'output');
+  return input === null || output === null ? null : { input, output };
 }
 
 function readString(obj: Record<string, unknown>, key: string): string {

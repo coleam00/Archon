@@ -215,11 +215,14 @@ describe('RunStream tool rendering', () => {
     expect(html([nodeStarted, finished], 'completed')).toContain('no result recorded');
   });
 
-  test('passes persisted completion usage to the node divider', () => {
+  test('shows completion tokens beside duration, cost, and turns in the node divider', () => {
     const completed: NodeTransitionEvent = {
       ...nodeStarted,
       id: 'n2',
       transition: 'completed',
+      durationMs: 11370,
+      costUsd: 0.04,
+      numTurns: 3,
       tokens: { input: 12000, output: 300 },
     };
     const html = renderToStaticMarkup(
@@ -235,6 +238,9 @@ describe('RunStream tool rendering', () => {
         />
       </StreamContextProvider>
     );
+    expect(html).toContain('· 00:11');
+    expect(html).toContain('· $0.04');
+    expect(html).toContain('· 3t');
     expect(html).toContain('tokens 12K in / 300 out');
   });
 
