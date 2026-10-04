@@ -13282,6 +13282,18 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     ]);
     // Workflow-level failure must propagate, not just the node event.
     expect(store.failWorkflowRun).toHaveBeenCalled();
+
+    // Each attempt reports on its own `node_error` row, so the transcript is where a
+    // reader sees both paid attempts — the durable failure row above carries only the
+    // final one. Their sum is the run total (#3508).
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const attemptRows = rows.filter(row => row.type === 'node_error' && row.step === 'only');
+    expect(attemptRows.map(row => row.cost_usd)).toEqual([0.02, 0.02]);
+    expect(
+      rows
+        .filter(row => row.type === 'node_complete' || row.type === 'node_error')
+        .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
+    ).toBeCloseTo(0.04, 10);
   });
 
   it('does NOT fail node when stream yields no assistant text but a structuredOutput is present', async () => {
@@ -17400,6 +17412,21 @@ describe('executeDagWorkflow -- cost tracking', () => {
         call => call[1] === 'loop_node.usage_cost_non_finite_ignored'
       )
     ).toBe(true);
+
+    // The loop's own terminal row carries the cumulative total once, and its
+    // per-iteration rows carry duration only (#3508). Nothing on the path restates
+    // the total, so a reader summing the transcript lands on the run total.
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const terminal = rows.find(row => row.type === 'node_complete' && row.step === 'my-loop');
+    expect(terminal?.cost_usd).toBeCloseTo(0.004, 10);
+    const iterationRows = rows.filter(
+      row =>
+        row.type === 'node_complete' &&
+        typeof row.step === 'string' &&
+        row.step.startsWith('my-loop-iteration-')
+    );
+    expect(iterationRows.length).toBe(4);
+    for (const row of iterationRows) expect(row).not.toHaveProperty('cost_usd');
   });
 });
 
@@ -17496,10 +17523,11 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
   });
 
   it('a node that fails mid-stream reports its spend in the transcript, not just the DB', async () => {
-    // #2609's worked example. Node A completes at $0.01; node B burns $0.02 and then
-    // the provider throws. The DB row has carried that $0.02 since #2654 — the JSONL
-    // failure row did not, because logNodeError had no usage parameter. The two sinks
-    // disagreeing about what a node cost is the bug.
+    // #2609's worked example. Node A completes at $0.01; a `loop_group` body burns
+    // $0.02 and then the provider throws. The DB row has carried that $0.02 since #2654
+    // — the JSONL failure row did not, because logNodeError had no usage parameter. The
+    // two sinks disagreeing about what a node cost is the bug. The body sits under a
+    // group so the failure path also has a restatement row above it to keep honest.
     let call = 0;
     mockSendQueryDag.mockImplementation(async function* () {
       call++;
@@ -17508,10 +17536,10 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
         yield { type: 'result', sessionId: 'sid-a', cost: 0.01, tokens: { input: 10, output: 1 } };
         return;
       }
-      // Node B streams, reports what it burned, and the same result chunk carries the
-      // provider's error — so the node throws with its usage already accumulated. This
-      // is the ordering that makes the bug reachable: the spend is real and the node
-      // still ends at a failure writer.
+      // The body node streams, reports what it burned, and the same result chunk carries
+      // the provider's error — so it throws with its usage already accumulated. This is
+      // the ordering that makes the bug reachable: the spend is real and the node still
+      // ends at a failure writer.
       yield { type: 'agent_message_chunk', text: 'node B got this far' };
       yield {
         type: 'result',
@@ -17537,9 +17565,21 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
           nodes: [
             { id: 'a', kind: 'agent', source: { kind: 'inline', prompt: 'Cheap work.' } },
             {
-              id: 'b',
-              kind: 'agent',
-              source: { kind: 'inline', prompt: 'Expensive work that dies.' },
+              id: 'grp',
+              kind: 'loop_group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 2,
+                fresh_context: false,
+                nodes: [
+                  {
+                    id: 'b',
+                    kind: 'agent',
+                    source: { kind: 'inline', prompt: 'Expensive work that dies.' },
+                    depends_on: [],
+                  },
+                ],
+              },
               depends_on: ['a'],
             },
           ],
@@ -17560,12 +17600,26 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
     const completeRow = rows.find(row => row.type === 'node_complete' && row.step === 'a');
     expect(completeRow?.cost_usd).toBe(0.01);
 
+    // The group's own failure row restates the body's $0.02, which that body already
+    // reported, so it reports none of its own (#3508). A failed restatement is the one
+    // a run that spent money and then died cannot afford to re-report.
+    const rollUp = rows.find(row => row.type === 'node_error' && row.step === 'grp');
+    expect(rollUp).toBeDefined();
+    expect(rollUp).not.toHaveProperty('cost_usd');
+    // Counting the error rows, not only the completed ones, is what makes this fail if a
+    // failed restatement row starts reporting again.
+    expect(
+      rows
+        .filter(row => row.type === 'node_complete' || row.type === 'node_error')
+        .reduce((total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0), 0)
+    ).toBeCloseTo(0.03, 5);
+
     // Same figure in the persisted event: the fix closes the gap between the sinks
     // rather than moving it.
     const failedEvents = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.filter(
       (c: unknown[]) => {
         const e = c[0] as { event_type: string; step_name?: string };
-        return e.event_type === 'node_failed' && e.step_name === 'b';
+        return e.event_type === 'node_failed' && e.step_name === 'grp.b';
       }
     );
     expect(failedEvents.length).toBe(1);
@@ -17574,7 +17628,8 @@ describe('executeDagWorkflow -- run usage survives every disposition', () => {
       'number'
     );
 
-    // And the run total is the money burned across both nodes.
+    // And the run total is the money burned across both nodes — the group restating the
+    // body's spend in its own result does not add to it.
     expect(runUsageWrites(store)).toEqual([
       { total_cost_usd: 0.03, total_tokens_in: 30, total_tokens_out: 3 },
     ]);
@@ -25260,11 +25315,6 @@ describe('executeDagWorkflow -- loop_group node', () => {
       ] as DagNode[],
     };
 
-    mockSendQueryDag.mockImplementationOnce(async function* () {
-      yield { type: 'agent_message_chunk', text: '{"type":"BUG"}' };
-      yield { type: 'result', sessionId: 'lg-declared-fields-sess' };
-    });
-
     await executeDagWorkflow(
       dagOptions({
         deps: mockDeps,
@@ -25510,6 +25560,26 @@ describe('executeDagWorkflow -- loop_group node', () => {
     const bodyRows = completedEvents.filter(e => e.step_name?.startsWith('paid.'));
     expect(bodyRows.length).toBeGreaterThan(0);
     for (const row of bodyRows) expect(row.data?.aggregate).toBeUndefined();
+
+    // The transcript half of the same rule (#3508): the roll-up row restates its body's
+    // spend, which those same leaves already report, so it reports none of its own and a
+    // sum of the transcript's node_complete costs equals the run total.
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const rollUpRow = rows.find(r => r.type === 'node_complete' && r.step === 'paid');
+    const bodyCompleted = rows.filter(
+      r =>
+        r.type === 'node_complete' &&
+        String((r.execution as { path?: string })?.path ?? '').startsWith('paid.')
+    );
+    expect(rollUpRow).toBeDefined();
+    expect(rollUpRow).not.toHaveProperty('cost_usd');
+    expect(bodyCompleted.length).toBeGreaterThan(0);
+    for (const row of bodyCompleted) expect(row).toHaveProperty('cost_usd');
+    expect(
+      rows
+        .filter(r => r.type === 'node_complete')
+        .reduce((total, r) => total + (typeof r.cost_usd === 'number' ? r.cost_usd : 0), 0)
+    ).toBeCloseTo(0.03, 5);
   });
 
   it('COST: accumulates token usage across loop_group iterations', async () => {
@@ -36649,6 +36719,109 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(instanceCompletions.every(e => e.data.node_output === 'DONE-a')).toBe(true);
     expect(events.some(e => e.event_type === 'node_completed' && e.step_name === 'grp')).toBe(true);
     expect(events.some(e => String(e.data.error ?? '').length > 0)).toBe(false);
+  });
+
+  it('charges each model call once: leaf node_complete costs sum to the run total (#3508)', async () => {
+    await writeBlock(
+      [
+        'name: compose-blk',
+        'description: test block',
+        'mutates_checkout: false',
+        'nodes:',
+        '  - id: work',
+        "    prompt: 'work on $INPUTS.item'",
+      ].join('\n')
+    );
+    mockGetAgentProviderDag.mockImplementation(() => ({
+      sendQuery: mockSendQueryDag,
+      getType: () => 'claude',
+      getCapabilities: mockClaudeCapabilities,
+    }));
+    let calls = 0;
+    mockSendQueryDag.mockImplementation(async function* () {
+      calls += 1;
+      yield { type: 'agent_message_chunk', text: 'done' };
+      yield {
+        type: 'result',
+        sessionId: `session-${calls}`,
+        cost: 0.02,
+        tokens: { input: 10, output: 5 },
+      };
+    });
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const workflowRun = makeWorkflowRun('compose-cost-run');
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        conversationId: 'conv-compose-cost',
+        cwd: testDir,
+        workflow: {
+          name: 'compose-parent',
+          nodes: [
+            {
+              id: 'list',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `echo '${JSON.stringify(['a', 'b'])}'`,
+            },
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              depends_on: ['list'],
+              with: { item: 'unused' },
+              fan_out: { items: '$list.output', as: 'item', max_parallel: 2, join: 'all_done' },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(calls).toBe(2);
+    const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
+    const completed = rows.filter(row => row.type === 'node_complete');
+    const leaves = completed.filter(
+      row => (row.execution as { path?: string } | undefined)?.path?.endsWith('__work') === true
+    );
+
+    // The two instance leaves are the only rows that report spend, so summing the
+    // transcript's per-node costs reproduces the run total. The wrapper and the two
+    // instance terminals restate that same spend and report none of their own.
+    const wrapperRow = completed.find(row => row.step === 'fan');
+    expect(leaves.map(row => row.cost_usd)).toEqual([0.02, 0.02]);
+    expect(wrapperRow).toBeDefined();
+    expect(wrapperRow).not.toHaveProperty('cost_usd');
+    const instanceTerminals = completed.filter(
+      row => (row.execution as { accounting?: string } | undefined)?.accounting === 'instance'
+    );
+    expect(instanceTerminals).toHaveLength(2);
+    for (const row of instanceTerminals) expect(row).not.toHaveProperty('cost_usd');
+    const reported = completed.reduce(
+      (total, row) => total + (typeof row.cost_usd === 'number' ? row.cost_usd : 0),
+      0
+    );
+    const runTotal = rows.find(row => row.type === 'workflow_complete')?.cost_usd;
+    expect(runTotal).toBe(0.04);
+    expect(reported).toBe(runTotal as number);
+    expect(runUsageWrites(store).map(write => write.total_cost_usd)).toEqual([0.04]);
+
+    // The durable rows are untouched: they still carry every number beside the
+    // `aggregate` marker, so a resumed run still balances over them. The fold skips the
+    // wrapper and treats each instance terminal as the authoritative row for its own
+    // scope, dropping that instance's inner rows. This change is reporting-only.
+    const durable = eventsOf(store).filter(e => e.event_type === 'node_completed');
+    const wrapperEvent = durable.find(e => e.step_name === 'fan');
+    expect(wrapperEvent?.data.cost_usd).toBe(0.04);
+    expect(wrapperEvent?.data.aggregate).toBe(true);
+    const instanceEvents = durable.filter(e => e.data.type === 'compose_fan_out_instance');
+    expect(instanceEvents).toHaveLength(2);
+    for (const event of instanceEvents) {
+      expect(event.data.cost_usd).toBe(0.02);
+      expect(event.data.aggregate).toBe(true);
+    }
   });
 });
 // ---------------------------------------------------------------------------

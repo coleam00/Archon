@@ -123,19 +123,22 @@ describe('node record serializers', () => {
     });
     expect(JSON.stringify(durable)).not.toContain('full runtime output');
     expect(JSON.stringify(durable)).not.toContain('sessionId');
+    // The fixture amends an already-recorded attempt, so the transcript and the emitter
+    // present no spend of its own (#3508). The durable row keeps every number beside the
+    // `aggregate` marker, and the runtime result keeps the scope total the run total reads.
     expect(serializeNodeTranscript(source)).toMatchObject({
       type: 'node_complete',
       duration_ms: 42,
-      cost_usd: 0,
-      tokens: { input: 0, output: 0 },
     });
+    expect(serializeNodeTranscript(source)).not.toHaveProperty('cost_usd');
+    expect(serializeNodeTranscript(source)).not.toHaveProperty('tokens');
     expect(serializeNodeEmitter(source)).toMatchObject({
       type: 'node_completed',
       duration: 42,
-      costUsd: 0,
       stopReason: 'end_turn',
       numTurns: 1,
     });
+    expect(serializeNodeEmitter(source)).not.toHaveProperty('costUsd');
     expect(serializeNodeOutput(source)).toMatchObject({
       state: 'completed',
       output: 'full runtime output',
@@ -144,6 +147,41 @@ describe('node record serializers', () => {
       costUsd: 0,
       loopIterations: 3,
     });
+  });
+
+  it('reports spend as a node its own only for accounting: node (#3508)', () => {
+    // The rule every sink shares, stated where a future `accounting` value is decided:
+    // a restatement reaches the durable row (marked `aggregate`) and the runtime result
+    // (which the run total reads), and nothing else.
+    for (const accounting of ['aggregate', 'instance', 'amendment'] as const) {
+      const source = { ...record(), accounting };
+      const label = `accounting: ${accounting}`;
+      const transcript = serializeNodeTranscript(source);
+      const emitter = serializeNodeEmitter(source);
+      expect({ [`${label} transcript`]: transcript && 'cost_usd' in transcript }).toEqual({
+        [`${label} transcript`]: false,
+      });
+      expect({ [`${label} emitter`]: emitter && 'costUsd' in emitter }).toEqual({
+        [`${label} emitter`]: false,
+      });
+      expect(serializeNodeStateRecord(source).data).toMatchObject({
+        aggregate: true,
+        cost_usd: 0,
+        tokens: { input: 0, output: 0 },
+      });
+      expect(serializeNodeOutput(source)).toMatchObject({
+        costUsd: 0,
+        tokens: { input: 0, output: 0 },
+      });
+    }
+
+    const source = { ...record(), accounting: 'node' as const };
+    expect(serializeNodeTranscript(source)).toMatchObject({
+      cost_usd: 0,
+      tokens: { input: 0, output: 0 },
+    });
+    expect(serializeNodeEmitter(source)).toMatchObject({ costUsd: 0 });
+    expect(serializeNodeStateRecord(source).data).not.toHaveProperty('aggregate');
   });
 
   it('names a node by its bare command name on progress surfaces and keeps the qualified reference durable', () => {
