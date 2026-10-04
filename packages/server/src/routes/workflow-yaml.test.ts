@@ -262,6 +262,35 @@ describe('serializeWorkflowPreservingText', () => {
     expect(text).toContain('# first step\r\n  - id: a');
   });
 
+  describe('a CRLF file with a quoted scalar that spans two lines', () => {
+    // Bun's parser, which the loader uses, keeps the line break of such a scalar in a CRLF
+    // file; the yaml library folds it to a space. The save has to follow the loader.
+    const crlf = [
+      'name: flow',
+      'description: "a first line long enough to be written across lines',
+      '  and a second line that follows it in the same scalar"',
+      'nodes:',
+      '  # the only step',
+      '  - id: a',
+      '    command: a',
+      '',
+    ].join('\r\n');
+    const asLoaded = (): { nodes: { command: string }[] } & Record<string, unknown> =>
+      Bun.YAML.parse(crlf) as { nodes: { command: string }[] } & Record<string, unknown>;
+
+    test('is left byte-for-byte as it was when nothing changed', () => {
+      expect(serializeWorkflowPreservingText(asLoaded(), crlf)).toBe(crlf);
+    });
+
+    test('still reads back as sent after an edit elsewhere', () => {
+      const edited = asLoaded();
+      edited.nodes[0].command = 'b';
+      const text = serializeWorkflowPreservingText(edited, crlf);
+      expect(Bun.YAML.parse(text)).toEqual(edited);
+      expect(text).toContain('# the only step');
+    });
+  });
+
   test('a long single-line value is not folded', () => {
     const long = 'word '.repeat(40).trim();
     const text = serializeWorkflowPreservingText({ name: 'x', description: long }, 'name: x\n');
