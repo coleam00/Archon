@@ -240,6 +240,13 @@ describe('workspaces root in the prompt', () => {
       root: join('/srv', 'archon-data', 'workspaces'),
     },
     { install: 'Docker', env: { ARCHON_DOCKER: 'true' }, root: join('/.archon', 'workspaces') },
+    {
+      // A Windows home such as C:\Users\Jane Doe puts a space in the root, so the
+      // clone destination must stay one shell word.
+      install: 'ARCHON_HOME with a space',
+      env: { ARCHON_HOME: join('/srv', 'archon data') },
+      root: join('/srv', 'archon data', 'workspaces'),
+    },
   ])('$install: every prompt names the runtime root', ({ env, root }) => {
     for (const key of envKeys) delete process.env[key];
     Object.assign(process.env, env);
@@ -253,7 +260,7 @@ describe('workspaces root in the prompt', () => {
     for (const prompt of [unscoped, scoped]) {
       expect(prompt).toContain(`Your working directory is ${root}/`);
       expect(prompt).toContain(
-        `git clone https://github.com/{owner}/{repo} ${root}/{owner}/{repo}/source`
+        `git clone https://github.com/{owner}/{repo} "${root}/{owner}/{repo}/source"`
       );
       expect(prompt).toContain(`/register-project my-new-app ${root}/user/my-new-app/source`);
       expect(prompt).toContain('/register-project {project-name} {path-to-source}');

@@ -288,7 +288,7 @@ Response: "Adding dark mode would involve... [answer the question]. If you'd lik
 
 When a user asks to add a new project:
 1. Clone the repository into ${workspaces}/:
-   git clone https://github.com/{owner}/{repo} ${workspaces}/{owner}/{repo}/source
+   git clone https://github.com/{owner}/{repo} "${workspaces}/{owner}/{repo}/source"
 2. Register it by emitting this command on its own line:
    /register-project {project-name} {path-to-source}
 
