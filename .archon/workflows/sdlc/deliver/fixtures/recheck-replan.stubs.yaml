@@ -1,5 +1,6 @@
 # A correction can uncover that the remaining blocker needs a materially wider
-# work order. The loop stops on replan and gate-ready refuses the ready path.
+# work order. The loop stops on replan and gate-ready refuses the ready path;
+# the discoveries are still filed.
 impl__implement:
   done: true
   green: true
@@ -61,7 +62,9 @@ recheck__publish:
   action: replan
   findings_summary: "stub: remaining correction requires replanning"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+file-discoveries: '{"issues":["https://github.com/example/repo/issues/9"]}'
 fixture:
   expect: failed
   fail-node: gate-ready
+  reached: [file-discoveries]
 exec-code: true

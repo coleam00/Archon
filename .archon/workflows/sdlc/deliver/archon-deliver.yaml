@@ -364,14 +364,18 @@ nodes:
       correction_action: { from: "$corrections.output.action", if_skipped: null }
 
   # Work the review proved but this change does not do becomes tracker issues,
-  # one per record, each linking back to this run and the pull request. Off the
-  # flip's path: a failed filing never holds a delivered change back, but it
-  # does end the run failed after the flip, so the unfiled records reach the
-  # operator.
+  # one per record, each linking back to this run and the pull request. It joins
+  # the final verdict the same way gate-ready does, not gate-ready itself, so a
+  # replan files its discoveries too: that is when a scope conflict matters most.
+  # A review that failed, or a correction loop that exhausted its bound, has no
+  # converged discovery set and blocks this node. Off the flip's path: a failed
+  # filing never holds a delivered change back or changes a replan's refusal,
+  # but it does end the run failed, so the unfiled records reach the operator.
   - id: file-discoveries
     script: file-discoveries
     runtime: bun
-    depends_on: [gate-ready]
+    depends_on: [review, corrections]
+    trigger_rule: none_failed_min_one_success
     with:
       pr: "$pr.output"
     output_format:

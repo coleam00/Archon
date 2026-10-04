@@ -105,7 +105,7 @@ Create parent directories as needed, then write both:
 - `$ARTIFACTS_DIR/discoveries.json`: a JSON array of the accepted records with `title`, `claim`, `evidence`, `relation`, and `source_nodes`;
 - `$ARTIFACTS_DIR/discoveries.md`: the same accepted discoveries for a human reader, grouped by `unrelated` and `scope_conflict`.
 
-Write an empty array and a short "No proved unrelated discoveries" document when no records survive. An `unrelated` record never affects readiness. You file nothing yourself: delivery files each accepted record as a tracker issue after the review converges, so a record belongs in the file only when it is real, proved, and worth an issue of its own. A `scope_conflict` accompanies `replan` only when the conflict is necessary to the requested outcome; otherwise it remains non-blocking.
+Write an empty array and a short "No proved unrelated discoveries" document when no records survive. An `unrelated` record never affects readiness. You file nothing yourself: delivery files each accepted record as a tracker issue once the review reaches its final verdict, `replan` included, so a record belongs in the file only when it is real, proved, and worth an issue of its own. A `scope_conflict` accompanies `replan` only when the conflict is necessary to the requested outcome; otherwise it remains non-blocking.
 
 If the verdict requires `replan` for a proved blocker, the consolidated artifacts must contain its proved `scope_conflict`; a classification gap needs none. When no producer wrote that raw record, write `$ARTIFACTS_DIR/discoveries/review-synthesize.json` from the accepted finding's already-verified evidence, then include it in both consolidated files. Never emit `replan` from an unsupported discovery.
 
