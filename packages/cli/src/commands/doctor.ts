@@ -71,6 +71,28 @@ export async function checkConfigFiles(
   }
 }
 
+/**
+ * Warn when the configured default assistant is a deprecated provider. Skips
+ * when the config cannot load: Config files already reports that failure.
+ */
+export async function checkProviderDeprecation(
+  cwd: string = process.cwd(),
+  load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig
+): Promise<CheckResult> {
+  const label = 'Provider support';
+  let assistant: string;
+  try {
+    assistant = (await load(cwd)).assistant;
+  } catch {
+    return { label, status: 'skip', message: 'config did not load' };
+  }
+  const { getRegistration } = await import('@archon/providers');
+  const notice = getRegistration(assistant).deprecationNotice;
+  return notice
+    ? { label, status: 'warn', message: notice }
+    : { label, status: 'pass', message: `${assistant} is supported` };
+}
+
 async function defaultLoadMergedConfig(cwd: string): Promise<MergedConfig> {
   // Lazy import so doctor doesn't pull the full @archon/core graph for an
   // unrelated check (matches defaultLoadClaudeBinaryDeps).
@@ -476,11 +498,11 @@ export async function checkAssistantLogin(
 
 async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<AssistantLoginDeps> {
   const config = await defaultLoadMergedConfig(process.cwd());
-  const { getRegistration, getAgentProvider, normalizeCredentialVendor } =
-    await import('@archon/providers');
+  const { getRegistration, normalizeCredentialVendor } = await import('@archon/providers');
   const configuredModel = config.assistants[config.assistant]?.model;
   const model = typeof configuredModel === 'string' ? configuredModel : undefined;
-  const { credentials } = getRegistration(config.assistant);
+  const registration = getRegistration(config.assistant);
+  const { credentials } = registration;
   const usableVendors =
     credentials.kind === 'static' ? credentials.specs.map(spec => spec.vendor) : [];
   const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
@@ -508,7 +530,9 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
     model,
     vendor: credentials.vendorFor(model),
     connectedVendors,
-    provider: getAgentProvider(config.assistant),
+    // The factory, not getAgentProvider: a credential check is not a run, so it must not
+    // log the deprecation notice the Provider support check already shows.
+    provider: registration.factory(),
   };
 }
 
@@ -998,6 +1022,7 @@ export async function doctorCommand(
         checkCodexBinary(env),
         checkGhAuth(env),
         checkAssistantLogin(env),
+        checkProviderDeprecation(),
         checkOpenCode(env, full),
         checkDatabase(),
         checkFolderProject(),

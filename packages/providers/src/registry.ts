@@ -37,6 +37,9 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Backing store for registered providers. */
 const registry = new Map<string, ProviderRegistration>();
 
+/** Deprecated providers whose notice this process already logged. */
+const deprecationNoticed = new Set<string>();
+
 function assertValidCapabilities(entry: ProviderRegistration): void {
   if (entry.capabilities.sessionFork === true && !entry.capabilities.sessionResume) {
     throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
@@ -65,6 +68,11 @@ export function getAgentProvider(id: string): IAgentProvider {
     throw new UnknownProviderError(id, [...registry.keys()]);
   }
   getLog().debug({ provider: id }, 'provider_selected');
+  // Every node and turn resolves its provider here, so the notice is gated per process.
+  if (entry.deprecationNotice && !deprecationNoticed.has(id)) {
+    deprecationNoticed.add(id);
+    getLog().warn({ provider: id, notice: entry.deprecationNotice }, 'provider.deprecated');
+  }
   return entry.factory();
 }
 
@@ -198,4 +206,5 @@ export function registerCommunityProviders(): void {
 /** @internal Test-only — clears the registry. Not for production use. */
 export function clearRegistry(): void {
   registry.clear();
+  deprecationNoticed.clear();
 }

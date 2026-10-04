@@ -115,6 +115,7 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+export { DEPRECATED_PROVIDERS_DOCS_PATH } from './community/deprecation';
 
 export {
   singleVendorCatalog,
