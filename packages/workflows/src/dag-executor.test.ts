@@ -1411,6 +1411,53 @@ nodes:
   });
 });
 
+it('a sub-run stamps its result contract with the legacy root fields older parents read', async () => {
+  const testDir = join(
+    tmpdir(),
+    `dag-subrun-contract-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  );
+  await mkdir(testDir, { recursive: true });
+  try {
+    const store = createMockStore();
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflow: {
+          name: 'child',
+          returns: 'r',
+          nodes: [
+            {
+              id: 'r',
+              kind: 'exec',
+              runtime: 'sh',
+              script: `printf '%s' '{"green":true,"note":{"text":"x"}}'`,
+              output_format: {
+                type: 'object',
+                properties: {
+                  green: { type: 'boolean' },
+                  note: { type: 'object', properties: { text: { type: 'string' } } },
+                },
+                required: ['green'],
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('child-run', { parent_run_id: 'parent-run' }),
+      })
+    );
+    const metadata = (store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>).mock
+      .calls[0]?.[2];
+    expect(metadata).toMatchObject({
+      summary_declared_output_paths: [['green'], ['note'], ['note', 'text']],
+      summary_declared_fields: ['green', 'note'],
+    });
+  } finally {
+    await removeTempTree(testDir);
+  }
+});
+
 describe('output reference errors name the reference as written', () => {
   const ctx = (nodeOutputs: Map<string, NodeOutput>): ShellInputContext => ({
     workflowRun: { id: 'run', user_message: '', metadata: {} },
@@ -11057,6 +11104,63 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       );
       expect(completed.length).toBe(1);
       expect(completed[0][0].data).not.toHaveProperty('tokens');
+    });
+
+    it('a finalize from an old approval cursor persists the path contract and its legacy root fields', async () => {
+      const mockDeps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'finalize-contract',
+            nodes: [
+              {
+                id: 'refine',
+                kind: 'loop',
+                loop: {
+                  fresh_context: false,
+                  prompt: 'Refine.',
+                  until: 'APPROVED',
+                  max_iterations: 10,
+                  interactive: true,
+                  gate_message: 'Review.',
+                },
+                output_format: {
+                  type: 'object',
+                  properties: {
+                    verdict: { type: 'object', properties: { ok: { type: 'boolean' } } },
+                  },
+                },
+              },
+            ],
+          },
+          // No `execution` in the cursor: the raw-event write path.
+          workflowRun: makeWorkflowRun('finalize-contract', {
+            metadata: {
+              approval: {
+                type: 'interactive_loop',
+                nodeId: 'refine',
+                iteration: 1,
+                message: 'gate',
+                completionSignaled: true,
+                signaledOutput: '{"verdict":{"ok":true}}',
+              },
+              loop_user_input: 'Approved',
+              loop_feedback_given: false,
+            },
+          }),
+        })
+      );
+      const completed = persistedEvents(mockDeps.store).find(
+        e => e.event_type === 'node_completed' && e.step_name === 'refine'
+      );
+      // Older binaries read only declared_fields, so this path must write it too.
+      expect(completed?.data).toMatchObject({
+        declared_fields: ['verdict'],
+        declared_output_paths: [['verdict'], ['verdict', 'ok']],
+      });
     });
 
     it('iterates at resume when feedback was given, even on a signal-bearing gate (#2074 C)', async () => {
