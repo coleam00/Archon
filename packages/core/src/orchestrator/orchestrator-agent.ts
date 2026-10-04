@@ -2466,10 +2466,6 @@ export async function handleMessage(
 
     // 5. Send to AI provider
     const aiClient = getAgentProvider(providerKey);
-    getLog().debug(
-      { assistantType: conversation.ai_assistant_type, resolvedAssistantType: providerKey },
-      'sending_to_ai'
-    );
 
     // Written by the `manage_run` tool when the agent resolves a human gate
     // during this turn, and acted on once the turn ends (#2565). Resolving a
@@ -2538,6 +2534,18 @@ export async function handleMessage(
     }
 
     const mode = platform.getStreamingMode();
+    // The one line that ties a chat turn to both conversation ids, so grepping the
+    // URL id finds the provider and model of every turn. `model` is read from the
+    // options handed to the provider, never re-resolved, so it cannot disagree.
+    getLog().info(
+      {
+        conversationId: conversation.id,
+        platformConversationId: conversationId,
+        provider: providerKey,
+        model: requestOptions.model,
+      },
+      'orchestrator.chat_dispatch_started'
+    );
     // `finally`, not straight-line code: the gate resolution is committed to the
     // DB the moment the tool call returns, so once the agent has resolved a gate
     // the continuation must run even if the rest of the turn throws — a provider

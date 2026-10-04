@@ -1290,6 +1290,12 @@ describe('filterToolIndicators logic (replicated regex tests)', () => {
 
 // ─── Helpers for handleMessage tests ─────────────────────────────────────────
 
+function chatDispatchLogs(): Record<string, unknown>[] {
+  return mockLogger.info.mock.calls
+    .filter(c => c[1] === 'orchestrator.chat_dispatch_started')
+    .map(c => c[0] as Record<string, unknown>);
+}
+
 function makePlatform() {
   return {
     capabilities: { messagePersistence: 'adapter', defaultWorkflowDispatch: 'background' } as const,
@@ -6074,17 +6080,12 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
       Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
     );
     mockGetUserAiPrefsDb.mockImplementation(async () => ({ defaultProvider: 'codex' }));
-    mockLogger.debug.mockClear();
+    mockLogger.info.mockClear();
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'Hello');
 
-    const sendingLog = mockLogger.debug.mock.calls.find(c => c[1] === 'sending_to_ai') as
-      | [Record<string, unknown>, string]
-      | undefined;
-    expect(sendingLog).toBeDefined();
-    expect(sendingLog?.[0].assistantType).toBe('claude');
-    expect(sendingLog?.[0].resolvedAssistantType).toBe('codex');
+    expect(chatDispatchLogs()[0]?.provider).toBe('codex');
   });
 
   test("without an identity the conversation's stored assistant drives the turn (#2241 chain)", async () => {
@@ -6093,17 +6094,36 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ ai_assistant_type: 'codex' }))
     );
-    mockLogger.debug.mockClear();
+    mockLogger.info.mockClear();
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', 'Hello');
 
     expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
-    const sendingLog = mockLogger.debug.mock.calls.find(c => c[1] === 'sending_to_ai') as
-      | [Record<string, unknown>, string]
-      | undefined;
-    expect(sendingLog).toBeDefined();
-    expect(sendingLog?.[0].resolvedAssistantType).toBe('codex');
+    expect(chatDispatchLogs()[0]?.provider).toBe('codex');
+  });
+
+  test('logs one dispatch line per turn tying both conversation ids to the provider and model (#1898)', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(
+      Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))
+    );
+    mockGetUserAiPrefsDb.mockImplementation(async () => ({
+      tiers: { large: { provider: 'codex', model: 'gpt-5.5' } },
+    }));
+    mockLogger.info.mockClear();
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', 'secret prompt text');
+
+    const logs = chatDispatchLogs();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toEqual({
+      conversationId: 'conv-1-db',
+      platformConversationId: 'conv-1',
+      provider: 'codex',
+      model: 'gpt-5.5',
+    });
+    expect(JSON.stringify(logs[0])).not.toContain('secret prompt text');
   });
 
   test('structurally invalid stored prefs degrade to config-only (chat still answers)', async () => {
