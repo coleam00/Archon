@@ -2,56 +2,48 @@ import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   clearPlatformPolicies,
   getRegisteredPlatformPolicies,
-  registerPlatformPolicy,
   retainsWorkspace,
+  setPlatformPolicies,
 } from './registry';
 
 beforeEach(clearPlatformPolicies);
 
 describe('platform policies', () => {
   test('retention is declared independently of a bundled platform name', () => {
-    registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
-    registerPlatformPolicy({ id: 'new-forge', workspaceRetention: 'age-based' });
+    setPlatformPolicies([
+      { id: 'matrix-chat', workspaceRetention: 'retain' },
+      { id: 'new-forge', workspaceRetention: 'age-based' },
+    ]);
     expect(retainsWorkspace('matrix-chat')).toBe(true);
     expect(retainsWorkspace('new-forge')).toBe(false);
     expect(retainsWorkspace('unknown')).toBe(false);
     expect(retainsWorkspace(null)).toBe(false);
-    expect(getRegisteredPlatformPolicies().map(policy => policy.id)).toEqual([
-      'matrix-chat',
-      'new-forge',
-    ]);
   });
 
-  test('repeated identical declarations are accepted and conflicting declarations fail', () => {
-    const policy = {
-      id: 'matrix-chat',
-      workspaceRetention: 'retain',
-      streaming: { defaultMode: 'batch', envVar: 'MATRIX_STREAMING_MODE' },
-    } as const;
-    registerPlatformPolicy(policy);
-    registerPlatformPolicy({ ...policy });
-    expect(getRegisteredPlatformPolicies()).toHaveLength(1);
-    expect(() => registerPlatformPolicy({ ...policy, workspaceRetention: 'age-based' })).toThrow(
-      'Conflicting platform policy'
-    );
-    expect(() =>
-      registerPlatformPolicy({
-        ...policy,
-        streaming: { ...policy.streaming, defaultMode: 'stream' },
-      })
-    ).toThrow('Conflicting platform policy');
-    expect(() =>
-      registerPlatformPolicy({
-        ...policy,
-        streaming: { ...policy.streaming, envVar: 'OTHER_MODE' },
-      })
-    ).toThrow('Conflicting platform policy');
+  test('retention fails until the host configures policies', () => {
+    expect(() => retainsWorkspace(null)).toThrow('Platform policies are not configured');
+    setPlatformPolicies([]);
+    expect(retainsWorkspace('telegram')).toBe(false);
   });
 
-  test('invalid identifiers fail before registration', () => {
+  test('a later call replaces the whole set', () => {
+    setPlatformPolicies([{ id: 'matrix-chat', workspaceRetention: 'retain' }]);
+    setPlatformPolicies([{ id: 'new-forge', workspaceRetention: 'age-based' }]);
+    expect(getRegisteredPlatformPolicies().map(policy => policy.id)).toEqual(['new-forge']);
+    expect(retainsWorkspace('matrix-chat')).toBe(false);
+  });
+
+  test('invalid or duplicate identifiers fail without changing the set', () => {
+    setPlatformPolicies([{ id: 'matrix-chat', workspaceRetention: 'retain' }]);
     expect(() =>
-      registerPlatformPolicy({ id: '../matrix', workspaceRetention: 'retain' })
+      setPlatformPolicies([{ id: '../matrix', workspaceRetention: 'retain' }])
     ).toThrow();
-    expect(getRegisteredPlatformPolicies()).toEqual([]);
+    expect(() =>
+      setPlatformPolicies([
+        { id: 'new-forge', workspaceRetention: 'retain' },
+        { id: 'new-forge', workspaceRetention: 'age-based' },
+      ])
+    ).toThrow("Duplicate platform policy for 'new-forge'");
+    expect(getRegisteredPlatformPolicies().map(policy => policy.id)).toEqual(['matrix-chat']);
   });
 });

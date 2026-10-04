@@ -1,6 +1,6 @@
 import { toBranchName } from '@archon/git';
 import { afterAll, beforeEach, expect, mock, test } from 'bun:test';
-import { clearPlatformPolicies, registerPlatformPolicy } from '../platforms/registry';
+import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
 const db = new SqliteAdapter(':memory:');
@@ -44,9 +44,11 @@ async function seed(platform: string | null, age: number) {
 }
 
 test('bound retention exclusions work alongside activity and creation thresholds', async () => {
-  registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
-  registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
-  registerPlatformPolicy({ id: 'new-forge', workspaceRetention: 'age-based' });
+  setPlatformPolicies([
+    { id: 'retain-test', workspaceRetention: 'retain' },
+    { id: 'matrix-chat', workspaceRetention: 'retain' },
+    { id: 'new-forge', workspaceRetention: 'age-based' },
+  ]);
   await seed('retain-test', 30);
   await seed('matrix-chat', 30);
   const stale = await seed('new-forge', 30);
@@ -65,7 +67,13 @@ test('bound retention exclusions work alongside activity and creation thresholds
   ]);
 });
 
-test('empty registry has valid SQL and preserves NULL exclusion', async () => {
+test('unconfigured registry fails instead of treating every platform as age-based', async () => {
+  await seed('retain-test', 30);
+  await expect(findStaleEnvironments()).rejects.toThrow('Platform policies are not configured');
+});
+
+test('empty policy set has valid SQL and preserves NULL exclusion', async () => {
+  setPlatformPolicies([]);
   const stale = await seed('retain-test', 30);
   await seed(null, 30);
   expect((await findStaleEnvironments()).map(row => row.id)).toEqual([stale.id]);

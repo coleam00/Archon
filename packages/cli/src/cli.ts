@@ -152,8 +152,11 @@ async function loadRoute<T>(
   options: { providers?: boolean; database?: boolean; platformPolicies?: boolean } = {}
 ): Promise<T> {
   if (options.providers || options.database || options.platformPolicies) {
-    const { registerBundledPlatformPolicies } = await import('@archon/adapters/platform-policies');
-    registerBundledPlatformPolicies();
+    const [{ setPlatformPolicies }, { bundledPlatformPolicies }] = await Promise.all([
+      import('@archon/core/platforms/registry'),
+      import('@archon/adapters/platform-policies'),
+    ]);
+    setPlatformPolicies(bundledPlatformPolicies);
   }
   if (options.providers) await registerProviders();
   const route = await loader();

@@ -2,7 +2,7 @@
  * Cleanup service for isolation environments
  * Handles removal triggered by events, schedule, or commands
  */
-import { retainsWorkspace } from '../platforms/registry';
+import { retainedPlatformIds, retainsWorkspace } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
 import * as sessionDb from '../db/sessions';
@@ -573,6 +573,9 @@ function skipReasonFor(verdict: Exclude<MergeVerdict, 'reclaimable'>): string | 
  * 2. Find and remove stale environments
  */
 export async function runScheduledCleanup(): Promise<CleanupReport> {
+  // Merged and path-missing removals run before the retention check, so an
+  // unconfigured host must fail before the sweep starts, not partway through it.
+  retainedPlatformIds();
   getLog().info('cleanup_started');
   const report: CleanupReport = { removed: [], skipped: [], errors: [], sessionsDeleted: 0 };
 
@@ -968,6 +971,8 @@ export async function cleanupMergedWorktrees(
  * Runs cleanup cycle every CLEANUP_INTERVAL_HOURS
  */
 export function startCleanupScheduler(): void {
+  // Fail at host startup rather than in a timer callback hours later.
+  retainedPlatformIds();
   if (cleanupIntervalId) {
     getLog().warn('scheduler_already_running');
     return;

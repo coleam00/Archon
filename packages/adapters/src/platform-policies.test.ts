@@ -3,14 +3,14 @@ import {
   clearPlatformPolicies,
   getRegisteredPlatformPolicies,
   retainsWorkspace,
+  setPlatformPolicies,
 } from '@archon/core/platforms/registry';
-import { registerBundledPlatformPolicies } from './platform-policies';
+import { bundledPlatformPolicies } from './platform-policies';
 
 beforeEach(clearPlatformPolicies);
 
-test('bundled metadata registers without constructing or starting any transport', () => {
-  registerBundledPlatformPolicies();
-  registerBundledPlatformPolicies();
+test('bundled policies are valid and keep existing retention and streaming defaults', () => {
+  setPlatformPolicies(bundledPlatformPolicies);
   expect(getRegisteredPlatformPolicies()).toEqual([
     {
       id: 'telegram',

@@ -79,7 +79,7 @@ Platform adapters connect messaging platforms to the orchestrator. Implement the
 
 ### IPlatformAdapter Interface
 
-The current contract is [IPlatformAdapter](https://github.com/coleam00/Archon/blob/dev/packages/core/src/types/index.ts). It declares transport methods, message persistence ownership, and the default workflow dispatch mode. Structured events and background worker preparation are optional capabilities. Hosts register offline retention and streaming policies before config or cleanup; see the [adapter authoring guide](https://github.com/coleam00/Archon/blob/dev/packages/adapters/src/community/chat/README.md).
+The current contract is [IPlatformAdapter](https://github.com/coleam00/Archon/blob/dev/packages/core/src/types/index.ts). It declares transport methods, message persistence ownership, and the default workflow dispatch mode. Structured events and background worker preparation are optional capabilities. Hosts set the complete offline retention and streaming policy set before config or cleanup, and cleanup fails until they do; see the [adapter authoring guide](https://github.com/coleam00/Archon/blob/dev/packages/adapters/src/community/chat/README.md).
 
 ### Implementation Guide
 

@@ -1,5 +1,6 @@
 import { platformStreamingSchema } from './config-types';
-import { registerPlatformPolicy, clearPlatformPolicies } from '../platforms/registry';
+import { setPlatformPolicies } from '../platforms/registry';
+import type { PlatformPolicy } from '../platforms/types';
 import { describe, test, expect, beforeEach, afterEach, mock } from 'bun:test';
 import { homedir } from 'os';
 import { join } from 'path';
@@ -52,13 +53,19 @@ describe('config-loader', () => {
     'ARCHON_HOME',
   ];
 
+  const streamtestPolicy: PlatformPolicy = {
+    id: 'streamtest',
+    workspaceRetention: 'age-based',
+    streaming: { defaultMode: 'stream', envVar: 'STREAMTEST_STREAMING_MODE' },
+  };
+  const matrixPolicy: PlatformPolicy = {
+    id: 'matrix-chat',
+    workspaceRetention: 'age-based',
+    streaming: { defaultMode: 'stream', envVar: 'MATRIX_STREAMING_MODE' },
+  };
+
   beforeEach(() => {
-    clearPlatformPolicies();
-    registerPlatformPolicy({
-      id: 'streamtest',
-      workspaceRetention: 'age-based',
-      streaming: { defaultMode: 'stream', envVar: 'STREAMTEST_STREAMING_MODE' },
-    });
+    setPlatformPolicies([streamtestPolicy]);
     clearConfigCache();
     mockFsReadFile.mockReset();
     mockFsWriteFile.mockReset();
@@ -86,11 +93,7 @@ describe('config-loader', () => {
   });
 
   test('new and unregistered streaming keys survive load, merge, update and safe projection', async () => {
-    registerPlatformPolicy({
-      id: 'matrix-chat',
-      workspaceRetention: 'age-based',
-      streaming: { defaultMode: 'stream', envVar: 'MATRIX_STREAMING_MODE' },
-    });
+    setPlatformPolicies([streamtestPolicy, matrixPolicy]);
     mockFsReadFile.mockResolvedValue('streaming:\n  matrix-chat: batch\n  other-chat: stream\n');
     expect((await loadGlobalConfig()).streaming).toEqual({
       'matrix-chat': 'batch',
@@ -113,11 +116,7 @@ describe('config-loader', () => {
   });
 
   test('registered streaming default and validated environment override apply', async () => {
-    registerPlatformPolicy({
-      id: 'matrix-chat',
-      workspaceRetention: 'age-based',
-      streaming: { defaultMode: 'stream', envVar: 'MATRIX_STREAMING_MODE' },
-    });
+    setPlatformPolicies([streamtestPolicy, matrixPolicy]);
     mockFsReadFile.mockResolvedValue('');
     expect((await loadConfig()).streaming['matrix-chat']).toBe('stream');
     process.env.MATRIX_STREAMING_MODE = 'batch';

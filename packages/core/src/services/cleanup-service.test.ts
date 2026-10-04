@@ -1,4 +1,4 @@
-import { clearPlatformPolicies, registerPlatformPolicy } from '../platforms/registry';
+import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { toBranchName } from '@archon/git';
@@ -17,7 +17,7 @@ import type * as SessionDb from '../db/sessions';
 import type * as CodebaseDb from '../db/codebases';
 import type * as ConfigLoader from '../config/config-loader';
 
-beforeEach(clearPlatformPolicies);
+beforeEach(() => setPlatformPolicies([]));
 
 const NO_PR: Isolation.PrLookup = { state: 'NONE' };
 const PR_HEAD_SHA = 'pr-head-sha';
@@ -767,7 +767,7 @@ describe('cleanup-service', () => {
 
 describe('runScheduledCleanup', () => {
   beforeEach(() => {
-    registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
+    setPlatformPolicies([{ id: 'retain-test', workspaceRetention: 'retain' }]);
     mockExecFileAsync.mockClear();
     mockHasUncommittedChanges.mockClear();
     mockWorktreeExists.mockClear();
@@ -812,7 +812,7 @@ describe('runScheduledCleanup', () => {
   test.each(['github', 'matrix-chat'])(
     'marks missing paths as destroyed and cleans up branch (%s)',
     async platformId => {
-      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      setPlatformPolicies([{ id: 'matrix-chat', workspaceRetention: 'retain' }]);
       mockListAllActiveWithCodebase.mockResolvedValueOnce([
         makeEnvironmentWithCodebase({
           id: 'env-123',
@@ -866,7 +866,7 @@ describe('runScheduledCleanup', () => {
   test.each(['github', 'matrix-chat'])(
     'removes merged branches without uncommitted changes (%s)',
     async platformId => {
-      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      setPlatformPolicies([{ id: 'matrix-chat', workspaceRetention: 'retain' }]);
       mockListAllActiveWithCodebase.mockResolvedValueOnce([
         makeEnvironmentWithCodebase({
           id: 'env-456',
@@ -1127,7 +1127,7 @@ describe('runScheduledCleanup', () => {
   });
 
   test('scheduled cleanup retains a declared adapter and removes an age-based control', async () => {
-    registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+    setPlatformPolicies([{ id: 'matrix-chat', workspaceRetention: 'retain' }]);
     const old = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const retained = makeEnvironmentWithCodebase({
       id: 'retained',
@@ -1147,6 +1147,24 @@ describe('runScheduledCleanup', () => {
     expect(report.errors).toEqual([]);
     expect(mockUpdateStatus).toHaveBeenCalledTimes(1);
     expect(mockUpdateStatus).toHaveBeenCalledWith('age-based', 'destroyed');
+  });
+
+  test('scheduled cleanup without configured platform policies fails and deletes nothing', async () => {
+    clearPlatformPolicies();
+    const env = makeEnvironmentWithCodebase({
+      created_by_platform: 'telegram',
+      created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
+    });
+    mockListAllActiveWithCodebase.mockResolvedValue([env]);
+    mockGetById.mockResolvedValue(env);
+    try {
+      await expect(runScheduledCleanup()).rejects.toThrow('Platform policies are not configured');
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
+      expect(mockDeleteOldSessions).not.toHaveBeenCalled();
+    } finally {
+      mockListAllActiveWithCodebase.mockResolvedValue([]);
+    }
   });
 
   test('continues processing after error on one environment', async () => {
@@ -1658,6 +1676,13 @@ describe('scheduler lifecycle', () => {
     stopCleanupScheduler();
     expect(isSchedulerRunning()).toBe(false);
   });
+
+  test('refuses to start without configured platform policies', () => {
+    clearPlatformPolicies();
+    expect(() => startCleanupScheduler()).toThrow('Platform policies are not configured');
+    expect(isSchedulerRunning()).toBe(false);
+    expect(mockListAllActiveWithCodebase).not.toHaveBeenCalled();
+  });
 });
 
 // =============================================================================
@@ -1666,7 +1691,7 @@ describe('scheduler lifecycle', () => {
 
 describe('getWorktreeStatusBreakdown', () => {
   beforeEach(() => {
-    registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
+    setPlatformPolicies([{ id: 'retain-test', workspaceRetention: 'retain' }]);
     mockExecFileAsync.mockClear();
     mockGetDefaultBranch.mockClear();
     mockIsBranchMerged.mockClear();
@@ -1741,7 +1766,10 @@ describe('getWorktreeStatusBreakdown', () => {
   test.each(['retain-test', 'matrix-chat'])(
     'excludes retain-policy environments from stale count (%s)',
     async platformId => {
-      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      setPlatformPolicies([
+        { id: 'retain-test', workspaceRetention: 'retain' },
+        { id: 'matrix-chat', workspaceRetention: 'retain' },
+      ]);
       mockListByCodebaseWithAge.mockResolvedValueOnce([
         makeEnvironmentWithAge({
           id: 'env-retain-test',
@@ -2861,7 +2889,7 @@ describe('onConversationClosed', () => {
 
 describe('cleanupStaleWorktrees', () => {
   beforeEach(() => {
-    registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
+    setPlatformPolicies([{ id: 'retain-test', workspaceRetention: 'retain' }]);
     mockExecFileAsync.mockClear();
     mockDestroy.mockClear();
     mockGetLiveRunOwningEnv.mockClear();
@@ -2910,7 +2938,10 @@ describe('cleanupStaleWorktrees', () => {
   test.each(['retain-test', 'matrix-chat'])(
     'skips retain-policy worktrees even if old (%s)',
     async platformId => {
-      registerPlatformPolicy({ id: 'matrix-chat', workspaceRetention: 'retain' });
+      setPlatformPolicies([
+        { id: 'retain-test', workspaceRetention: 'retain' },
+        { id: 'matrix-chat', workspaceRetention: 'retain' },
+      ]);
       mockListByCodebaseWithAge.mockResolvedValueOnce([
         makeEnvironmentWithAge({
           id: 'env-retain-test',

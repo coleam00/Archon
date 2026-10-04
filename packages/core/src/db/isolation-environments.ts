@@ -1,7 +1,7 @@
 /**
  * Database operations for isolation environments
  */
-import { getRegisteredPlatformPolicies } from '../platforms/registry';
+import { retainedPlatformIds } from '../platforms/registry';
 import { pool, getDialect, getDatabaseType } from './connection';
 import {
   TERMINAL_WORKFLOW_STATUSES,
@@ -314,9 +314,7 @@ export async function findStaleEnvironments(
   const staleActivityThreshold = dialect.nowMinusDays(1);
   const staleCreationThreshold = dialect.nowMinusDays(2);
 
-  const retainedIds = getRegisteredPlatformPolicies()
-    .filter(policy => policy.workspaceRetention === 'retain')
-    .map(policy => policy.id);
+  const retainedIds = retainedPlatformIds();
   const retentionFilter = retainedIds.length
     ? `AND e.created_by_platform NOT IN (${retainedIds.map((_, index) => `$${index + 3}`).join(', ')})`
     : '';

@@ -1,4 +1,4 @@
-import { clearPlatformPolicies, registerPlatformPolicy } from '../platforms/registry';
+import { setPlatformPolicies } from '../platforms/registry';
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
@@ -30,7 +30,7 @@ import {
 
 describe('isolation-environments', () => {
   beforeEach(() => {
-    clearPlatformPolicies();
+    setPlatformPolicies([]);
     mockQuery.mockClear();
   });
 
@@ -411,7 +411,7 @@ describe('isolation-environments', () => {
     });
 
     test('excludes registered retain-policy environments in query', async () => {
-      registerPlatformPolicy({ id: 'retain-test', workspaceRetention: 'retain' });
+      setPlatformPolicies([{ id: 'retain-test', workspaceRetention: 'retain' }]);
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await findStaleEnvironments();
