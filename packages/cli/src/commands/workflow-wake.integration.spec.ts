@@ -329,7 +329,10 @@ describe('cold CLI continuation host', () => {
     while (row(f).status !== 'completed' && Date.now() < deadline) await Bun.sleep(25);
     expect(row(f).status).toBe('completed');
     child.kill('SIGTERM');
-    expect(await child.exited).toBe(0);
+    const exitCode = await child.exited;
+    // Windows has no catchable SIGTERM: Bun terminates the child outright (143), so only
+    // POSIX can prove the handler drains and exits cleanly.
+    if (process.platform !== 'win32') expect(exitCode).toBe(0);
     children.delete(child);
     const passes = (await stdout)
       .trim()
