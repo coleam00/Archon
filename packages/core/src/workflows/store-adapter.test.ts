@@ -369,7 +369,7 @@ describe('createWorkflowDeps', () => {
     test('getUserProviderEnv refuses delivery when list query throws', async () => {
       mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
       const deps = createWorkflowDeps();
-      await expect(deps.getUserProviderEnv?.('u-1', '/tmp/art', ['openai'])).rejects.toThrow(
+      await expect(deps.getUserProviderEnv?.('u-1', '/tmp/art', ['openai'], [])).rejects.toThrow(
         'db gone'
       );
     });
@@ -382,7 +382,7 @@ describe('createWorkflowDeps', () => {
     test('getUserProviderEnv is additive: unconnected user gets empty env (no ambient scrub)', async () => {
       mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
       const deps = createWorkflowDeps();
-      const result = await deps.getUserProviderEnv?.('u-unconnected', '/tmp/art', ['openai']);
+      const result = await deps.getUserProviderEnv?.('u-unconnected', '/tmp/art', ['openai'], []);
       expect(result).toEqual({ env: {}, files: [], protectedValues: [] });
     });
 
@@ -392,11 +392,12 @@ describe('createWorkflowDeps', () => {
         { provider: 'google', cred: { kind: 'api_key', apiKey: 'g-k' } },
       ]);
       const deps = createWorkflowDeps();
-      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art', [
-        'openrouter',
-        'google',
-        'openai',
-      ]);
+      const result = await deps.getUserProviderEnv?.(
+        'u-1',
+        '/tmp/art',
+        ['openrouter', 'google', 'openai'],
+        []
+      );
       expect(result?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-k', GEMINI_API_KEY: 'g-k' });
       expect(result?.protectedValues).toEqual(['or-k', 'g-k']);
     });
@@ -422,11 +423,12 @@ describe('createWorkflowDeps', () => {
         },
       ]);
       const deps = createWorkflowDeps();
-      const result = await deps.getUserProviderEnv?.('u-1', '/tmp/art', [
-        'openrouter',
-        'google',
-        'openai',
-      ]);
+      const result = await deps.getUserProviderEnv?.(
+        'u-1',
+        '/tmp/art',
+        ['openrouter', 'google', 'openai'],
+        []
+      );
       expect(result?.protectedValues).toEqual([
         'derived-bearer',
         'access-token',
@@ -452,7 +454,12 @@ describe('required workflow credential delivery', () => {
       { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'canonical' } },
       { provider: 'openai', cred: { kind: 'api_key', apiKey: 'unused-dead' } },
     ]);
-    const result = await createWorkflowDeps().getUserProviderEnv?.('u', '/tmp/art', ['anthropic']);
+    const result = await createWorkflowDeps().getUserProviderEnv?.(
+      'u',
+      '/tmp/art',
+      ['anthropic'],
+      []
+    );
     expect(decrypt.mock.calls).toEqual([['u', 'anthropic']]);
     expect(result?.env.ANTHROPIC_API_KEY).toBe('canonical');
     expect(result?.protectedValues).not.toContain('unused-dead');
@@ -469,6 +476,40 @@ describe('required workflow credential delivery', () => {
     expect(status).toHaveBeenCalledWith('u', 'codex');
   });
 
+  test('a connection deleted between preflight and delivery refuses ambient fallback', async () => {
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'selected-key' } },
+    ]);
+    const deps = createWorkflowDeps();
+    expect(await deps.getUserProviderCredentialStatus?.('u', 'anthropic')).toMatchObject({
+      state: 'usable',
+    });
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([]);
+    await expect(
+      deps.getUserProviderEnv?.('u', '/tmp/art', ['anthropic'], ['anthropic'])
+    ).rejects.toMatchObject({
+      vendor: 'anthropic',
+      status: { state: 'not_connected', source: 'archon' },
+    });
+  });
+
+  test('a connection deleted during its delivery read also refuses ambient fallback', async () => {
+    const db = await import('../db/user-provider-key-store');
+    mockListDecryptedUserProviderCredentials.mockResolvedValue([
+      { provider: 'anthropic', cred: { kind: 'api_key', apiKey: 'selected-key' } },
+    ]);
+    (db.getDecryptedProviderCredential as ReturnType<typeof mock>).mockResolvedValueOnce({
+      state: 'not_connected',
+      source: 'archon',
+    });
+    await expect(
+      createWorkflowDeps().getUserProviderEnv?.('u', '/tmp/art', ['anthropic'], ['anthropic'])
+    ).rejects.toMatchObject({
+      vendor: 'anthropic',
+      status: { state: 'not_connected', source: 'archon' },
+    });
+  });
+
   test('a required stored failure throws a secret-free typed refusal', async () => {
     const db = await import('../db/user-provider-key-store');
     mockListDecryptedUserProviderCredentials.mockResolvedValue([
@@ -479,7 +520,7 @@ describe('required workflow credential delivery', () => {
       source: 'archon',
       evidence: 'cannot read',
     });
-    const attempt = createWorkflowDeps().getUserProviderEnv?.('u', '/tmp/art', ['anthropic']);
+    const attempt = createWorkflowDeps().getUserProviderEnv?.('u', '/tmp/art', ['anthropic'], []);
     await expect(attempt).rejects.toMatchObject({
       vendor: 'anthropic',
       status: { state: 'unusable', evidence: 'cannot read' },

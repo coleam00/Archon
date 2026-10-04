@@ -2260,7 +2260,7 @@ async function runWorkflowWithOwnedSource(
               : {}),
           }),
     });
-    await assertRunCredentials(createWorkflowDeps(), workflow, prepared);
+    await assertRunCredentials(createWorkflowDeps(), prepared);
     return prepared;
   };
 

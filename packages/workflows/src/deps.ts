@@ -220,13 +220,15 @@ export interface WorkflowDeps {
    * map — the engine just merges `env` into `config.envVars` and writes the
    * `files` before any provider invocation.
    *
-   * Delivery failures must throw to prevent fallback to another account.
+   * Vendors selected as connected during preflight must remain connected at
+   * delivery. Failures must throw to prevent fallback to another account.
    */
   getUserProviderCredentialStatus?: (userId: string, vendor: string) => Promise<CredentialStatus>;
   getUserProviderEnv?: (
     userId: string,
     artifactsDir: string,
-    vendors: readonly string[]
+    vendors: readonly string[],
+    connectedVendors: readonly string[]
   ) => Promise<{
     env: Record<string, string>;
     files: { path: string; contents: string }[];

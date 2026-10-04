@@ -3547,9 +3547,12 @@ describe('executeWorkflow', () => {
         }
       );
 
-      expect(getUserProviderEnv).toHaveBeenCalledWith('persisted-user', expect.any(String), [
-        'anthropic',
-      ]);
+      expect(getUserProviderEnv).toHaveBeenCalledWith(
+        'persisted-user',
+        expect.any(String),
+        ['anthropic'],
+        ['anthropic']
+      );
       const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
       expect(configArg?.protectedCredentialValues).toEqual(['persisted-user-token']);
     });
@@ -5449,7 +5452,16 @@ describe('credential preflight lifecycle', () => {
     const deps = makeDeps(store);
     deps.isPerUserProviderKeysEnabled = () => true;
     const { StoredCredentialDeliveryError } = await import('./run-preflight');
-    deps.getUserProviderEnv = mock(async () => {
+    deps.getUserProviderCredentialStatus = mock(
+      async () =>
+        ({
+          state: 'usable',
+          source: 'archon',
+        }) as const
+    );
+    deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {
+      expect(vendors).toEqual(['anthropic']);
+      expect(connectedVendors).toEqual(['anthropic']);
       throw new StoredCredentialDeliveryError('anthropic', {
         state: 'check_failed',
         source: 'archon',

@@ -459,7 +459,7 @@ async function dispatchBackgroundWorkflowOwned(
           : {}),
       }
     );
-    await assertRunCredentials(workflowDeps, workflow, preparedAiConfiguration);
+    await assertRunCredentials(workflowDeps, preparedAiConfiguration);
 
     return { workflow, preparedSource, preparedAiConfiguration };
   };

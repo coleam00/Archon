@@ -208,19 +208,27 @@ export function createWorkflowDeps(): WorkflowDeps {
     getUserProviderEnv: async (
       userId: string,
       artifactsDir: string,
-      vendors: readonly string[]
+      vendors: readonly string[],
+      connectedVendors: readonly string[]
     ): Promise<{
       env: Record<string, string>;
       files: { path: string; contents: string }[];
       protectedValues: string[];
     }> => {
       const rows = await requiredCredentialRows(userId, vendors);
+      for (const vendor of connectedVendors) {
+        if (!rows.some(row => row.vendor === vendor)) {
+          throw new StoredCredentialDeliveryError(vendor, {
+            state: 'not_connected',
+            source: 'archon',
+          });
+        }
+      }
       const creds = [];
       for (const { vendor, provider } of rows) {
         const stored = await getDecryptedProviderCredential(userId, provider);
         if (stored.state === 'usable') creds.push({ provider, cred: stored.credential });
-        else if (stored.state !== 'not_connected')
-          throw new StoredCredentialDeliveryError(vendor, stored);
+        else throw new StoredCredentialDeliveryError(vendor, stored);
       }
       const env: Record<string, string> = {};
       const files: { path: string; contents: string }[] = [];

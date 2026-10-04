@@ -1,7 +1,7 @@
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
-  collectRunCredentialRequirements,
+  type RunCredentialRequirement,
   assertCredentialStatus,
   StoredCredentialDeliveryError,
   type PreparedRunAiConfiguration,
@@ -285,7 +285,8 @@ async function resolveUserProviderEnvForWorkflow(
   deps: WorkflowDeps,
   userId: string | undefined,
   artifactsDir: string,
-  requirements: ReturnType<typeof collectRunCredentialRequirements>
+  requirements: readonly RunCredentialRequirement[],
+  connectedVendors: ReadonlySet<string>
 ): Promise<{ env: Record<string, string>; protectedValues: string[] }> {
   const perUserEnabled = deps.isPerUserProviderKeysEnabled?.() ?? false;
   if (!perUserEnabled || !userId || !deps.getUserProviderEnv) {
@@ -295,7 +296,7 @@ async function resolveUserProviderEnvForWorkflow(
   if (vendors.length === 0) return { env: {}, protectedValues: [] };
   let resolved: Awaited<ReturnType<NonNullable<WorkflowDeps['getUserProviderEnv']>>>;
   try {
-    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors);
+    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, [...connectedVendors]);
   } catch (error) {
     if (error instanceof StoredCredentialDeliveryError) {
       const requirement = requirements.find(r => r.vendor === error.vendor);
@@ -1336,7 +1337,7 @@ async function runChildWorkflow(
           ...(runConfig ? { runConfig } : {}),
         }
       );
-      await assertRunCredentials(deps, childWorkflow, childPrepared);
+      await assertRunCredentials(deps, childPrepared);
     } catch (error) {
       return failOutcome((error as Error).message, resumeChild?.run.id);
     }
@@ -2886,11 +2887,13 @@ export async function executeWorkflow(
     // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
     // returns empty bags when the feature is disabled or no userId is present).
     await clearManagedProviderCredentialFiles(artifactsDir);
+    await assertRunCredentials(deps, prepared);
     const { env: userProviderEnv, protectedValues } = await resolveUserProviderEnvForWorkflow(
       deps,
       executionUserId,
       artifactsDir,
-      collectRunCredentialRequirements(workflow, prepared)
+      prepared.requirements,
+      prepared.connectedVendors
     );
     config.envVars = { ...config.envVars, ...userProviderEnv };
     for (const key of Object.keys(userProviderEnv)) {
@@ -2907,13 +2910,6 @@ export async function executeWorkflow(
     ];
     if (protectedCredentialValues.length > 0) {
       config.protectedCredentialValues = protectedCredentialValues;
-    }
-
-    try {
-      await assertRunCredentials(deps, workflow, prepared);
-    } catch (error) {
-      await clearManagedProviderCredentialFiles(artifactsDir);
-      throw error;
     }
 
     // Capture the loaded graph on both fresh execution and resume before any node runs.

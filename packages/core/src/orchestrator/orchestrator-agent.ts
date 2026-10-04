@@ -1078,7 +1078,7 @@ async function dispatchOrchestratorWorkflowOwned(
         })
       : undefined);
   if (preparedAiConfiguration)
-    await assertRunCredentials(createWorkflowDeps(), workflow, preparedAiConfiguration);
+    await assertRunCredentials(createWorkflowDeps(), preparedAiConfiguration);
 
   // Auto-attach project to conversation
   await db.updateConversation(conversation.id, {

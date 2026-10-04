@@ -176,10 +176,14 @@ export async function prepareRunAiConfiguration(
     effectiveRunConfig,
     runConfigMetadata,
     executionUserId,
+    requirements: collectRunCredentialRequirements(workflow, { config, aiProfile, scope }),
+    connectedVendors: new Set(),
   };
 }
 
 export interface PreparedRunAiConfiguration {
+  requirements: readonly RunCredentialRequirement[];
+  connectedVendors: Set<string>;
   config: WorkflowConfig;
   dbEnvVars: Record<string, string>;
   baseAiProfile: ResolvedAiProfile;
@@ -275,11 +279,10 @@ export async function assertRunCredentials(
     WorkflowDeps,
     'getAgentProvider' | 'isPerUserProviderKeysEnabled' | 'getUserProviderCredentialStatus'
   >,
-  workflow: ResolvedWorkflow,
   prepared: PreparedRunAiConfiguration
 ): Promise<void> {
   const storedStatuses = new Map<string, CredentialStatus>();
-  for (const requirement of collectRunCredentialRequirements(workflow, prepared)) {
+  for (const requirement of prepared.requirements) {
     const { provider, model, vendor } = requirement;
     if (prepared.executionUserId && deps.isPerUserProviderKeysEnabled?.() && vendor) {
       if (!deps.getUserProviderCredentialStatus)
@@ -299,8 +302,12 @@ export async function assertRunCredentials(
         }
         storedStatuses.set(vendor, status);
       }
+      if (status.state === 'not_connected' && prepared.connectedVendors.has(vendor)) {
+        assertCredentialStatus(requirement, status);
+      }
       if (status.state !== 'not_connected') {
         assertCredentialStatus(requirement, status);
+        prepared.connectedVendors.add(vendor);
         continue;
       }
     }
