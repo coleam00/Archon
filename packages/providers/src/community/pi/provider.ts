@@ -338,7 +338,7 @@ function isPiModelsError(error: unknown, code: ModelsErrorCode): boolean {
  * value in `credentialValues` redacted: Pi's errors can echo a configured credential.
  */
 export async function resolvePiAuth(
-  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth' | 'getProviderAuthStatus'>,
+  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth' | 'listCredentials'>,
   providerId: string,
   credentialValues: readonly string[],
   signal?: AbortSignal
@@ -353,7 +353,10 @@ export async function resolvePiAuth(
     if (!(await runtime.checkAuth(providerId, { signal }))) {
       // Pi resolves a stored auth.json `!command` key while checking, and a failed command
       // leaves the stored entry with no key. That is a broken credential, not a missing one.
-      if (runtime.getProviderAuthStatus(providerId).source === 'stored') {
+      // The store is read directly: Pi's availability snapshot stays empty when any other
+      // provider's check throws.
+      const stored = await runtime.listCredentials({ signal });
+      if (stored.some(credential => credential.providerId === providerId)) {
         return {
           status: {
             state: 'unusable',
@@ -392,7 +395,7 @@ export async function resolvePiAuth(
  * the key to choose the subscription-OAuth system prompt.
  */
 async function resolvePiTurnAuth(
-  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth' | 'getProviderAuthStatus'>,
+  runtime: Pick<ModelRuntime, 'checkAuth' | 'getAuth' | 'listCredentials'>,
   providerId: string,
   catalogued: boolean,
   credentialValues: readonly string[],

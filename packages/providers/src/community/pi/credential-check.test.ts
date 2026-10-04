@@ -298,6 +298,35 @@ describe('Pi native credentials', () => {
       errors: [expect.stringContaining('auth.json')],
     });
   });
+  test('a failing auth.json key command is unusable when another provider check throws', async () => {
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: '!exit 1' } })
+    );
+    // A throwing check for an unrelated provider fails Pi's whole availability pass, which
+    // leaves its snapshot of stored providers empty.
+    const realCreate = ModelRuntime.create.bind(ModelRuntime);
+    const create = spyOn(ModelRuntime, 'create').mockImplementation(async options => {
+      const runtime = await realCreate({ ...options, refreshOnCreate: false });
+      const models = Reflect.get(runtime, 'models') as Pick<ModelRuntime, 'checkAuth'>;
+      const checkAuth = models.checkAuth.bind(models);
+      models.checkAuth = async (providerId, checkOptions) =>
+        providerId === 'openai'
+          ? Promise.reject(new Error('unrelated check failed'))
+          : checkAuth(providerId, checkOptions);
+      await runtime.refresh();
+      return runtime;
+    });
+    try {
+      expect(await check()).toMatchObject({
+        state: 'unusable',
+        source: 'native',
+        evidence: expect.stringContaining('auth.json'),
+      });
+    } finally {
+      create.mockRestore();
+    }
+  });
   test('a failing models.json key command fails the check and the turn alike', async () => {
     const marker = join(root, 'command-ran');
     writeFileSync(
@@ -438,7 +467,7 @@ describe('Pi native credentials', () => {
   test('a check cancelled while the key command runs is check_failed', async () => {
     const controller = new AbortController();
     const runtime: Parameters<typeof resolvePiAuth>[0] = {
-      getProviderAuthStatus: () => ({ configured: true, source: 'models_json_command' }),
+      listCredentials: async () => [],
       checkAuth: async () => ({ type: 'api_key', source: 'configured API key' }),
       getAuth: async () => {
         controller.abort(new Error('cancelled'));

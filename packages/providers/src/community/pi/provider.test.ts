@@ -177,6 +177,7 @@ type MockModelRuntime = {
   getAuth(providerId: string): Promise<unknown>;
   hasConfiguredAuth(providerId: string): boolean;
   getProviderAuthStatus(providerId: string): { configured: boolean; source?: string };
+  listCredentials(): Promise<readonly { providerId: string }[]>;
 };
 type MockModelRegistryCtor = new (runtime: MockModelRuntime) => MockModelRegistry;
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
@@ -235,6 +236,7 @@ const mockModelRuntimeCreate = mock(
     getAuth: mockGetAuth,
     hasConfiguredAuth: mockHasConfiguredAuth,
     getProviderAuthStatus: () => ({ configured: false }),
+    listCredentials: async () => [],
   })
 );
 
@@ -628,6 +630,7 @@ describe('PiProvider', () => {
         getAuth: mockGetAuth,
         hasConfiguredAuth: mockHasConfiguredAuth,
         getProviderAuthStatus: () => ({ configured: false }),
+        listCredentials: async () => [],
       };
     });
 
