@@ -16,7 +16,7 @@ import { forgeSource, parsePrRecord, record } from '../../.shared/forge.ts';
 import { emit, refuse, text } from '../../.shared/io.ts';
 
 try {
-  const source = forgeSource(process.env.ARCHON_SDLC_FORGE);
+  const source = forgeSource();
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
   const intent = record(JSON.parse(readFileSync(text(process.env.INPUTS_INTENT), 'utf8')));
   if (!intent) throw new Error('the body intent must be a JSON object');

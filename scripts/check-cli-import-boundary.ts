@@ -100,6 +100,23 @@ try {
     'packages/workflows/src/schemas/model-binding.ts',
     'packages/workflows/src/schemas/run-config.ts',
   ]);
+  const policyMetafile = buildImportGraph(
+    join(repoRoot, 'packages/adapters/src/platform-policies.ts'),
+    join(buildDir, 'platform-policies')
+  );
+  const policyInputs = Object.keys(policyMetafile.inputs)
+    .map(repositoryInput)
+    .filter((input): input is string => input !== undefined);
+  assert.ok(
+    policyInputs.every(
+      input =>
+        input === 'packages/adapters/src/platform-policies.ts' ||
+        (input.startsWith('packages/adapters/src/') && input.endsWith('/policy.ts')) ||
+        input.startsWith('packages/core/src/platforms/') ||
+        input === 'packages/core/src/schemas/user.ts'
+    ),
+    'Platform policy bootstrap imports an implementation outside its declaration boundary'
+  );
   console.log('CLI startup and detached handoff import boundaries pass.');
 } finally {
   await removeTempTree(buildDir);

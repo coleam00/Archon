@@ -1,8 +1,16 @@
 /**
- * Zod schemas for dashboard workflow run types (enriched JOIN results).
+ * Zod schemas for workflow run requests and dashboard types (enriched JOIN results).
  */
 import { z } from '@hono/zod-openapi';
 import { workflowRunSchema, workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
+
+export const signalWorkflowWaitRequestSchema = z.object({
+  event: z.string().min(1),
+  resumeAt: z.iso.datetime(),
+  payload: z.unknown().optional(),
+});
+
+export type SignalWorkflowWaitRequest = z.infer<typeof signalWorkflowWaitRequestSchema>;
 
 // ---------------------------------------------------------------------------
 // DashboardWorkflowRun

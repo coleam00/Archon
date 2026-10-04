@@ -9,7 +9,7 @@ sidebar:
   order: 5
 ---
 
-Archon uses [agent-browser](https://github.com/vercel-labs/agent-browser) (by Vercel Labs) for end-to-end browser testing in workflows like `archon-validate-pr`. It is an **optional** external dependency — core Archon functionality works without it.
+Archon uses [agent-browser](https://github.com/vercel-labs/agent-browser) (by Vercel Labs) for end-to-end browser testing in workflows. It is an **optional** external dependency — core Archon functionality works without it.
 
 ## Installation
 
@@ -34,15 +34,7 @@ agent-browser close
 
 ## Where It's Used
 
-The following workflows and commands depend on agent-browser:
-
-| Resource | Type | Purpose |
-|----------|------|---------|
-| `archon-validate-pr` | Workflow | E2E testing phase of PR validation |
-| `validate-ui` | Skill | Comprehensive UI testing |
-| `replicate-issue` | Skill | Issue reproduction via browser |
-| `archon-validate-pr-e2e-main.md` | Command | E2E tests against the main branch |
-| `archon-validate-pr-e2e-feature.md` | Command | E2E tests against the feature branch |
+No bundled workflow requires agent-browser. Your own workflows can call it from a `bash:` node or from an AI node's instructions, for example to reproduce a UI bug in a real browser or to check a change against a running dev server.
 
 ## Platform-Specific Notes
 

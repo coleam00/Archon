@@ -2,6 +2,7 @@
 // @archon/workflows and @archon/core import from this subpath (@archon/providers/types).
 // HARD RULE: This file must never import SDK packages.
 
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { EffortRung } from '@archon/paths/effort';
 import type {
   ProviderCapabilities,
@@ -386,8 +387,6 @@ export interface AgentRequestOptions {
    * provider-specific and immutability is not guaranteed.
    */
   forkSession?: boolean;
-  /** When false, skip writing session transcript to disk. */
-  persistSession?: boolean;
   /**
    * In-process tools the model may call this turn. Defined once by the caller
    * (e.g. core's manage_run) and adapted per provider — Claude wraps each via
@@ -548,6 +547,11 @@ export interface ProviderAdmissionEvent {
  * The workflow path additionally passes nodeConfig and assistantConfig.
  */
 export interface SendQueryOptions extends AgentRequestOptions {
+  /**
+   * Honored by Codex only: titles use empty capability declarations and a read-only
+   * sandbox. Claude and Pi ignore it.
+   */
+  purpose?: 'title-generation';
   /** Observer for capped-provider admission transitions (queue visibility, #2817). */
   onAdmission?: (event: ProviderAdmissionEvent) => void;
   /** Raw YAML node config — provider translates internally to SDK-specific options. */
@@ -603,8 +607,12 @@ export interface CredentialSpec {
  * introspection API and exposes it through a dedicated endpoint).
  */
 export type ProviderCredentialCatalog =
-  | { kind: 'static'; specs: CredentialSpec[] }
-  | { kind: 'dynamic' };
+  | {
+      kind: 'static';
+      specs: CredentialSpec[];
+      vendorFor(model: string | undefined): string | undefined;
+    }
+  | { kind: 'dynamic'; vendorFor(model: string | undefined): undefined };
 
 /**
  * Registration entry for a provider in the provider registry.
@@ -626,6 +634,12 @@ export interface ProviderRegistration {
 
   /** Whether this is a built-in (maintained by core team) or community provider */
   builtIn: boolean;
+
+  /**
+   * Set when the provider is deprecated. The registry logs it once per process when a
+   * run first uses the provider; `archon doctor` and `archon ai default` show it too.
+   */
+  deprecationNotice?: string;
 
   /**
    * Credentials this agent can consume. Required: registering an agent without
@@ -662,6 +676,14 @@ export interface ProviderInfo {
  * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */
 export interface IAgentProvider {
+  /** Check the credential this provider uses when Archon delivers none. */
+  checkCredential(request: {
+    assistantConfig?: SendQueryOptions['assistantConfig'];
+    model?: string;
+    env: Record<string, string>;
+    signal: AbortSignal;
+  }): Promise<CredentialStatus>;
+
   /**
    * Send a message and get streaming response.
    * @param prompt - User message or prompt

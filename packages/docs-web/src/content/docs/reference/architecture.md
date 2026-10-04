@@ -79,39 +79,7 @@ Platform adapters connect messaging platforms to the orchestrator. Implement the
 
 ### IPlatformAdapter Interface
 
-**Location:** `packages/core/src/types/index.ts`
-
-```typescript
-export interface IPlatformAdapter {
-  // Send a message to the platform (optional metadata for message type hints)
-  sendMessage(conversationId: string, message: string, metadata?: MessageMetadata): Promise<void>;
-
-  // Ensure responses go to a thread, creating one if needed
-  // Returns the thread's conversation ID (may be same as original)
-  ensureThread(originalConversationId: string, messageContext?: unknown): Promise<string>;
-
-  // Get the configured streaming mode
-  getStreamingMode(): 'stream' | 'batch';
-
-  // Get the platform type identifier
-  getPlatformType(): string;
-
-  // Start the platform adapter (e.g., begin polling, start webhook server)
-  start(): Promise<void>;
-
-  // Stop the platform adapter gracefully
-  stop(): void;
-
-  // Optional: Send a structured event (a tool call or its update, a result, a status line or a dispatch)
-  sendStructuredEvent?(conversationId: string, event: PlatformStructuredEvent): Promise<void>;
-
-  // Optional: Retract previously streamed text (workflow routing intercept)
-  emitRetract?(conversationId: string): Promise<void>;
-
-  // Optional: Append a cost / token footer after a direct-chat reply
-  sendResultFooter?(conversationId: string, info: { cost?: number; tokens?: TokenUsage; stopReason?: string }): Promise<void>;
-}
-```
+The current contract is [IPlatformAdapter](https://github.com/coleam00/Archon/blob/dev/packages/core/src/types/index.ts). It declares transport methods, message persistence ownership, and the default workflow dispatch mode. Structured events and background worker preparation are optional capabilities. Hosts set the complete offline retention and streaming policy set before config or cleanup, and cleanup fails until they do; see the [adapter authoring guide](https://github.com/coleam00/Archon/blob/dev/packages/adapters/src/community/chat/README.md).
 
 ### Implementation Guide
 
@@ -123,6 +91,11 @@ export interface IPlatformAdapter {
 import type { IPlatformAdapter } from '@archon/core';
 
 export class YourPlatformAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
+
   private streamingMode: 'stream' | 'batch';
 
   constructor(config: YourPlatformConfig, mode: 'stream' | 'batch' = 'stream') {
@@ -310,22 +283,10 @@ AI agent providers wrap AI SDKs and provide a unified streaming interface. Imple
 
 ### IAgentProvider Interface
 
-**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps)
+**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps). That file is the definition; this page does not copy it.
 
-```typescript
-export interface IAgentProvider {
-  sendQuery(
-    prompt: string,
-    cwd: string,
-    resumeSessionId?: string,
-    options?: SendQueryOptions
-  ): AsyncGenerator<MessageChunk>;
+A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery(prompt, cwd, resumeSessionId, options)`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`), the caller's `env`, and an abort `signal`.
 
-  getType(): string;
-
-  getCapabilities(): ProviderCapabilities;
-}
-```
 
 ### MessageChunk Types
 
@@ -360,9 +321,14 @@ Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(r
 **2. Implement the interface:**
 
 ```typescript
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
 
 export class YourAssistantProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   async *sendQuery(
     prompt: string,
     cwd: string,
@@ -521,45 +487,29 @@ if (!resultReported) {
 yield { type: 'settled' };
 ```
 
-**Codex SDK** (`packages/providers/src/codex/provider.ts`):
+**Codex app-server** (`packages/providers/src/codex/provider.ts`): Archon speaks Codex's JSON-RPC protocol over stdio, one `codex app-server` process per turn.
 
 ```typescript
-// A new thread's id is assigned during the run via the thread.started event,
-// not synchronously on startThread() — capture it for a resumable sessionId.
-let resolvedThreadId = thread.id;
-for await (const event of result.events) {
-  if (event.type === 'thread.started') {
-    resolvedThreadId = event.thread_id; // resumable id; persist_session depends on it
-    continue;
-  }
-  if (event.type === 'item.started' && event.item.type === 'command_execution') {
+const { thread } = await connection.request('thread/start', { cwd, sandbox, approvalPolicy, config });
+const { turn } = await connection.request('turn/start', { threadId: thread.id, input });
+for await (const notification of connection.notifications()) {
+  if (notification.method === 'item/started' && notification.params.item.type === 'commandExecution') {
     // The command is the title the operator reads; the kind of tool is the name.
     yield {
       type: 'tool_call',
-      toolCallId: event.item.id,
+      toolCallId: notification.params.item.id,
       name: 'command_execution',
-      title: event.item.command,
+      title: notification.params.item.command,
     };
-  } else if (event.type === 'item.completed') {
-    switch (event.item.type) {
-      case 'agent_message':
-        yield { type: 'agent_message_chunk', text: event.item.text };
-        break;
-      case 'command_execution':
-        yield {
-          type: 'tool_call_update',
-          toolCallId: event.item.id,
-          status: event.item.exit_code === 0 ? 'completed' : 'failed',
-          ...truncateToolOutput(event.item.aggregated_output),
-        };
-        break;
-      case 'reasoning':
-        yield { type: 'agent_thought_chunk', text: event.item.text };
-        break;
-    }
-  } else if (event.type === 'turn.completed') {
-    yield { type: 'result', sessionId: resolvedThreadId };
-    break; // CRITICAL: Exit loop on turn completion
+  } else if (notification.method === 'item/completed' && notification.params.item.type === 'agentMessage') {
+    yield { type: 'agent_message_chunk', text: notification.params.item.text };
+  } else if (notification.method === 'turn/completed' && notification.params.turn.id === turn.id) {
+    const { error } = notification.params.turn;
+    // The failure class comes from the typed codexErrorInfo, never from the message.
+    yield error
+      ? { type: 'result', sessionId: thread.id, failure: classify(error.codexErrorInfo, error.message) }
+      : { type: 'result', sessionId: thread.id };
+    break;
   }
 }
 yield { type: 'settled' };
@@ -1121,7 +1071,7 @@ remote_agent_codebases
 
 remote_agent_conversations
 ├── id (UUID)
-├── platform_type (VARCHAR) -- 'web' | 'telegram' | 'github' | 'slack' | 'discord' | 'gitea' | 'gitlab' | 'cli'
+├── platform_type (VARCHAR) -- lowercase kebab-case platform identifier, at most 32 characters
 ├── platform_conversation_id (VARCHAR) -- Platform-specific ID
 ├── codebase_id (UUID -> remote_agent_codebases.id)
 ├── cwd (VARCHAR) -- Explicit working-directory override, usually null (set by worktree create/remove; effective cwd falls back to codebase.default_cwd)
@@ -1199,7 +1149,7 @@ remote_agent_users
 remote_agent_user_identities
 ├── id (UUID)
 ├── user_id (UUID -> remote_agent_users.id, ON DELETE CASCADE)
-├── platform (VARCHAR) -- 'slack' | 'telegram' | 'discord' | 'github' | 'gitea' | 'gitlab' | 'web' | 'cli'
+├── platform (VARCHAR) -- lowercase kebab-case platform identifier, at most 32 characters
 ├── platform_user_id (VARCHAR) -- Slack U-id, Telegram chat id, Discord snowflake, GitHub login, ...
 ├── platform_display_name (VARCHAR) -- Cached per-platform display name
 └── UNIQUE(platform, platform_user_id)
@@ -1382,7 +1332,7 @@ Post single comment on issue with summary
 This checklist is for **built-in** providers only. For community providers (`builtIn: false`), see [Adding a Community Provider](../contributing/adding-a-community-provider/) — the folder layout, registration, and capability discipline are covered there in depth.
 
 - [ ] Create `packages/providers/src/your-assistant/provider.ts`
-- [ ] Implement `IAgentProvider` interface (sendQuery + getType + getCapabilities)
+- [ ] Implement `IAgentProvider` interface (checkCredential + sendQuery + getType + getCapabilities)
 - [ ] Map SDK events to `MessageChunk` discriminated union
 - [ ] Handle session creation and resumption
 - [ ] Declare `ProviderCapabilities` honestly — under-declare rather than over-promise

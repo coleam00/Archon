@@ -8,7 +8,7 @@ How to discover, select, and invoke Archon workflows against real work.
 archon workflow list                 # human-readable compact descriptions and errors
 archon workflow list --json          # compact descriptions + descriptionTruncated state
 archon workflow list <name> --full   # exact description for one candidate
-archon workflow search "pr review"  # search the marketplace (installable packs)
+archon plugin install owner/repo     # install a workflow pack published on GitHub
 ```
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
@@ -167,6 +167,11 @@ A failed or paused run resumes from completed nodes:
 archon workflow resume <run-id>
 archon workflow resume <run-id> --detach
 ```
+
+Detached resume returns after engine acceptance, before completion. Immediately use
+`workflow wait <run-id> --json` for the next attention or terminal outcome. If the
+60-second acceptance confirmation fails, inspect the run before retrying: the
+child may still continue.
 
 The ambient sequential session cursor is not reconstructed by a cold resume.
 Explicit `context: { resume: node-id }` ancestry is restored from the completed

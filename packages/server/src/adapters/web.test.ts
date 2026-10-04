@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 
 // Mock logger before importing any module that transitively imports @archon/paths
 const mockLogger = {
@@ -33,6 +33,7 @@ function makeAdapter(): {
   adapter: WebAdapter;
   emitted: string[];
   appendToolResultCalls: unknown[][];
+  bridge: WorkflowEventBridge;
 } {
   const emitted: string[] = [];
   const appendToolResultCalls: unknown[][] = [];
@@ -54,9 +55,6 @@ function makeAdapter(): {
   } as unknown as MessagePersistence;
 
   const mockBridge = {
-    emitOutput: mock(() => {}),
-    registerOutputCallback: mock(() => {}),
-    removeOutputCallback: mock(() => {}),
     setStepTransitionCallback: mock(() => {}),
     start: mock(() => {}),
     stop: mock(() => {}),
@@ -64,7 +62,7 @@ function makeAdapter(): {
   } as unknown as WorkflowEventBridge;
 
   const adapter = new WebAdapter(mockTransport, mockPersistence, mockBridge);
-  return { adapter, emitted, appendToolResultCalls };
+  return { adapter, emitted, appendToolResultCalls, bridge: mockBridge };
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +72,18 @@ function makeAdapter(): {
 beforeEach(() => {
   mockLogger.warn.mockClear();
   mockLogger.error.mockClear();
+});
+
+describe('WebAdapter.sendStructuredEvent — provider results', () => {
+  test('does not emit a provider session id on SSE', async () => {
+    const { adapter, emitted } = makeAdapter();
+    const sessionId = 'provider-session-3597-resumable-conversation';
+
+    await adapter.sendStructuredEvent('conv-1', { type: 'result', sessionId });
+
+    expect(emitted.join('\n')).not.toContain(sessionId);
+    expect(emitted).toEqual([]);
+  });
 });
 
 describe('WebAdapter.sendStructuredEvent — tool results', () => {
@@ -167,4 +177,35 @@ describe('WebAdapter.sendMessage — text event category', () => {
 
     expect(emitted.length).toBe(0);
   });
+});
+
+test('background preparation maps persistence and releases the bridge before awaited lock flush', async () => {
+  const { adapter, bridge: workflowBridge } = makeAdapter();
+  const calls: string[] = [];
+  const mapping = spyOn(adapter, 'setConversationDbId').mockImplementation(() => {
+    calls.push('mapping');
+  });
+  const bridge = spyOn(workflowBridge, 'bridgeWorkerEvents').mockImplementation(() => () => {
+    calls.push('unsubscribe');
+  });
+  let release: () => void = () => {};
+  const lock = spyOn(adapter, 'emitLockEvent').mockImplementation(async () => {
+    await new Promise<void>(resolve => {
+      release = resolve;
+    });
+    calls.push('lock');
+  });
+  const finish = await adapter.prepareBackgroundConversation({
+    workerConversationId: 'worker',
+    parentConversationId: 'parent',
+    conversationDbId: 'db',
+  });
+  expect(mapping).toHaveBeenCalledWith('worker', 'db');
+  expect(bridge).toHaveBeenCalledWith('worker', 'parent');
+  const finished = finish();
+  expect(calls).toEqual(['mapping', 'unsubscribe']);
+  expect(lock).toHaveBeenCalledWith('worker', false);
+  release();
+  await finished;
+  expect(calls).toEqual(['mapping', 'unsubscribe', 'lock']);
 });

@@ -11,6 +11,7 @@ import {
   serializeNodeStateRecord,
   serializeNodeTranscript,
   serializeNodeOutput,
+  persistedOutputContract,
   type NodeExecutionResult,
 } from './node-record-serialization';
 import {
@@ -39,6 +40,10 @@ import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
 import { isEffortRung } from '@archon/paths/effort';
+import {
+  collectCredentialValues,
+  redactCredentialValues,
+} from '@archon/paths/credential-redaction';
 import { discoverScriptsForCwd } from './script-discovery';
 import { discoverWorkflowsWithConfig, resolveWorkflowCommandContents } from './workflow-discovery';
 import {
@@ -68,7 +73,7 @@ import type {
   OverlayChangeSummary,
 } from '@archon/providers/types';
 import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
-import type { ProviderFailure } from '@archon/provider-contract';
+import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
 import {
@@ -114,6 +119,7 @@ import {
   isExecNode,
   isAgentNode,
   isLoopGroupNode,
+  definedOutputPaths,
   loopGroupBodySinks,
   loopGroupSoleTerminalSink,
   isGateNode,
@@ -153,7 +159,10 @@ import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { evaluateCondition } from './condition-evaluator';
 import {
-  declaredFieldsFromSchema,
+  declaredOutputPathsFromSchema,
+  rootOutputFields,
+  outputRefText,
+  type DeclaredOutputPaths,
   resolveNodeOutputField,
   assertProducerNotFailed,
   OutputRefError,
@@ -164,6 +173,9 @@ import {
   resolveExecutionCheckoutStart,
   parseWholeInputsRef,
   substituteInputRefs,
+  PRIOR_OUTPUT_PATH_SOURCE,
+  CURRENT_OUTPUT_PATH_SOURCE,
+  assertSupportedOutputRefs,
   type JsonValue,
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
@@ -197,8 +209,6 @@ import {
   currentAdoptedRunDir,
   getRetryDelayMs,
   RATE_LIMIT_MAX_RETRIES,
-  providerFailureKind,
-  detectCreditExhaustion,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -332,7 +342,8 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
 function wholeRefLogicalValue(
   producer: NodeOutput,
   nodeId: string,
-  field: string | undefined
+  field: string | undefined,
+  reference: string
 ): JsonValue {
   if (field === undefined) {
     assertProducerNotFailed(
@@ -349,7 +360,7 @@ function wholeRefLogicalValue(
   }
   // A failed producer's fielded form is rejected inside resolveNodeOutputField itself
   // (#2713) — the same 'producer-failed' guard as the unfielded branch above.
-  const resolution = resolveNodeOutputField(producer, nodeId, field);
+  const resolution = resolveNodeOutputField(producer, nodeId, field, reference);
   return resolution.kind === 'empty' ? '' : (resolution.value as JsonValue);
 }
 
@@ -394,15 +405,13 @@ function resolveWorkflowValue(
   if (wholeRef !== undefined) {
     const producer = ctx.nodeOutputs.get(wholeRef.nodeId);
     if (producer !== undefined) {
-      return wholeRefLogicalValue(producer, wholeRef.nodeId, wholeRef.field);
+      return wholeRefLogicalValue(producer, wholeRef.nodeId, wholeRef.field, rawValue.trim());
     }
     if (wholeRef.field !== undefined) {
-      throw new OutputRefError(
-        wholeRef.nodeId,
-        wholeRef.field,
-        'unknown-node',
-        similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys())
-      );
+      throw new OutputRefError(wholeRef.nodeId, wholeRef.field, 'unknown-node', {
+        reference: rawValue.trim(),
+        candidates: similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys()),
+      });
     }
     if (strictWholeRef) {
       const candidates = similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys());
@@ -521,7 +530,7 @@ function resolveBindingDirective(
       `failure, or guard '${consumerId}' with a 'when:' condition that excludes the ` +
       'failed branch.'
   );
-  return wholeRefLogicalValue(producer, ref.nodeId, ref.field);
+  return wholeRefLogicalValue(producer, ref.nodeId, ref.field, directive.from.trim());
 }
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -696,13 +705,12 @@ export interface ChildWorkflowOutcome {
    */
   structuredOutput?: unknown;
   /**
-   * Top-level field names the child's selected `returns:` node declared (#2453), read
-   * from `metadata.summary_declared_fields`. This is what authorizes a parent's
-   * `$<node>.output.field`: the child owns the contract, and a `workflow:` node cannot
-   * declare one of its own. Absent for schemaless children and pre-#2453 rows — those
-   * carry no field contract at all.
+   * Field paths the child's selected `returns:` node declared (#2453), read from the
+   * run's subrun metadata. This is what authorizes a parent's `$<node>.output.a.b`: the
+   * child owns the contract, and a `workflow:` node cannot declare one of its own.
+   * Absent for schemaless children and pre-#2453 rows — those carry no contract at all.
    */
-  declaredFields?: readonly string[];
+  declaredOutputPaths?: DeclaredOutputPaths;
   /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
   costUsd?: number;
   tokens?: TokenUsage;
@@ -808,7 +816,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
   // from "not stamped".
-  const { summaryValue, summaryDeclaredFields } = readSubrunMetadata(md);
+  const { summaryValue, summaryDeclaredOutputPaths } = readSubrunMetadata(md);
   return {
     childRunId: run.id,
     status: run.status,
@@ -817,7 +825,9 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     // The child's own field contract (#2453) — read from the row so the synchronous
     // path and the parent re-entry/resume path stay one source, exactly like the
     // summary and usage above.
-    ...(summaryDeclaredFields !== undefined ? { declaredFields: summaryDeclaredFields } : {}),
+    ...(summaryDeclaredOutputPaths !== undefined
+      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
+      : {}),
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
     tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
@@ -950,10 +960,10 @@ function getExplicitNodeRetryConfig(
  * `undefined` when it does not.
  *
  * Shared by {@link runNodeRetryLoop} for every node type so the retry decision
- * cannot drift. The class comes from {@link retryClassOf}: a provider failure is
- * decided by the kind recorded where it failed, never by its text. Fatal failures
- * (credentials, authorization, quota and spend windows) are never retried, even
- * when `on_error: all`; `unknown` is retried only under `on_error: all`.
+ * cannot drift. The class comes from {@link retryClassOf}: the kind recorded where
+ * the node failed decides, never its error text. Fatal failures (credentials, quota
+ * and spend windows, config errors, cancellation) are never retried, even when
+ * `on_error: all`; `unknown` is retried only under `on_error: all`.
  */
 function retryableFailureClass(
   output: NodeOutput,
@@ -964,10 +974,9 @@ function retryableFailureClass(
   // here too so `output.error` type-checks and the helper is safe standalone.
   if (output.state !== 'failed') return undefined;
   // A producer that diagnosed its own output (an exec contract failure, #2453) says so
-  // in the type; its error text quotes stdout, so classifying that text would let a
-  // transient-looking excerpt re-run a script whose stdout is deterministically wrong.
+  // in the type: its stdout is deterministically wrong, so no class re-runs it.
   if (output.retryable === false) return undefined;
-  const retryClass = retryClassOf(output);
+  const retryClass = retryClassOf(output.failureKind);
   if (retryClass === 'fatal') return undefined;
   if (retryClass === 'unknown' && onError !== 'all') return undefined;
   return retryClass;
@@ -1136,6 +1145,29 @@ async function snapshotCheckout(
 }
 
 /**
+ * Take a `mutates_checkout: false` node's pre-run snapshot and record it in its
+ * concurrent layer's snapshot set, so a sibling's violation can name it. Returns
+ * `undefined` for an undeclared node: nothing to assert.
+ */
+async function snapshotGuardedNode(
+  ctx: Pick<RunLayersContext, 'cwd' | 'guardedLayerSnapshots'>,
+  node: DagNode,
+  excludeDirs: readonly string[]
+): Promise<string | undefined> {
+  if (node.mutates_checkout !== false) return undefined;
+  ctx.guardedLayerSnapshots?.add(node.id);
+  return snapshotCheckout(ctx.cwd, excludeDirs);
+}
+
+/**
+ * A node whose `mutates_checkout: false` the engine enforces: exec and agent nodes.
+ * Every other node may write to the checkout as far as layer scheduling knows.
+ */
+function isCheckoutGuarded(node: DagNode): boolean {
+  return node.mutates_checkout === false && (isExecNode(node) || isAgentNode(node));
+}
+
+/**
  * Enforce a node's `mutates_checkout: false` declaration (#2771): when the node ran
  * successfully but the pre-run snapshot changed, rewrite its result to a failure that
  * names the node and lists what moved, and persist the standard `node_failed` event so
@@ -1151,7 +1183,8 @@ async function assertCheckoutUntouched(
   before: string | undefined,
   result: NodeExecutionResult,
   deps: WorkflowDeps,
-  logDir: string
+  logDir: string,
+  guardedLayerSnapshots: ReadonlySet<string> | undefined
 ): Promise<NodeExecutionResult> {
   if (node.mutates_checkout !== false || before === undefined || result.state !== 'completed') {
     return result;
@@ -1166,7 +1199,11 @@ async function assertCheckoutUntouched(
     .flatMap(porcelainPaths)
     .slice(0, 10)
     .join(', ');
-  const error = `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`;
+  const concurrentGuardedSiblings = [...(guardedLayerSnapshots ?? [])].filter(id => id !== node.id);
+  const error =
+    concurrentGuardedSiblings.length === 0
+      ? `Node \`${node.id}\` declared \`mutates_checkout: false\` but modified the working tree: ${changedPaths}`
+      : `Node \`${node.id}\` declared \`mutates_checkout: false\`, and the working tree changed; the guarded siblings ${concurrentGuardedSiblings.map(id => `\`${id}\``).join(', ')} also ran in this parallel layer, so the change may not be this node's alone: ${changedPaths}`;
   getLog().error({ nodeId: node.id, changed: changedPaths }, 'dag_mutates_checkout_violation');
   if (result.execution === undefined) {
     throw new Error(`Node '${node.id}' completed without its execution record`);
@@ -1181,7 +1218,7 @@ async function assertCheckoutUntouched(
         output: {
           text: result.output,
           structured: result.structuredOutput,
-          declaredFields: result.declaredFields,
+          declaredOutputPaths: result.declaredOutputPaths,
         },
       }
     )
@@ -1276,8 +1313,9 @@ export function substituteNodeOutputRefs(
   artifactsDir?: string,
   requiredContext?: RequiredOutputRefContext
 ): string {
+  assertSupportedOutputRefs(prompt);
   return prompt.replace(
-    /\$([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
+    new RegExp(CURRENT_OUTPUT_PATH_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
@@ -1290,12 +1328,10 @@ export function substituteNodeOutputRefs(
         // `until_bash` opts into requiredContext because empty text would become an
         // input to a completion decision rather than merely missing display text.
         if (field) {
-          const error = new OutputRefError(
-            nodeId,
-            field,
-            'unknown-node',
-            similarNodeIds(nodeId, nodeOutputs.keys())
-          );
+          const error = new OutputRefError(nodeId, field, 'unknown-node', {
+            reference: match,
+            candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
+          });
           throw requiredContext
             ? requiredOutputRefError(requiredContext, match, error.message)
             : error;
@@ -1357,7 +1393,7 @@ export function substituteNodeOutputRefs(
       // value that resolves to empty is an author-declared-optional field.
       let resolution: ReturnType<typeof resolveNodeOutputField>;
       try {
-        resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+        resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
       } catch (error) {
         if (requiredContext && error instanceof OutputRefError) {
           throw requiredOutputRefError(requiredContext, match, error.message);
@@ -1448,11 +1484,12 @@ export function substituteLoopPrevRefs(
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
   // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
+  assertSupportedOutputRefs(prompt);
   if (!prompt.includes('$LOOP_PREV.')) {
     return prompt;
   }
   return prompt.replace(
-    /\$LOOP_PREV\.([a-zA-Z_][a-zA-Z0-9_-]*)\.output(?:\.([a-zA-Z_][a-zA-Z0-9_]*))?/g,
+    new RegExp(PRIOR_OUTPUT_PATH_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
       if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
@@ -1465,12 +1502,10 @@ export function substituteLoopPrevRefs(
             // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
             // alone cannot tell a typo from a legitimate first-pass absence.
             if (field) {
-              throw new OutputRefError(
-                nodeId,
-                field,
-                'unknown-node',
-                similarNodeIds(nodeId, knownBodyIds)
-              );
+              throw new OutputRefError(nodeId, field, 'unknown-node', {
+                reference: match,
+                candidates: similarNodeIds(nodeId, knownBodyIds),
+              });
             }
           } else if (directBodyIds && !directBodyIds.has(nodeId)) {
             // Known id owned by a NESTED loop_group, not this group's own body. Leave the
@@ -1494,7 +1529,7 @@ export function substituteLoopPrevRefs(
           ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
           : nodeOutput.output;
       }
-      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
       if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
       const value = resolution.value;
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -2080,6 +2115,8 @@ async function executeNodeInternal(
   let nodeStopReason: string | undefined;
   let nodeNumTurns: number | undefined;
   let nodeResolvedModel: ResolvedModel | undefined;
+  // Declared before `failAgentNode`, which records it and can run before the stream starts.
+  let newSessionId: string | undefined;
   const nodeKey = `${workflowRun.id}:${node.id}`;
 
   const failAgentNode = async (
@@ -2106,6 +2143,7 @@ async function executeNodeInternal(
           stopReason: nodeStopReason,
           numTurns: nodeNumTurns,
           resolvedModel: nodeResolvedModel?.id,
+          sessionId: newSessionId,
         }
       )
     );
@@ -2202,7 +2240,6 @@ async function executeNodeInternal(
 
   let nodeOutputText = ''; // Always accumulate regardless of streaming mode
   let structuredOutput: unknown;
-  let newSessionId: string | undefined;
   let nodeResumed: boolean | undefined;
   const batchMessages: string[] = [];
 
@@ -2414,7 +2451,7 @@ async function executeNodeInternal(
               nodeId: node.id,
               errorSubtype: subtype,
               errors: msg.errors,
-              sessionId: msg.sessionId,
+              ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
               stopReason: msg.stopReason,
               durationMs: Date.now() - nodeStartTime,
             },
@@ -2648,15 +2685,6 @@ async function executeNodeInternal(
       await safeSendMessage(platform, conversationId, batchContent, nodeContext);
     }
 
-    // Detect credit exhaustion: SDK returns it as assistant text, not a thrown error.
-    const creditError = detectCreditExhaustion(nodeOutputText);
-
-    if (creditError) {
-      const duration = Date.now() - nodeStartTime;
-      getLog().warn({ nodeId: node.id, durationMs: duration }, 'dag.node_credit_exhausted');
-      return { state: 'failed', output: nodeOutputText, error: creditError, failureKind: 'fatal' };
-    }
-
     // Fail for zero output: covers both silent non-timeout exits AND idle-timeout before first token (time-to-first-token exceeded the window).
     if (nodeOutputText.trim() === '' && structuredOutput === undefined) {
       const duration = Date.now() - nodeStartTime;
@@ -2707,7 +2735,7 @@ async function executeNodeInternal(
     // Capture the producer's declared field set so downstream `$node.output.field`
     // refs can tell a declared-optional-absent field ('') from a typo (throws).
     // Only present when output_format declares an object with `properties`.
-    const declaredFields = declaredFieldsFromSchema(node.output_format);
+    const declaredOutputPaths = declaredOutputPathsFromSchema(node.output_format);
 
     return {
       state: 'completed',
@@ -2716,7 +2744,7 @@ async function executeNodeInternal(
       costUsd: nodeCostUsd,
       ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
       ...(nodeResumed !== undefined ? { resumed: nodeResumed } : {}),
     };
   };
@@ -2737,7 +2765,7 @@ async function executeNodeInternal(
       ? 'cancelled'
       : err instanceof NodeFailure
         ? err.kind
-        : providerFailureKind(err);
+        : 'unknown';
     const providerFailure =
       !cancelled && err instanceof NodeFailure ? err.providerFailure : undefined;
     return failAgentNode(failureMessage, failureKind, {
@@ -2759,7 +2787,7 @@ async function executeNodeInternal(
         output: {
           text: result.output,
           structured: result.structuredOutput,
-          declaredFields: result.declaredFields,
+          declaredOutputPaths: result.declaredOutputPaths,
         },
         tokens: nodeTokens,
         costUsd: nodeCostUsd,
@@ -2777,7 +2805,7 @@ async function executeNodeInternal(
         },
       }
     ),
-    { sessionId: result.sessionId, resumed: result.resumed }
+    { resumed: result.resumed }
   );
 
   // Clean up throttle entries on completion
@@ -2859,36 +2887,6 @@ function isSubprocessTimeout(error: RawSubprocessRejection): boolean {
   return error.killed === true && error.code === null;
 }
 
-const CREDENTIAL_ENV_KEY_SUFFIX = /(?:TOKEN|KEY|SECRET|PASSWORD)$/i;
-const CREDENTIAL_ENV_KEYS = new Set(['DATABASE_URL']);
-
-function collectSubprocessCredentialValues(
-  env: NodeJS.ProcessEnv,
-  protectedEnvKeys: readonly string[] | undefined,
-  protectedCredentialValues: readonly string[] | undefined
-): string[] {
-  const explicitlyProtected = new Set(protectedEnvKeys);
-  const values = Object.entries(env).flatMap(([key, value]) =>
-    value &&
-    (explicitlyProtected.has(key) ||
-      CREDENTIAL_ENV_KEYS.has(key) ||
-      CREDENTIAL_ENV_KEY_SUFFIX.test(key))
-      ? [value]
-      : []
-  );
-  return [...new Set([...values, ...(protectedCredentialValues ?? [])])]
-    .filter(value => value.length > 0)
-    .sort((a, b) => b.length - a.length);
-}
-
-function redactCredentialValues(input: string, credentialValues: readonly string[]): string {
-  let result = input;
-  for (const value of credentialValues) {
-    result = result.replaceAll(value, '[REDACTED]');
-  }
-  return result;
-}
-
 /**
  * Scrub credentials from every subprocess rejection field that can carry
  * subprocess text. The exact values come from the engine's injected-credential
@@ -2896,7 +2894,7 @@ function redactCredentialValues(input: string, credentialValues: readonly string
  * removed even when the failed process echoes them without their env key.
  *
  * Mutates in place rather than returning a fresh Error: callers classify the
- * rejection by reading `killed` (timeout) and `code`/`message` (ENOENT/EACCES) off
+ * rejection by reading `killed` (timeout) and `code` (ENOENT/EACCES) off
  * the original object, and a replacement would silently drop those and turn every
  * timeout into a generic failure.
  *
@@ -2968,7 +2966,7 @@ async function runSubprocess(
   // Both outcomes redact against the same values, so the credential set is resolved
   // once here rather than separately per path — a success path that redacted less than
   // the failure path would be the security hole, not a style difference.
-  const credentialValues = collectSubprocessCredentialValues(
+  const credentialValues = collectCredentialValues(
     subprocessEnv,
     options.protectedEnvKeys,
     options.protectedCredentialValues
@@ -3190,15 +3188,21 @@ function providerReportedFailure(
   maxBudgetUsd: number | undefined,
   logContext: Record<string, unknown>
 ): NodeFailure {
-  if (failure.class === 'budget_exceeded') {
-    getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+  let message: string;
+  switch (failure.class) {
+    case 'budget_exceeded':
+      getLog().warn({ ...logContext, maxBudgetUsd }, 'dag.node_budget_cap_exceeded');
+      message = `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`;
+      break;
+    case 'misconfigured':
+      message = `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`;
+      break;
+    case 'quota_exhausted':
+      message = `${subject} failed: the provider's usage or credit limit is used up${failure.resetAt !== undefined ? ` (resets ${failure.resetAt})` : ''}. Resume the run once it reopens: ${failure.evidence}`;
+      break;
+    default:
+      message = `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   }
-  const message =
-    failure.class === 'budget_exceeded'
-      ? `${subject} exceeded cost cap${maxBudgetUsd !== undefined ? ` of $${maxBudgetUsd.toFixed(2)}` : ''}.`
-      : failure.class === 'misconfigured'
-        ? `${subject} failed: the provider's configuration must be fixed before it can run; retrying will not help: ${failure.evidence}`
-        : `${subject} failed: provider reported ${failure.class}: ${failure.evidence}`;
   return new NodeFailure(nodeFailureKindOf(failure), message, failure);
 }
 
@@ -3244,7 +3248,11 @@ function certifyExecOutput(
   node: ExecNode,
   stdout: string,
   credentialValues: readonly string[]
-): { output: string; structuredOutput?: JsonValue; declaredFields?: string[] } {
+): {
+  output: string;
+  structuredOutput?: JsonValue;
+  declaredOutputPaths?: DeclaredOutputPaths;
+} {
   if (node.output_format === undefined) return { output: stdout };
 
   const label = `${node.runtime === 'sh' ? 'Bash' : 'Script'} node '${node.id}'`;
@@ -3279,11 +3287,11 @@ function certifyExecOutput(
 
   // Same projection an AI producer captures: it lets a downstream `.field` ref tell a
   // declared-but-absent optional field ('') from a typo (throws).
-  const declaredFields = declaredFieldsFromSchema(node.output_format);
+  const declaredOutputPaths = declaredOutputPathsFromSchema(node.output_format);
   return {
     output: canonicalValueText(value),
     structuredOutput: value,
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
   };
 }
 
@@ -3526,7 +3534,7 @@ async function executeBashNode(
         output: {
           text: output,
           structured: certified.structuredOutput,
-          declaredFields: certified.declaredFields,
+          declaredOutputPaths: certified.declaredOutputPaths,
           persisted: {
             text: persistedOutput.nodeOutput,
             truncated: persistedOutput.truncated,
@@ -3831,9 +3839,9 @@ async function executeScriptNode(
       errorMsg = err.message;
     } else if (isTimeout) {
       errorMsg = `${label} timed out after ${String(timeout)}ms`;
-    } else if (err.message?.includes('ENOENT')) {
+    } else if (execContext.kind === 'host' && err.code === 'ENOENT') {
       errorMsg = `${label} failed: '${cmd}' executable not found in PATH`;
-    } else if (err.message?.includes('EACCES')) {
+    } else if (execContext.kind === 'host' && err.code === 'EACCES') {
       errorMsg = `${label} failed: permission denied (check cwd permissions)`;
     } else {
       errorMsg = formatted.userMessage;
@@ -3875,7 +3883,7 @@ async function executeScriptNode(
         output: {
           text: output,
           structured: certified.structuredOutput,
-          declaredFields: certified.declaredFields,
+          declaredOutputPaths: certified.declaredOutputPaths,
           persisted: {
             text: persistedOutput.nodeOutput,
             truncated: persistedOutput.truncated,
@@ -4032,7 +4040,7 @@ async function finalizeLoopFromSignal(
   const output = {
     text: finalizeOutput,
     structured: finalizeStructuredOutput,
-    declaredFields: declaredFieldsFromSchema(node.output_format),
+    declaredOutputPaths: declaredOutputPathsFromSchema(node.output_format),
   };
   if (execution !== undefined) {
     return recordNodeState(
@@ -4047,8 +4055,7 @@ async function finalizeLoopFromSignal(
           // Approval does no execution work. Keep the duration observed before pause.
           durationMs: execution.timing.durationMs,
         }
-      ),
-      { sessionId }
+      )
     );
   }
   // Old approval cursors have no execution identity or observed start time.
@@ -4062,7 +4069,9 @@ async function finalizeLoopFromSignal(
       ...(finalizeStructuredOutput !== undefined
         ? { structured_output: finalizeStructuredOutput }
         : {}),
-      ...(output.declaredFields !== undefined ? { declared_fields: output.declaredFields } : {}),
+      ...(output.declaredOutputPaths !== undefined
+        ? persistedOutputContract(output.declaredOutputPaths)
+        : {}),
       ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
       ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     },
@@ -4075,7 +4084,9 @@ async function finalizeLoopFromSignal(
     ...(finalizeStructuredOutput !== undefined
       ? { structuredOutput: finalizeStructuredOutput }
       : {}),
-    ...(output.declaredFields !== undefined ? { declaredFields: output.declaredFields } : {}),
+    ...(output.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: output.declaredOutputPaths }
+      : {}),
     ...finalizeUsage,
     ...(sessionId !== undefined ? { sessionId } : {}),
   };
@@ -4341,23 +4352,19 @@ async function executeLoopGroupBody(
     for (const id of directBodyIds) {
       const prior = outerNodeOutputs.get(bodyStepNamePrefix + id);
       if (!prior) continue;
-      // The persisted row's dotted `<groupId>.<bodyId>` step name never matches a
-      // TOP-LEVEL node id, so the pre-population `prior` came from (executeDagWorkflow's
-      // resume loop) can only supply a contract the ROW itself carried — a body
-      // `workflow:` node's child-owned projection (#2453). Otherwise re-derive from the
-      // body node's OWN current definition — the same source the in-process per-iteration
-      // path uses (~line 3111) — so a resumed $LOOP_PREV.<id>.output.<field> ref keeps
-      // the same schema-typo strictness a live iteration has, instead of silently
-      // degrading to lenient '' for a genuinely undeclared field.
+      // Same rule as executeDagWorkflow's resume loop: the body node's OWN current
+      // definition owns its contract — the source a live iteration uses — so a resumed
+      // $LOOP_PREV.<id>.output.<path> ref keeps the same strictness, and a row an older
+      // binary wrote (top-level fields only) cannot narrow it. The persisted row supplies
+      // only a contract the definition cannot state: a body `workflow:` node's
+      // child-owned projection (#2453).
       const bodyNodeDef = bodyNodesById.get(id);
-      const declaredFields =
-        ('declaredFields' in prior ? prior.declaredFields : undefined) ??
-        (bodyNodeDef !== undefined && !isLoopGroupNode(bodyNodeDef)
-          ? declaredFieldsFromSchema(bodyNodeDef.output_format)
-          : undefined);
+      const declaredOutputPaths =
+        (bodyNodeDef !== undefined ? definedOutputPaths(bodyNodeDef) : undefined) ??
+        ('declaredOutputPaths' in prior ? prior.declaredOutputPaths : undefined);
       restoredLoopPrevOutputs.set(id, {
         ...prior,
-        ...(declaredFields !== undefined ? { declaredFields } : {}),
+        ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
       });
     }
     // Kept as an empty-map guard for clarity only — substituteLoopPrevRefs reads via
@@ -4717,6 +4724,13 @@ async function executeLoopGroupBody(
       );
     }
 
+    // Carry the body's final sequential session into the next iteration (unless
+    // fresh_context forces a reset, handled above by seeding undefined). Taken
+    // before the escalation below, which returns early: its pause persists this
+    // cursor, and a cursor from before the paused iteration would resume without
+    // that iteration's turns (#3532).
+    loopLastSequentialSession = iterCtx.lastSequentialSession;
+
     // #2707 step 3: pause escalation. A gate node that is the body's sole terminal
     // sink pauses generically via executeApprovalNode (called through runLayers,
     // like any other body node) — that pause alone does NOT stop this loop: the
@@ -4824,10 +4838,6 @@ async function executeLoopGroupBody(
         loopIterations: i,
       };
     }
-
-    // Carry the body's final sequential session into the next iteration (unless
-    // fresh_context forces a reset, handled above by seeding undefined).
-    loopLastSequentialSession = iterCtx.lastSequentialSession;
 
     // Carry prior-iteration snapshot forward for $LOOP_PREV.* on the next iteration.
     loopPrevOutputs = new Map(scopedNodeOutputs);
@@ -5029,7 +5039,7 @@ async function executeLoopGroupBody(
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
         // The final iteration's sink payload, so downstream `$group.output.field`
-        // resolves from the logical value (#2637). No declaredFields: a group's
+        // resolves from the logical value (#2637). No declaredOutputPaths: a group's
         // own output_format is ignored, so field access stays tier-2 lenient.
         ...(lastIterationStructuredOutput !== undefined
           ? { structuredOutput: lastIterationStructuredOutput }
@@ -5064,7 +5074,7 @@ async function executeLoopGroupBody(
           state: 'failed',
           output: lastIterationOutput,
           failureKind: 'unknown',
-          error: `Loop-group gate message failed to deliver for node '${node.id}' — cannot pause safely`,
+          error: undeliveredGatePromptError('Loop-group gate', node.id),
         };
       }
       deps.store
@@ -5319,6 +5329,7 @@ async function executeLoopNode(
           stopReason: loopFinalStopReason,
           numTurns: loopTotalNumTurns,
           resolvedModel: loopResolvedModel?.id,
+          sessionId: currentSessionId,
           diagnostics: { ...extras.data, loopIterations: extras.loopIterations },
         }
       )
@@ -5585,6 +5596,8 @@ async function executeLoopNode(
     let iterationSettled = false;
     let lastWatchdogReset: WatchdogReset | undefined;
     let iterationPayload: unknown;
+    // The session this iteration reported, for its own `loop_iteration_completed` row.
+    let iterationSessionId: string | undefined;
 
     // Per-attempt transient retry for AI-loop iterations (#2706): a plain AI node's
     // failure goes through runNodeRetryLoop; an iteration used to die on its first
@@ -5595,7 +5608,7 @@ async function executeLoopNode(
       failure: { failureKind: NodeFailureKind; error: string },
       attempt: number
     ): Promise<boolean> => {
-      const retryClass = retryClassOf(failure);
+      const retryClass = retryClassOf(failure.failureKind);
       if (retryClass === 'rate_limited') iterSawRateLimit = true;
       if (retryClass !== 'transient' && retryClass !== 'rate_limited') return false;
       const message = failure.error;
@@ -5626,6 +5639,8 @@ async function executeLoopNode(
     };
 
     iterationAttempt: for (let iterRetry = 0; ; iterRetry++) {
+      // A failed attempt's session is not the one the iteration completed in.
+      iterationSessionId = undefined;
       let iterationAbortController = new AbortController();
       // Mid-stream cancel-check throttle (see the check inside the stream loop).
       // The between-iteration status check just ran, so start the clock at the
@@ -5844,13 +5859,16 @@ async function executeLoopNode(
               if (msg.sessionId) {
                 if (pass.threadsSession) {
                   currentSessionId = msg.sessionId;
+                  iterationSessionId = msg.sessionId;
                 } else if (currentSessionId !== msg.sessionId) {
                   getLog().debug(
                     {
                       nodeId: node.id,
                       iteration: i,
                       attempt: reaskAttempt,
-                      keptSessionId: currentSessionId,
+                      ...(currentSessionId !== undefined
+                        ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
+                        : {}),
                     },
                     'loop_node.reask_session_not_threaded'
                   );
@@ -5911,7 +5929,7 @@ async function executeLoopNode(
                     iteration: i,
                     errorSubtype: subtype,
                     errors: msg.errors,
-                    sessionId: msg.sessionId,
+                    ...(msg.sessionId ? { sessionIdPreview: sessionPreview(msg.sessionId) } : {}),
                     stopReason: msg.stopReason,
                   },
                   'loop_node.iteration_sdk_error'
@@ -5971,8 +5989,7 @@ async function executeLoopNode(
             .catch((evtErr: Error) => {
               logEventStoreError(evtErr, i);
             });
-          const failureKind: NodeFailureKind =
-            err instanceof NodeFailure ? err.kind : providerFailureKind(err);
+          const failureKind: NodeFailureKind = err instanceof NodeFailure ? err.kind : 'unknown';
           if (await tryIterationTransientRetry({ failureKind, error: err.message }, iterRetry)) {
             continue iterationAttempt;
           }
@@ -6450,7 +6467,15 @@ async function executeLoopNode(
         workflow_run_id: workflowRun.id,
         event_type: 'loop_iteration_completed',
         step_name: stepName,
-        data: { iteration: i, duration, completionDetected, nodeId: node.id },
+        data: {
+          iteration: i,
+          duration,
+          completionDetected,
+          nodeId: node.id,
+          // The durable row is the only home for the full id; the emitter event above
+          // and the transcript line below stay without it.
+          ...(iterationSessionId !== undefined ? { session_id: iterationSessionId } : {}),
+        },
       })
       .catch((err: Error) => {
         logEventStoreError(err, i);
@@ -6489,7 +6514,7 @@ async function executeLoopNode(
             output: {
               text: lastIterationOutput,
               structured: lastIterationStructuredOutput,
-              declaredFields: declaredFieldsFromSchema(node.output_format),
+              declaredOutputPaths: declaredOutputPathsFromSchema(node.output_format),
             },
             tokens: loopTotalTokens,
             costUsd: loopTotalCostUsd,
@@ -6504,8 +6529,7 @@ async function executeLoopNode(
                 : {}),
             },
           }
-        ),
-        { sessionId: currentSessionId }
+        )
       );
     }
 
@@ -6536,17 +6560,14 @@ async function executeLoopNode(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_node.gate_message_send_failed'
         );
-        return failLoopNode(
-          `Loop gate message failed to deliver for node '${node.id}' — cannot pause safely`,
-          {
-            failureKind: 'unknown',
-            output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-            loopIterations: i,
-            data: { iteration: i },
-          }
-        );
+        return failLoopNode(undeliveredGatePromptError('Loop gate', node.id), {
+          failureKind: 'unknown',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          data: { iteration: i },
+        });
       }
       deps.store
         .createWorkflowEvent({
@@ -6618,6 +6639,18 @@ async function executeLoopNode(
     loopIterations: loop.max_iterations,
     data: { maxIterations: loop.max_iterations },
   });
+}
+
+/**
+ * The failure of a gate whose prompt could not be delivered. The prompt is the only place
+ * a human learns how to resume, so a gate that cannot send it fails its node instead of
+ * pausing a run nobody was told about.
+ */
+function undeliveredGatePromptError(
+  gate: 'Approval' | 'Loop gate' | 'Loop-group gate',
+  nodeId: string
+): string {
+  return `${gate} message failed to deliver for node '${nodeId}' — cannot pause safely`;
 }
 
 /**
@@ -6874,7 +6907,7 @@ async function executeWaitNode(
             output: {
               text: output,
               structured: result,
-              declaredFields: declaredFieldsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
+              declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
             },
           }
         );
@@ -6901,7 +6934,7 @@ async function executeWaitNode(
     state: 'completed',
     output,
     structuredOutput: result,
-    declaredFields: declaredFieldsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
+    declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
   };
 }
 
@@ -7084,7 +7117,24 @@ async function executeApprovalNode(
     `Run ID: \`${workflowRun.id}\`\n` +
     `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
     `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
-  await safeSendMessage(platform, conversationId, approvalMsg, msgContext);
+  if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
+    getLog().error(
+      { nodeId: node.id, workflowRunId: workflowRun.id },
+      'approval_node.gate_message_send_failed'
+    );
+    return recordNodeState(
+      { store: deps.store, logDir: ctx.logDir },
+      finishNodeExecution(
+        execution,
+        {
+          status: 'failed',
+          error: undeliveredGatePromptError('Approval', node.id),
+          failureKind: 'unknown',
+        },
+        { output: { text: '' }, diagnostics: { iteration } }
+      )
+    );
+  }
 
   deps.store
     .createWorkflowEvent({
@@ -7272,7 +7322,7 @@ async function executeWorkflowNode(
     // certified the value and stamped the field projection beside it. Nothing is
     // re-validated here — a `workflow:` node cannot declare a schema of its own (that is
     // a load error), so there is no caller side to check against.
-    const declaredFields = outcome.declaredFields;
+    const declaredOutputPaths = outcome.declaredOutputPaths;
     // The same holds for an artifact pointer in the child's value (#2453): the child's
     // producer proved it against the child's own run, and this node relays it unchanged.
     if (outcome.output === undefined) {
@@ -7298,7 +7348,7 @@ async function executeWorkflowNode(
             ...(outcome.structuredOutput !== undefined
               ? { structured: outcome.structuredOutput }
               : {}),
-            ...(declaredFields !== undefined ? { declaredFields: [...declaredFields] } : {}),
+            ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
           },
           costUsd: outcome.costUsd,
           tokens: outcome.tokens,
@@ -9046,6 +9096,15 @@ interface RunLayersContext extends RunInputs, RunDerived {
   nodeInvocation?: NodeInvocation;
   /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */
   currentExecution?: NodeExecutionRecord;
+  /**
+   * Ids of the nodes in this concurrent layer that have taken their
+   * `mutates_checkout: false` snapshot in this run, shared by the layer's nodes. A
+   * violation names the others as nodes that also ran in the layer; add-only, so a
+   * named node may have finished before the write. A node that was skipped or
+   * reused from a prior run never snapshots and is never named. Undefined when the
+   * layer runs sequentially. Set per layer; never inherited.
+   */
+  guardedLayerSnapshots?: Set<string>;
   unfinishedInvocations?: DagResumeSnapshot['unfinishedInvocations'];
   // --- per-subgraph mutable state (varies between top-level DAG and loop_group body) ---
   /** Pre-computed topological layers (caller builds once — body shape is static). runLayers walks ONLY these; there is deliberately no flat node list here. */
@@ -9285,19 +9344,25 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
       ctx.lastSequentialSession = undefined; // reset — parallel nodes can't share sessions
     }
 
-    // Build a thunk per node so the layer can run either concurrently or, when any
-    // node guards its checkout, strictly sequentially: the `mutates_checkout: false`
-    // assertion snapshots before and asserts after a node's own execution, so a
-    // concurrent sibling's write landing inside that window would be falsely
-    // attributed to the guarded node. Serializing the whole layer keeps that window
-    // exclusive — including loop/loop_group/workflow siblings whose internal
-    // execution would otherwise overlap it.
+    // Build a thunk per node so the layer can run either concurrently or strictly
+    // sequentially. The `mutates_checkout: false` assertion snapshots before and
+    // asserts after a node's own execution, so when a guarded node shares the layer
+    // with any node that isn't checkout-guarded (including loop/loop_group/workflow
+    // siblings whose internal execution would overlap the window), that sibling's
+    // legitimate write would be blamed on the guarded node: such a mixed layer runs
+    // sequentially. A layer of guarded nodes only runs concurrently, since no node in
+    // it may write: the writer still sees its own write and fails, and a sibling
+    // whose window overlapped fails with it, its error naming the siblings.
+    const guardedCount = layer.filter(isCheckoutGuarded).length;
+    const serializeLayer = guardedCount > 0 && guardedCount < layer.length;
+    const guardedLayerSnapshots = serializeLayer ? undefined : new Set<string>();
     const nodeThunks = layer.map(
       (node): (() => Promise<LayerNodeResult>) =>
         async (): Promise<LayerNodeResult> => {
           const ctx: RunLayersContext = {
             ...parentCtx,
             currentExecution: undefined,
+            guardedLayerSnapshots,
             nodeInvocation:
               parentCtx.unfinishedInvocations?.get(
                 nodeInvocationKey(parentCtx.stepNamePrefix + node.id, parentCtx.loopGroupPath)
@@ -9465,6 +9530,11 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                           : {}),
                       }
                     : formatThisNodesPriorOutput(skipStepName);
+                  // Return the pre-populated output (already in nodeOutputs)
+                  const cachedOutput = ctx.nodeOutputs.get(node.id);
+                  if (cachedOutput === undefined) {
+                    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
+                  }
                   await recordNodeState(
                     { store: ctx.deps.store, logDir: ctx.logDir },
                     {
@@ -9475,20 +9545,18 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         action: 'replayed',
                         output: {
                           ...persistedExecutionOutput(priorSkipOutput, prior?.output ?? ''),
-                          structured: prior?.structuredOutput,
-                          declaredFields:
-                            prior?.declaredFields === undefined
-                              ? undefined
-                              : [...prior.declaredFields],
+                          structured:
+                            'structuredOutput' in cachedOutput
+                              ? cachedOutput.structuredOutput
+                              : undefined,
+                          declaredOutputPaths:
+                            'declaredOutputPaths' in cachedOutput
+                              ? cachedOutput.declaredOutputPaths
+                              : undefined,
                         },
                       },
                     }
                   );
-                  // Return the pre-populated output (already in nodeOutputs)
-                  const cachedOutput = ctx.nodeOutputs.get(node.id);
-                  if (cachedOutput === undefined) {
-                    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
-                  }
                   return {
                     nodeId: node.id,
                     output: cachedOutput,
@@ -9590,10 +9658,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.stateDir,
                     ctx.logDir
                   );
-                  const treeBefore =
-                    node.mutates_checkout === false
-                      ? await snapshotCheckout(ctx.cwd, excludes)
-                      : undefined;
+                  const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                   const output = await runDeterministicNodeWithRetry(
                     node,
                     ctx.platform,
@@ -9620,7 +9685,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       treeBefore,
                       output,
                       ctx.deps,
-                      ctx.logDir
+                      ctx.logDir,
+                      ctx.guardedLayerSnapshots
                     ),
                   };
                 }
@@ -9631,10 +9697,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.stateDir,
                   ctx.logDir
                 );
-                const treeBefore =
-                  node.mutates_checkout === false
-                    ? await snapshotCheckout(ctx.cwd, excludes)
-                    : undefined;
+                const treeBefore = await snapshotGuardedNode(ctx, node, excludes);
                 const output = await runDeterministicNodeWithRetry(
                   node,
                   ctx.platform,
@@ -9661,7 +9724,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     treeBefore,
                     output,
                     ctx.deps,
-                    ctx.logDir
+                    ctx.logDir,
+                    ctx.guardedLayerSnapshots
                   ),
                 };
               }
@@ -9968,11 +10032,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     row => row.node_id === node.id && row.provider === provider
                   );
                   if (persisted) {
-                    // workflow_events is broader-scoped and longer-lived than the
-                    // node-session table. A session ID can resume a conversation, so we
-                    // store only an 8-char prefix here — enough for observability without
-                    // leaving a resumable artifact in the event log.
-                    const sessionIdPreview = `${persisted.provider_session_id.slice(0, 8)}…`;
+                    // This event is not a node record, so it carries only the preview.
+                    const sessionIdPreview = sessionPreview(persisted.provider_session_id);
                     const continues = handling === 'fork';
                     if (continues) resumeSessionId = persisted.provider_session_id;
                     ctx.deps.store
@@ -10039,10 +10100,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.stateDir,
               ctx.logDir
             );
-            const treeBefore =
-              node.mutates_checkout === false
-                ? await snapshotCheckout(ctx.cwd, checkoutExcludes)
-                : undefined;
+            const treeBefore = await snapshotGuardedNode(ctx, node, checkoutExcludes);
             const retriedOutput = await runNodeRetryLoop(
               node,
               ctx.platform,
@@ -10084,7 +10142,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               treeBefore,
               retriedOutput,
               ctx.deps,
-              ctx.logDir
+              ctx.logDir,
+              ctx.guardedLayerSnapshots
             );
 
             // Cold-resume surfacing: this node requested a session resume but the
@@ -10115,14 +10174,12 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     node.id
                   )
                 : '';
-              // Mask the session id: it's a resumable artifact, so log only an
-              // 8-char preview (same policy as the node_session_resumed event above).
               getLog().warn(
                 {
                   nodeId: node.id,
                   provider,
                   workflowRunId: ctx.workflowRun.id,
-                  resumeSessionId: `${resumeSessionId.slice(0, 8)}…`,
+                  resumeSessionIdPreview: sessionPreview(resumeSessionId),
                   priorArtifactsFound: recoveryPointer !== '',
                 },
                 'dag.session_resume_failed'
@@ -10220,9 +10277,9 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
           }
         }
     );
-    // A guarded node in the layer forces fully sequential execution (see the thunk
-    // comment above); an unguarded layer keeps the concurrent `allSettled` path.
-    const layerResults = layer.some(node => node.mutates_checkout === false)
+    // A layer mixing guarded and unguarded nodes runs sequentially (see the thunk
+    // comment above); every other layer keeps the concurrent `allSettled` path.
+    const layerResults = serializeLayer
       ? await settleSequentially(nodeThunks)
       : await Promise.allSettled(nodeThunks.map(thunk => thunk()));
 
@@ -10281,9 +10338,6 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
             runId: ctx.workflowRun.id,
             producedAt: new Date().toISOString(),
             ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: ctx.loopGroupPath } : {}),
-            // `sessionId` may be undefined (e.g. bash/script nodes have no
-            // session); writeNodeArtifact omits it from the metadata when so.
-            sessionId: output.sessionId,
           };
           try {
             await writeNodeArtifact(ctx.artifactsDir, meta, output.output);
@@ -11143,18 +11197,16 @@ export async function executeDagWorkflow(
       const node = nodesById.get(nodeId);
       // Nodes flagged always_run re-execute on resume — leave them for fresh output.
       if (node?.always_run) continue;
-      // Prefer the contract the node actually completed under (#2453) — a `workflow:`
-      // node's is the CHILD's, which this definition does not state and re-derivation
-      // would therefore lose. Otherwise re-derive a schema-capable producer's declared
-      // field set from the loaded definition so its strict `$node.output.field` contract
-      // survives resume (#2091). A loop_group is the exception: its output_format is
-      // ignored, so it never gets declaredFields — but its persisted terminal payload
-      // (below) still rehydrates, matching fresh completion since #2637.
-      const declaredFields =
-        prior.declaredFields ??
-        (node !== undefined && !isLoopGroupNode(node)
-          ? declaredFieldsFromSchema(node.output_format)
-          : undefined);
+      // A local producer's loaded definition owns its contract, so its strict
+      // `$node.output.<path>` contract survives resume (#2091) and matches the load-time
+      // check, even when the row was written by an older binary that recorded only
+      // top-level fields. The persisted contract serves producers whose definition states
+      // none: a `workflow:` node's is the CHILD's (#2453), and a wait node's is fixed by
+      // the engine. A loop_group gets none: its output_format is ignored, but its
+      // persisted terminal payload (below) still rehydrates, matching fresh completion
+      // since #2637.
+      const declaredOutputPaths =
+        (node !== undefined ? definedOutputPaths(node) : undefined) ?? prior.declaredOutputPaths;
       nodeOutputs.set(nodeId, {
         state: 'completed',
         output: prior.output,
@@ -11164,7 +11216,7 @@ export async function executeDagWorkflow(
         ...(prior.structuredOutput !== undefined
           ? { structuredOutput: prior.structuredOutput }
           : {}),
-        ...(declaredFields !== undefined ? { declaredFields: [...declaredFields] } : {}),
+        ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
         ...(prior.execution !== undefined ? { execution: prior.execution } : {}),
       });
       prepopulatedCount++;
@@ -11195,7 +11247,6 @@ export async function executeDagWorkflow(
   // launched the run (see `persistScopeKey`). The `|| undefined` guard keeps an empty
   // key from scoping every invocation to the same blank scope — persistence is simply
   // skipped in that case.
-  // Distinct from AgentRequestOptions.persistSession (Claude SDK on-disk transcript flag).
   const runPersistScopeKey: string | undefined = persistScopeKey(workflowRun) || undefined;
   const workflowPersistSessions = workflow.persist_sessions === true;
   let persistScope: PersistScope | undefined;
@@ -11241,7 +11292,12 @@ export async function executeDagWorkflow(
     const selectedOutput = nodeOutputs.get(returns);
     if (selectedOutput?.state !== 'completed') return;
 
-    const resolution = resolveNodeOutputField(selectedOutput, returns, field);
+    const resolution = resolveNodeOutputField(
+      selectedOutput,
+      returns,
+      field,
+      outputRefText(returns, field)
+    );
     if (resolution.kind !== 'value' || typeof resolution.value !== 'boolean') {
       throw new Error(
         `Workflow outcome_field '${field}' on returns node '${returns}' did not resolve to a boolean`
@@ -11432,8 +11488,8 @@ export async function executeDagWorkflow(
   try {
     await runLayers(runCtx);
   } catch (error) {
-    // runLayers guards almost everything, but a FATAL platform error can escape its
-    // allSettled rejection branch. Persist both durable facts before rethrowing that
+    // runLayers guards almost everything, but a failed durable write (terminal status or
+    // node event) escapes through its layer join. Persist both durable facts before rethrowing that
     // exact value (including an exotic `throw undefined`). Usage is best-effort. An
     // outcome write failure is secondary here: record it, but never let it mask the
     // execution error already in flight.
@@ -11749,11 +11805,11 @@ export async function executeDagWorkflow(
   // summary as `metadata.summary_value` so a parent `workflow:` node threads the
   // LOGICAL value back (fan-out aggregation and `.field` access keep the type).
   let terminalStructuredOutput: unknown;
-  // The selected node's declared field names (#2453) — the callee-owned half of the
+  // The selected node's declared field paths (#2453) — the callee-owned half of the
   // result contract. Stamped beside `summary_value` so the parent's `workflow:` node can
-  // authorize `$<node>.output.field` from the CHILD's schema instead of requiring the
+  // authorize `$<node>.output.a.b` from the CHILD's schema instead of requiring the
   // caller to repeat it. Only the projection travels; the schema stays in captured source.
-  let terminalDeclaredFields: readonly string[] | undefined;
+  let terminalDeclaredOutputPaths: DeclaredOutputPaths | undefined;
   if (workflow.returns !== undefined && workflowRun.parent_run_id) {
     const returnsOutput = nodeOutputs.get(workflow.returns);
     const value = returnsOutput?.state === 'completed' ? returnsOutput.output : undefined;
@@ -11766,10 +11822,8 @@ export async function executeDagWorkflow(
       // Taken from the completed node rather than re-derived from the definition: the
       // node already resolved its own contract (a wait node's fixed schema, a resumed
       // node's persisted projection), and re-deriving here would silently disagree.
-      terminalDeclaredFields =
-        returnsOutput !== undefined && 'declaredFields' in returnsOutput
-          ? returnsOutput.declaredFields
-          : undefined;
+      terminalDeclaredOutputPaths =
+        returnsOutput?.state === 'completed' ? returnsOutput.declaredOutputPaths : undefined;
     } else {
       getLog().warn(
         { workflowRunId: workflowRun.id, returns: workflow.returns },
@@ -11786,10 +11840,8 @@ export async function executeDagWorkflow(
     // it here too keeps the two channels together: a child without `returns:` has threaded
     // its terminal LOGICAL value to the parent since #2637, and a value whose field
     // authorization stayed behind would read as schemaless downstream.
-    terminalDeclaredFields =
-      terminalSink !== undefined && 'declaredFields' in terminalSink
-        ? terminalSink.declaredFields
-        : undefined;
+    terminalDeclaredOutputPaths =
+      terminalSink?.state === 'completed' ? terminalSink.declaredOutputPaths : undefined;
     terminalStructuredOutput =
       terminalSink !== undefined && 'structuredOutput' in terminalSink
         ? terminalSink.structuredOutput
@@ -11830,11 +11882,17 @@ export async function executeDagWorkflow(
         ...(workflowRun.parent_run_id && terminalOutput && terminalStructuredOutput !== undefined
           ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminalStructuredOutput }
           : {}),
-        // `summary_declared_fields` (#2453) is the callee-owned field projection. Gated
-        // on the same terminal output as the two keys above, so a blank/incomplete
-        // `returns:` node stamps no contract at all rather than one nothing satisfies.
-        ...(workflowRun.parent_run_id && terminalOutput && terminalDeclaredFields !== undefined
-          ? { [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: [...terminalDeclaredFields] }
+        // The callee-owned field contract (#2453). Gated on the same terminal output as
+        // the two keys above, so a blank/incomplete `returns:` node stamps no contract
+        // at all rather than one nothing satisfies. `summary_declared_fields` is derived
+        // from the paths and still written for older binaries, which read only it.
+        ...(workflowRun.parent_run_id && terminalOutput && terminalDeclaredOutputPaths !== undefined
+          ? {
+              [SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths]: terminalDeclaredOutputPaths,
+              [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: rootOutputFields(
+                terminalDeclaredOutputPaths
+              ),
+            }
           : {}),
       }
     ),

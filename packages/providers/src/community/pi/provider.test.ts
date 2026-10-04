@@ -1,3 +1,4 @@
+import { PI_PROVIDER_ENV_VARS } from './pi-vendor-map.generated';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -116,6 +117,14 @@ const mockGetAuth = mock(async (providerId: string) => {
     return { auth: { apiKey: 'sk-ant-oat01-file-stub' }, source: 'auth.json' };
   return undefined;
 });
+const mockCheckAuth = mock(async (providerId: string) => {
+  if (runtimeOverrides[providerId]) return { type: 'api_key', source: 'runtime override' };
+  if (fileCreds[providerId])
+    return { type: fileCreds[providerId].type, source: 'stored credential' };
+  if (!PI_PROVIDER_ENV_VARS[providerId] && mockHasConfiguredAuth(providerId))
+    return { type: 'api_key', source: 'config' };
+  return undefined;
+});
 const mockHasConfiguredAuth = mock(
   (providerId: string) =>
     runtimeOverrides[providerId] !== undefined || fileCreds[providerId] !== undefined
@@ -163,9 +172,12 @@ type MockModelRegistry = Pick<ModelRegistry, 'find'> &
 // previously poked at the auth passed to `ModelRegistry.create` now poke at
 // the runtime passed to the constructor.
 type MockModelRuntime = {
+  checkAuth: typeof mockCheckAuth;
   setRuntimeApiKey(providerId: string, key: string): Promise<void>;
   getAuth(providerId: string): Promise<unknown>;
   hasConfiguredAuth(providerId: string): boolean;
+  getProviderAuthStatus(providerId: string): { configured: boolean; source?: string };
+  listCredentials(): Promise<readonly { providerId: string }[]>;
 };
 type MockModelRegistryCtor = new (runtime: MockModelRuntime) => MockModelRegistry;
 function makeMockRegistry(runtime: MockModelRuntime): MockModelRegistry {
@@ -219,9 +231,12 @@ const mockModelRegistryConstruct = mock(
 // (just on the runtime object now).
 const mockModelRuntimeCreate = mock(
   async (_options?: { authPath?: string; modelsPath?: string }): Promise<MockModelRuntime> => ({
+    checkAuth: mockCheckAuth,
     setRuntimeApiKey: mockSetRuntimeApiKey,
     getAuth: mockGetAuth,
     hasConfiguredAuth: mockHasConfiguredAuth,
+    getProviderAuthStatus: () => ({ configured: false }),
+    listCredentials: async () => [],
   })
 );
 
@@ -540,8 +555,6 @@ describe('PiProvider', () => {
     expect(mockLogger.info).toHaveBeenCalledWith(
       {
         piProvider: 'unknownprovider',
-        envHint: expect.stringContaining("not in the Archon adapter's env-var table"),
-        loginHint: expect.stringContaining('/login'),
       },
       'pi.auth_missing'
     );
@@ -600,21 +613,20 @@ describe('PiProvider', () => {
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = userModelsDir;
 
-    // The per-call file is unlinked in `provider.ts`'s `finally` block as
-    // soon as ModelRuntime.create resolves. The mock factory returns
-    // synchronously without actually reading the file, so the cleanup
-    // would race with the file-content assertions below. Capture the file
-    // contents INSIDE the mock implementation, while the file still exists,
-    // and assert against the captured snapshot.
+    // The per-call file is removed when the session ends, so capture its
+    // contents inside the create() mock and assert against the snapshot.
     let capturedPerCallContent: string | undefined;
     mockModelRuntimeCreate.mockImplementationOnce(async (options?: { modelsPath?: string }) => {
       if (options?.modelsPath && existsSync(options.modelsPath)) {
         capturedPerCallContent = readFileSync(options.modelsPath, 'utf-8');
       }
       return {
+        checkAuth: mockCheckAuth,
         setRuntimeApiKey: mockSetRuntimeApiKey,
         getAuth: mockGetAuth,
         hasConfiguredAuth: mockHasConfiguredAuth,
+        getProviderAuthStatus: () => ({ configured: false }),
+        listCredentials: async () => [],
       };
     });
 
@@ -648,9 +660,6 @@ describe('PiProvider', () => {
       expect(createArgs?.modelsPath).toBeDefined();
       expect(createArgs?.modelsPath).not.toBe(userModelsPath);
       // The per-call file carried the substituted literals at create time.
-      // The cleanup `finally` in provider.ts unlinks it as soon as create()
-      // resolves — see the dedicated "per-call models.json is unlinked after
-      // ModelRuntime.create" test below for the post-cleanup assertion.
       expect(capturedPerCallContent).toBeDefined();
       const perCallModels = JSON.parse(capturedPerCallContent as string) as {
         providers: Record<
@@ -698,21 +707,20 @@ describe('PiProvider', () => {
     }
   });
 
-  test('custom provider: per-call models.json is unlinked after ModelRuntime.create', async () => {
-    // Round-2 review (Finding 3): the per-call models.json was written and
-    // returned to the caller, but never deleted. Long-running processes
-    // accumulate one file per sendQuery until mkdirSync/writeFileSync fails
-    // with ENOSPC, after which buildCustomProviderModelsPath's errors are
-    // caught at the caller and the SDK silently falls back to the
-    // unsubstituted user models.json — re-opening the round-1 R1 leak
-    // surface. The fix wraps ModelRuntime.create in a try/finally that
-    // unlinks the file regardless of create() outcome.
-    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-cleanup-'));
+  /**
+   * Point PI_CODING_AGENT_DIR at a scratch models.json whose `provider` entry
+   * has a `${MYGW_API_KEY}` apiKey, so sendQuery writes a per-call file.
+   */
+  async function withTemplatedUserModels(
+    provider: string,
+    run: () => Promise<void>
+  ): Promise<void> {
+    const userModelsDir = mkdtempSync(join(tmpdir(), 'archon-pi-test-user-models-lifetime-'));
     writeFileSync(
       join(userModelsDir, 'models.json'),
       JSON.stringify({
         providers: {
-          mygw: {
+          [provider]: {
             baseUrl: 'https://gateway.example/v1',
             api: 'openai-completions',
             apiKey: 'prefix-${MYGW_API_KEY}',
@@ -723,36 +731,100 @@ describe('PiProvider', () => {
     );
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = userModelsDir;
-
-    resetScript(scriptedAgentEnd());
-    let perCallPath: string | undefined;
     try {
-      await consume(
+      await run();
+    } finally {
+      const perCallPath = (mockModelRuntimeCreate.mock.calls[0]?.[0] as { modelsPath?: string })
+        ?.modelsPath;
+      if (perCallPath) rmSync(perCallPath, { force: true });
+      rmSync(userModelsDir, { recursive: true, force: true });
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  }
+
+  function perCallModelsPath(): string {
+    const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as { modelsPath?: string };
+    expect(createArgs.modelsPath).toBeDefined();
+    return createArgs.modelsPath as string;
+  }
+
+  test('custom provider: per-call models.json lives until the session ends', async () => {
+    // Pi re-reads modelsPath on every refresh(), and registerProvider() ends
+    // with one, so a file removed mid-session drops the custom provider.
+    let existedDuringPrompt: boolean | undefined;
+    mockPrompt.mockImplementationOnce(async () => {
+      existedDuringPrompt = existsSync(perCallModelsPath());
+      for (const ev of scriptedEvents) capturedListener?.(ev);
+    });
+    resetScript(scriptedAgentEnd());
+    await withTemplatedUserModels('mygw', async () => {
+      const { failure } = await consume(
         new PiProvider().sendQuery('hi', '/tmp', undefined, {
           model: 'mygw/demo',
           env: { MYGW_API_KEY: 'request-secret' },
           protectedEnvKeys: [],
         })
       );
-      const createArgs = mockModelRuntimeCreate.mock.calls[0]?.[0] as
-        | { modelsPath?: string }
-        | undefined;
-      perCallPath = createArgs?.modelsPath;
-      expect(perCallPath).toBeDefined();
-      // The cleanup ran in the provider's `finally` block, so the file is
-      // gone after sendQuery resolves.
-      expect(existsSync(perCallPath as string)).toBe(false);
-    } finally {
-      if (perCallPath && existsSync(perCallPath)) {
-        rmSync(perCallPath, { force: true });
-      }
-      rmSync(userModelsDir, { recursive: true, force: true });
-      if (previousAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-      }
-    }
+      expect(failure).toBeUndefined();
+      expect(existedDuringPrompt).toBe(true);
+      expect(existsSync(perCallModelsPath())).toBe(false);
+    });
+  });
+
+  test.each([
+    {
+      exit: 'a model lookup miss',
+      provider: 'nonexistent',
+      arrange: (): void => undefined,
+      abortSignal: undefined,
+      sessions: 1,
+    },
+    {
+      exit: 'a model registry construction failure',
+      provider: 'mygw',
+      arrange: (): void => {
+        mockModelRegistryConstruct.mockImplementationOnce(() => {
+          throw new Error('registry construction failed');
+        });
+      },
+      abortSignal: undefined,
+      sessions: 0,
+    },
+    {
+      exit: 'an extension failure',
+      provider: 'mygw',
+      arrange: (): void => {
+        mockBindExtensions.mockImplementationOnce(async () => {
+          throw new Error('extension failed to bind');
+        });
+      },
+      abortSignal: undefined,
+      sessions: 1,
+    },
+    {
+      exit: 'cancellation',
+      provider: 'mygw',
+      arrange: (): void => undefined,
+      abortSignal: AbortSignal.abort(),
+      sessions: 0,
+    },
+  ])('custom provider: per-call models.json is removed after $exit', async c => {
+    c.arrange();
+    resetScript(scriptedAgentEnd());
+    await withTemplatedUserModels(c.provider, async () => {
+      const { failure, error } = await consume(
+        new PiProvider().sendQuery('hi', '/tmp', undefined, {
+          model: `${c.provider}/demo`,
+          env: { MYGW_API_KEY: 'request-secret' },
+          protectedEnvKeys: [],
+          abortSignal: c.abortSignal,
+        })
+      );
+      expect(failure ?? error).toBeDefined();
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(c.sessions);
+      expect(existsSync(perCallModelsPath())).toBe(false);
+    });
   });
 
   test('custom provider: per-call models.json is unlinked even when ModelRuntime.create throws', async () => {
@@ -1112,7 +1184,7 @@ describe('PiProvider', () => {
     // Runtime override NOT set — no env var present — so Pi's getAuth
     // resolves through the OAuth code path.
     expect(mockSetRuntimeApiKey).not.toHaveBeenCalled();
-    expect(mockGetAuth).toHaveBeenCalledWith('anthropic');
+    expect(mockGetAuth).toHaveBeenCalledWith('anthropic', { signal: undefined });
   });
 
   test('reports a failure when ModelRegistry.find returns undefined', async () => {
@@ -1178,6 +1250,39 @@ describe('PiProvider', () => {
     expect(mockSetModel).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'custom-model', provider: 'extension-provider' })
     );
+  });
+
+  test('an Anthropic model outside the static catalog with no stored login reaches the extensions', async () => {
+    // An extension may register the model and manage its credential outside Pi's store.
+    mockModelRegistryFind.mockImplementationOnce(() => undefined);
+    mockModelRegistryFind.mockImplementationOnce(() =>
+      createMockModel('anthropic', 'extension-model')
+    );
+    resetScript(scriptedAgentEnd());
+
+    const { error, failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'anthropic/extension-model',
+      })
+    );
+
+    expect(error).toBeUndefined();
+    expect(failure).toBeUndefined();
+    expect(mockSetModel).toHaveBeenCalledTimes(1);
+  });
+
+  test('a configured login that resolves to nothing names no env var the provider lacks', async () => {
+    fileCreds['local-oauth'] = { type: 'oauth' };
+    mockGetAuth.mockImplementationOnce(async () => undefined);
+    resetScript(scriptedAgentEnd());
+
+    const { failure } = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'local-oauth/model' })
+    );
+
+    expect(failure?.class).toBe('auth');
+    expect(failure?.evidence).toContain("no credentials for provider 'local-oauth'");
+    expect(failure?.evidence).not.toContain('undefined');
   });
 
   test('request env (codebase env vars) overrides process.env via setRuntimeApiKey', async () => {
@@ -2291,6 +2396,7 @@ describe('PiProvider', () => {
       ];
     };
     const violations = await runProviderConformance({
+      capabilities: new PiProvider().getCapabilities(),
       turns: [
         {
           name: 'completed prompt',
@@ -2348,21 +2454,6 @@ describe('PiProvider', () => {
       ],
     });
     expect(violations).toEqual([]);
-  });
-
-  test('pre-aborted signal triggers session.abort before any yielding', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-    const controller = new AbortController();
-    controller.abort();
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-        abortSignal: controller.signal,
-      })
-    );
-    expect(mockAbort).toHaveBeenCalled();
   });
 
   test('abort signal mid-stream calls session.abort', async () => {
@@ -2680,6 +2771,102 @@ describe('PiProvider', () => {
     expect(result.chunks.at(-1)).toEqual({ type: 'settled' });
     expect(mockAbort).toHaveBeenCalledTimes(1);
     expect(mockDispose).toHaveBeenCalledTimes(1);
+  });
+
+  test('two extension-enabled turns run at the same time', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    const extensionPath = '/extensions/fake-extension.ts';
+    mockGetExtensions.mockImplementation(
+      () =>
+        ({
+          extensions: [{ path: extensionPath, resolvedPath: extensionPath }],
+          errors: [],
+          runtime: mockLoaderRuntime,
+        }) as unknown as ReturnType<typeof mockGetExtensions>
+    );
+    let releaseFirst!: () => void;
+    mockPrompt.mockImplementationOnce(
+      () =>
+        new Promise<void>(resolve => {
+          releaseFirst = resolve;
+        })
+    );
+    try {
+      const first = consume(
+        new PiProvider().sendQuery('first', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
+      );
+      // The second turn must finish while the first is still mid-prompt.
+      const second = await Promise.race([
+        consume(
+          new PiProvider().sendQuery('second', '/tmp', undefined, {
+            model: 'google/gemini-2.5-pro',
+          })
+        ),
+        new Promise<'blocked'>(resolve => setTimeout(() => resolve('blocked'), 500)),
+      ]);
+      releaseFirst();
+      await first;
+
+      expect(second).not.toBe('blocked');
+      expect(mockPrompt).toHaveBeenCalledTimes(2);
+    } finally {
+      mockGetExtensions.mockImplementation(() => ({
+        extensions: [],
+        errors: [],
+        runtime: mockLoaderRuntime,
+      }));
+    }
+  });
+
+  test('a caller that aborted before the session starts never creates one', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    const result = await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        abortSignal: AbortSignal.abort(),
+      })
+    );
+
+    expect(result.error?.message).toBe('Query aborted');
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
+  });
+
+  test('a caller that aborts during the credential check gets Query aborted, not an auth failure', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    const controller = new AbortController();
+    let entered: () => void = () => undefined;
+    const checking = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    mockCheckAuth.mockImplementationOnce((async (
+      _providerId: string,
+      options?: { signal?: AbortSignal }
+    ) => {
+      entered();
+      return new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => {
+          reject(new Error('The operation was aborted.'));
+        });
+      });
+    }) as unknown as typeof mockCheckAuth);
+    resetScript(scriptedAgentEnd());
+
+    const pending = consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        abortSignal: controller.signal,
+      })
+    );
+    await checking;
+    controller.abort();
+    const result = await pending;
+
+    expect(result.error?.message).toBe('Query aborted');
+    expect(result.failure).toBeUndefined();
+    expect(mockCreateAgentSession).not.toHaveBeenCalled();
   });
 
   test('Pi structured extension errors fail the turn with the supplied stack', async () => {
@@ -3007,6 +3194,47 @@ describe('PiProvider', () => {
       c => c[1] === 'pi.semaphore_initialized'
     );
     expect(initCalls).toHaveLength(0);
+  });
+
+  test('a caller that aborts while waiting for a maxConcurrent slot disposes its session', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+    // The process-wide semaphore was sized 2 by the first maxConcurrent test above.
+    const releases: (() => void)[] = [];
+    const holdSlot = (): Promise<void> =>
+      new Promise<void>(resolve => {
+        releases.push(resolve);
+      });
+    mockPrompt.mockImplementationOnce(holdSlot).mockImplementationOnce(holdSlot);
+    const options = { model: 'google/gemini-2.5-pro', assistantConfig: { maxConcurrent: 2 } };
+    const holders = [
+      consume(new PiProvider().sendQuery('one', '/tmp', undefined, options)),
+      consume(new PiProvider().sendQuery('two', '/tmp', undefined, options)),
+    ];
+    const acquiring = (): number =>
+      (mockLogger.debug.mock.calls as unknown[][]).filter(c => c[0] === 'pi.semaphore_acquiring')
+        .length;
+    const controller = new AbortController();
+    try {
+      while (releases.length < 2) await new Promise(resolve => setTimeout(resolve, 1));
+      const waiter = consume(
+        new PiProvider().sendQuery('three', '/tmp', undefined, {
+          ...options,
+          abortSignal: controller.signal,
+        })
+      );
+      while (acquiring() < 3) await new Promise(resolve => setTimeout(resolve, 1));
+      controller.abort();
+      const result = await waiter;
+
+      expect(result.error).toBeDefined();
+      // Only the waiter's session is gone; both slot holders are still mid-prompt.
+      expect(mockDispose).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).toHaveBeenCalledTimes(2);
+    } finally {
+      for (const release of releases) release();
+      await Promise.all(holders);
+    }
   });
 
   test('settings: create(cwd) called, inMemory seeded with pre-merged global+project (empty project → just global)', async () => {

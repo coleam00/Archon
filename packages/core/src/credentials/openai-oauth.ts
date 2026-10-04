@@ -152,6 +152,21 @@ interface OpenAiTokenResponse {
   id_token?: unknown;
 }
 
+/**
+ * A failed call to OpenAI's token endpoint. `status` is the HTTP status when the
+ * endpoint answered; it is absent for a network failure, timeout or cancellation.
+ * Callers decide from `status`, never from the message.
+ */
+export class OpenAiTokenError extends Error {
+  constructor(
+    message: string,
+    readonly status?: number
+  ) {
+    super(message);
+    this.name = 'OpenAiTokenError';
+  }
+}
+
 async function postTokenRequest(
   body: URLSearchParams,
   operation: 'exchange' | 'refresh',
@@ -172,12 +187,12 @@ async function postTokenRequest(
     });
   } catch (error) {
     if (signal?.aborted) {
-      throw new Error('Login cancelled');
+      throw new OpenAiTokenError('Login cancelled');
     }
     if (error instanceof Error && error.name === 'TimeoutError') {
-      throw new Error(`OpenAI token ${operation} request timed out.`);
+      throw new OpenAiTokenError(`OpenAI token ${operation} request timed out.`);
     }
-    throw new Error(
+    throw new OpenAiTokenError(
       `OpenAI token ${operation} request failed: ${error instanceof Error ? error.message : String(error)}`
     );
   }
@@ -198,8 +213,9 @@ async function postTokenRequest(
     } catch {
       // Non-JSON error body — drop it entirely; the status code must suffice.
     }
-    throw new Error(
-      `OpenAI token ${operation} failed (${response.status})${errorCode ? `: ${errorCode}` : ''}`
+    throw new OpenAiTokenError(
+      `OpenAI token ${operation} failed (${response.status})${errorCode ? `: ${errorCode}` : ''}`,
+      response.status
     );
   }
   let raw: unknown;

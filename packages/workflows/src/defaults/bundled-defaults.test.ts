@@ -20,7 +20,8 @@ import {
   parsePackagedResourceReference,
 } from '../packaged-workflow';
 import { parseWorkflow } from '../loader';
-import { formatDeprecationNotice } from '../deprecation';
+import { resolveWorkflowName } from '../router';
+import { collectInstalledBundleSources } from './bundle-inventory';
 import {
   isExecNode,
   isIncludeDirective,
@@ -42,11 +43,6 @@ registerBuiltinProviders();
 // tests work regardless of cwd. From packages/workflows/src/defaults go up
 // four levels to the repo root, then into .archon/.
 const REPO_ROOT = join(import.meta.dir, '..', '..', '..', '..');
-const COMMANDS_DIR = join(REPO_ROOT, '.archon/commands/defaults');
-const WORKFLOWS_DIR = join(REPO_ROOT, '.archon/workflows/defaults');
-// `legacy/` holds the deprecated-window defaults (#2781): same flat file
-// convention, one grouping subfolder within the discovery depth cap.
-const LEGACY_WORKFLOWS_DIR = join(WORKFLOWS_DIR, 'legacy');
 
 describe('bundled-defaults', () => {
   describe('isBinaryBuild', () => {
@@ -59,100 +55,41 @@ describe('bundled-defaults', () => {
     });
   });
 
+  describe('fresh install', () => {
+    // A binary reads the embedded records; a source install reads the indexed tree.
+    // Both must offer exactly the sdlc pack, so neither can still ship a flat default.
+    it('ships only the sdlc pack, in the binary and from source', async () => {
+      const embedded = Object.keys(BUNDLED_WORKFLOWS).sort();
+      expect(embedded.filter(name => BUNDLED_WORKFLOW_OWNERS[name]?.pack !== 'sdlc')).toEqual([]);
+      expect(
+        Object.keys(BUNDLED_COMMANDS).filter(
+          name => parsePackagedResourceReference(name)?.owner.pack !== 'sdlc'
+        )
+      ).toEqual([]);
+
+      const sources = await collectInstalledBundleSources(join(REPO_ROOT, '.archon/workflows'));
+      const fromSource = (sources ?? []).flatMap(file =>
+        file.kind === 'workflow' ? [{ name: file.name, pack: file.owner.pack }] : []
+      );
+      expect(fromSource.filter(file => file.pack !== 'sdlc')).toEqual([]);
+      expect(fromSource.map(file => file.name).sort()).toEqual(embedded);
+    });
+
+    it('resolves every bundled workflow by its short name without ambiguity', () => {
+      const workflows = Object.keys(BUNDLED_WORKFLOWS).map(name => ({ name }));
+      for (const { name } of workflows) {
+        const short = name.replace(/^archon-/, '');
+        expect(resolveWorkflowName(short, workflows)?.name).toBe(name);
+      }
+    });
+  });
+
   describe('bundle completeness', () => {
     // These assertions are the canary for bundle drift: if someone adds a
     // default file without regenerating bundled-defaults.generated.ts, the
     // bundle would be missing in compiled binaries (see #979 context). The
     // generator is `scripts/generate-bundled-defaults.ts`, and
     // `bun run check:bundled` verifies the generated file is up to date.
-
-    it('BUNDLED_COMMANDS contains every .md file in .archon/commands/defaults/', () => {
-      const onDisk = readdirSync(COMMANDS_DIR)
-        .filter(f => f.endsWith('.md'))
-        .map(f => f.slice(0, -'.md'.length))
-        .sort();
-      expect(
-        Object.keys(BUNDLED_COMMANDS)
-          .filter(name => parsePackagedResourceReference(name) === null)
-          .sort()
-      ).toEqual(onDisk);
-    });
-
-    it('BUNDLED_WORKFLOWS contains every .yaml/.yml file in .archon/workflows/defaults/', () => {
-      const readFlat = (dir: string): string[] => {
-        if (!existsSync(dir)) return [];
-        return readdirSync(dir)
-          .filter(f => f.endsWith('.yaml') || f.endsWith('.yml'))
-          .map(f => f.replace(/\.ya?ml$/, ''));
-      };
-      const onDisk = [...readFlat(WORKFLOWS_DIR), ...readFlat(LEGACY_WORKFLOWS_DIR)].sort();
-      expect(
-        Object.keys(BUNDLED_WORKFLOWS)
-          .filter(name => BUNDLED_WORKFLOW_OWNERS[name] === undefined)
-          .sort()
-      ).toEqual(onDisk);
-    });
-
-    it('bundled content matches on-disk file content (defense against generator corruption)', () => {
-      // Bundled content is LF-normalized by the generator so it stays identical
-      // regardless of the checkout's line-ending policy. Match that here.
-      const readLF = (path: string): string => readFileSync(path, 'utf-8').replace(/\r\n/g, '\n');
-
-      // Packaged (pack-owned) entries live under .archon/workflows/<pack>/<workflow>/,
-      // not the flat defaults directories — their content parity is proven by
-      // 'packaged bundle metadata is internally consistent' below.
-      for (const [name, content] of Object.entries(BUNDLED_COMMANDS)) {
-        if (parsePackagedResourceReference(name) !== null) continue;
-        const diskContent = readLF(join(COMMANDS_DIR, `${name}.md`));
-        expect(content).toBe(diskContent);
-      }
-      for (const [name, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-        if (BUNDLED_WORKFLOW_OWNERS[name] !== undefined) continue;
-        // Workflows may be .yaml or .yml — prefer .yaml, fall back. The name may
-        // live in the flat defaults dir or the legacy/ deprecation window.
-        let diskContent: string | undefined;
-        for (const dir of [WORKFLOWS_DIR, LEGACY_WORKFLOWS_DIR]) {
-          try {
-            diskContent = readLF(join(dir, `${name}.yaml`));
-            break;
-          } catch {}
-          try {
-            diskContent = readLF(join(dir, `${name}.yml`));
-            break;
-          } catch {}
-        }
-        // The completeness test above pins the file existing; here we only
-        // compare content parity.
-        expect(diskContent).toBeDefined();
-        expect(content).toBe(diskContent as string);
-      }
-    });
-
-    it('every flat bundled default is in the legacy deprecation window (#2781, #3525)', () => {
-      // Pack-owned workflows are the replacement; every flat default is legacy
-      // and announces its removal. No flat default is exempt.
-      const flat = Object.keys(BUNDLED_WORKFLOWS).filter(
-        name => BUNDLED_WORKFLOW_OWNERS[name] === undefined
-      );
-      expect(flat).toContain('archon-assist');
-      for (const name of flat) {
-        const parsed = parseWorkflow(BUNDLED_WORKFLOWS[name]!, `${name}.yaml`);
-        if (parsed.error) throw new Error(`${name} failed to parse: ${parsed.error.error}`);
-        expect(parsed.workflow.deprecated, `${name} is not deprecated`).toBeDefined();
-      }
-      expect(existsSync(join(LEGACY_WORKFLOWS_DIR, 'archon-assist.yaml'))).toBe(true);
-    });
-
-    it('archon-assist announces removal with the copy escape hatch (#3525)', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-assist']!, 'archon-assist.yaml');
-      if (parsed.error) throw new Error(parsed.error.error);
-      expect(formatDeprecationNotice(parsed.workflow)).toBe(
-        '⚠️ `archon-assist` is deprecated and will be removed in an upcoming release. ' +
-          'Switch to the sdlc pack instead. ' +
-          'To keep using this workflow after removal, copy the workflow file into your project ' +
-          '`.archon/workflows/` or your global `~/.archon/workflows/`.'
-      );
-    });
 
     it('packaged bundle metadata is internally consistent', () => {
       for (const [workflow, owner] of Object.entries(BUNDLED_WORKFLOW_OWNERS)) {
@@ -211,31 +148,24 @@ describe('bundled-defaults', () => {
       }
     });
 
-    it('archon-pr-review-scope should read .pr-number before other discovery', () => {
-      const content = BUNDLED_COMMANDS['archon-pr-review-scope'];
-      expect(content).toContain('$ARTIFACTS_DIR/.pr-number');
-      expect(content).toContain('PR_NUMBER=$(cat $ARTIFACTS_DIR/.pr-number');
-    });
-
     it('classify-review-scope declares only its structured output fields', () => {
       const content =
         BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:deliver::classify-review-scope'];
+      expect(content).toContain('- `tier` — `focused` or `full`');
       expect(content).toContain('- `errors`, `docs` — booleans');
-      expect(content).toContain('- `reasons` — `{errors, docs}`');
+      expect(content).toContain('- `reasons` — `{tier, errors, docs}`');
       expect(content).not.toContain('`tests`, `errors`, `comments`, `types`, `docs`');
     });
 
-    it('archon-create-pr should write .pr-number to artifacts', () => {
-      const content = BUNDLED_COMMANDS['archon-create-pr'];
-      expect(content).toContain('echo "$PR_NUMBER" > "$ARTIFACTS_DIR/.pr-number"');
-    });
-
-    it('the SDLC implementation and every review lens own separate discovery records', () => {
+    it('the SDLC investigation, plan, implementation and every review lens own separate discovery records', () => {
       const expected = new Map([
+        ['__archon_pack__bundled:sdlc:investigate::investigate', 'discoveries/investigate.json'],
+        ['__archon_pack__bundled:sdlc:plan::plan', 'discoveries/plan.json'],
         ['__archon_pack__bundled:sdlc:implement::implement', 'discoveries/implement.json'],
         ['__archon_pack__bundled:sdlc:review::review-code', 'discoveries/review-code.json'],
         ['__archon_pack__bundled:sdlc:review::review-seams', 'discoveries/review-seams.json'],
-        ['__archon_pack__bundled:sdlc:review::review-simplify', 'discoveries/review-simplify.json'],
+        ['__archon_pack__bundled:sdlc:simplify::simplify', 'discoveries/review-simplify.json'],
+        ['__archon_pack__bundled:sdlc:review::review-focused', 'discoveries/review-focused.json'],
         ['__archon_pack__bundled:sdlc:review::review-tests', 'discoveries/review-tests.json'],
         ['__archon_pack__bundled:sdlc:review::review-errors', 'discoveries/review-errors.json'],
         ['__archon_pack__bundled:sdlc:review::review-docs', 'discoveries/review-docs.json'],
@@ -250,33 +180,59 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.json');
       expect(synthesize).toContain('$ARTIFACTS_DIR/discoveries.md');
-      expect(synthesize).toContain('an `adjacent` record never affects readiness');
+      expect(synthesize).toContain('An `unrelated` record never affects readiness');
       expect(synthesize).toContain(
         'If you are an agent reading this: open discoveries.md and surface each discovery to your human.'
       );
     });
 
+    // A scratch worktree carries tracked files only, so a falsifying command run there
+    // fails on unresolved dependencies unless the prompt that creates it installs them.
+    it('every SDLC prompt that creates a scratch worktree installs its dependencies', () => {
+      const creators = Object.entries(BUNDLED_COMMANDS).filter(
+        ([key, content]) =>
+          key.includes(':sdlc:') && content.includes('git worktree add --detach "$(mktemp -d)"')
+      );
+      expect(creators.length).toBeGreaterThan(0);
+      for (const [key, content] of creators) {
+        expect({ key, installs: content.includes('package manager in locked mode') }).toEqual({
+          key,
+          installs: true,
+        });
+      }
+    });
+
     // A reusable pack must not hardcode one project's context paths (AGENTS.md,
     // "Project guidance should be available, not sprayed everywhere"). Every evaluative
-    // prompt reads the pack-owned scope artifact plus a conventional, conditional
-    // `architecture.md`; project guidance arrives through the provider's own context
-    // mechanism, which is why no prompt instructs reading AGENTS.md either. The rules the
-    // prompts used to delegate to a project file are stated in the prompts themselves.
+    // prompt reads the pack-owned scope artifact plus the project's conventional
+    // architecture, engineering and direction documents, each only where it exists — the
+    // same conditional read implementation makes — so a reviewer judges taste against the
+    // project's own values rather than its own. Project guidance arrives through the
+    // provider's own context mechanism, which is why no prompt instructs reading
+    // AGENTS.md. The rules the prompts used to delegate to a project file are stated in
+    // the prompts themselves.
     it('no review prompt hardcodes a project context path', () => {
       const lenses = [
-        'review-code',
-        'review-seams',
-        'review-simplify',
-        'review-tests',
-        'review-errors',
-        'review-docs',
+        '__archon_pack__bundled:sdlc:review::review-code',
+        '__archon_pack__bundled:sdlc:review::review-seams',
+        '__archon_pack__bundled:sdlc:review::review-focused',
+        '__archon_pack__bundled:sdlc:simplify::simplify',
+        '__archon_pack__bundled:sdlc:review::review-tests',
+        '__archon_pack__bundled:sdlc:review::review-errors',
+        '__archon_pack__bundled:sdlc:review::review-docs',
       ];
-      for (const name of [...lenses, 'review-synthesize']) {
-        const content = BUNDLED_COMMANDS[`__archon_pack__bundled:sdlc:review::${name}`];
+      for (const key of [...lenses, '__archon_pack__bundled:sdlc:review::review-synthesize']) {
+        const content = BUNDLED_COMMANDS[key];
         expect(content).toBeDefined();
         expect(content).not.toContain('.archon/engineering.md');
         expect(content).not.toContain('Read `AGENTS.md`');
-        expect(content).toContain("the project's `architecture.md` if it has one");
+        expect(content).toContain(
+          'where the project has them, its `architecture.md`, its `engineering.md`, and its direction document'
+        );
+        // One boundary decides whether a defect blocks now or becomes a filed issue:
+        // anything that touches the change is a finding, only unrelated work is a
+        // discovery. Every reviewer states it in the same words.
+        expect(content).toContain('is a finding, even when the contract never named it');
         expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
         // The risk taxonomy the removed file used to own, now stated in every prompt
         // that depends on it rather than cited.
@@ -287,9 +243,28 @@ describe('bundled-defaults', () => {
       }
       // Synthesis judges whether the lenses engaged those risks; the lenses scale their
       // own depth by them.
-      for (const name of lenses) {
-        expect(BUNDLED_COMMANDS[`__archon_pack__bundled:sdlc:review::${name}`]).toContain(
-          'scale depth to what the change can destroy'
+      for (const key of lenses) {
+        expect(BUNDLED_COMMANDS[key]).toContain('scale depth to what the change can destroy');
+      }
+    });
+
+    // Severity has one definition: synthesis assigns every label, so a lens that kept its
+    // own scale would be a second owner of the same decision.
+    it('only synthesis defines finding severity', () => {
+      const reviewers = Object.keys(BUNDLED_COMMANDS).filter(
+        key =>
+          (key.startsWith('__archon_pack__bundled:sdlc:review::review-') &&
+            !key.endsWith('review-synthesize') &&
+            !key.endsWith('review-scope')) ||
+          key === '__archon_pack__bundled:sdlc:simplify::simplify'
+      );
+      expect(reviewers.length).toBeGreaterThanOrEqual(7);
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '## Severity'
+      );
+      for (const key of reviewers) {
+        expect(BUNDLED_COMMANDS[key]).not.toMatch(
+          /## Severity|\bCritical\b|\bImportant\b|Suggestion/
         );
       }
     });
@@ -300,24 +275,6 @@ describe('bundled-defaults', () => {
       for (const content of Object.values(BUNDLED_WORKFLOWS)) {
         expect(content.length).toBeGreaterThan(50);
       }
-    });
-
-    it('archon-workflow-builder should have validate-before-save node ordering and key constraints', () => {
-      const content = BUNDLED_WORKFLOWS['archon-workflow-builder'];
-      expect(content).toContain('id: validate-yaml');
-      expect(content).toContain('depends_on: [validate-yaml]');
-      expect(content).toContain('denied_tools: [Edit, Bash]');
-      expect(content).toContain('output_format:');
-      expect(content).toContain('workflow_name');
-    });
-
-    it('archon-adversarial-dev init-workspace should avoid non-portable sed -i', () => {
-      const content = BUNDLED_WORKFLOWS['archon-adversarial-dev'];
-      expect(content).toContain('STATE_TMP="$ARTIFACTS/state.json.tmp"');
-      expect(content).toContain(
-        'sed "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/" "$ARTIFACTS/state.json" > "$STATE_TMP"'
-      );
-      expect(content).not.toContain('sed -i "s/SPRINT_COUNT_PLACEHOLDER/$SPRINT_COUNT/"');
     });
 
     it('archon-ship carries its target through triage.md without downstream target prose', () => {
@@ -382,6 +339,44 @@ describe('bundled-defaults', () => {
       // beside a head branch nothing downstream reads (#2968).
       expect(review.with).not.toHaveProperty('pr_number');
       expect(review.with).not.toHaveProperty('pr_head');
+    });
+
+    // Every commit that ships is read by a review round that judges structure as well
+    // as correctness. A pass that writes code with no review after it ships that code
+    // unread, and any structure finding it declines goes unjudged.
+    it('archon-deliver follows every implementation pass with a review', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+
+      type ParsedNode = (typeof parsed.workflow.nodes)[number];
+      const unreviewed: string[] = [];
+      const checkScope = (nodes: readonly ParsedNode[]): void => {
+        const dependents = new Map<string, string[]>();
+        for (const node of nodes) {
+          for (const dep of node.depends_on ?? []) {
+            dependents.set(dep, [...(dependents.get(dep) ?? []), node.id]);
+          }
+        }
+        const byId = new Map(nodes.map(node => [node.id, node]));
+        const isInclude = (id: string, target: string): boolean => {
+          const node = byId.get(id);
+          return node?.kind === 'include' && node.include === target;
+        };
+        const reviewedAfter = (id: string, seen = new Set<string>()): boolean =>
+          (dependents.get(id) ?? []).some(next => {
+            if (seen.has(next)) return false;
+            seen.add(next);
+            return isInclude(next, 'archon-review') || reviewedAfter(next, seen);
+          });
+        for (const node of nodes) {
+          if (node.kind === 'loop_group') checkScope(node.loop_group.nodes);
+          if (isInclude(node.id, 'archon-implement') && !reviewedAfter(node.id)) {
+            unreviewed.push(node.id);
+          }
+        }
+      };
+      checkScope(parsed.workflow.nodes);
+      expect(unreviewed).toEqual([]);
     });
 
     it('archon-deliver delegates the optional CI read timeout to the engine', () => {
@@ -505,10 +500,34 @@ describe('bundled-defaults', () => {
       const docs = parsed.workflow.nodes.find(node => node.id === 'docs');
       expect(docs?.when).toContain("$INPUTS.docs == 'auto' && $scope.output.docs == true");
 
-      const specialists = ['code', 'seams', 'simplify', 'tests', 'errors', 'docs'];
+      const specialists = ['seams', 'code', 'tests', 'focused', 'simplify', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
       expect(reviewComplete?.depends_on).toEqual(specialists);
+      // Seams runs on every tier; code and tests only on the full one, where the
+      // focused reviewer stands in for them on a low-risk change.
+      const lensWhen = (id: string) => parsed.workflow?.nodes.find(node => node.id === id)?.when;
+      expect(lensWhen('seams')).not.toContain('tier');
+      expect(lensWhen('code')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('tests')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
+      // Structure is a full-tier lens again: delivery's pre-PR pass is the first look,
+      // not a replacement for this one.
+      expect(lensWhen('simplify')).toContain("$INPUTS.tier != 'focused'");
+      // Reviewers are read-only by the engine's check, not only by their prompts.
+      for (const id of [
+        'scope',
+        'seams',
+        'code',
+        'tests',
+        'focused',
+        'errors',
+        'docs',
+        'synthesize',
+      ]) {
+        const node = parsed.workflow.nodes.find(candidate => candidate.id === id);
+        expect(node && 'mutates_checkout' in node ? node.mutates_checkout : undefined).toBe(false);
+      }
       expect(reviewComplete?.trigger_rule).toBe('all_done');
 
       const synthesize = parsed.workflow.nodes.find(node => node.id === 'synthesize');
@@ -537,12 +556,13 @@ describe('bundled-defaults', () => {
       );
       // The lens this restores was cut as inert, not as unwanted (#2898/#2899): its charter
       // demoted every finding to a Suggestion. Pin the two halves of the posture that
-      // replaced it — the values frame it reasons from, and the blocking severity.
-      expect(commands['__archon_pack__bundled:sdlc:review::review-simplify']).toContain(
+      // replaced it — the values frame it reasons from, and the blocking severity, which
+      // synthesis owns because it assigns every label.
+      expect(commands['__archon_pack__bundled:sdlc:simplify::simplify']).toContain(
         'Writing code is cheap; maintaining it and recovering option value are not'
       );
-      expect(commands['__archon_pack__bundled:sdlc:review::review-simplify']).toContain(
-        'a verdict may rest on simplification alone'
+      expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
+        '- **Unneeded** — the change adds complexity that a proved, behavior-preserving smaller shape removes'
       );
       expect(commands['__archon_pack__bundled:sdlc:review::review-synthesize']).toContain(
         'report-round-N.md'
@@ -552,9 +572,11 @@ describe('bundled-defaults', () => {
       );
 
       for (const lens of specialists) {
-        expect(commands[`__archon_pack__bundled:sdlc:review::review-${lens}`]).toContain(
-          `sources: [${lens}]`
-        );
+        const key =
+          lens === 'simplify'
+            ? '__archon_pack__bundled:sdlc:simplify::simplify'
+            : `__archon_pack__bundled:sdlc:review::review-${lens}`;
+        expect(commands[key]).toContain(`sources: [${lens}]`);
       }
     });
 
@@ -565,6 +587,9 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('$ARTIFACTS_DIR/review/findings.json');
       expect(synthesize).toContain('{id, severity, sources, claim, status, round}');
+      // scripts/lens-yield.ts tallies blocking and disproved findings by these values.
+      expect(synthesize).toContain('`severity` is `blocking` or `note`');
+      expect(synthesize).toContain('`status` is `open`, `fixed`, `declined`');
       // Carried-forward findings keep the lens that found them, or a multi-round review
       // reattributes every surviving finding to its last round.
       expect(synthesize).toContain('keeping the `sources` it was first attributed to');
@@ -572,8 +597,8 @@ describe('bundled-defaults', () => {
 
     // The lenses judge defects in what changed; only synthesis runs on every round, so it
     // owns holding the change to the contract's acceptance, invariants, and steering. Scope
-    // must carry those items for it to judge, and an unmet one must block like any
-    // Important finding and stay attributable in findings.json.
+    // must carry those items for it to judge, and an unmet one must block as a blocking
+    // finding and stay attributable in findings.json.
     it('review holds the change to the accepted contract on every round', () => {
       // Triage is where the delivery chain first restates the contract; a count or summary
       // of acceptance there is where the items were lost.
@@ -585,7 +610,7 @@ describe('bundled-defaults', () => {
       const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
       expect(synthesize).toContain('## Judge contract coverage');
       expect(synthesize).toContain('`sources: [contract]`');
-      expect(synthesize).toContain('An unmet contract item is an Important or Critical finding');
+      expect(synthesize).toContain('An unmet contract item is a blocking finding');
     });
 
     // The same "does this diff earn a docs review" call is made in two packs — at
@@ -703,8 +728,8 @@ describe('bundled-defaults', () => {
     // discover or mutate the just-created PR (an empty/unset --repo value does
     // NOT fail: gh silently falls back to its default resolution, verified).
     // `gh pr view` is intentionally NOT guarded here: review-path commands
-    // (archon-pr-review-scope etc.) view explicit PR numbers supplied as
-    // workflow input — pinning those is a separate concern.
+    // view explicit PR numbers supplied as workflow input — pinning those is a
+    // separate concern.
 
     // Join backslash-continued shell lines so multi-line `gh pr create \`
     // blocks are checked as a single command.

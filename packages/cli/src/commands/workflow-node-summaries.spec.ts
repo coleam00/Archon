@@ -9,7 +9,8 @@
  */
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
-import { buildNodeSummaries } from './workflow';
+import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
+import { NODE_SUMMARY_EVENT_TYPES, buildNodeSummaries, buildRunNodes } from './workflow';
 
 function event(
   id: string,
@@ -251,5 +252,170 @@ describe('buildNodeSummaries durations', () => {
       ])
     );
     expect(summary?.durationMs).toBe(7_200_000);
+  });
+});
+
+// A resume writes the reset before the node's new node_started; a process that dies
+// between the two leaves the reset as the node's last word.
+describe('buildNodeSummaries resume resets', () => {
+  for (const reset of ['node_always_run_reset', 'node_prior_cache_invalidated'] as const) {
+    describe(`after ${reset}`, () => {
+      const completedThenReset = [
+        event('1', 'node_started', 'prepare', '2026-10-03T10:00:00.000Z'),
+        event('2', 'node_completed', 'prepare', '2026-10-03T10:00:01.000Z', {
+          node_output: 'prepared',
+        }),
+        event('3', reset, 'prepare', '2026-10-03T10:05:00.000Z', { prior_output: 'prepared' }),
+      ];
+
+      it('reports the node pending, without the prior attempt’s details', () => {
+        expect(buildNodeSummaries(completedThenReset)).toEqual([
+          { nodeId: 'prepare', state: 'pending' },
+        ]);
+      });
+
+      it('follows the re-run to running and completed', () => {
+        const started = [
+          ...completedThenReset,
+          event('4', 'node_started', 'prepare', '2026-10-03T10:05:01.000Z'),
+        ];
+        expect(buildNodeSummaries(started)).toEqual([
+          { nodeId: 'prepare', state: 'running', startedAt: '2026-10-03T10:05:01.000Z' },
+        ]);
+        expect(
+          buildNodeSummaries([
+            ...started,
+            event('5', 'node_completed', 'prepare', '2026-10-03T10:05:03.000Z', {
+              node_output: 'prepared again',
+            }),
+          ])
+        ).toEqual([
+          {
+            nodeId: 'prepare',
+            state: 'completed',
+            startedAt: '2026-10-03T10:05:01.000Z',
+            durationMs: 2_000,
+            outputPreview: 'prepared again',
+          },
+        ]);
+      });
+
+      it('reports a later prior-success replay as completed', () => {
+        expect(
+          buildNodeSummaries([
+            ...completedThenReset,
+            event('4', 'node_skipped_prior_success', 'prepare', '2026-10-03T10:05:01.000Z', {
+              reason: 'prior_success',
+              node_output: 'prepared',
+            }),
+          ])
+        ).toEqual([{ nodeId: 'prepare', state: 'completed', outputPreview: 'prepared' }]);
+      });
+    });
+  }
+});
+
+describe('buildRunNodes', () => {
+  const graph = { terminal_graph: { node_ids: ['plan', 'implement', 'review'] } };
+
+  it('lists every declared node in declared order, pending until an event reaches it', () => {
+    const nodes = buildRunNodes({ metadata: graph }, [
+      event('implement-started', 'node_started', 'implement', '2026-09-27T10:00:05.000Z'),
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:00.000Z'),
+      event('plan-completed', 'node_completed', 'plan', '2026-09-27T10:00:04.000Z'),
+    ]);
+
+    expect(nodes.map(node => [node.nodeId, node.state])).toEqual([
+      ['plan', 'completed'],
+      ['implement', 'running'],
+      ['review', 'pending'],
+    ]);
+    expect(nodes[2]).toEqual({ nodeId: 'review', state: 'pending' });
+  });
+
+  it('appends a node that ran without being declared after the declared ones', () => {
+    const nodes = buildRunNodes({ metadata: graph }, [
+      event('loop-body', 'node_started', 'plan.step', '2026-09-27T10:00:00.000Z'),
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:01.000Z'),
+    ]);
+
+    expect(nodes.map(node => [node.nodeId, node.state])).toEqual([
+      ['plan', 'running'],
+      ['implement', 'pending'],
+      ['review', 'pending'],
+      ['plan.step', 'running'],
+    ]);
+  });
+
+  it('reports only the folded nodes when the run recorded no graph', () => {
+    const nodes = buildRunNodes({ metadata: {} }, [
+      event('plan-started', 'node_started', 'plan', '2026-09-27T10:00:00.000Z'),
+    ]);
+
+    expect(nodes).toEqual([
+      { nodeId: 'plan', state: 'running', startedAt: '2026-09-27T10:00:00.000Z' },
+    ]);
+  });
+});
+
+describe('buildNodeSummaries session ids', () => {
+  const at = (second: number): string => `2026-10-03T10:00:${String(second).padStart(2, '0')}.000Z`;
+
+  it('lists every attempt’s session in order, surviving the retry’s reset', () => {
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'plan', at(0)),
+      event('2', 'node_failed', 'plan', at(1), { error: 'overloaded', session_id: 'attempt-1' }),
+      event('3', 'node_started', 'plan', at(2)),
+      event('4', 'node_completed', 'plan', at(3), { session_id: 'attempt-2' }),
+    ]);
+    expect(summary).toMatchObject({ state: 'completed', sessionIds: ['attempt-1', 'attempt-2'] });
+  });
+
+  it('lists a fresh-context loop’s iterations once each', () => {
+    // The loop's node_completed repeats its last iteration's session.
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'work', at(0)),
+      event('2', 'loop_iteration_completed', 'work', at(1), { iteration: 1, session_id: 'it-1' }),
+      event('3', 'loop_iteration_completed', 'work', at(2), { iteration: 2, session_id: 'it-2' }),
+      event('4', 'node_completed', 'work', at(3), { session_id: 'it-2' }),
+    ]);
+    expect(summary?.sessionIds).toEqual(['it-1', 'it-2']);
+  });
+
+  it('lists a loop that continues one session once', () => {
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'work', at(0)),
+      event('2', 'loop_iteration_completed', 'work', at(1), { iteration: 1, session_id: 'same' }),
+      event('3', 'loop_iteration_completed', 'work', at(2), { iteration: 2, session_id: 'same' }),
+      event('4', 'node_completed', 'work', at(3), { session_id: 'same' }),
+    ]);
+    expect(summary?.sessionIds).toEqual(['same']);
+  });
+
+  it('adds nothing for a run recorded before session ids were stored', () => {
+    const [summary] = buildNodeSummaries([
+      event('1', 'node_started', 'plan', at(0)),
+      event('2', 'node_completed', 'plan', at(1), { node_output: 'done' }),
+    ]);
+    expect(summary).not.toHaveProperty('sessionIds');
+  });
+});
+
+describe('NODE_SUMMARY_EVENT_TYPES', () => {
+  it('names every event type the fold reads: fetching only those changes nothing', () => {
+    // One row of every event type, each carrying fields the fold would pick up.
+    const log = WORKFLOW_EVENT_TYPES.map((type, i) =>
+      event(String(i), type, 'work', `2026-10-03T10:00:${String(i).padStart(2, '0')}.000Z`, {
+        session_id: `session-${type}`,
+        iteration: 1,
+        node_output: 'out',
+        error: 'boom',
+      })
+    );
+    const read = new Set<string>(NODE_SUMMARY_EVENT_TYPES);
+
+    expect(buildNodeSummaries(log.filter(row => read.has(row.event_type)))).toEqual(
+      buildNodeSummaries(log)
+    );
   });
 });

@@ -1,3 +1,8 @@
+import {
+  declaredOutputPathsSchema,
+  rootOutputFields,
+  type DeclaredOutputPaths,
+} from './output-ref';
 import { z } from '@hono/zod-openapi';
 import type { TokenUsage } from '@archon/providers/types';
 import { providerFailureSchema } from '@archon/provider-contract';
@@ -10,11 +15,15 @@ import {
   executionSpendSchema,
   nodeExecutionMetadataSchema,
   nodeFailureKindSchema,
+  type NodeCostScope,
+  type NodeDescriptor,
   type NodeExecutionRecord,
   type NodeStateRecord,
   type ExecutionOutput,
 } from './schemas/node-execution';
 import { executionMetadata } from './node-execution';
+import { unqualifiedResourceName } from './packaged-workflow';
+import type { DagNode } from './schemas';
 
 /** Existing flat wire keys remain readable by older binaries. */
 export const serializedNodeDataSchema = z.object({
@@ -52,6 +61,7 @@ export const serializedNodeDataSchema = z.object({
   node_output_spill_path: z.string().optional(),
   structured_output: z.unknown().optional(),
   declared_fields: z.array(z.string()).optional(),
+  declared_output_paths: declaredOutputPathsSchema.optional(),
   prior_output: z.string().optional(),
   prior_output_truncated: z.boolean().optional(),
   prior_output_original_bytes: z.number().optional(),
@@ -73,6 +83,8 @@ export const serializedNodeDataSchema = z.object({
   identity: z.string().optional(),
   ordinal: z.number().optional(),
   approval_decision: z.string().optional(),
+  /** The full provider session id; only this durable row carries it. */
+  session_id: z.string().optional(),
 });
 export type SerializedNodeData = z.infer<typeof serializedNodeDataSchema>;
 
@@ -104,6 +116,7 @@ function outputFields(
   | 'node_output_spill_path'
   | 'structured_output'
   | 'declared_fields'
+  | 'declared_output_paths'
 > {
   return {
     node_output: output.persisted?.text ?? output.text,
@@ -119,8 +132,44 @@ function outputFields(
         }
       : {}),
     ...(output.structured !== undefined ? { structured_output: output.structured } : {}),
-    ...(output.declaredFields !== undefined ? { declared_fields: output.declaredFields } : {}),
+    ...(output.declaredOutputPaths !== undefined
+      ? persistedOutputContract(output.declaredOutputPaths)
+      : {}),
   };
+}
+
+/**
+ * The persisted form of a path contract. `declared_fields` is derived and still written
+ * because older binaries opening the same database read only that key.
+ */
+export function persistedOutputContract(
+  paths: DeclaredOutputPaths
+): Pick<SerializedNodeData, 'declared_fields' | 'declared_output_paths'> {
+  return { declared_fields: rootOutputFields(paths), declared_output_paths: paths };
+}
+
+/**
+ * Whether a node row's spend is its own, or a restatement of spend rows the same run
+ * already carries. `accounting` is the seam: a `loop_group` roll-up sums its body rows, a
+ * composed fan-out wrapper sums its instances, an instance terminal sums its own leaves,
+ * and an amendment re-states the attempt it amends. `serializeNodeStateRecord` marks every
+ * of them `aggregate: true`, and the resume fold skips a marked row because its scope's
+ * own rows already carry that spend — except for a composed-instance terminal, which the
+ * fold keeps as the authoritative source for its scope because its inner rows are
+ * observability writes that can be missing after a crash. So the durable row, the
+ * transcript, the emitter and the run-detail API all report spend on the same terms (#3508).
+ * Rows written before `accounting` existed carry only the `aggregate` marker.
+ * `serializeNodeOutput` is deliberately not gated: the run total is fed by exactly one
+ * aggregation point, and the scope totals it reads are already this record's own.
+ */
+export function nodeCostScope(data: Readonly<Record<string, unknown>>): NodeCostScope {
+  const accounting = nodeExecutionMetadataSchema.shape.accounting.safeParse(data.accounting);
+  if (accounting.success) return accounting.data === 'node' ? 'own' : 'total';
+  return data.aggregate === true ? 'total' : 'own';
+}
+
+function reportsOwnSpend(record: NodeExecutionRecord): boolean {
+  return nodeCostScope(record) === 'own';
 }
 
 export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNodeEvent {
@@ -208,7 +257,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
             },
           }
         : {}),
-      ...(accounting !== 'node' ? { aggregate: true } : {}),
+      ...(!reportsOwnSpend(record) ? { aggregate: true } : {}),
       ...(lifecycle.status === 'failed'
         ? {
             error: lifecycle.error,
@@ -248,6 +297,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
       ...(d?.ordinal !== undefined ? { ordinal: d.ordinal } : {}),
       ...(d?.approvalDecision !== undefined ? { approval_decision: d.approvalDecision } : {}),
       ...(d?.expr !== undefined ? { expr: d.expr } : {}),
+      ...(record.sessionId !== undefined ? { session_id: record.sessionId } : {}),
     },
   };
 }
@@ -258,18 +308,17 @@ export type NodeExecutionResult = NodeOutput & {
   loopIterations?: number;
 };
 
-/** Full session cursors never enter the record or its public projections. */
 export function serializeNodeOutput(
   record: NodeExecutionRecord,
-  continuation: { sessionId?: string; resumed?: boolean } = {}
+  continuation: { resumed?: boolean } = {}
 ): NodeExecutionResult {
   const common = {
     output: record.output?.text ?? '',
     ...(record.output?.structured !== undefined
       ? { structuredOutput: record.output.structured }
       : {}),
-    ...(record.output?.declaredFields !== undefined
-      ? { declaredFields: record.output.declaredFields }
+    ...(record.output?.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: record.output.declaredOutputPaths }
       : {}),
     ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
     ...(record.spend.costUsd.source === 'provider' ? { costUsd: record.spend.costUsd.value } : {}),
@@ -278,6 +327,7 @@ export function serializeNodeOutput(
       : {}),
     execution: executionMetadata(record),
   };
+  const session = record.sessionId !== undefined ? { sessionId: record.sessionId } : {};
   const lifecycle = record.lifecycle;
   switch (lifecycle.status) {
     case 'failed':
@@ -294,17 +344,21 @@ export function serializeNodeOutput(
     case 'skipped':
       return { ...common, state: 'skipped', cause: lifecycle.cause };
     case 'completed':
-      return { ...common, ...continuation, state: 'completed' };
+      return { ...common, ...session, ...continuation, state: 'completed' };
     case 'started':
     case 'suspended':
-      return { ...common, ...continuation, state: 'running' };
+      return { ...common, ...session, ...continuation, state: 'running' };
   }
 }
 
-export function nodeRecordName(record: NodeStateRecord): string {
-  return record.node.kind === 'agent' && record.node.source.kind === 'command'
-    ? record.node.source.name
-    : record.node.id;
+/**
+ * The label progress surfaces show for a node: the command name for a command node, else
+ * the node id. A packaged command's internal reference is reduced to its bare name; the
+ * qualified reference stays in persisted `data.command` and transcript content.
+ */
+export function nodeDisplayName(node: NodeDescriptor | DagNode): string {
+  if (node.kind !== 'agent' || node.source.kind !== 'command') return node.id;
+  return unqualifiedResourceName(node.source.name);
 }
 
 export function serializeNodeTranscript(
@@ -317,10 +371,14 @@ export function serializeNodeTranscript(
   const lifecycle = record.lifecycle;
   const execution = executionMetadata(record);
   const base = { step: record.node.id, execution };
-  const usage = {
-    ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
-    ...(record.spend.costUsd.source === 'provider' ? { cost_usd: record.spend.costUsd.value } : {}),
-  };
+  const usage = reportsOwnSpend(record)
+    ? {
+        ...(record.spend.tokens.source === 'provider' ? { tokens: record.spend.tokens.value } : {}),
+        ...(record.spend.costUsd.source === 'provider'
+          ? { cost_usd: record.spend.costUsd.value }
+          : {}),
+      }
+    : {};
   const content =
     record.node.kind === 'agent'
       ? record.node.source.kind === 'command'
@@ -356,7 +414,11 @@ export function serializeNodeTranscript(
 export function serializeNodeEmitter(
   record: NodeStateRecord
 ): import('./event-emitter').WorkflowEmitterEvent | undefined {
-  const base = { runId: record.runId, nodeId: record.node.id, nodeName: nodeRecordName(record) };
+  const base = {
+    runId: record.runId,
+    nodeId: record.node.id,
+    nodeName: nodeDisplayName(record.node),
+  };
   if ('cache' in record)
     return record.cache.action === 'replayed'
       ? { ...base, type: 'node_skipped_prior_success' }
@@ -382,7 +444,7 @@ export function serializeNodeEmitter(
         execution,
         type: 'node_completed',
         ...(record.timing.durationMs !== undefined ? { duration: record.timing.durationMs } : {}),
-        ...(record.spend.costUsd.source === 'provider'
+        ...(reportsOwnSpend(record) && record.spend.costUsd.source === 'provider'
           ? { costUsd: record.spend.costUsd.value }
           : {}),
         ...(record.spend.stopReason.source === 'provider'

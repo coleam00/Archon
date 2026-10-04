@@ -1,9 +1,38 @@
 import { defineConfig } from 'astro/config';
+import { unified } from '@astrojs/markdown-remark';
 import starlight from '@astrojs/starlight';
 import starlightLlmsTxt from 'starlight-llms-txt';
 
+// Preserve old entry bookmarks without claiming that an author republished their pack.
+// The former listing redirects to the GitHub topic index.
+const retiredRegistrySlugs = [
+  'archon-piv-loop',
+  'archon-fix-github-issue',
+  'archon-comprehensive-pr-review',
+  'archon-ralph-dag',
+  'video-generic',
+  'archon-idea-to-wo',
+  'archon-smart-mr-review',
+  'archon-resolve-mr-conflicts',
+  'archon-comprehensive-mr-review',
+  'piv-system-evolution',
+  'harness-score',
+  'pocock-skills-workflow-family',
+  'token-max-site-factory',
+  'image-node-factory',
+];
+const retiredRegistryRedirects = Object.fromEntries(
+  retiredRegistrySlugs.map((slug) => [
+    `/workflows/${slug}/`,
+    '/guides/global-workflows/#installed-workflow-packs',
+  ])
+);
+
 export default defineConfig({
   site: 'https://archon.diy',
+  // Keep the existing Markdown and llms.txt rendering across Astro's processor change.
+  markdown: { processor: unified() },
+  redirects: { ...retiredRegistryRedirects, '/workflows/': '/plugins/' },
   integrations: [
     starlight({
       title: 'Archon',
@@ -33,36 +62,36 @@ export default defineConfig({
         baseUrl: 'https://github.com/coleam00/Archon/edit/main/packages/docs-web/',
       },
       sidebar: [
-        { label: '✦  Marketplace', link: '/workflows/' },
         { label: '🗺️  Roadmap', link: '/roadmap/' },
         { label: '🎨  Brand', link: '/brand/' },
+        { label: 'Plugins', link: '/plugins/' },
         {
           label: 'The Book of Archon',
-          autogenerate: { directory: 'book' },
+          items: [{ autogenerate: { directory: 'book' } }],
         },
         {
           label: 'Getting Started',
-          autogenerate: { directory: 'getting-started' },
+          items: [{ autogenerate: { directory: 'getting-started' } }],
         },
         {
           label: 'Guides',
-          autogenerate: { directory: 'guides' },
+          items: [{ autogenerate: { directory: 'guides' } }],
         },
         {
           label: 'Adapters',
-          autogenerate: { directory: 'adapters' },
+          items: [{ autogenerate: { directory: 'adapters' } }],
         },
         {
           label: 'Deployment',
-          autogenerate: { directory: 'deployment' },
+          items: [{ autogenerate: { directory: 'deployment' } }],
         },
         {
           label: 'Reference',
-          autogenerate: { directory: 'reference' },
+          items: [{ autogenerate: { directory: 'reference' } }],
         },
         {
           label: 'Contributing',
-          autogenerate: { directory: 'contributing' },
+          items: [{ autogenerate: { directory: 'contributing' } }],
         },
       ],
       customCss: ['./src/styles/custom.css'],
@@ -126,11 +155,6 @@ export default defineConfig({
               label: 'Roadmap',
               url: 'https://archon.diy/roadmap/',
               description: 'Project roadmap and planned features',
-            },
-            {
-              label: 'Workflow Marketplace',
-              url: 'https://archon.diy/workflows/',
-              description: 'Browse and discover community workflows',
             },
           ],
 

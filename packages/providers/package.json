@@ -14,10 +14,10 @@
     "./codex/provider": "./src/codex/provider.ts",
     "./codex/config": "./src/codex/config.ts",
     "./codex/binary-resolver": "./src/codex/binary-resolver.ts",
+    "./codex/setup-env": "./src/codex/setup-env.ts",
     "./mcp/config": "./src/mcp/config.ts",
     "./oauth": "./src/oauth.ts",
     "./community/pi": "./src/community/pi/index.ts",
-    "./community/pi/auth-status": "./src/community/pi/auth-status.ts",
     "./community/copilot": "./src/community/copilot/index.ts",
     "./community/copilot/binary-resolver": "./src/community/copilot/binary-resolver.ts",
     "./community/opencode/runtime": "./src/community/opencode/runtime.ts",
@@ -33,10 +33,10 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@github/copilot-sdk": "~1.0.1",
-    "@earendil-works/pi-ai": "^1.0.0",
-    "@earendil-works/pi-coding-agent": "^1.0.0",
+    "@earendil-works/pi-ai": "^1.0.2",
+    "@earendil-works/pi-coding-agent": "^1.0.2",
     "@opencode-ai/sdk": "^1.17.3",
-    "@openai/codex-sdk": "^0.160.0",
+    "@openai/codex": "0.160.0",
     "@sinclair/typebox": "^0.34.41",
     "ajv": "^8.20.0",
     "jsonrepair": "^3.14.0",
@@ -54,6 +54,17 @@
     ],
     [
       "src/codex/provider.test.ts"
+    ],
+    [
+      "src/codex/turn-error.test.ts",
+      "src/codex/setup-env.test.ts"
+    ],
+    [
+      "src/codex/app-server.test.ts"
+    ],
+    [
+      "src/codex/scope.test.ts",
+      "src/codex/scope.boundary.test.ts"
     ],
     [
       "src/registry.test.ts"
@@ -86,6 +97,9 @@
       "src/native-tools-conformance.test.ts"
     ],
     [
+      "src/native-credential-check.test.ts"
+    ],
+    [
       "src/claude/config.test.ts"
     ],
     [
@@ -101,7 +115,8 @@
       "src/community/pi/event-bridge.test.ts"
     ],
     [
-      "src/community/pi/extension-error-broker.test.ts"
+      "src/community/pi/extension-error-broker.test.ts",
+      "src/community/pi/semaphore.test.ts"
     ],
     [
       "src/community/pi/options-translator.test.ts"
@@ -116,9 +131,6 @@
       "src/community/pi/request-auth.test.ts"
     ],
     [
-      "src/community/pi/auth-status.test.ts"
-    ],
-    [
       "src/community/pi/request-auth.integration.test.ts"
     ],
     [
@@ -126,6 +138,9 @@
     ],
     [
       "src/community/pi/provider.test.ts"
+    ],
+    [
+      "src/community/pi/provider.integration.test.ts"
     ],
     [
       "src/community/pi/provider-lazy-load.test.ts"
@@ -183,6 +198,9 @@
     ],
     [
       "src/claude/plugins.test.ts"
+    ],
+    [
+      "src/community/pi/credential-check.test.ts"
     ]
   ]
 }

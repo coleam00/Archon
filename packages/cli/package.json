@@ -9,7 +9,7 @@
   "scripts": {
     "cli": "bun src/cli.ts",
     "test": "bun run ../../scripts/package-tests.ts",
-    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-interrupt.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts",
+    "test:integration": "bun test src/utils/detached-run-control.integration.spec.ts && bun test src/telemetry-exit.integration.spec.ts && bun test src/commands/workflow-terminal-event.integration.spec.ts && bun test src/commands/workflow-continuation-provider.integration.spec.ts && bun test src/commands/workflow-adopt-source.integration.spec.ts && bun test src/commands/workflow-resume-conversation.integration.spec.ts && bun test src/commands/workflow-wait.integration.spec.ts && bun test src/commands/workflow-interrupt.integration.spec.ts && bun test src/commands/workflow-transcript.integration.spec.ts && bun test src/commands/workflow-wake.integration.spec.ts && bun test src/commands/workflow-codebase-resolution.integration.spec.ts",
     "type-check": "bun x tsc --noEmit"
   },
   "dependencies": {
@@ -72,6 +72,9 @@
       "src/utils/detached-run-control.integration.spec.ts"
     ],
     [
+      "src/utils/detached-resume-receipt.test.ts"
+    ],
+    [
       "src/telemetry-exit.integration.spec.ts"
     ],
     [
@@ -113,6 +116,15 @@
     ],
     [
       "src/commands/trigger.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-continuations.test.ts"
+    ],
+    [
+      "src/commands/workflow-wake.integration.spec.ts"
+    ],
+    [
+      "src/commands/workflow-codebase-resolution.integration.spec.ts"
     ]
   ]
 }

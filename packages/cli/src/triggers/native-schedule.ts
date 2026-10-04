@@ -178,7 +178,10 @@ export async function installMacosNativeSchedule(
   await mkdir(runtime.directory, { recursive: true, mode: 0o700 });
   const path = join(runtime.directory, `${rendered.label}.plist`);
   const created = await writeOwnedConfiguration(path, rendered.plist);
-  if (!created) return path;
+  if (!created) {
+    await runtime.runCommand('/bin/launchctl', ['print', `${runtime.domain}/${rendered.label}`]);
+    return path;
+  }
 
   try {
     await runtime.runCommand('/bin/launchctl', ['bootstrap', runtime.domain, path]);

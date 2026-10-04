@@ -2,14 +2,19 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowStore } from '@archon/workflows/store';
-import type { WorkflowResumeCursor } from '@archon/workflows/store';
-import type { resumeWorkflow } from '@archon/core/operations';
+import type { getWorkflowRun } from '@archon/core/db/workflows';
+import type { getConversationById } from '@archon/core/db/conversations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 
 const mockListDueWorkflowContinuations = mock(async () => [] as WorkflowRun[]);
 const mockDeferWorkflowContinuation = mock(async () => undefined);
-const mockResumeWorkflow = mock<typeof resumeWorkflow>(async (_runId: string) => {
+type ResumeConversation = Pick<
+  NonNullable<Awaited<ReturnType<typeof getConversationById>>>,
+  'platform_type' | 'platform_conversation_id'
+>;
+const mockGetConversationById = mock(async (_id: string) => null as ResumeConversation | null);
+const mockResumeWorkflow = mock<typeof getWorkflowRun>(async (_runId: string) => {
   throw new Error('unused');
 });
 const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
@@ -59,17 +64,20 @@ mock.module('@archon/core', () => ({
   createChildWorktreeResolver: mock(() => undefined),
   createWorkflowDeps: mock(() => mockWorkflowDeps),
 }));
-mock.module('@archon/core/operations', () => ({
-  resumeWorkflow: mockResumeWorkflow,
-}));
+
 mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
   resolveRunWorkflow: mockResolveRunWorkflow,
 }));
 mock.module('@archon/core/services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
+  RunLiveOwnerAlreadyOwnedError: class extends Error {},
 }));
 mock.module('@archon/core/db/codebases', () => ({ getCodebase: mock(async () => null) }));
+mock.module('@archon/core/db/conversations', () => ({
+  getConversationById: mockGetConversationById,
+}));
 mock.module('@archon/core/db/workflows', () => ({
+  getWorkflowRun: mockResumeWorkflow,
   listDueWorkflowContinuations: mockListDueWorkflowContinuations,
   deferWorkflowContinuation: mockDeferWorkflowContinuation,
   WorkflowNotResumableError: MockWorkflowNotResumableError,
@@ -90,13 +98,13 @@ mock.module('@archon/workflows/executor', () => ({
 }));
 
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
-import { HeadlessPlatform } from '../adapters/headless';
+import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 
 import {
   resumeWorkflowRunFromServer,
-  scanDueWorkflowContinuations,
   workflowResumeConversationId,
   workflowResumeTargetForConversation,
+  workflowResumeTargetForRun,
 } from './workflow-resume-service';
 
 function run(
@@ -131,6 +139,8 @@ describe('workflow continuation scanner', () => {
     mockListDueWorkflowContinuations.mockReset();
     mockDeferWorkflowContinuation.mockReset();
     mockDeferWorkflowContinuation.mockResolvedValue(undefined);
+    mockGetConversationById.mockReset();
+    mockGetConversationById.mockResolvedValue(null);
     mockResumeWorkflow.mockReset();
     mockResumeWorkflow.mockImplementation(async () => {
       throw new Error('unused');
@@ -241,90 +251,7 @@ describe('workflow continuation scanner', () => {
     });
   });
 
-  test('resumes due waits and quota continuations through the shared resume CAS', async () => {
-    const scheduled = {
-      reason: 'quota' as const,
-      resumeAt: '2026-08-24T11:00:00.000Z',
-      deadlineAt: '2026-08-25T11:00:00.000Z',
-      attempt: 1,
-      maxAttempts: 2,
-      error: 'usage limit reached',
-    };
-    mockListDueWorkflowContinuations.mockResolvedValue([
-      run('wait-1', 'paused', {
-        wait: {
-          owner: 'node',
-          nodeId: 'delay',
-          kind: 'time',
-          waitingSince: '2026-08-24T10:00:00.000Z',
-          resumeAt: '2026-08-24T11:00:00.000Z',
-        },
-      }),
-      run('quota-1', 'failed', { scheduled_resume: scheduled }),
-    ]);
-    const resume = mock(async (_run: WorkflowRun, _cursor: WorkflowResumeCursor) => true);
-
-    await expect(
-      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:01.000Z'), resume)
-    ).resolves.toBe(2);
-    expect(resume).toHaveBeenCalledTimes(2);
-    expect(resume.mock.calls[0]).toEqual([
-      expect.objectContaining({ id: 'wait-1' }),
-      { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00.000Z' },
-    ]);
-    expect(resume.mock.calls[1]).toEqual([
-      expect.objectContaining({ id: 'quota-1' }),
-      { kind: 'quota', attempt: 1, resumeAt: '2026-08-24T11:00:00.000Z' },
-    ]);
-  });
-
-  test('resumes due event waits through the shared resume CAS', async () => {
-    mockListDueWorkflowContinuations.mockResolvedValue([
-      run('event-1', 'paused', {
-        wait: {
-          owner: 'node',
-          nodeId: 'await-review',
-          kind: 'event',
-          waitingSince: '2026-08-24T10:00:00.000Z',
-          resumeAt: '2026-08-24T11:00:00.000Z',
-          event: 'review.completed',
-        },
-      }),
-    ]);
-    const resume = mock(async (_run: WorkflowRun, _cursor: WorkflowResumeCursor) => true);
-
-    await expect(
-      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:01.000Z'), resume)
-    ).resolves.toBe(1);
-    expect(resume).toHaveBeenCalledWith(expect.objectContaining({ id: 'event-1' }), {
-      kind: 'wait',
-      nodeId: 'await-review',
-      resumeAt: '2026-08-24T11:00:00.000Z',
-    });
-  });
-
-  test('does not schedule an action-required wait even if a malformed due query returns it', async () => {
-    mockListDueWorkflowContinuations.mockResolvedValue([
-      run('attention-1', 'paused', {
-        wait: {
-          owner: 'node',
-          nodeId: 'rerun-ci',
-          kind: 'attention',
-          waitingSince: '2026-08-24T10:00:00.000Z',
-          message: 'Re-run CI, then resume.',
-        },
-      }),
-    ]);
-    const resume = mock(async () => true);
-
-    await expect(
-      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:01.000Z'), resume)
-    ).resolves.toBe(0);
-    expect(resume).not.toHaveBeenCalled();
-    expect(mockDeferWorkflowContinuation).not.toHaveBeenCalled();
-  });
-
-  test('routes background web execution through its worker and results through the parent', () => {
+  test('routes background web execution through its worker and results through the parent', async () => {
     const background = {
       ...run('wait-web', 'paused', {}),
       conversation_id: 'worker-conv',
@@ -388,36 +315,52 @@ describe('workflow continuation scanner', () => {
         new Map()
       )
     ).toEqual({ kind: 'headless' });
+
+    mockGetConversationById.mockImplementation(async id => {
+      if (id === 'worker-conv') {
+        return { platform_type: 'web', platform_conversation_id: 'web-worker-123' };
+      }
+      if (id === 'visible-conv') {
+        return { platform_type: 'web', platform_conversation_id: 'visible-web-conv' };
+      }
+      return null;
+    });
+    await expect(
+      workflowResumeTargetForRun(background, new Map([['web', webPlatform]]))
+    ).resolves.toEqual({
+      kind: 'platform',
+      destination: {
+        platform: webPlatform,
+        conversationId: 'web-worker-123',
+        resultConversationId: 'visible-web-conv',
+      },
+    });
   });
 
-  test('resumes a paused wait even when the run retains historical quota metadata', async () => {
-    const scheduled = {
-      reason: 'quota' as const,
-      resumeAt: '2026-08-24T10:30:00.000Z',
-      deadlineAt: '2026-08-25T10:30:00.000Z',
-      attempt: 1,
-      maxAttempts: 2,
-      error: 'usage limit reached',
-      triggeredAt: '2026-08-24T10:30:01.000Z',
-    };
-    mockListDueWorkflowContinuations.mockResolvedValue([
-      run('wait-after-quota', 'paused', {
-        wait: {
-          owner: 'node',
-          nodeId: 'delay',
-          kind: 'time',
-          waitingSince: '2026-08-24T10:31:00.000Z',
-          resumeAt: '2026-08-24T11:00:00.000Z',
-        },
-        scheduled_resume: scheduled,
-      }),
-    ]);
-    const resume = mock(async (_run: WorkflowRun, _cursor: WorkflowResumeCursor) => true);
+  test('resolves a persisted run to its owning platform destination', async () => {
+    const slackPlatform = {
+      sendMessage: mock(async () => undefined),
+      getStreamingMode: () => 'batch' as const,
+      getPlatformType: () => 'slack',
+    } satisfies IWorkflowPlatform;
+    mockGetConversationById.mockResolvedValue({
+      platform_type: 'slack',
+      platform_conversation_id: 'C1:111.0',
+    });
 
     await expect(
-      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:01.000Z'), resume)
-    ).resolves.toBe(1);
-    expect(resume).toHaveBeenCalledTimes(1);
+      workflowResumeTargetForRun(
+        run('slack-gate', 'paused', {}),
+        new Map([['slack', slackPlatform]])
+      )
+    ).resolves.toEqual({
+      kind: 'platform',
+      destination: {
+        platform: slackPlatform,
+        conversationId: 'C1:111.0',
+      },
+    });
+    expect(mockGetConversationById).toHaveBeenCalledWith('conv-1');
   });
 
   test('uses the originating platform destination when one is available', async () => {
@@ -642,6 +585,7 @@ describe('workflow continuation scanner', () => {
 
   test('does not claim a continuation when its recorded destination is unavailable', async () => {
     const paused = run('wait-unavailable', 'paused', {});
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
 
     await expect(
       resumeWorkflowRunFromServer(paused, undefined, {
@@ -650,70 +594,42 @@ describe('workflow continuation scanner', () => {
       })
     ).resolves.toBe(false);
 
-    expect(mockResumeWorkflow).not.toHaveBeenCalled();
     expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
 
   test('does not claim a container continuation that only the CLI can rewire', async () => {
     const paused = run('wait-container', 'paused', { isolation: 'container' });
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
 
     await expect(resumeWorkflowRunFromServer(paused)).resolves.toBe(false);
 
-    expect(mockResumeWorkflow).not.toHaveBeenCalled();
     expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
-
-  test('backs off a due row when execution prerequisites are unavailable', async () => {
-    mockListDueWorkflowContinuations.mockResolvedValueOnce([
-      run('wait-poison', 'paused', {
-        wait: {
-          owner: 'node',
-          nodeId: 'delay',
-          kind: 'time',
-          waitingSince: '2026-08-24T10:00:00.000Z',
-          resumeAt: '2026-08-24T11:00:00.000Z',
-        },
-      }),
-    ]);
-    const resume = mock(async () => false);
-
-    await expect(
-      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:00.000Z'), resume)
-    ).resolves.toBe(0);
-
-    expect(mockDeferWorkflowContinuation).toHaveBeenCalledWith(
-      'wait-poison',
-      '2026-08-24T11:01:00.000Z',
-      { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00.000Z' }
-    );
+  test('does not prepare or claim a row another host already moved', async () => {
+    const paused = run('moved', 'paused', {});
+    mockResumeWorkflow.mockResolvedValueOnce({ ...paused, status: 'running' });
+    expect(await resumeWorkflowRunFromServer(paused)).toBe(false);
+    expect(mockResolveRunWorkflow).not.toHaveBeenCalled();
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
   });
 
-  test('logs and backs off a row when destination resolution rejects', async () => {
-    mockListDueWorkflowContinuations.mockResolvedValueOnce([
-      run('wait-reject', 'paused', {
-        wait: {
-          owner: 'node',
-          nodeId: 'delay',
-          kind: 'time',
-          waitingSince: '2026-08-24T10:00:00.000Z',
-          resumeAt: '2026-08-24T11:00:00.000Z',
-        },
-      }),
-    ]);
-    const resume = mock(async () => {
-      throw new Error('conversation lookup failed');
+  test('uses the explicit actor instead of the original run user', async () => {
+    const paused = { ...run('actor', 'paused', {}), user_id: 'original-user' };
+    mockResumeWorkflow.mockResolvedValueOnce(paused);
+    mockResolveRunWorkflow.mockResolvedValueOnce({
+      ok: true,
+      workflow: makeTestResolvedWorkflow({ name: 'deliver' }),
     });
-
-    await expect(
-      scanDueWorkflowContinuations(new Date('2026-08-24T11:00:00.000Z'), resume)
-    ).resolves.toBe(0);
-
-    expect(mockDeferWorkflowContinuation).toHaveBeenCalledWith(
-      'wait-reject',
-      '2026-08-24T11:01:00.000Z',
-      { kind: 'wait', nodeId: 'delay', resumeAt: '2026-08-24T11:00:00.000Z' }
-    );
+    mockHydrateResumableRun.mockResolvedValueOnce({
+      preCreatedRun: { ...paused, status: 'running' },
+      priorCompletedNodes: new Map(),
+      priorUsage: { costUsd: 0 },
+      priorNodeSessions: [],
+    });
+    expect(await resumeWorkflowRunFromServer(paused, 'clicking-user')).toBe(true);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]).toMatchObject({ userId: 'clicking-user' });
   });
 });

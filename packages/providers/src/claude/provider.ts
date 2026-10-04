@@ -28,6 +28,7 @@
  *   the SDK switched to native binaries in the 0.2.x series. See
  *   `shouldPassNoEnvFile` for the implications on the `--no-env-file` flag.
  */
+import type { CredentialStatus } from '@archon/provider-contract';
 import {
   query,
   type Options,
@@ -36,6 +37,7 @@ import {
   type McpServerStatus,
   type PostToolUseFailureHookInput,
   type PostToolUseHookInput,
+  type SDKAPIRetryMessage,
   type SDKAssistantMessageError,
   type SDKRateLimitInfo,
   type SDKResultMessage,
@@ -55,6 +57,7 @@ import type {
   NodeConfig,
 } from '../types';
 import {
+  sessionPreview,
   truncateToolOutput,
   type ProviderFailure,
   type ProviderFailureClass,
@@ -472,6 +475,20 @@ export function classifyClaudeThrownError(
 /** A failed turn as the one `result` chunk the contract requires. */
 function failureResultChunk(failure: ProviderFailure): ResultChunk {
   return { type: 'result', isError: true, failure, errors: [failure.evidence] };
+}
+
+/** Counts, delay, status and the SDK's error token only: the vendor's error body stays out. */
+function apiRetryWarning(retry: SDKAPIRetryMessage): ProviderWarning {
+  const delay =
+    retry.retry_delay_ms < 1000
+      ? `${String(retry.retry_delay_ms)}ms`
+      : `${String(Math.round(retry.retry_delay_ms / 1000))}s`;
+  const cause =
+    retry.error_status === null ? retry.error : `HTTP ${String(retry.error_status)} ${retry.error}`;
+  return {
+    code: 'claude.api_retry',
+    message: `Claude is retrying the model call (attempt ${String(retry.attempt)} of ${String(retry.max_retries)}, waiting ${delay}, ${cause})`,
+  };
 }
 
 function getFirstEventTimeoutMs(): number {
@@ -956,9 +973,6 @@ function buildBaseClaudeOptions(
     ...(requestOptions?.fallbackModel !== undefined
       ? { fallbackModel: requestOptions.fallbackModel }
       : {}),
-    ...(requestOptions?.persistSession !== undefined
-      ? { persistSession: requestOptions.persistSession }
-      : {}),
     ...(requestOptions?.forkSession !== undefined
       ? { forkSession: requestOptions.forkSession }
       : {}),
@@ -1353,6 +1367,10 @@ async function* streamClaudeMessages(
         };
         if (sysMsg.exit_code !== undefined) hook.exitCode = sysMsg.exit_code;
         yield hook;
+      } else if (subtype === 'api_retry') {
+        // The SDK retries the model call itself; Archon only reports it, so a turn that
+        // waits out a rate limit does not look stuck.
+        yield { type: 'warning', ...apiRetryWarning(msg as SDKAPIRetryMessage) };
       } else {
         getLog().debug({ subtype: sysMsg.subtype }, 'claude.system_message_unhandled');
       }
@@ -1376,7 +1394,10 @@ async function* streamClaudeMessages(
         sessionSpend.record(resultMsg.session_id, cumulative);
         if (spend.costUsd === undefined) {
           getLog().warn(
-            { sessionId: resultMsg.session_id, baseline: spendBaseline.kind },
+            {
+              sessionIdPreview: sessionPreview(resultMsg.session_id),
+              baseline: spendBaseline.kind,
+            },
             'claude.query_cost_unknown'
           );
         }
@@ -1407,7 +1428,10 @@ async function* streamClaudeMessages(
       // than silently swallowing content.
       if (syntheticError !== undefined && !resultMsg.is_error) {
         getLog().warn(
-          { sessionId: resultMsg.session_id, errorCode: syntheticError.code },
+          {
+            sessionIdPreview: sessionPreview(resultMsg.session_id),
+            errorCode: syntheticError.code,
+          },
           'claude.synthetic_error_not_confirmed'
         );
         if (syntheticError.text) yield { type: 'agent_message_chunk', text: syntheticError.text };
@@ -1456,7 +1480,7 @@ async function* streamClaudeMessages(
       if (failure !== undefined) {
         getLog().error(
           {
-            sessionId: resultMsg.session_id,
+            sessionIdPreview: sessionPreview(resultMsg.session_id),
             errorSubtype: resultMsg.subtype,
             errorCode: syntheticError?.code,
             terminalReason: resultMsg.terminal_reason,
@@ -1469,7 +1493,10 @@ async function* streamClaudeMessages(
         );
       } else if (isSuccessWithErrorFlag) {
         getLog().debug(
-          { sessionId: resultMsg.session_id, stopReason: resultMsg.stop_reason },
+          {
+            sessionIdPreview: sessionPreview(resultMsg.session_id),
+            stopReason: resultMsg.stop_reason,
+          },
           'claude.result_success_validated'
         );
       }
@@ -1535,6 +1562,10 @@ async function* streamClaudeMessages(
  * - classifyClaudeThrownError: typed failure for an error thrown by the SDK
  */
 export class ClaudeProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   constructor() {
     if (getProcessUid() === 0 && process.env.IS_SANDBOX !== '1') {
       throw new Error(
@@ -1662,7 +1693,10 @@ export class ClaudeProvider implements IAgentProvider {
       if (resumeSessionId) {
         options.resume = resumeSessionId;
         getLog().debug(
-          { sessionId: resumeSessionId, forkSession: requestOptions?.forkSession },
+          {
+            sessionIdPreview: sessionPreview(resumeSessionId),
+            forkSession: requestOptions?.forkSession,
+          },
           'resuming_session'
         );
       } else {

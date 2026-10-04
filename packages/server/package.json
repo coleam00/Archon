@@ -77,9 +77,6 @@
       "src/adapters/web.test.ts"
     ],
     [
-      "src/adapters/headless.test.ts"
-    ],
-    [
       "src/adapters/web/dashboard-event-poller.test.ts"
     ],
     [
@@ -95,7 +92,11 @@
       "src/resolve-user-id.test.ts"
     ],
     [
-      "src/boot/claude-auth-posture.test.ts"
+      "src/index.slack-resume.test.ts"
+    ],
+    [
+      "src/boot/claude-auth-posture.test.ts",
+      "src/boot/codex-auth-posture.test.ts"
     ],
     [
       "src/github-auth-bootstrap.test.ts"
@@ -129,6 +130,12 @@
     ],
     [
       "src/static-cache.test.ts"
+    ],
+    [
+      "src/services/workflow-continuation-scheduler.test.ts"
+    ],
+    [
+      "src/routes/schemas/config.schemas.test.ts"
     ],
     [
       "src/routes/workflow-yaml.test.ts"

@@ -7,6 +7,7 @@
  * Bootstrap: callers must call registerBuiltinProviders() at process entrypoints
  * (server startup, CLI init) before any provider lookups.
  */
+import { singleVendorCatalog } from './credential-catalog';
 import type {
   IAgentProvider,
   ProviderCapabilities,
@@ -36,6 +37,9 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Backing store for registered providers. */
 const registry = new Map<string, ProviderRegistration>();
 
+/** Deprecated providers whose notice this process already logged. */
+const deprecationNoticed = new Set<string>();
+
 function assertValidCapabilities(entry: ProviderRegistration): void {
   if (entry.capabilities.sessionFork === true && !entry.capabilities.sessionResume) {
     throw new Error(`Provider '${entry.id}' cannot advertise sessionFork without sessionResume`);
@@ -64,6 +68,11 @@ export function getAgentProvider(id: string): IAgentProvider {
     throw new UnknownProviderError(id, [...registry.keys()]);
   }
   getLog().debug({ provider: id }, 'provider_selected');
+  // Every node and turn resolves its provider here, so the notice is gated per process.
+  if (entry.deprecationNotice && !deprecationNoticed.has(id)) {
+    deprecationNoticed.add(id);
+    getLog().warn({ provider: id, notice: entry.deprecationNotice }, 'provider.deprecated');
+  }
   return entry.factory();
 }
 
@@ -136,16 +145,11 @@ export function registerBuiltinProviders(): void {
       capabilities: CLAUDE_CAPABILITIES,
       builtIn: true,
       parseConfig: parseClaudeConfigStrict,
-      credentials: {
-        kind: 'static',
-        specs: [
-          {
-            vendor: 'anthropic',
-            displayName: 'Anthropic',
-            kinds: ['api_key', 'subscription'],
-          },
-        ],
-      },
+      credentials: singleVendorCatalog({
+        vendor: 'anthropic',
+        displayName: 'Anthropic',
+        kinds: ['api_key', 'subscription'],
+      }),
     },
     {
       id: 'codex',
@@ -154,18 +158,13 @@ export function registerBuiltinProviders(): void {
       capabilities: CODEX_CAPABILITIES,
       builtIn: true,
       parseConfig: parseCodexConfigStrict,
-      credentials: {
-        kind: 'static',
-        specs: [
-          {
-            // Subscription (ChatGPT) login runs Archon's own PKCE flow —
-            // see @archon/core credentials/openai-oauth.ts (#1924).
-            vendor: 'openai',
-            displayName: 'OpenAI',
-            kinds: ['api_key', 'subscription'],
-          },
-        ],
-      },
+      credentials: singleVendorCatalog({
+        // Subscription (ChatGPT) login runs Archon's own PKCE flow —
+        // see @archon/core credentials/openai-oauth.ts (#1924).
+        vendor: 'openai',
+        displayName: 'OpenAI',
+        kinds: ['api_key', 'subscription'],
+      }),
     },
   ];
 
@@ -207,4 +206,5 @@ export function registerCommunityProviders(): void {
 /** @internal Test-only — clears the registry. Not for production use. */
 export function clearRegistry(): void {
   registry.clear();
+  deprecationNoticed.clear();
 }

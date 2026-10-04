@@ -556,23 +556,31 @@ export async function* bridgeSession(
     onAbort();
   });
 
-  const promptPromise = extensionFailed
-    ? Promise.resolve()
-    : session.prompt(prompt).then(
-        () => {
-          if (sawAgentEnd) {
-            flushPending();
-            queue.push({ kind: 'chunk', chunk: buildResultChunk(promptMessages, promptSideCalls) });
+  const promptPromise =
+    extensionFailed || abortSignal?.aborted
+      ? Promise.resolve()
+      : session.prompt(prompt).then(
+          () => {
+            if (sawAgentEnd) {
+              flushPending();
+              queue.push({
+                kind: 'chunk',
+                chunk: buildResultChunk(promptMessages, promptSideCalls),
+              });
+            }
+            queue.push({ kind: 'done' });
+          },
+          (err: unknown) => {
+            queue.push({ kind: 'error', error: err as Error });
           }
-          queue.push({ kind: 'done' });
-        },
-        (err: unknown) => {
-          queue.push({ kind: 'error', error: err as Error });
-        }
-      );
+        );
 
   try {
+    // An aborted caller may have walked away with a next() still pending. Yielding to
+    // it would park this generator for good and skip the cleanup below, so end by throwing.
+    if (abortSignal?.aborted) throw new Error('Query aborted');
     for await (const item of queue) {
+      if (abortSignal?.aborted) throw new Error('Query aborted');
       if (item.kind === 'done') {
         extensionTurn?.throwIfFailed();
         extensionTurn?.stopAccepting();

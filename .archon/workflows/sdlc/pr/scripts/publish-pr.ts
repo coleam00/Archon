@@ -46,7 +46,7 @@ function required(value: unknown, field: string): string {
 }
 
 function publish(): PrRecord {
-  const source = forgeSource(process.env.ARCHON_SDLC_FORGE);
+  const source = forgeSource();
   const intent = record(JSON.parse(readFileSync(text(process.env.INPUTS_INTENT), 'utf8')));
   if (!intent) throw new Error('the PR intent must be a JSON object');
   const base = repo(intent.repo, 'repo');

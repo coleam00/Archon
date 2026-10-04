@@ -253,12 +253,37 @@ function getGitCloneCall(): Parameters<typeof gitUtils.cloneRepository> | undefi
 }
 
 describe('findCodebaseForCheckoutPath', () => {
-  const cwd = '/workspace/external-linked';
+  const cwd = resolve('/workspace/external-linked');
   const commonGitDir = '/metadata/repository';
 
   function externalLinkedError(): gitUtils.CanonicalRepoPathUnavailableError {
     return new gitUtils.CanonicalRepoPathUnavailableError(cwd, commonGitDir);
   }
+
+  test('canonicalizes a forward-slash checkout before exact lookup', async () => {
+    const gitSpelling = 'C:/workspace/primary';
+    const canonical = resolve('/canonical/primary');
+    const registered = makeCodebase({ default_cwd: canonical });
+    const realpathSpy = spyOn(fsPromises, 'realpath').mockResolvedValue(canonical);
+    const findExact = mock(async (path: string) => (path === canonical ? registered : null));
+    const getPrimary = mock(async (path: string) => path);
+    try {
+      await expect(
+        findCodebaseForCheckoutPath(
+          gitSpelling,
+          makeResolverDeps({
+            findCodebaseByDefaultCwd: findExact,
+            getCanonicalRepoPath: getPrimary,
+          })
+        )
+      ).resolves.toBe(registered);
+      expect(findExact).toHaveBeenCalledWith(canonical);
+      expect(findExact).not.toHaveBeenCalledWith(gitSpelling);
+      expect(getPrimary).not.toHaveBeenCalled();
+    } finally {
+      realpathSpy.mockRestore();
+    }
+  });
 
   test('matches an external linked worktree to its uniquely registered Git repository', async () => {
     const registered = makeCodebase({ default_cwd: '/workspace/primary' }) as Codebase;
@@ -280,6 +305,24 @@ describe('findCodebaseForCheckoutPath', () => {
     });
 
     await expect(findCodebaseForCheckoutPath(cwd, deps)).resolves.toBe(registered);
+  });
+
+  test('looks up a linked worktree primary under its canonical spelling', async () => {
+    // `git worktree list` prints `C:/...` on Windows; `default_cwd` is stored canonically.
+    const gitSpelling = resolve('/git-spelling/primary');
+    const canonical = resolve('/canonical/primary');
+    const registered = makeCodebase({ default_cwd: canonical }) as Codebase;
+    const realpathSpy = spyOn(fsPromises, 'realpath').mockImplementation(((p: string) =>
+      Promise.resolve(p === gitSpelling ? canonical : p)) as unknown as never);
+    try {
+      const deps = makeResolverDeps({
+        getCanonicalRepoPath: async () => gitSpelling,
+        findCodebaseByDefaultCwd: async path => (path === canonical ? registered : null),
+      });
+      await expect(findCodebaseForCheckoutPath(cwd, deps)).resolves.toBe(registered);
+    } finally {
+      realpathSpy.mockRestore();
+    }
   });
 
   test('does not conflate a separate clone with the registered repository', async () => {
@@ -816,7 +859,7 @@ describe('cloneRepository', () => {
       const revParseCall = (spyExecFileAsync.mock.calls as string[][]).find(args =>
         args[1]?.includes('rev-parse')
       );
-      expect(revParseCall?.[1]).toContain('/home/test/myrepo');
+      expect(revParseCall?.[1]).toContain(resolve('/home/test/myrepo'));
     });
 
     test('delegates relative path (./) to registerRepository', async () => {
@@ -1055,6 +1098,29 @@ describe('registerRepository', () => {
     }
   );
 
+  test('canonicalizes a forward-slash path before validation, lookup and persistence', async () => {
+    const gitSpelling = 'C:/workspace/myrepo';
+    const canonical = resolve('/canonical/myrepo');
+    spyFsRealpath.mockResolvedValue(canonical);
+    mockCreateCodebase.mockResolvedValue(makeCodebase({ default_cwd: canonical }));
+
+    const result = await registerRepository(gitSpelling);
+
+    expect(spyExecFileAsync).toHaveBeenCalledWith('git', [
+      '-C',
+      canonical,
+      'rev-parse',
+      '--git-dir',
+    ]);
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenCalledWith(canonical);
+    expect(mockFindCodebaseByDefaultCwd).not.toHaveBeenCalledWith(gitSpelling);
+    expect(mockCreateProjectSourceSymlink).toHaveBeenCalledWith('_local', 'myrepo', canonical);
+    expect(mockCreateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ default_cwd: canonical })
+    );
+    expect(result.defaultCwd).toBe(canonical);
+  });
+
   // ── Happy path ─────────────────────────────────────────────────────────
   test('registers a valid local git repo not yet in DB', async () => {
     spyExecFileAsync.mockImplementation((_cmd: string, args: string[]) => {
@@ -1134,8 +1200,14 @@ describe('registerRepository', () => {
 
     const result = await registerRepository('/home/user/sibling-worktree');
 
-    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(1, '/home/user/sibling-worktree');
-    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(2, '/home/user/primary-checkout');
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(
+      1,
+      resolve('/home/user/sibling-worktree')
+    );
+    expect(mockFindCodebaseByDefaultCwd).toHaveBeenNthCalledWith(
+      2,
+      resolve('/home/user/primary-checkout')
+    );
     expect(result).toMatchObject({
       alreadyExisted: true,
       codebaseId: 'primary-codebase-id',
@@ -1476,7 +1548,7 @@ describe('name-based deduplication', () => {
 
     expect(error?.message).toContain('/home/test/.archon/workspaces/owner/repo/source');
     expect(error?.message).toContain(
-      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg('/home/user/repo')}`
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(resolve('/home/user/repo'))}`
     );
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
     expect(mockCreateCodebase).not.toHaveBeenCalled();
@@ -1506,7 +1578,7 @@ describe('name-based deduplication', () => {
     );
 
     expect(error?.message).toContain(
-      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(lookalike)}`
+      `/update-project ${quoteCommandArg('owner/repo')} ${quoteCommandArg(resolve(lookalike))}`
     );
   });
 
@@ -1529,7 +1601,9 @@ describe('name-based deduplication', () => {
       (err: unknown) => err as Error
     );
 
-    expect(error?.message).toContain('/update-project "we\\"ird" "/home/user/we\\"ird"');
+    expect(error?.message).toContain(
+      `/update-project ${JSON.stringify('we"ird')} ${JSON.stringify(resolve('/home/user/we"ird'))}`
+    );
   });
 
   test('fills missing default_branch on existing local codebase', async () => {

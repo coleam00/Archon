@@ -130,8 +130,10 @@ describe('RunStream tool rendering', () => {
     skipExpr: null,
     outputPreview: null,
     costUsd: null,
+    costScope: null,
     stopReason: null,
     numTurns: null,
+    tokens: null,
   };
   const message: Message = {
     id: 'm1',
@@ -151,6 +153,7 @@ describe('RunStream tool rendering', () => {
         <RunStream
           messages={[message]}
           events={[nodeStarted]}
+          nodes={[{ node_id: 'implement', state: 'running' }]}
           providerEvents={providerEvents}
           showToolCalls
           showSystem={false}
@@ -193,12 +196,13 @@ describe('RunStream tool rendering', () => {
       ],
     ]);
     const finished: NodeTransitionEvent = { ...nodeStarted, id: 'n2', transition: 'completed' };
-    const html = (events: NodeTransitionEvent[]): string =>
+    const html = (events: NodeTransitionEvent[], state: 'running' | 'completed'): string =>
       renderToStaticMarkup(
         <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
           <RunStream
             messages={[]}
             events={events}
+            nodes={[{ node_id: 'implement', state }]}
             providerEvents={lostUpdate}
             showToolCalls
             showSystem={false}
@@ -207,8 +211,37 @@ describe('RunStream tool rendering', () => {
         </StreamContextProvider>
       );
 
-    expect(html([nodeStarted])).not.toContain('no result recorded');
-    expect(html([nodeStarted, finished])).toContain('no result recorded');
+    expect(html([nodeStarted], 'running')).not.toContain('no result recorded');
+    expect(html([nodeStarted, finished], 'completed')).toContain('no result recorded');
+  });
+
+  test('shows completion tokens beside duration, cost, and turns in the node divider', () => {
+    const completed: NodeTransitionEvent = {
+      ...nodeStarted,
+      id: 'n2',
+      transition: 'completed',
+      durationMs: 11370,
+      costUsd: 0.04,
+      numTurns: 3,
+      tokens: { input: 12000, output: 300 },
+    };
+    const html = renderToStaticMarkup(
+      <StreamContextProvider value={{ runStartedAt: '2026-10-02T09:59:00.000Z' }}>
+        <RunStream
+          messages={[]}
+          events={[nodeStarted, completed]}
+          nodes={[{ node_id: 'implement', state: 'completed' }]}
+          providerEvents={new Map()}
+          showToolCalls={false}
+          showSystem={false}
+          selectedNodeId="all"
+        />
+      </StreamContextProvider>
+    );
+    expect(html).toContain('· 00:11');
+    expect(html).toContain('· $0.04');
+    expect(html).toContain('· 3t');
+    expect(html).toContain('tokens 12K in / 300 out');
   });
 
   test('falls back to message-inline tools for a run that recorded no tool events', () => {

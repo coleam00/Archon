@@ -7,7 +7,7 @@
  * 3. Repository config (.archon/config.yaml)
  * 4. Environment variables
  */
-
+import { getRegisteredPlatformPolicies } from '../platforms/registry';
 import { readFile as fsReadFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import {
@@ -38,7 +38,7 @@ import type {
   RawAliasesConfig,
   RawTiersConfig,
 } from './config-types';
-import { workflowContinuationConfigSchema } from './config-types';
+import { platformStreamingSchema, workflowContinuationConfigSchema } from './config-types';
 import { createLogger } from '@archon/paths';
 import {
   isRegisteredProvider,
@@ -382,11 +382,23 @@ function validateModelBindingConfig(parsed: unknown, configPath: string): void {
   }
 }
 
+function validateStreamingConfig(parsed: unknown, configPath: string): void {
+  if (!isConfigRecord(parsed) || parsed.streaming === undefined) return;
+  const result = platformStreamingSchema.safeParse(parsed.streaming);
+  if (!result.success) {
+    const issues = result.error.issues
+      .map(issue => `streaming.${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .join('; ');
+    throw new InvalidConfigError('Invalid streaming config', configPath, issues);
+  }
+  parsed.streaming = result.data;
+}
+
 /**
  * Read ~/.archon/config.yaml, degrading to an empty config when it is missing
  * or unreadable. A missing file is created from the documented template; any
- * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases` or
- * `workflows` block — is logged and the install falls back to defaults.
+ * other failure — permissions, YAML syntax, a rejected `tiers`/`aliases`,
+ * `streaming` or `workflows` block — is logged and the install falls back to defaults.
  */
 async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConfig> {
   try {
@@ -394,6 +406,7 @@ async function readGlobalConfigOrDegrade(configPath: string): Promise<GlobalConf
     const parsed = parseYaml(content);
     validateWorkflowContinuationConfig(parsed, configPath);
     validateModelBindingConfig(parsed, configPath);
+    validateStreamingConfig(parsed, configPath);
     return (parsed as GlobalConfig | null) ?? {};
   } catch (error) {
     const err = error as { code?: string };
@@ -516,15 +529,16 @@ function getDefaults(): MergedConfig {
     }
   }
 
+  const streaming: MergedConfig['streaming'] = {};
+  for (const policy of getRegisteredPlatformPolicies()) {
+    if (policy.streaming) streaming[policy.id] = policy.streaming.defaultMode;
+  }
+
   return {
     botName: 'Archon',
     assistant: providers.find(p => p.builtIn)?.id ?? 'claude',
     assistants: registeredAssistants,
-    streaming: {
-      telegram: 'stream',
-      discord: 'batch',
-      slack: 'batch',
-    },
+    streaming,
     paths: {
       workspaces: getArchonWorkspacesPath(),
       worktrees: getArchonWorktreesPath(),
@@ -589,21 +603,10 @@ function applyEnvOverrides(
     }
   }
 
-  // Streaming overrides
-  const streamingModes = ['stream', 'batch'] as const;
-  const telegramMode = process.env.TELEGRAM_STREAMING_MODE;
-  if (telegramMode && streamingModes.includes(telegramMode as 'stream' | 'batch')) {
-    config.streaming.telegram = telegramMode as 'stream' | 'batch';
-  }
-
-  const discordMode = process.env.DISCORD_STREAMING_MODE;
-  if (discordMode && streamingModes.includes(discordMode as 'stream' | 'batch')) {
-    config.streaming.discord = discordMode as 'stream' | 'batch';
-  }
-
-  const slackMode = process.env.SLACK_STREAMING_MODE;
-  if (slackMode && streamingModes.includes(slackMode as 'stream' | 'batch')) {
-    config.streaming.slack = slackMode as 'stream' | 'batch';
+  for (const policy of getRegisteredPlatformPolicies()) {
+    if (!policy.streaming) continue;
+    const mode = process.env[policy.streaming.envVar];
+    if (mode === 'stream' || mode === 'batch') config.streaming[policy.id] = mode;
   }
 
   // Path overrides (these come from archon-paths.ts which already checks env vars)
@@ -652,11 +655,8 @@ function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig): Merged
   result.aliases = mergeAliases(result.aliases, global.aliases);
   result.tiers = mergeTiers(result.tiers, global.tiers);
 
-  // Streaming preferences
   if (global.streaming) {
-    if (global.streaming.telegram) result.streaming.telegram = global.streaming.telegram;
-    if (global.streaming.discord) result.streaming.discord = global.streaming.discord;
-    if (global.streaming.slack) result.streaming.slack = global.streaming.slack;
+    result.streaming = { ...result.streaming, ...global.streaming };
   }
 
   // Path preferences
@@ -943,6 +943,7 @@ export async function updateGlobalConfig(
     // config load, and a bad block already on disk must be repaired, not kept.
     validateWorkflowContinuationConfig(merged, configPath);
     validateModelBindingConfig(merged, configPath);
+    validateStreamingConfig(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
     // Serialize to YAML and write
@@ -1005,11 +1006,7 @@ export function toSafeConfig(config: MergedConfig): SafeConfig {
     botName: config.botName,
     assistant: config.assistant,
     assistants: toSafeAssistantDefaults(config.assistants),
-    streaming: {
-      telegram: config.streaming.telegram,
-      discord: config.streaming.discord,
-      slack: config.streaming.slack,
-    },
+    streaming: { ...config.streaming },
     concurrency: { maxConversations: config.concurrency.maxConversations },
     defaults: {
       copyDefaults: config.defaults.copyDefaults,

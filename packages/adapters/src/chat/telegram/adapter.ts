@@ -2,6 +2,7 @@
  * Telegram platform adapter using grammY SDK
  * Handles message sending with 4096 character limit splitting
  */
+import { telegramPolicy } from './policy';
 import { Bot, Context } from 'grammy';
 import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import { createLogger } from '@archon/paths';
@@ -20,12 +21,16 @@ function getLog(): ReturnType<typeof createLogger> {
 const MAX_LENGTH = 4096;
 
 export class TelegramAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private bot: Bot;
   private streamingMode: 'stream' | 'batch';
   private allowedUserIds: number[];
   private messageHandler: ((ctx: TelegramMessageContext) => Promise<void>) | null = null;
 
-  constructor(token: string, mode: 'stream' | 'batch' = 'stream') {
+  constructor(token: string, mode: 'stream' | 'batch' = telegramPolicy.streaming.defaultMode) {
     // grammY does not impose a handler timeout by default (unlike Telegraf's 90s limit)
     this.bot = new Bot(token);
     this.streamingMode = mode;

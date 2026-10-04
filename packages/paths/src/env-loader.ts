@@ -24,8 +24,8 @@
  *   - Passes `{ quiet: true }` to suppress dotenv's own `[dotenv@17.3.1] …`
  *     output.
  */
-import { config } from 'dotenv';
-import { existsSync } from 'fs';
+import { config, parse } from 'dotenv';
+import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getArchonEnvPath, getArchonHome, getRepoArchonEnvPath } from './archon-paths';
@@ -141,4 +141,27 @@ export function loadArchonEnv(
       );
     }
   }
+}
+
+function envFileKeyNames(path: string): string[] {
+  return existsSync(path) ? Object.keys(parse(readFileSync(path))) : [];
+}
+
+/**
+ * Names `~/.archon/.env`/`<cwd>/.archon/.env` declare, read fresh from disk rather than
+ * from `loadArchonEnv`'s own already-applied result.
+ *
+ * This is the "Archon supplies this" set the exec env-read checker (see
+ * `@archon/workflows`' `exec-input-validation.ts`) treats as configured — deliberately
+ * not the process's full ambient environment. `loadArchonEnv` folds both files into
+ * `process.env`, which also holds every shell/CI var inherited at process start; a
+ * checker that trusted all of `process.env` would stop warning on a genuinely unbound
+ * name the moment it happened to collide with one of those, not with anything Archon
+ * actually supplies.
+ */
+export function getArchonEnvNames(cwd: string = process.cwd()): ReadonlySet<string> {
+  return new Set([
+    ...envFileKeyNames(getArchonEnvPath()),
+    ...envFileKeyNames(getRepoArchonEnvPath(cwd)),
+  ]);
 }

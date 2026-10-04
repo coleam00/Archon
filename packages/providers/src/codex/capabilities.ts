@@ -9,11 +9,10 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   // `skills:` list. Workflow nodes suppress the automatic catalog and authors
   // invoke installed skills explicitly with `$skill-name` in the node body.
   skills: false,
-  // Codex nodes still load the user's Codex plugins; scoping lands with the app-server client.
-  plugins: false,
+  plugins: true, // a workflow node's thread loads only the plugins it names (./scope.ts)
   agents: false,
   toolRestrictions: false,
-  structuredOutput: 'enforced', // SDK outputSchema grammar-constrains decoding
+  structuredOutput: 'enforced', // turn outputSchema grammar-constrains decoding
   requiresAllPropertiesRequired: true, // OpenAI strict-mode: every key in properties must appear in required
   envInjection: true,
   costControl: false,
@@ -23,7 +22,7 @@ export const CODEX_CAPABILITIES: ProviderCapabilities = {
   turnCountReporting: false,
   resolvedModelReporting: false,
   // Codex reads the node-level `effort:` field like every other effort-capable
-  // provider and translates it to the SDK's `modelReasoningEffort` internally
+  // provider and translates it to the turn's reasoning `effort` internally
   // (#2556). Before that it was `false` — which was read as "Codex cannot do
   // reasoning depth" rather than the truth, "Codex spells it differently".
   effortControl: true,

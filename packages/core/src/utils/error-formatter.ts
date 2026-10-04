@@ -9,6 +9,7 @@ import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workf
 import { TierResolutionError } from '@archon/workflows/model-validation';
 import { WorkflowAdoptionError } from '../operations/workflow-adoption';
 import type { ProviderFailure } from '@archon/provider-contract';
+import { MissingProjectDirectoryError } from '@archon/isolation';
 
 const SHOWN_EVIDENCE_MAX_CHARS = 600;
 
@@ -68,6 +69,10 @@ export function formatProviderFailure(failure: ProviderFailure): string {
 export function classifyAndFormatError(error: Error, surface: WorkflowCommandSurface = {}): string {
   const message = error.message || '';
 
+  if (error instanceof MissingProjectDirectoryError) {
+    return `⚠️ ${message}`;
+  }
+
   // Adoption refusals are authored user guidance (fail-loud contract in
   // workflow-adoption.ts): deliver them verbatim instead of erasing them into
   // the generic fallback below.
@@ -106,7 +111,7 @@ export function classifyAndFormatError(error: Error, surface: WorkflowCommandSur
   ) {
     // Anchor on · (Claude format: "... · resets 4:50pm (UTC)"); stop at · or newline so "p.m." isn't truncated.
     // The no-· fallback also drops any follow-on sentence (period + capital letter), so shapes like
-    // "Claude session limit reached — resets 3:20pm (UTC). Abandon this run…" yield just the reset clause.
+    // "usage limit hit — resets 3:20pm (UTC). Try again later." yield just the reset clause.
     const reset =
       /·\s*(resets[^·\n]*)/i.exec(message)?.[1]?.trim() ??
       /resets[^·\n]*/i

@@ -132,8 +132,7 @@ mock.module('@archon/paths', () => ({
   createLogger: noopLogger,
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
-  getDefaultCommandsPath: mock(() => '/tmp/.archon-test-nonexistent/commands/defaults'),
-  getDefaultWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows/defaults'),
+  getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
   getArchonWorkspacesPath: () => '/tmp/.archon/workspaces',
   getArchonHome: () => '/tmp/.archon',
   getRunArtifactsPath: (owner: string, repo: string, runId: string): string =>

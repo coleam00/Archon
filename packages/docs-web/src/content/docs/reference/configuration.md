@@ -142,7 +142,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 ## Provider concurrency caps
 
-`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap, so many runs across Claude, Codex, and Pi can start in parallel. Within each process, [Pi turns that discover extension code](/getting-started/ai-assistants/#extensions-on-by-default) run one at a time so detached extension failures remain attributable to one node. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
+`concurrency.providers.<provider-id>: N` limits how many attempts against that provider run at once across every Archon process sharing this database: server, CLI, detached runs, chat, and title generation. There are no default database-wide caps. A provider without an entry has no admission cap, so many runs across Claude, Codex, and Pi can start in parallel. Set a cap only when the provider cannot take more, such as a local model on one GPU or an account with a hard concurrency limit.
 
 - **Attempts, not runs.** One attempt holds one slot from the moment the provider starts until its stream has closed. Retry backoff between attempts holds no slot. A rate limit is retried with backoff as before; it never lowers the cap.
 - **Waiting.** An attempt that finds the cap full waits and checks again about once a second. Cancelling the run stops the wait without starting the attempt. Until queue visibility lands, a waiting node looks idle, and a wait longer than the node's `idle_timeout` ends the node like any other idle node.
@@ -235,8 +235,8 @@ defaults:
 
 # Recommended workflows for this project (declared order = pin order in the UI)
 # recommendedWorkflows:
-#   - archon-fix-github-issue
-#   - archon-idea-to-pr
+#   - archon-ship
+#   - archon-review
 #   - archon-plan
 
 # Per-project environment variables for workflow execution (Claude SDK only)
@@ -370,8 +370,8 @@ Repo owners curate an **ordered list of recommended workflows** in the project's
 
 ```yaml
 recommendedWorkflows:
-  - archon-fix-github-issue
-  - archon-idea-to-pr
+  - archon-ship
+  - archon-review
   - archon-plan
 ```
 
@@ -475,10 +475,11 @@ When `CLAUDE_USE_GLOBAL_AUTH` is unset, Archon auto-detects: it uses explicit to
 
 | Variable | Description | Default |
 | --- | --- | --- |
-| `CODEX_ID_TOKEN` | Codex ID token (from `~/.codex/auth.json`) | -- |
-| `CODEX_ACCESS_TOKEN` | Codex access token | -- |
-| `CODEX_REFRESH_TOKEN` | Codex refresh token | -- |
-| `CODEX_ACCOUNT_ID` | Codex account ID | -- |
+| `ARCHON_CODEX_ID_TOKEN` | Codex ID token (from `~/.codex/auth.json`) | -- |
+| `ARCHON_CODEX_ACCESS_TOKEN` | Codex access token | -- |
+| `ARCHON_CODEX_REFRESH_TOKEN` | Codex refresh token | -- |
+| `ARCHON_CODEX_ACCOUNT_ID` | Codex account ID | -- |
+| `CODEX_API_KEY` | Run Codex on this OpenAI API key instead of the login in your Codex home. Held in the Codex process's memory, never written to `CODEX_HOME`. Codex does not read `OPENAI_API_KEY`. | -- |
 
 ### AI Providers -- Copilot (community)
 
@@ -723,7 +724,7 @@ docker run -v /my/data:/.archon ghcr.io/coleam00/archon
 
 ## Streaming Modes
 
-Each platform adapter supports two streaming modes, configured via environment variable or `~/.archon/config.yaml`.
+Telegram, Slack, and Discord adapters support two streaming modes. The server selects their runtime mode from environment variables. `~/.archon/config.yaml` accepts a `streaming` map keyed by platform identifier and exposes merged preferences through the config API; these YAML preferences currently do not control adapter construction. Existing `telegram`, `slack`, and `discord` keys remain accepted. Additional keys use lowercase kebab-case identifiers of at most 32 characters.
 
 ### Stream Mode
 
@@ -794,7 +795,7 @@ DISCORD_STREAMING_MODE=batch
 
 This policy is separate from per-node `retry:`. Quota exhaustion is terminal for the current attempt because retrying in the same provider window only repeats the failure. When enabled, Archon leaves the run `failed`, records the scheduled time in run metadata, and the server claims and resumes it when due. The claim is durable and bounded, so two server scans cannot launch the same attempt and an early resume failure does not create a rapid retry loop.
 
-Only a provider's typed failure schedules a continuation; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. No other provider reports a structured quota signal, so their quota errors never schedule a continuation. A quota failure without a reset time, or with one that has already passed, resumes only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
+Only a provider's typed failure schedules a continuation; Archon never reads the error text for it. Claude reports a `quota_exhausted` failure, with the reset time, when its subscription window rejects a request or its credit balance runs out. Codex reports `quota_exhausted` when its usage limit is reached, with the reset time of the usage window that is full. No other provider reports a structured quota signal, so their quota errors never schedule a continuation. A quota failure without a reset time, or with one that has already passed, resumes only when you configure `quotaFallbackDelayMs`. The server must be running at the due time, or it resumes the run on the first later scan.
 
 ## Concurrency Settings
 

@@ -13,7 +13,9 @@
  * so a future SDK update that reads the filesystem at module load can't
  * break compiled-binary bootstrap.
  */
+import type { CredentialStatus } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
+import { sessionPreview } from '@archon/provider-contract';
 import type {
   CopilotClientOptions,
   CopilotSession,
@@ -399,6 +401,10 @@ function buildFriendlyCopilotError(error: unknown, lastSessionError?: string): E
  * per-request env vars are honored.
  */
 export class CopilotProvider implements IAgentProvider {
+  async checkCredential(): Promise<CredentialStatus> {
+    return { state: 'not_checked', source: 'native' };
+  }
+
   getType(): string {
     return 'copilot';
   }
@@ -444,18 +450,11 @@ export class CopilotProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const log = getLog();
 
-    // forkSession / persistSession are boolean flags the executor may set in
-    // normal operation; log-warn rather than throw — throwing would block
-    // ordinary session reuse.
+    // The executor sets forkSession in normal operation; log rather than throw,
+    // which would block ordinary session reuse.
     if (requestOptions?.forkSession !== undefined) {
       log.debug(
         { option: 'forkSession', value: requestOptions.forkSession },
-        'copilot.option_not_supported'
-      );
-    }
-    if (requestOptions?.persistSession !== undefined) {
-      log.debug(
-        { option: 'persistSession', value: requestOptions.persistSession },
         'copilot.option_not_supported'
       );
     }
@@ -538,12 +537,15 @@ export class CopilotProvider implements IAgentProvider {
     const wantsFork = requestOptions?.forkSession === true;
     try {
       if (resumeSessionId && !wantsFork) {
-        log.debug({ sessionId: resumeSessionId, cwd }, 'copilot.resume_attempt');
+        log.debug(
+          { sessionIdPreview: sessionPreview(resumeSessionId), cwd },
+          'copilot.resume_attempt'
+        );
         try {
           session = await client.resumeSession(resumeSessionId, sessionConfig);
         } catch (err) {
           log.debug(
-            { err, sessionId: resumeSessionId },
+            { err, sessionIdPreview: sessionPreview(resumeSessionId) },
             'copilot.resume_failed_falling_back_to_create'
           );
           resumeFailed = true;
@@ -552,7 +554,7 @@ export class CopilotProvider implements IAgentProvider {
       } else {
         if (resumeSessionId && wantsFork) {
           log.warn(
-            { requestedResumeSessionId: resumeSessionId },
+            { requestedResumeSessionIdPreview: sessionPreview(resumeSessionId) },
             'copilot.fork_unsupported_creating_fresh_session'
           );
           forkedToFresh = true;
@@ -588,7 +590,7 @@ export class CopilotProvider implements IAgentProvider {
 
     log.info(
       {
-        sessionId: session.sessionId,
+        sessionIdPreview: sessionPreview(session.sessionId),
         model: sessionConfig.model,
         cwd,
         reasoningEffort: sessionConfig.reasoningEffort,
@@ -612,9 +614,12 @@ export class CopilotProvider implements IAgentProvider {
         ),
         { resultEndsTurn: true }
       );
-      log.info({ sessionId: session.sessionId }, 'copilot.prompt_completed');
+      log.info({ sessionIdPreview: sessionPreview(session.sessionId) }, 'copilot.prompt_completed');
     } catch (err) {
-      log.error({ err, sessionId: session.sessionId }, 'copilot.prompt_failed');
+      log.error(
+        { err, sessionIdPreview: sessionPreview(session.sessionId) },
+        'copilot.prompt_failed'
+      );
       throw buildFriendlyCopilotError(err);
     } finally {
       // Stop the client so its CLI subprocess shuts down; bridgeSession already

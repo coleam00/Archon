@@ -138,10 +138,8 @@ interface WorkflowSourceRootPaths {
   readonly globalWorkflows: string;
   readonly globalCommands: string;
   readonly globalScripts: string;
-  /** Directory holding packaged bundled workflows (the parent of the defaults folder). */
+  /** Directory holding the bundled packs. */
   readonly bundledWorkflows: string;
-  /** Directory holding bundled default commands. */
-  readonly bundledCommands: string;
   /** Where installed workflow packs are read from. */
   readonly installed: InstalledPacksRoot;
 }
@@ -173,6 +171,9 @@ export interface LiveWorkflowSourceRoots extends WorkflowSourceRootPaths {
 export interface CapturedWorkflowSourceRoots extends WorkflowSourceRootPaths {
   readonly kind: 'captured';
   readonly anchor: WorkflowSourceAnchor;
+  /** Flat bundled commands an older build froze. Current builds bundle only packaged
+   * commands, so only a capture can hold these. */
+  readonly bundledCommands: string;
 }
 
 export type WorkflowSourceRoots = LiveWorkflowSourceRoots | CapturedWorkflowSourceRoots;
@@ -199,6 +200,7 @@ export function workflowSourceConfigFrom(config: WorkflowConfig): WorkflowSource
     load_default_workflows: config.defaults?.loadDefaultWorkflows ?? true,
     load_default_commands: config.defaults?.loadDefaultCommands ?? true,
     ...(config.commands?.folder !== undefined ? { command_folder: config.commands.folder } : {}),
+    ...(config.envVars !== undefined ? { env_var_names: Object.keys(config.envVars) } : {}),
   };
 }
 
@@ -216,8 +218,7 @@ export function liveSourceRoots(
     globalWorkflows: archonPaths.getHomeWorkflowsPath(),
     globalCommands: archonPaths.getHomeCommandsPath(),
     globalScripts: archonPaths.getHomeScriptsPath(),
-    bundledWorkflows: dirname(archonPaths.getDefaultWorkflowsPath()),
-    bundledCommands: archonPaths.getDefaultCommandsPath(),
+    bundledWorkflows: archonPaths.getBundledWorkflowsPath(),
     installed,
     kind: 'live',
     config,
@@ -734,14 +735,6 @@ async function readBundledSources(
 
 let bundledScope: BundledScope | undefined;
 
-/** The two on-disk roots a source build keeps its bundled defaults under. */
-function bundledSourceRoots(): { name: string; from: string }[] {
-  return [
-    { name: 'workflows', from: dirname(archonPaths.getDefaultWorkflowsPath()) },
-    { name: 'commands', from: dirname(archonPaths.getDefaultCommandsPath()) },
-  ];
-}
-
 /**
  * Identity of the live bundled trees: their shape plus every file's size and mtime.
  *
@@ -776,8 +769,9 @@ async function resolveBundledScope(): Promise<BundledScope | undefined> {
     return bundledScope;
   }
 
-  const roots = bundledSourceRoots();
-  const sources = await collectInstalledBundleSources(roots[0].from, roots[1].from);
+  // Every bundled pack, with its commands and scripts, lives under the workflows root.
+  const workflowsRoot = archonPaths.getBundledWorkflowsPath();
+  const sources = await collectInstalledBundleSources(workflowsRoot);
   if (!sources) return undefined;
   const files: TreeFile[] = [];
   for (const file of sources) {
@@ -790,7 +784,7 @@ async function resolveBundledScope(): Promise<BundledScope | undefined> {
     });
   }
 
-  const key = `source\0${roots.map(r => r.from).join('\0')}`;
+  const key = `source\0${workflowsRoot}`;
   const stamp = stampListings([{ name: 'bundled', listing: { dirs: [], files } }]);
   if (bundledScope?.key !== key || bundledScope.stamp !== stamp) {
     bundledScope = { key, stamp, ...(await readBundledSources(sources)) };

@@ -46,6 +46,7 @@ beforeAll(() => {
     displayName: 'Admission fake',
     builtIn: false,
     factory: () => ({
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => PROVIDER,
       getCapabilities: () => claude.capabilities,
       sendQuery: (prompt, _cwd, _resume, options) => {

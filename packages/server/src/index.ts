@@ -60,6 +60,8 @@ import {
   registerCommunityProviders,
 } from '@archon/providers';
 import { getVendorCatalog } from '@archon/core';
+import { formatCodexSetupDeprecation } from '@archon/providers/codex/setup-env';
+import { CODEX_BOOT_CHECKED, readCodexBootAuth } from './boot/codex-auth-posture';
 
 // Bootstrap provider registry before any provider lookups
 registerBuiltinProviders();
@@ -79,6 +81,11 @@ import {
   SlackAdapter,
   SlackWorkflowBridge,
 } from '@archon/adapters';
+import { bundledPlatformPolicies } from '@archon/adapters/platform-policies';
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
+import { slackPolicy } from '@archon/adapters/chat/slack/policy';
+import { discordPolicy } from '@archon/adapters/community/chat/discord/policy';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { WebAdapter } from './adapters/web';
@@ -92,10 +99,10 @@ import { registerGithubWebhookRoute, registerWebhookSourceRoutes } from './route
 import { loadWebhookSourcePlugins } from './services/webhook-source-plugins';
 import { createServerResourceStartHost } from './services/resource-start-hosting';
 import {
+  resumeWorkflowRunFromServer,
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
-  workflowResumeConversationId,
-  workflowResumeTargetForConversation,
+  workflowResumeTargetForRun,
 } from './services/workflow-resume-service';
 import {
   handleMessage,
@@ -123,7 +130,7 @@ import {
 import type { IPlatformAdapter } from '@archon/core';
 import type { IdentityPlatform } from '@archon/core';
 import * as userDb from '@archon/core/db/users';
-import * as conversationDb from '@archon/core/db/conversations';
+import * as workflowDb from '@archon/core/db/workflows';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
   createLogger,
@@ -213,8 +220,8 @@ function createMessageErrorHandler(
  * Exported for testability. Filters specifically for SDK cleanup races
  * ("Operation aborted" when the PostToolUse hook writes to a closed pipe after
  * a DAG node abort). Those are logged at error level but do not exit the process.
- * A stack-attested error from the one active Pi extension turn is handed back to
- * that node. Every other rejection is logged at fatal level and exits after
+ * An error whose stack names an extension loaded by a running Pi turn is handed
+ * back to that node; when several running turns loaded it, each of them fails. Every other rejection is logged at fatal level and exits after
  * queued telemetry flushes (bounded, so still Fail Fast).
  */
 export function handleUnhandledRejection(reason: unknown): void {
@@ -267,6 +274,7 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
+  setPlatformPolicies(bundledPlatformPolicies);
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
@@ -315,19 +323,26 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // shared Claude key — auth is delivered per request from the encrypted store,
   // so it must NOT trip the no-credentials exit (#1983).
   const hasClaudeCredentials = hasClaudeBootAuthPosture(process.env);
-  const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const codexAuth = readCodexBootAuth(process.env);
+  if (codexAuth.deprecated.length > 0) {
+    getLog().warn(
+      { hint: formatCodexSetupDeprecation(codexAuth.deprecated) },
+      'codex_setup_env_deprecated'
+    );
+  }
+  const hasCodexCredentials = codexAuth.hasCredentials;
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     getLog().fatal(
       {
         checked: {
           claude: ['CLAUDE_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CLAUDE_USE_GLOBAL_AUTH'],
-          codex: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'],
+          codex: CODEX_BOOT_CHECKED,
         },
         hints: [
           'Set CLAUDE_USE_GLOBAL_AUTH=true in .env (requires `claude /login` first)',
           'Or set CLAUDE_API_KEY in .env',
-          'Or set CODEX_ID_TOKEN + CODEX_ACCESS_TOKEN in .env',
+          `Or set ${CODEX_BOOT_CHECKED.join(' + ')} in .env`,
           'See .env.example for all options',
         ],
         envFile: BUNDLED_IS_BINARY ? getArchonEnvPath() : envPath,
@@ -344,10 +359,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     );
   }
   if (!hasCodexCredentials) {
-    getLog().warn(
-      { checked: ['CODEX_ID_TOKEN', 'CODEX_ACCESS_TOKEN'] },
-      'codex_credentials_missing'
-    );
+    getLog().warn({ checked: CODEX_BOOT_CHECKED }, 'codex_credentials_missing');
   }
 
   // Test database connection
@@ -407,6 +419,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const workflowBridge = new WorkflowEventBridge(transport);
   const webAdapter = new WebAdapter(transport, persistence, workflowBridge);
   await webAdapter.start();
+  const workflowPlatforms = new Map<string, IWorkflowPlatform>([
+    [webAdapter.getPlatformType(), webAdapter],
+  ]);
   persistence.startPeriodicFlush();
 
   // Stream workflow runs started in ANY process (incl. the `archon` CLI / `--detach`)
@@ -505,6 +520,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         getUserToken,
       });
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub (App)');
       getLog().info(
         { slug: githubAppAuthProvider.slug, defaultInstallationId },
@@ -521,6 +537,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       const auth: GitHubAuth = { kind: 'pat', token: patToken };
       github = new GitHubAdapter(auth, webhookSecret, lockManager, botMention);
       await github.start();
+      workflowPlatforms.set(github.getPlatformType(), github);
       activePlatforms.push('GitHub');
       getLog().info('github.adapter_mode_pat');
     } else {
@@ -539,6 +556,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         giteaBotMention
       );
       await gitea.start();
+      workflowPlatforms.set(gitea.getPlatformType(), gitea);
       activePlatforms.push('Gitea');
     } else {
       getLog().info('gitea_adapter_skipped');
@@ -556,6 +574,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
         gitlabBotMention
       );
       await gitlab.start();
+      workflowPlatforms.set(gitlab.getPlatformType(), gitlab);
       activePlatforms.push('GitLab');
     } else {
       getLog().info('gitlab_adapter_skipped');
@@ -563,9 +582,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Initialize Discord adapter (conditional)
     if (process.env.DISCORD_BOT_TOKEN) {
-      const discordStreamingMode = (process.env.DISCORD_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+      const discordStreamingMode = (process.env[discordPolicy.streaming.envVar] ??
+        discordPolicy.streaming.defaultMode) as 'stream' | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
       const discordAdapter = discord; // Capture for use in callback
       const discordRequireMention = isDiscordMentionRequired();
@@ -631,6 +649,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // unrelated bot misconfiguration. See #1365.
       try {
         await discord.start();
+        workflowPlatforms.set(discord.getPlatformType(), discord);
         activePlatforms.push('Discord');
       } catch (error) {
         const err = error as Error;
@@ -649,9 +668,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Initialize Slack adapter (conditional)
     if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
-      const slackStreamingMode = (process.env.SLACK_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+      const slackStreamingMode = (process.env[slackPolicy.streaming.envVar] ??
+        slackPolicy.streaming.defaultMode) as 'stream' | 'batch';
       slack = new SlackAdapter(
         process.env.SLACK_BOT_TOKEN,
         process.env.SLACK_APP_TOKEN,
@@ -705,7 +723,14 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
       // Attach the workflow bridge BEFORE app.start(): Bolt's Socket Mode
       // refuses new event-handler registrations once the connection is open,
       // so `app.action(...)` calls inside the bridge must run first.
-      slackBridge = new SlackWorkflowBridge(slack);
+      workflowPlatforms.set(slack.getPlatformType(), slack);
+      slackBridge = new SlackWorkflowBridge(slack, async (runId, slackUserId) => {
+        const run = await workflowDb.getWorkflowRun(runId);
+        if (!run) return false;
+        const actorUserId = await resolveUserId('slack', slackUserId, undefined);
+        const target = await workflowResumeTargetForRun(run, workflowPlatforms);
+        return resumeWorkflowRunFromServer(run, actorUserId, target);
+      });
       slackBridge.attach();
 
       await slack.start();
@@ -986,7 +1011,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;
   if (!opts.skipPlatformAdapters && process.env.TELEGRAM_BOT_TOKEN) {
-    const streamingMode = (process.env.TELEGRAM_STREAMING_MODE ?? 'stream') as 'stream' | 'batch';
+    const streamingMode = (process.env[telegramPolicy.streaming.envVar] ??
+      telegramPolicy.streaming.defaultMode) as 'stream' | 'batch';
     telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN, streamingMode);
     const telegramAdapter = telegram; // Capture for use in callback
 
@@ -1010,6 +1036,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     try {
       await telegramAdapter.start();
+      workflowPlatforms.set(telegramAdapter.getPlatformType(), telegramAdapter);
       activePlatforms.push('Telegram');
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -1024,34 +1051,10 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // adapter is initialized. Web background runs execute against a hidden worker
   // conversation but deliver to their visible parent; other runs use their owning
   // conversation directly.
-  const workflowPlatforms = new Map<string, IWorkflowPlatform>();
-  for (const platform of [webAdapter, github, gitea, gitlab, discord, slack, telegram]) {
-    if (platform !== null) workflowPlatforms.set(platform.getPlatformType(), platform);
-  }
-  startWorkflowContinuationScheduler(async run => {
-    const conversation = await conversationDb.getConversationById(
-      workflowResumeConversationId(run)
-    );
-    if (!conversation) {
-      return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
-    }
-    if (run.parent_conversation_id !== null) {
-      const parent = await conversationDb.getConversationById(run.parent_conversation_id);
-      if (!parent?.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'parent conversation no longer exists' };
-      }
-      if (!conversation.platform_conversation_id) {
-        return { kind: 'unavailable', reason: 'worker conversation has no platform id' };
-      }
-      return workflowResumeTargetForConversation(
-        parent,
-        workflowPlatforms,
-        conversation.platform_conversation_id,
-        parent.platform_conversation_id
-      );
-    }
-    return workflowResumeTargetForConversation(conversation, workflowPlatforms);
-  }, requestResourceStartDrain);
+  startWorkflowContinuationScheduler(
+    run => workflowResumeTargetForRun(run, workflowPlatforms),
+    requestResourceStartDrain
+  );
   if (resourceStartHostId)
     getLog().info({ hostId: resourceStartHostId }, 'resource_start_host_enabled');
 
@@ -1108,7 +1111,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   process.once('SIGTERM', shutdown);
 
   // Guard against SDK cleanup races and hand stack-attested Pi extension
-  // failures back to their serialized node turn. When a DAG node is aborted,
+  // failures back to the Pi turns that loaded that extension. When a DAG node is aborted,
   // the Claude Agent SDK's PostToolUse hook may be in-flight. After the hook
   // returns { continue: true }, handleControlRequest() tries to write() back to
   // the subprocess pipe — but the pipe is already closed (abort fired). The

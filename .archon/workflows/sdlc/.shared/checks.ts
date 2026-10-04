@@ -137,8 +137,8 @@ function readGhChecks(pr: QualifiedPr): readonly CheckUnit[] {
 }
 
 /** Read the recorded pull request's checks from the selected source. */
-export function readPrChecks(pr: QualifiedPr, selected: string | undefined): CheckRead {
-  const source = forgeSource(selected);
+export function readPrChecks(pr: QualifiedPr): CheckRead {
+  const source = forgeSource();
   if (source === 'gh') return { source, revision: null, units: readGhChecks(pr) };
   try {
     const observation = readChecks(pr);

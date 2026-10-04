@@ -20,12 +20,7 @@ import {
   readComposedBindings,
   type LoopWithCompiledCommand,
 } from './compiled-command';
-import {
-  declaredFieldsFromSchema,
-  canonicalValueText,
-  parseWholeExecutionCheckoutRef,
-  type JsonValue,
-} from './output-ref';
+import { canonicalValueText, parseWholeExecutionCheckoutRef, type JsonValue } from './output-ref';
 import { discoverScriptsForCwd } from './script-discovery';
 import {
   describeUnmetCompletion,
@@ -61,6 +56,7 @@ import {
   isAgentNode,
   isComposeFanOutNode,
   isLoopGroupNode,
+  definedOutputPaths,
   isLoopNode,
   isWaitNode,
   isWorkflowNode,
@@ -501,19 +497,20 @@ function nodeType(node: DagNode): z.infer<typeof dryRunNodeTypeSchema> {
 }
 
 function completedOutput(node: DagNode, stub: DryRunStubValue): NodeOutput {
-  const declaredFields = declaredFieldsFromSchema(node.output_format);
+  const declaredOutputPaths = definedOutputPaths(node);
+  const contract = declaredOutputPaths !== undefined ? { declaredOutputPaths } : {};
   if (typeof stub === 'string') {
     return {
       state: 'completed',
       output: stub,
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...contract,
     };
   }
   return {
     state: 'completed',
     output: JSON.stringify(stub),
     structuredOutput: stub,
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...contract,
   };
 }
 
@@ -866,8 +863,7 @@ type SimulatedCompletion =
  *
  * Note the reach of that middle rule (#2563): it fires whenever `until_bash` is
  * declared, INCLUDING alongside an `until:` whose sentinel the stub did not carry.
- * That combination previously simulated as a max-iterations failure, and a shipped
- * default uses it (`archon-adversarial-dev.yaml` declares both). Assuming completion
+ * That combination previously simulated as a max-iterations failure. Assuming completion
  * is the honest answer — the real run's `until_bash` may well have fired — but it
  * does mean a dry run cannot prove a prose stub trips `until:` on a loop that also
  * declares `until_bash`. Drop `until_bash` from the workflow, or stub the sentinel,

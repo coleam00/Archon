@@ -185,13 +185,13 @@ Commands:
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs a human decision
   workflow resume <run-id>   Resume a failed or paused run from completed nodes
+  workflow wake [--watch] [--json] Wake due continuations across this install
+  workflow signal <full-run-id> Signal and wake one exact event wait occurrence
   workflow cancel <run-id>   Stop a running workflow (stops an owning process first)
   workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first
   workflow respond <run-id> <decision> [text]
                              Resolve a paused gate with any of its declared decisions
                              ('approve'/'reject' are sugar for the dedicated commands)
-  workflow search [query]    Search the workflow marketplace
-  workflow install <slug>    Install a workflow from the marketplace
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
                              workflow, a workflow folder or pack (by name or directory
@@ -259,7 +259,7 @@ Options:
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
   --json                     Output machine-readable JSON (list/status/get/wait/runs/approve/reject/respond/cancel/abandon/resume)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
-  --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (returns immediately)
+  --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
@@ -272,7 +272,8 @@ Options:
                              persist_session resume between separate CLI invocations)
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
-  --force                    Overwrite existing file (for workflow install)
+  --force                    For 'setup': overwrite existing values instead of merging
+                             For 'complete': remove even when safety checks block it
 
 Examples:
   archon chat "What does the orchestrator do?"
@@ -281,9 +282,9 @@ Examples:
   archon workflow run plan --cwd /path/to/repo "Add dark mode"
   archon workflow run implement --branch feature-auth "Implement auth"
   archon workflow run quick-fix --no-worktree "Fix typo"
-  archon workflow run assist --folder "List every repo under this multi-repo root"
-  archon workflow run archon-assist --detach "Investigate the flaky test"
-  archon workflow run assist --dry-run --stubs ./stubs.yaml --json
+  archon workflow run investigate --folder "Explain how the repos under this root fit together"
+  archon workflow run archon-investigate --detach "Investigate the flaky test"
+  archon workflow run investigate --dry-run --stubs ./stubs.yaml --json
   archon workflow runs --json
   archon workflow get <run-id> --json
   archon workflow logs <run-id> --follow
@@ -292,12 +293,10 @@ Examples:
   archon workflow resume <run-id>
   archon workflow cancel <run-id>
   archon workflow runs --open
-  archon workflow run archon-smart-pr-review --adopt <run-id> "Review the changes"
+  archon workflow run archon-review --adopt <run-id> "Review the changes"
   archon skill install
   archon skill install /path/to/project
   archon plugin install coleam00/Archon/plugins/forge-github
-  archon workflow search "pr review"
-  archon workflow install archon-piv-loop
 
 `;
 

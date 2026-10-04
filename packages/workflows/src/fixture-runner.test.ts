@@ -30,8 +30,7 @@ afterAll(() => removeTempTree(bundledDefaultsRoot));
 const realArchonPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   ...realArchonPaths,
-  getDefaultWorkflowsPath: () => join(bundledDefaultsRoot, 'defaults'),
-  getDefaultCommandsPath: () => join(bundledDefaultsRoot, 'defaults'),
+  getBundledWorkflowsPath: () => bundledDefaultsRoot,
 }));
 
 import { execFileAsync, resolveBashPath } from '@archon/git';

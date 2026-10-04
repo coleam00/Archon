@@ -1,6 +1,7 @@
 /**
  * Zod schemas for configuration API endpoints.
  */
+import { platformStreamingSchema } from '@archon/core/config';
 import { z } from '@hono/zod-openapi';
 import { effortLevelSchema, rejectRetiredThinking } from '@archon/workflows/schemas/effort';
 
@@ -47,12 +48,7 @@ export const safeConfigSchema = z
     botName: z.string(),
     assistant: z.string().min(1),
     assistants: z.record(z.string(), providerDefaultsSchema),
-    streaming: z.object({
-      telegram: z.enum(['stream', 'batch']),
-      discord: z.enum(['stream', 'batch']),
-      slack: z.enum(['stream', 'batch']),
-      // github removed — never implemented; hardcoded 'batch' in GitHubAdapter
-    }),
+    streaming: platformStreamingSchema,
     concurrency: z.object({ maxConversations: z.number() }),
     defaults: z.object({
       copyDefaults: z.boolean(),

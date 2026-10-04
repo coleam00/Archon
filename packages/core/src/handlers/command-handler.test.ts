@@ -14,7 +14,12 @@ import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
+import {
+  MissingProjectDirectoryError,
+  type IsolationEnvironmentRow,
+  type IsolationRequest,
+  type IsolatedEnvironment,
+} from '@archon/isolation';
 import { join } from 'path';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
@@ -355,15 +360,15 @@ mock.module('../db/isolation-environments', () => ({
 }));
 
 // Mock isolation provider
-const mockIsolationCreate = mock(() =>
+const mockIsolationCreate = mock<(request: IsolationRequest) => Promise<IsolatedEnvironment>>(() =>
   Promise.resolve({
     id: '/workspace/my-repo/worktrees/task-feat-auth',
     provider: 'worktree',
     workingPath: '/workspace/my-repo/worktrees/task-feat-auth',
-    branchName: 'task-feat-auth',
+    branchName: gitUtils.toBranchName('task-feat-auth'),
     status: 'active',
     createdAt: new Date(),
-    metadata: {},
+    metadata: { adopted: false },
   })
 );
 const mockIsolationDestroy = mock(() => Promise.resolve());
@@ -1411,6 +1416,29 @@ describe('CommandHandler', () => {
           expect(result.message).toContain('classified:');
         });
 
+        test('names the registered project when its directory is missing', async () => {
+          mockIsolationCreate.mockImplementationOnce(async request => {
+            throw new MissingProjectDirectoryError(
+              request.canonicalRepoPath,
+              request.codebaseName ?? request.codebaseId
+            );
+          });
+
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree create feat-auth'
+          );
+
+          expect(result.success).toBe(false);
+          expect(result.message).toContain("Project 'my-repo'");
+          expect(result.message).toContain('/workspace/my-repo');
+          expect(result.message).toContain('Restore');
+          expect(result.message).toContain('re-register');
+          expect(result.message).not.toContain('codebase-123');
+          expect(mockIsolationEnvDbCreate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
+        });
+
         test('should reject if already using a worktree (shows working path, not UUID)', async () => {
           const convWithWorktree = makeConversation({
             ...conversationWithCodebase,
@@ -1872,7 +1900,7 @@ describe('CommandHandler', () => {
       test('should match workflow name via suffix match', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
-            makeTestWorkflowWithSource({ name: 'archon-assist', description: 'General assistant' }),
+            makeTestWorkflowWithSource({ name: 'acme-assist', description: 'General assistant' }),
           ],
           errors: [],
         });
@@ -1880,14 +1908,14 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run assist');
 
         expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).definition.name).toBe('archon-assist');
+        expect(startRequest(result.workflow).definition.name).toBe('acme-assist');
       });
 
       test('should match workflow name via substring match', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [
             makeTestWorkflowWithSource({
-              name: 'archon-smart-pr-review',
+              name: 'acme-smart-pr-review',
               description: 'Smart PR review',
             }),
           ],
@@ -1897,7 +1925,7 @@ describe('CommandHandler', () => {
         const result = await handleCommand(conversationWithCodebase, '/workflow run smart');
 
         expect(result.success).toBe(true);
-        expect(startRequest(result.workflow).definition.name).toBe('archon-smart-pr-review');
+        expect(startRequest(result.workflow).definition.name).toBe('acme-smart-pr-review');
       });
 
       test('should return failure with candidates on ambiguous suffix match', async () => {

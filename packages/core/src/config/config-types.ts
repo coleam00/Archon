@@ -5,6 +5,12 @@
  * - Global: ~/.archon/config.yaml (user preferences)
  * - Repository: .archon/config.yaml (project settings)
  */
+import { z } from '@hono/zod-openapi';
+import { identityPlatformSchema } from '../schemas/user';
+
+export const streamingModeSchema = z.enum(['stream', 'batch']);
+export const platformStreamingSchema = z.record(identityPlatformSchema, streamingModeSchema);
+export type PlatformStreaming = z.infer<typeof platformStreamingSchema>;
 
 /**
  * Global configuration (non-secret user preferences)
@@ -141,13 +147,9 @@ export interface GlobalConfig {
   tiers?: RawTiersConfig;
 
   /**
-   * Platform streaming preferences (can be overridden per conversation)
+   * Platform streaming preferences
    */
-  streaming?: {
-    telegram?: 'stream' | 'batch';
-    discord?: 'stream' | 'batch';
-    slack?: 'stream' | 'batch';
-  };
+  streaming?: PlatformStreaming;
 
   /**
    * Directory preferences (usually not needed - defaults work well)
@@ -385,11 +387,7 @@ export interface MergedConfig {
    * Undefined when no tiers are configured anywhere.
    */
   tiers?: RawTiersConfig;
-  streaming: {
-    telegram: 'stream' | 'batch';
-    discord: 'stream' | 'batch';
-    slack: 'stream' | 'batch';
-  };
+  streaming: PlatformStreaming;
   paths: {
     workspaces: string;
     worktrees: string;
@@ -456,11 +454,7 @@ export interface SafeConfig {
   botName: string;
   assistant: string;
   assistants: ProviderDefaultsMap;
-  streaming: {
-    telegram: 'stream' | 'batch';
-    discord: 'stream' | 'batch';
-    slack: 'stream' | 'batch';
-  };
+  streaming: PlatformStreaming;
   concurrency: {
     maxConversations: number;
   };

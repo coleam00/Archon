@@ -7,16 +7,11 @@ import { z } from '@hono/zod-openapi';
 // IdentityPlatform
 // ---------------------------------------------------------------------------
 
-export const identityPlatformSchema = z.enum([
-  'slack',
-  'telegram',
-  'discord',
-  'github',
-  'gitea',
-  'gitlab',
-  'web',
-  'cli',
-]);
+export const identityPlatformSchema = z
+  .string()
+  .min(1)
+  .max(32)
+  .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
 
 export type IdentityPlatform = z.infer<typeof identityPlatformSchema>;
 

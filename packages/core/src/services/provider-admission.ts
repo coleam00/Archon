@@ -157,6 +157,7 @@ async function* admittedQuery(
 export function getAgentProvider(id: string, pollMs = DEFAULT_POLL_MS): IAgentProvider {
   const provider = getRegisteredAgentProvider(id);
   return {
+    checkCredential: request => provider.checkCredential(request),
     getType: () => provider.getType(),
     getCapabilities: () => provider.getCapabilities(),
     sendQuery: (prompt, cwd, resumeSessionId, options) =>

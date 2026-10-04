@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
+import * as paths from '@archon/paths';
 import {
   getAgentProvider,
   getProviderCapabilities,
@@ -18,10 +19,19 @@ import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider } from './types';
 import { EFFORT_LADDER } from '@archon/paths/effort';
 
+// The registry creates its logger on first use and keeps it; hand it one this file can
+// observe. Module scope, so the spy is in place before any test makes the registry log.
+const registryLog = paths.createLogger('provider.registry');
+const realCreateLogger = paths.createLogger;
+spyOn(paths, 'createLogger').mockImplementation(module =>
+  module === 'provider.registry' ? registryLog : realCreateLogger(module)
+);
+
 /** Minimal mock provider for testing registration. */
 function makeMockProvider(id: string): IAgentProvider {
   return {
     getType: () => id,
+    checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     getCapabilities: () => ({
       sessionResume: false,
       mcp: false,
@@ -58,7 +68,7 @@ function makeMockRegistration(
     factory: () => makeMockProvider(id),
     capabilities: makeMockProvider(id).getCapabilities(),
     builtIn: false,
-    credentials: { kind: 'static', specs: [] },
+    credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
     ...overrides,
     parseConfig: overrides?.parseConfig ?? (raw => raw),
   };
@@ -109,6 +119,23 @@ describe('registry', () => {
       const provider2 = getAgentProvider('claude');
 
       expect(provider1).not.toBe(provider2);
+    });
+
+    test('logs a deprecated provider once per process, however often it is resolved', () => {
+      registerProvider(makeMockRegistration('old', { deprecationNotice: 'old is deprecated' }));
+      const warn = spyOn(registryLog, 'warn').mockImplementation(() => undefined);
+      try {
+        getAgentProvider('old');
+        getAgentProvider('old');
+        getAgentProvider('claude');
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(
+          { provider: 'old', notice: 'old is deprecated' },
+          'provider.deprecated'
+        );
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     test('providers expose getCapabilities', () => {
@@ -284,6 +311,15 @@ describe('registry', () => {
       expect(isRegisteredProvider('copilot')).toBe(true);
     });
 
+    test('only OpenCode and Copilot are deprecated', () => {
+      registerCommunityProviders();
+      const deprecated = getRegisteredProviders()
+        .filter(p => p.deprecationNotice)
+        .map(p => p.id)
+        .sort();
+      expect(deprecated).toEqual(['copilot', 'opencode']);
+    });
+
     test('is idempotent', () => {
       registerCommunityProviders();
       expect(() => registerCommunityProviders()).not.toThrow();
@@ -450,5 +486,39 @@ describe('registry', () => {
         .sort();
       expect(ids).toEqual(['claude', 'codex', 'copilot']);
     });
+  });
+});
+
+describe('credential vendor mapping', () => {
+  beforeEach(() => {
+    clearRegistry();
+    registerBuiltinProviders();
+    registerCommunityProviders();
+  });
+  test('single-vendor providers resolve every model from their own spec', () => {
+    for (const [id, vendor] of [
+      ['claude', 'anthropic'],
+      ['codex', 'openai'],
+      ['copilot', 'github-copilot'],
+    ]) {
+      const catalog = getRegistration(id).credentials;
+      expect(catalog.vendorFor(undefined)).toBe(vendor);
+      expect(catalog.vendorFor('any-model')).toBe(vendor);
+      if (catalog.kind === 'static')
+        expect(catalog.specs.map(spec => spec.vendor)).toEqual([vendor]);
+    }
+  });
+  test('Pi maps only models whose vendor is in its catalog', () => {
+    const { vendorFor } = getRegistration('pi').credentials;
+    expect(vendorFor('anthropic/claude-sonnet-4-6')).toBe('anthropic');
+    expect(vendorFor('github-copilot/gpt-5.6')).toBe('github-copilot');
+    expect(vendorFor('google/gemini-3-pro')).toBe('google');
+    expect(vendorFor('copilot/gpt-5.6')).toBe('github-copilot');
+    expect(vendorFor('ollama/local')).toBeUndefined();
+    expect(vendorFor('broken')).toBeUndefined();
+    expect(vendorFor(undefined)).toBeUndefined();
+  });
+  test('OpenCode has no stored-credential mapping', () => {
+    expect(getRegistration('opencode').credentials.vendorFor('anthropic/claude')).toBeUndefined();
   });
 });

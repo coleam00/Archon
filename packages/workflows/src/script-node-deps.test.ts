@@ -45,8 +45,7 @@ mock.module('@archon/paths', () => ({
     return paths;
   },
   // This fixture has project scripts and no installed bundled source tree.
-  getDefaultCommandsPath: () => join(testDir, 'absent-bundle', 'commands', 'defaults'),
-  getDefaultWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows', 'defaults'),
+  getBundledWorkflowsPath: () => join(testDir, 'absent-bundle', 'workflows'),
 }));
 
 // --- Imports (after all mock.module calls) ---
@@ -169,6 +168,7 @@ const mockSendQuery = mock<ReturnType<WorkflowDeps['getAgentProvider']>['sendQue
 
 const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider => ({
   sendQuery: mockSendQuery,
+  checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: () => 'claude',
   getCapabilities: () => ({
     sessionResume: true,

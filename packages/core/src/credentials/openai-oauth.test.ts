@@ -6,6 +6,7 @@ import {
   exchangeOpenAiAuthorizationCode,
   refreshOpenAiOAuthCredentials,
   mintOpenAiOAuthApiKey,
+  OpenAiTokenError,
 } from './openai-oauth';
 
 /** Build an unsigned JWT-shaped token with the given payload. */
@@ -219,9 +220,36 @@ describe('refreshOpenAiOAuthCredentials', () => {
       /refresh failed \(401\): invalid_grant/
     );
   });
+
+  test('a token endpoint answer carries its HTTP status; a network failure carries none', async () => {
+    stubTokenEndpoint(401, { error: 'invalid_grant' });
+    const rejected = await refreshOpenAiOAuthCredentials(stored).catch((e: unknown) => e);
+    expect(rejected).toBeInstanceOf(OpenAiTokenError);
+    expect((rejected as OpenAiTokenError).status).toBe(401);
+
+    installFetch(async () => {
+      throw new TypeError('fetch failed');
+    });
+    const unreachable = await refreshOpenAiOAuthCredentials(stored).catch((e: unknown) => e);
+    expect(unreachable).toBeInstanceOf(OpenAiTokenError);
+    expect((unreachable as OpenAiTokenError).status).toBeUndefined();
+  });
 });
 
 describe('mintOpenAiOAuthApiKey', () => {
+  test('an expired blob whose refresh is rejected keeps the HTTP status on the error', async () => {
+    stubTokenEndpoint(401, { error: 'invalid_grant' });
+    const rejected = await mintOpenAiOAuthApiKey({
+      access: 'old-access',
+      refresh: 'old-refresh',
+      expires: 1,
+      accountId: 'acct-42',
+      id_token: 'old-idt',
+    }).catch((e: unknown) => e);
+    expect(rejected).toBeInstanceOf(OpenAiTokenError);
+    expect((rejected as OpenAiTokenError).status).toBe(401);
+  });
+
   test('unexpired blob → returned as-is, no network call', async () => {
     let fetched = 0;
     installFetch(async () => {

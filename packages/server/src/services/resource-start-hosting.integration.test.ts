@@ -9,6 +9,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { registerFolder, registerRepository } from '@archon/core';
+import { findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
 import { getStartReceipt } from '@archon/core/db/resource-starts';
 import { claimPendingWorkflowRun } from '@archon/core/db/workflows';
 import {
@@ -18,7 +21,7 @@ import {
 import { captureLogLines, removeTempTree } from '@archon/paths/test-utils';
 import type { IWorkflowEngine, WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
-import { HeadlessPlatform } from '../adapters/headless';
+import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { registerWebhookSourceRoutes } from '../routes/webhooks';
 import { createServerResourceStartHost } from './resource-start-hosting';
 import { loadWebhookSourcePlugins } from './webhook-source-plugins';
@@ -81,7 +84,8 @@ interface Fixture {
 
 async function fixture(
   autoDrain = true,
-  isolation: { kind: 'in-place' } | { kind: 'worktree' } = { kind: 'in-place' }
+  isolation: { kind: 'in-place' } | { kind: 'worktree' } = { kind: 'in-place' },
+  initGit = true
 ): Promise<Fixture> {
   const project = join(root, 'project');
   await mkdir(join(project, '.archon', 'workflows'), { recursive: true });
@@ -89,7 +93,7 @@ async function fixture(
     join(project, '.archon', 'workflows', 'hosted.yaml'),
     'name: hosted\ndescription: Server-hosted start.\nnodes:\n  - id: one\n    bash: echo one\n'
   );
-  expect(await Bun.spawn(['git', 'init', '-q'], { cwd: project }).exited).toBe(0);
+  if (initGit) expect(await Bun.spawn(['git', 'init', '-q'], { cwd: project }).exited).toBe(0);
   if (isolation.kind === 'worktree') {
     // A worktree syncs from the remote's base branch, so give the project a local one.
     const origin = join(root, 'origin.git');
@@ -217,6 +221,7 @@ beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'archon-server-resource-host-')));
   process.env.ARCHON_HOME = join(root, 'home');
   delete process.env.DATABASE_URL;
+  setPlatformPolicies([]);
   resetDatabase();
   await getDatabase().query(
     `INSERT INTO remote_agent_users (id, display_name) VALUES ($1, 'Trigger actor')`,
@@ -254,6 +259,46 @@ describe('server resource-start host', () => {
       bindingId: 'hosted',
     });
     await until(() => (engine.claimed.includes(runId ?? '') ? true : undefined));
+  });
+
+  test.each(['folder', 'repo'] as const)(
+    'a nested repository belongs to itself under a registered parent %s',
+    async parentKind => {
+      if (parentKind === 'repo') {
+        expect(await Bun.spawn(['git', 'init', '-q'], { cwd: root }).exited).toBe(0);
+      }
+      const parent = await (parentKind === 'repo'
+        ? registerRepository(root)
+        : registerFolder(root));
+      const { deliver, engine, host } = await fixture(false);
+      expect((await deliver('nested', 'queue')).status).toBe(200);
+      await host.requestDrain();
+      await until(() => engine.claimed[0]);
+      const child = await findCodebaseByDefaultCwd(join(root, 'project'));
+      expect(child).not.toBeNull();
+      expect(child?.id).not.toBe(parent.codebaseId);
+      expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(child?.id);
+    }
+  );
+
+  test('reuses an existing nested repository registration', async () => {
+    const parent = await registerFolder(root);
+    const { deliver, engine, host } = await fixture(false);
+    const child = await registerRepository(join(root, 'project'));
+    expect((await deliver('registered-child', 'queue')).status).toBe(200);
+    await host.requestDrain();
+    await until(() => engine.claimed[0]);
+    expect(child.codebaseId).not.toBe(parent.codebaseId);
+    expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(child.codebaseId);
+  });
+
+  test('retains parent folder resolution outside Git', async () => {
+    const parent = await registerFolder(root);
+    const { deliver, engine, host } = await fixture(false, { kind: 'in-place' }, false);
+    expect((await deliver('folder-child', 'queue')).status).toBe(200);
+    await host.requestDrain();
+    await until(() => engine.claimed[0]);
+    expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(parent.codebaseId);
   });
 
   test('a queued receipt starts when its blocker ends and the scheduler tick drains', async () => {

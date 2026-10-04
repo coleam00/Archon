@@ -2,7 +2,7 @@
  * Web platform adapter implementing IPlatformAdapter with SSE stream management.
  * Bridge between the orchestrator and the React frontend via Server-Sent Events.
  */
-import type { IWebPlatformAdapter, MessageMetadata } from '@archon/core';
+import type { IPlatformAdapter, MessageMetadata } from '@archon/core';
 import type { PlatformStructuredEvent } from '@archon/workflows/deps';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
@@ -17,7 +17,11 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export class WebAdapter implements IWebPlatformAdapter {
+export class WebAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'adapter',
+    defaultWorkflowDispatch: 'background',
+  } as const;
   /**
    * Per-conversation running tool stack for SSE duration tracking.
    * Uses a Map of toolCallId → start info so parallel DAG nodes don't
@@ -82,9 +86,6 @@ export class WebAdapter implements IWebPlatformAdapter {
       ...(metadata?.category ? { category: metadata.category } : {}),
       ...(metadata?.workflowResult ? { workflowResult: metadata.workflowResult } : {}),
     });
-
-    // Forward output to registered callback (for event bridge preview)
-    this.workflowBridge.emitOutput(conversationId, message);
 
     await this.transport.emit(conversationId, event);
 
@@ -161,12 +162,7 @@ export class WebAdapter implements IWebPlatformAdapter {
         timestamp: now,
       });
     } else if (chunk.type === 'result') {
-      if (!chunk.sessionId) return;
-      event = JSON.stringify({
-        type: 'session_info',
-        sessionId: chunk.sessionId,
-        timestamp: Date.now(),
-      });
+      return;
     } else if (chunk.type === 'workflow_dispatch') {
       event = JSON.stringify({
         type: 'workflow_dispatch',
@@ -278,20 +274,20 @@ export class WebAdapter implements IWebPlatformAdapter {
     return this.transport.hasActiveStream(conversationId);
   }
 
-  /**
-   * Bridge workflow events from a worker conversation to a parent conversation's SSE stream.
-   * Forwards compact progress events (step progress, status) and output previews.
-   */
-  setupEventBridge(workerConversationId: string, parentConversationId: string): () => void {
-    return this.workflowBridge.bridgeWorkerEvents(workerConversationId, parentConversationId);
-  }
-
-  registerOutputCallback(conversationId: string, callback: (text: string) => void): void {
-    this.workflowBridge.registerOutputCallback(conversationId, callback);
-  }
-
-  removeOutputCallback(conversationId: string): void {
-    this.workflowBridge.removeOutputCallback(conversationId);
+  async prepareBackgroundConversation(
+    context: Parameters<NonNullable<IPlatformAdapter['prepareBackgroundConversation']>>[0]
+  ): Promise<() => Promise<void>> {
+    const { workerConversationId, parentConversationId, conversationDbId } = context;
+    this.setConversationDbId(workerConversationId, conversationDbId);
+    // Worker workflow events are forwarded to the parent conversation's stream.
+    const unsubscribe = this.workflowBridge.bridgeWorkerEvents(
+      workerConversationId,
+      parentConversationId
+    );
+    return async () => {
+      unsubscribe();
+      await this.emitLockEvent(workerConversationId, false);
+    };
   }
 
   async emitRetract(conversationId: string): Promise<void> {

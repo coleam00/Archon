@@ -108,7 +108,8 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
   trigger_rule: all_success                    # optional (default)
   retry:                                       # optional; same shape as bash/AI nodes
     max_attempts: 3
-    on_error: transient
+    on_error: all                              # a script exit is retried only under `all`;
+                                               #  `transient` retries only a timeout
 ```
 
 ### Fields

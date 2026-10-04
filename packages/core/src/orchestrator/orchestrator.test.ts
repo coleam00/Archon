@@ -511,7 +511,7 @@ const mockSession: Session = {
   ended_reason: null,
 };
 
-const testWorkflowDefs = makeTestWorkflowList(['fix-bug', 'add-feature', 'archon-assist']);
+const testWorkflowDefs = makeTestWorkflowList(['fix-bug', 'add-feature', 'archon-investigate']);
 const testWorkflows = testWorkflowDefs.map(workflow => ({
   workflow: resolveWorkflow(workflow),
   source: 'bundled' as const,
@@ -522,6 +522,7 @@ const mockClientSendQuery = mock<IAgentProvider['sendQuery']>(async function* ()
 });
 const mockClient = {
   sendQuery: mockClientSendQuery,
+  checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: mock(() => 'claude'),
   getCapabilities: mock(() => providerCapabilities),
 } satisfies IAgentProvider;
@@ -648,11 +649,11 @@ describe('parseOrchestratorCommands', () => {
 
   test('parses --prompt with double quotes', () => {
     const response =
-      'I will analyze this.\n/invoke-workflow archon-assist --project test-project --prompt "Analyze the orchestrator module architecture"';
+      'I will analyze this.\n/invoke-workflow archon-investigate --project test-project --prompt "Analyze the orchestrator module architecture"';
     const result = parseOrchestratorCommands(response, codebases, workflows);
 
     expect(result.workflowInvocation).not.toBeNull();
-    expect(result.workflowInvocation?.workflowName).toBe('archon-assist');
+    expect(result.workflowInvocation?.workflowName).toBe('archon-investigate');
     expect(result.workflowInvocation?.projectName).toBe('test-project');
     expect(result.workflowInvocation?.synthesizedPrompt).toBe(
       'Analyze the orchestrator module architecture'
@@ -680,7 +681,7 @@ describe('parseOrchestratorCommands', () => {
 
   test('parses --prompt with spaces in the quoted value', () => {
     const response =
-      '/invoke-workflow archon-assist --project test-project --prompt "Analyze the database schema and migration patterns in the project, focusing on table structure and relationships"';
+      '/invoke-workflow archon-investigate --project test-project --prompt "Analyze the database schema and migration patterns in the project, focusing on table structure and relationships"';
     const result = parseOrchestratorCommands(response, codebases, workflows);
 
     expect(result.workflowInvocation?.synthesizedPrompt).toBe(
@@ -701,7 +702,7 @@ describe('parseOrchestratorCommands', () => {
 
   test('parses --prompt with --project= equals syntax', () => {
     const response =
-      '/invoke-workflow archon-assist --project=test-project --prompt "Summarize the README"';
+      '/invoke-workflow archon-investigate --project=test-project --prompt "Summarize the README"';
     const result = parseOrchestratorCommands(response, codebases, workflows);
 
     expect(result.workflowInvocation?.projectName).toBe('test-project');
@@ -815,42 +816,6 @@ describe('orchestrator-agent handleMessage', () => {
       );
       expect(mockDiscoverWorkflows).not.toHaveBeenCalled();
       expect(mockExecuteWorkflow).toHaveBeenCalled();
-    });
-
-    test('validates workflow exists in auto-selected project before dispatch', async () => {
-      const workflowDefinition = makeTestResolvedWorkflow({
-        name: 'test-workflow',
-        description: 'A test workflow',
-      });
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockHandleCommand.mockResolvedValue({
-        success: true,
-        message: 'Starting workflow: `test-workflow`',
-        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
-      });
-      mockDiscoverWorkflows.mockResolvedValue({
-        workflows: [
-          {
-            workflow: makeTestResolvedWorkflow({ name: 'other-workflow' }),
-            source: 'bundled' as const,
-          },
-        ],
-        errors: [],
-      });
-
-      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
-
-      expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
-        '/workspace/test-project',
-        expect.any(Function),
-        undefined // non-worktree cwd: source root is the cwd itself
-      );
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        'Workflow `test-workflow` not found.\n\nUse /workflow list to see available workflows.'
-      );
-      expect(mockUpdateConversation).not.toHaveBeenCalled();
-      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     });
 
     test('non-deterministic commands go to AI orchestrator', async () => {
@@ -1057,6 +1022,7 @@ describe('orchestrator-agent handleMessage', () => {
       });
       const codexClient = {
         sendQuery: codexSendQuery,
+        checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
         getType: () => 'codex',
         getCapabilities: () => providerCapabilities,
       } satisfies IAgentProvider;
@@ -1478,7 +1444,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
           type: 'agent_message_chunk',
-          text: `Running analysis.\n/invoke-workflow archon-assist --project test-project --prompt "${synthesized}"`,
+          text: `Running analysis.\n/invoke-workflow archon-investigate --project test-project --prompt "${synthesized}"`,
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1545,7 +1511,7 @@ describe('orchestrator-agent handleMessage', () => {
       mockClient.sendQuery.mockImplementation(async function* () {
         yield {
           type: 'agent_message_chunk',
-          text: '/invoke-workflow archon-assist --project test-project',
+          text: '/invoke-workflow archon-investigate --project test-project',
         };
         yield { type: 'result', sessionId: 'session-id' };
       });
@@ -1555,7 +1521,7 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'chat-456',
-        expect.stringContaining('archon-assist')
+        expect.stringContaining('archon-investigate')
       );
     });
   });

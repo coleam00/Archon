@@ -19,7 +19,7 @@ Each Archon release publishes the plugin as a native executable for every platfo
 archon plugin install coleam00/Archon/plugins/forge-github
 ```
 
-This works the same for the release binary, a source checkout, and [Docker](/deployment/docker/#forge-plugins). Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
+This works the same for the release binary, a source checkout, and [Docker](/deployment/docker/#plugins). Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
 
 - resolves the tag to a commit with `git ls-remote` and reads `plugins/forge-github/archon-plugin.json` at that commit. It calls no GitHub API and needs no token.
 - downloads `archon-forge-github-<os>-<arch>[.exe]` from that release and checks it against the release's `checksums.txt`. A mismatch installs nothing.
@@ -38,7 +38,7 @@ archon plugin remove coleam00/Archon/plugins/forge-github          # deletes onl
 
 Nothing updates in the background. To build the plugin yourself instead, compile `packages/adapters/src/forge/github/plugin.ts` from a source checkout (`bun run --cwd packages/adapters build:github-plugin`, or `bun build --compile <entry> --outfile archon-forge-github.exe` on Windows) and copy the executable into `ARCHON_HOME/plugins/`, or configure its absolute path under `forge.plugins` below. `archon plugin` leaves such a file alone.
 
-The eventual single marketplace will distribute forge plugins, agent providers, workflow packs, chat integrations, webhook sources, themes and other plugin kinds. The Archon-maintained GitHub plugin will move to its own repository and install through that marketplace, optionally during setup. That changes packaging and location, not this runtime protocol. The marketplace and a mandatory setup install are not prerequisites today. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
+Forge plugins and workflow packs install the same way: `archon plugin install owner/repo[/path][@tag]` reads the repository's `archon-plugin.json`, and no central registry is involved. Other plugin kinds will use the same command when their install path exists. The Archon-maintained GitHub plugin may move to its own repository, which changes the reference you install from, not this runtime protocol. Setup does not install it for you. Other production forges are community-maintained; the existing bundled Gitea/GitLab transition is not settled by this contract.
 
 ## Commands
 
@@ -88,9 +88,9 @@ The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`.
 
 ## Use the forge path in the SDLC pack
 
-The bundled SDLC pack reads checks and performs its pull-request writes through `gh` by default. The forge path is an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the pull request's host and set `ARCHON_SDLC_FORGE=forge` in the environment Archon runs with, for example `~/.archon/.env`. One switch covers both reads and writes; a value other than `gh` or `forge` fails the steps that use it.
+The bundled SDLC pack reads checks and performs its pull-request writes through `gh` by default. The forge path is an explicit opt-in until the GitHub plugin installs through the marketplace. To opt in, install a plugin for the pull request's host and set `ARCHON_SDLC_FORGE=forge` in the environment Archon runs with, for example `~/.archon/.env`. One switch covers both reads and writes on the pull request and its checks; a value other than `gh` or `forge` fails the steps that use it. The forge contract has no issue operation, so the issues `file-discoveries` files go through `gh` whichever source is selected.
 
-The pack's writes are the draft pull request, the body resync, the canonical review comment and the ready flip. Each happens in a deterministic node — `publish-pr`, `publish-pr-body`, `publish-review` and `flip-ready` — that publishes through the selected source and fails unless the result reads back. The agents around them establish the target, author the body and decide the verdict; they never write to the forge themselves. Whether a branch already has a pull request is decided by an open-head lookup, so a second one is never opened for it.
+The pack's pull-request writes are the draft pull request, the body resync, the canonical review comment and the ready flip. Each happens in a deterministic node — `publish-pr`, `publish-pr-body`, `publish-review` and `flip-ready` — that publishes through the selected source and fails unless the result reads back. The agents around them establish the target, author the body and decide the verdict; they never write to the forge themselves. Whether a branch already has a pull request is decided by an open-head lookup, so a second one is never opened for it.
 
 For reads, the pack prefers a supplied required set, otherwise the full observation. It classifies each GitHub check the same way through either source and applies the same gate policy: it waits once for registration when no checks exist and refuses the final ready preflight for pending, red, gated, unknown or failed reads. The workflow owns this policy. Archon never switches to the forge path because a plugin is installed, and a selected forge path that cannot answer never falls back to `gh`: the step fails with the reason, for example `no forge plugin claims <host>`.
 

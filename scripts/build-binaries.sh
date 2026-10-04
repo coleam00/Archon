@@ -21,7 +21,7 @@ OUTFILE="${OUTFILE:-}"
 
 echo "Building Archon CLI v${VERSION} (commit: ${GIT_COMMIT})"
 
-# Regenerate bundled defaults from .archon/{commands,workflows}/defaults/ so the
+# Regenerate the bundled packs named in bundle-index.json so the
 # compiled binary always embeds the current on-disk contents. CI also runs
 # `bun run check:bundled` to catch committed drift.
 echo "Regenerating bundled defaults..."

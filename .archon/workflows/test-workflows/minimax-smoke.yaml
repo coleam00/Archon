@@ -4,7 +4,7 @@ description: |
   node — no output_format, no tools, no large context — to check whether Pi can
   reach MiniMax-M3 and stream a first token at all.
 
-  Diagnostic for the stall seen in archon-fix-github-issue-minimax, where the
+  Diagnostic for the stall seen in a MiniMax issue-fix workflow, where the
   `classify` node (large prompt + output_format augmentation) hung with zero
   output for 30 min × 3 retries. This isolates the question: does M3/Pi respond
   to a tiny prompt (→ the stall is prompt-size / structured-output specific), or
