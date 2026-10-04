@@ -208,7 +208,6 @@ describe('oauth-bridge', () => {
     };
     const start = await startOAuth('u1', 'claude');
     cancelOAuth(start.sessionId, 'u1');
-    await tick();
     expect(mockLogger.info).toHaveBeenCalledWith(
       { userId: 'u1', provider: 'anthropic', sessionId: start.sessionId, reason: 'cancelled' },
       'oauth_bridge.login_aborted'
@@ -251,7 +250,6 @@ describe('oauth-bridge', () => {
         } else {
           await startOAuth('bob', 'openai');
         }
-        await tick();
         expect(mockLogger.info).toHaveBeenCalledWith(
           { userId: 'alice', provider: 'openai', sessionId: start.sessionId, reason: 'expired' },
           'oauth_bridge.login_aborted'
@@ -266,7 +264,6 @@ describe('oauth-bridge', () => {
     await startOAuth('u1', 'openai');
     mockLogger.info.mockClear();
     resetOAuthSessionsForTest();
-    await tick();
     expect(mockLogger.info).not.toHaveBeenCalled();
     expect(mockLogger.warn).not.toHaveBeenCalled();
   });
