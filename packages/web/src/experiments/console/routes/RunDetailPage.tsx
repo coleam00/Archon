@@ -24,16 +24,13 @@ import { providerEventStore, useRunProviderEvents } from '../lib/provider-events
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
-import { runMessageConversationId, type Run } from '../primitives/run';
-import { foldNodeRuns, type RunEvent } from '../primitives/event';
+import { runMessageConversationId } from '../primitives/run';
+import { foldNodeRuns } from '../primitives/event';
 import type { Message } from '../primitives/message';
 import type { Project } from '../primitives/project';
 import type { ArtifactFile } from '../skills/runs';
 
-interface RunDetailView {
-  run: Run;
-  events: RunEvent[];
-}
+type RunDetailView = Awaited<ReturnType<typeof skill.getRun>>;
 
 /**
  * Run detail — the "logs" page, promoted out of a hidden tab.
@@ -216,8 +213,12 @@ export function RunDetailPage(): ReactElement {
   // Distinct nodes drive the node-filter dropdown — derived from the same fold
   // the stream renders, so the options match the dividers exactly.
   const nodeOptions = useMemo(
-    () => foldNodeRuns(detail?.events ?? []).map(r => ({ id: r.nodeId, name: r.nodeName })),
-    [detail?.events]
+    () =>
+      foldNodeRuns(detail?.events ?? [], detail?.nodes ?? []).map(r => ({
+        id: r.nodeId,
+        name: r.nodeName,
+      })),
+    [detail?.events, detail?.nodes]
   );
 
   // Each node's provider events load once, when the node first appears; live frames
@@ -416,7 +417,7 @@ export function RunDetailPage(): ReactElement {
     );
   }
 
-  const { run, events } = detail;
+  const { run, events, nodes } = detail;
   const messageList = messages ?? [];
   const toolCallCount = runToolCalls(messageList, providerEvents).count;
 
@@ -477,6 +478,7 @@ export function RunDetailPage(): ReactElement {
                       <RunStream
                         messages={messageList}
                         events={events}
+                        nodes={nodes}
                         providerEvents={providerEvents}
                         showToolCalls={showToolCalls}
                         showSystem={showSystem}
@@ -527,7 +529,7 @@ export function RunDetailPage(): ReactElement {
                 <RunGraphPanel
                   workflowName={run.workflow}
                   projectCwd={project.path}
-                  events={events}
+                  nodes={nodes}
                   onNodeSelect={(nodeId): void => {
                     pendingNodeIdRef.current = nodeId;
                     setView('log');

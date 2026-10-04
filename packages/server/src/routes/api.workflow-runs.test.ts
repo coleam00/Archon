@@ -1,4 +1,19 @@
-import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
+import {
+  RUN_GRAPH_METADATA_KEY,
+  terminalRecordSchema,
+} from '@archon/workflows/schemas/terminal-record';
+import { buildTerminalRecord } from '@archon/workflows/terminal-record';
+import {
+  nodeExecutionMetadataSchema,
+  type NodeCostScope,
+  type NodeExecutionMetadata,
+} from '@archon/workflows/schemas/node-execution';
+import {
+  finishNodeExecution,
+  newNodeInvocation,
+  startNodeExecution,
+} from '@archon/workflows/node-execution';
+import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
 import { describe, test, expect, mock, beforeAll, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, rm, symlink, writeFile, realpath } from 'fs/promises';
 import * as fsPromises from 'fs/promises';
@@ -7,7 +22,6 @@ import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
-import type { resumeWorkflow } from '@archon/core/operations';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
@@ -408,19 +422,6 @@ mock.module('@archon/core/utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-// The direct in-process resume fallback used when a run has no parent
-// conversation to dispatch a chat message through.
-const mockResumeWorkflow = mock<typeof resumeWorkflow>(async runId => {
-  const source =
-    runId.includes('paused') || runId.includes('auto-resume') ? MOCK_PAUSED_RUN : MOCK_FAILED_RUN;
-  return {
-    ...source,
-    id: runId,
-    conversation_id: source.conversation_id ?? 'conv-uuid-1',
-    last_activity_at: source.last_activity_at ?? null,
-    working_path: `/tmp/worktrees/${runId}`,
-  };
-});
 const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
   ok: true,
   workflow: makeTestResolvedWorkflow({ name: 'deploy' }),
@@ -436,9 +437,6 @@ mock.module('@archon/core/services/run-owner-stop', () => ({
   DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
 }));
 
-mock.module('@archon/core/operations', () => ({
-  resumeWorkflow: mockResumeWorkflow,
-}));
 mock.module('@archon/core/workflows/resolve-run-workflow', () => ({
   resolveRunWorkflow: mockResolveRunWorkflow,
 }));
@@ -1634,6 +1632,138 @@ describe('GET /api/workflows/runs/:runId', () => {
     expect(body.run.terminal_record).toBeNull();
   });
 
+  describe('serves the engine node states the console renders', () => {
+    // The #3544 workflow: `prepare` is always_run, `flaky` fails on its first try.
+    const graphRun = {
+      ...MOCK_FAILED_RUN,
+      metadata: { [RUN_GRAPH_METADATA_KEY]: { node_ids: ['prepare', 'flaky'] } },
+    };
+    let seq = 0;
+    const event = (event_type: string, step_name: string | null, data = {}): MockWorkflowEvent => ({
+      id: `event-${++seq}`,
+      workflow_run_id: graphRun.id,
+      event_type,
+      step_index: null,
+      step_name,
+      data,
+      created_at: NOW_DATE.toISOString(),
+    });
+    const firstAttemptThenResetOnResume = (): MockWorkflowEvent[] => [
+      event('node_started', 'prepare'),
+      event('node_completed', 'prepare'),
+      event('node_started', 'flaky'),
+      event('node_failed', 'flaky', { error: 'flaky failed' }),
+      event('workflow_failed', null),
+      event('workflow_resumed', null),
+      event('workflow_started', null),
+      event('node_always_run_reset', 'prepare'),
+    ];
+    async function getNodes(run: MockWorkflowRun, events: MockWorkflowEvent[]) {
+      mockGetWorkflowRun.mockImplementationOnce(async () => run);
+      mockListWorkflowEvents.mockImplementationOnce(async () => events);
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${run.id}`);
+      expect(response.status).toBe(200);
+      return (
+        (await response.json()) as {
+          run: { nodes: unknown; terminal_record: { nodes: unknown } | null };
+        }
+      ).run;
+    }
+
+    test('a node reset on resume is pending while the resumed run is active', async () => {
+      const events = firstAttemptThenResetOnResume();
+      const run = await getNodes({ ...graphRun, status: 'running' }, events);
+      expect(run.terminal_record).toBeNull();
+      expect(run.nodes).toEqual([
+        { node_id: 'prepare', state: 'pending' },
+        { node_id: 'flaky', state: 'failed', error: 'flaky failed' },
+      ]);
+      const record = await buildTerminalRecord({ run: graphRun, events });
+      expect(run.nodes).toEqual(record.nodes);
+    });
+
+    test('a resumed node whose re-run fails is failed, as the terminal record says', async () => {
+      const events = [
+        ...firstAttemptThenResetOnResume(),
+        event('node_started', 'prepare'),
+        event('node_failed', 'prepare', { error: 'prepare failed' }),
+      ];
+      const record = await buildTerminalRecord({ run: graphRun, events });
+      const run = await getNodes(graphRun, [
+        ...events,
+        event('workflow_failed', null, { terminal_record: record }),
+      ]);
+      expect(run.terminal_record?.nodes).toEqual(record.nodes);
+      expect(run.nodes).toEqual(record.nodes);
+      expect(run.nodes).toContainEqual({
+        node_id: 'prepare',
+        state: 'failed',
+        error: 'prepare failed',
+      });
+    });
+
+    test('a run recorded before terminal records still lists its nodes', async () => {
+      const run = await getNodes(MOCK_FAILED_RUN, [
+        event('node_started', 'build'),
+        event('node_completed', 'build'),
+      ]);
+      expect(run.terminal_record).toBeNull();
+      expect(run.nodes).toEqual([{ node_id: 'build', state: 'completed' }]);
+    });
+  });
+
+  test("serves each cost row with the engine's cost scope", async () => {
+    const expected = {
+      node: 'own',
+      aggregate: 'total',
+      instance: 'total',
+      amendment: 'total',
+    } satisfies Record<NodeExecutionMetadata['accounting'], NodeCostScope>;
+    const rows: { data: Record<string, unknown>; scope: NodeCostScope | undefined }[] = [
+      ...nodeExecutionMetadataSchema.shape.accounting.options.map(accounting => ({
+        data: serializeNodeStateRecord(
+          finishNodeExecution(
+            startNodeExecution({
+              runId: MOCK_FAILED_RUN.id,
+              path: accounting,
+              node: { id: accounting, kind: 'agent', source: { kind: 'inline', prompt: 'work' } },
+              invocation: newNodeInvocation(),
+              provider: 'claude',
+              accounting,
+            }),
+            { status: 'completed' },
+            { costUsd: 0.01 }
+          )
+        ).data,
+        scope: expected[accounting],
+      })),
+      // Rows written before `accounting` existed.
+      { data: { cost_usd: 0.01, aggregate: true }, scope: 'total' },
+      { data: { cost_usd: 0.01 }, scope: 'own' },
+      // No cost, so no scope.
+      { data: {}, scope: undefined },
+    ];
+    mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_FAILED_RUN);
+    mockListWorkflowEvents.mockImplementationOnce(async () =>
+      rows.map(({ data }, index) => ({
+        id: `event-${index}`,
+        workflow_run_id: MOCK_FAILED_RUN.id,
+        event_type: 'cost_usd' in data ? 'node_completed' : 'node_started',
+        step_index: null,
+        step_name: `node-${index}`,
+        data,
+        created_at: NOW_DATE.toISOString(),
+      }))
+    );
+    const { app } = makeApp();
+    const response = await app.request(`/api/workflows/runs/${MOCK_FAILED_RUN.id}`);
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { events: { cost_scope?: NodeCostScope }[] };
+    expect(body.events.map(event => event.cost_scope)).toEqual(rows.map(row => row.scope));
+    expect(body.events.at(-1)).not.toHaveProperty('cost_scope');
+  });
+
   test('does not disguise an event query failure as an absent terminal record', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => MOCK_FAILED_RUN);
     mockListWorkflowEvents.mockRejectedValueOnce(new Error('storage unavailable'));
@@ -1936,7 +2066,6 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     mockGetWorkflowRun.mockReset();
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
-    mockResumeWorkflow.mockClear();
     mockResolveRunWorkflow.mockClear();
     mockHydrateResumableRun.mockClear();
     mockExecuteWorkflow.mockClear();
@@ -1966,7 +2095,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     // A CLI-launched run has no parent conversation to dispatch a chat
     // message through — it now resumes directly, in-process, instead of
     // being stranded until someone runs the CLI.
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: null,
       working_path: '/tmp/worktrees/run-uuid-4',
@@ -1990,7 +2119,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   test('returns 400 with CLI hint when the run has no parent conversation and cannot be resolved headlessly', async () => {
     // Safe degrade: the workflow source is unresolvable (e.g. deleted) —
     // falls back to the existing CLI-hint response instead of a silent 500.
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: null,
       working_path: '/tmp/worktrees/run-uuid-4',
@@ -2007,6 +2136,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('archon workflow resume run-uuid-4');
     expect(mockHandleMessage).not.toHaveBeenCalled();
+    expect(mockResolveRunWorkflow).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
@@ -3221,7 +3351,6 @@ describe('approve/reject auto-resume', () => {
     mockGetConversationById.mockReset();
     mockHandleMessage.mockReset();
     mockCancelWorkflowRun.mockReset();
-    mockResumeWorkflow.mockClear();
     mockResolveRunWorkflow.mockClear();
     mockHydrateResumableRun.mockClear();
     mockExecuteWorkflow.mockClear();

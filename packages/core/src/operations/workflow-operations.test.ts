@@ -300,6 +300,9 @@ describe('approveWorkflow', () => {
       await expect(approveWorkflow('run-1')).rejects.toThrow('already resolved');
       expect(observed).toHaveLength(0);
       mockGetWorkflowRun.mockResolvedValueOnce(run);
+      // A completion carrying execution metadata must not take the metadata-less
+      // path, so clear the file-wide logger and prove the warning stays off it.
+      mockLogger.warn.mockClear();
       await approveWorkflow('run-1');
       const row = mockResolveApprovalGate.mock.calls.at(-1)?.[2][0];
       expect(row).toMatchObject({
@@ -319,6 +322,10 @@ describe('approveWorkflow', () => {
           path: 'outer.review',
         },
       });
+      expect(mockLogger.warn).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'workflow.gate_transcript_metadata_missing'
+      );
     } finally {
       unsubscribe();
     }
@@ -1188,14 +1195,23 @@ describe('gate decisions in the run transcript', () => {
     await removeTempTree(home);
   });
 
-  async function decisionRows(): Promise<Record<string, unknown>[]> {
+  async function transcriptRows(): Promise<Record<string, unknown>[]> {
     const path = join(root, 'logs', 'run-1.jsonl');
     if (!existsSync(path)) return [];
     return (await readFile(path, 'utf-8'))
       .trim()
       .split('\n')
-      .map(line => JSON.parse(line) as Record<string, unknown>)
-      .filter(row => row.type === 'gate_decision');
+      .map((line): Record<string, unknown> => {
+        const row: unknown = JSON.parse(line);
+        if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+          throw new Error(`transcript line is not a JSON object: ${line}`);
+        }
+        return Object.fromEntries(Object.entries(row));
+      });
+  }
+
+  async function decisionRows(): Promise<Record<string, unknown>[]> {
+    return (await transcriptRows()).filter(row => row.type === 'gate_decision');
   }
 
   test('an approval writes one decision row with the comment the DB event stores', async () => {
@@ -1291,6 +1307,25 @@ describe('gate decisions in the run transcript', () => {
         eventTypes: ['node_completed', 'approval_received'],
       },
       'workflow.gate_transcript_root_missing'
+    );
+  });
+
+  test('a gate paused before execution metadata existed skips its completion row and says so', async () => {
+    // The gate decision still reaches the transcript, so a missing completion row with
+    // no log would leave an operator no way to know the approval was never completed.
+    mockLogger.warn.mockClear();
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ output_root: root }));
+
+    await approveWorkflow('run-1', 'Looks good');
+
+    // Unfiltered: the decision row is the only thing this resolution may write, so
+    // "the completion row was skipped" is a claim about the whole transcript.
+    const rows = await transcriptRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ type: 'gate_decision', step: 'review' });
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      { runId: 'run-1', step: 'review' },
+      'workflow.gate_transcript_metadata_missing'
     );
   });
 

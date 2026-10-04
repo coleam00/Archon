@@ -26,6 +26,14 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import * as childProcess from 'node:child_process';
+import * as fs from 'node:fs';
+import { PassThrough } from 'node:stream';
+import {
+  DETACHED_RESUME_RECEIPT,
+  DETACHED_RESUME_RECEIPT_ENV,
+  DETACHED_RESUME_RECEIPT_FD,
+} from '../utils/detached-resume-receipt';
 import { homedir, hostname, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { getArchonHome, isDocker, RUN_ARTIFACTS_ENGINE_SUBDIR } from '@archon/paths';
@@ -2064,11 +2072,22 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
       return null;
     });
 
-    await expect(
-      workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true })
-    ).rejects.toThrow(
-      /no completed nodes and no interactive-loop state[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
-    );
+    const write = spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+    const close = spyOn(fs, 'closeSync').mockImplementation(() => {});
+    process.env[DETACHED_RESUME_RECEIPT_ENV] = '1';
+    try {
+      await expect(
+        workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true })
+      ).rejects.toThrow(
+        /no completed nodes and no interactive-loop state[\s\S]*archon workflow run archon-ship --branch fix\/issue-3124 --supersedes run-dead/
+      );
+
+      expect(write).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(process.env, DETACHED_RESUME_RECEIPT_ENV);
+      write.mockRestore();
+      close.mockRestore();
+    }
 
     // The refusal is still a refusal: no run is started.
     expect(executeWorkflow).not.toHaveBeenCalled();
@@ -2104,6 +2123,49 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     );
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
+
+  for (const brokenPipe of [false, true]) {
+    it(`notifies accepted resume before settlement (broken pipe: ${String(brokenPipe)})`, async () => {
+      const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
+      await stubFailedPriorRun();
+      (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        preCreatedRun: { id: 'run-dead', workflow_name: 'archon-ship' },
+        priorCompletedNodes: new Map([['triage', 'done']]),
+      });
+      let settleExecution!: (result: { success: boolean; workflowRunId: string }) => void;
+      const execution = new Promise<{ success: boolean; workflowRunId: string }>(resolve => {
+        settleExecution = resolve;
+      });
+      (executeWorkflow as ReturnType<typeof mock>).mockReturnValueOnce(execution);
+      const write = spyOn(fs, 'writeFileSync').mockImplementation(() => {
+        if (brokenPipe) throw Object.assign(new Error('closed launcher'), { code: 'EPIPE' });
+      });
+      const close = spyOn(fs, 'closeSync').mockImplementation(() => {});
+      process.env[DETACHED_RESUME_RECEIPT_ENV] = '1';
+      try {
+        let finished = false;
+        const command = workflowRunCommand('/repo/root', 'archon-ship', 'go', { resume: true });
+        void command.then(() => {
+          finished = true;
+        });
+        for (let attempt = 0; attempt < 100 && write.mock.calls.length === 0; attempt++) {
+          await Promise.resolve();
+        }
+        expect(write).toHaveBeenCalledWith(DETACHED_RESUME_RECEIPT_FD, DETACHED_RESUME_RECEIPT);
+        expect(finished).toBe(false);
+        expect(process.env[DETACHED_RESUME_RECEIPT_ENV]).toBeUndefined();
+        settleExecution({ success: true, workflowRunId: 'run-dead' });
+        await command;
+        expect(finished).toBe(true);
+        expect(write).toHaveBeenCalledTimes(1);
+      } finally {
+        settleExecution({ success: true, workflowRunId: 'run-dead' });
+        Reflect.deleteProperty(process.env, DETACHED_RESUME_RECEIPT_ENV);
+        write.mockRestore();
+        close.mockRestore();
+      }
+    });
+  }
 
   it('still resumes when the prior run has completed nodes', async () => {
     const { executeWorkflow, hydrateResumableRun } = await import('@archon/workflows/executor');
@@ -9411,26 +9473,68 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     await silenceLogFile();
 
     const execBefore = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
-    const child = createDetachedChildFixture();
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+    const child = new childProcess.ChildProcess();
+    const receipt = new PassThrough();
+    Object.defineProperty(child, 'stdio', { value: [null, null, null, receipt] });
+    Object.defineProperty(child, 'pid', { value: 12345 });
+    const spawnSpy = spyOn(childProcess, 'spawn').mockReturnValue(child);
     const savedArgv = process.argv;
     process.argv = ['bun', '/abs/cli.ts', 'workflow', 'resume', 'run-123', '--detach'];
 
     let spawnCmd: string[] = [];
     try {
-      // Signature: (runId, json, cwd, detach) — detach is the 4th arg.
       const commandPromise = workflowResumeCommand('run-123', undefined, undefined, true);
-      await finishStartupWindow(commandPromise, spawnSpy);
-      spawnCmd = firstDetachedSpawnOptions(spawnSpy).cmd.slice();
+      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+        await Promise.resolve();
+      }
+      expect(spawnSpy).toHaveBeenCalledTimes(1);
+      jest.advanceTimersByTime(501);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(consoleSpy).not.toHaveBeenCalledWith(
+        "Started 'resume' for run run-123 in the background."
+      );
+      receipt.write(DETACHED_RESUME_RECEIPT);
+      await commandPromise;
+      spawnCmd = [...(spawnSpy.mock.calls[0][1] ?? [])];
     } finally {
       process.argv = savedArgv;
       spawnSpy.mockRestore();
+      receipt.destroy();
     }
 
     expect(spawnCmd).not.toContain('--detach');
     expect(spawnCmd).toContain('resume');
     expect(spawnCmd).toContain('run-123');
     expect((executeWorkflow as ReturnType<typeof mock>).mock.calls.length).toBe(execBefore);
+  });
+
+  it('resume --detach fails fast with the executable when the child fails to spawn', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      ...pausedRun,
+      status: 'failed',
+    });
+    await silenceLogFile();
+
+    // Bun's failed spawn: no pid and no receipt pipe; the ENOENT arrives later as an event.
+    const child = new childProcess.ChildProcess();
+    Object.defineProperty(child, 'stdio', { value: [null, null, null, null] });
+    const spawnSpy = spyOn(childProcess, 'spawn').mockReturnValue(child);
+    const savedArgv = process.argv;
+    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'resume', 'run-123', '--detach'];
+
+    try {
+      await expect(workflowResumeCommand('run-123', undefined, undefined, true)).rejects.toThrow(
+        /Failed to start detached workflow child \(executable: /
+      );
+    } finally {
+      process.argv = savedArgv;
+      spawnSpy.mockRestore();
+    }
+    expect(consoleSpy).not.toHaveBeenCalledWith(
+      "Started 'resume' for run run-123 in the background."
+    );
   });
 });
 

@@ -3,7 +3,8 @@
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
 
-import { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
+import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
@@ -110,6 +111,7 @@ import {
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { MessageRow } from '@archon/core/schemas/message';
 import type { DashboardWorkflowRun } from '@archon/core/schemas/workflow-run';
+import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { findCommandFiles } from '@archon/core/utils/commands';
 import { resumeWorkflowRunFromServer } from '../services/workflow-resume-service';
 
@@ -1000,12 +1002,6 @@ const resumeWorkflowRunRoute = createRoute({
   },
 });
 
-const signalWorkflowWaitBodySchema = z.object({
-  event: z.string().min(1),
-  resumeAt: z.string().datetime(),
-  payload: z.unknown().optional(),
-});
-
 const signalWorkflowWaitRoute = createRoute({
   method: 'post',
   path: '/api/workflows/runs/{runId}/signal',
@@ -1017,7 +1013,7 @@ const signalWorkflowWaitRoute = createRoute({
       required: true,
       content: {
         'application/json': {
-          schema: signalWorkflowWaitBodySchema,
+          schema: signalWorkflowWaitRequestSchema,
         },
       },
     },
@@ -3800,7 +3796,7 @@ export function registerApiRoutes(
 
   registerOpenApiRoute(signalWorkflowWaitRoute, async c => {
     const runId = c.req.param('runId') ?? '';
-    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitBodySchema);
+    const { event, resumeAt, payload } = getValidatedBody(c, signalWorkflowWaitRequestSchema);
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
@@ -4319,15 +4315,23 @@ export function registerApiRoutes(
         parentPlatformId = parentConv?.platform_conversation_id;
       }
 
+      const terminalRecord = getTerminalRecord(run.status, events);
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,
-          terminal_record: getTerminalRecord(run.status, events),
+          terminal_record: terminalRecord,
+          // The console reads node state from here and keeps no fold of its own.
+          nodes: terminalRecord?.nodes ?? buildRunNodeStates(run, events),
         },
-        events,
+        // The console renders each cost's scope from here and keeps no copy of the rule.
+        events: events.map(event =>
+          typeof event.data.cost_usd === 'number'
+            ? { ...event, cost_scope: nodeCostScope(event.data) }
+            : event
+        ),
       });
     } catch (error) {
       getLog().error({ err: error }, 'get_workflow_run_failed');

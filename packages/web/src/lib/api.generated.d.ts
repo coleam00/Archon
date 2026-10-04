@@ -4739,6 +4739,45 @@ export interface components {
             }[];
           };
         } | null;
+        /** @description The engine's node states: the terminal record's when present, otherwise the engine fold over the events recorded so far. */
+        nodes: {
+          node_id: string;
+          /** @enum {string} */
+          state: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+          error?: string;
+          /** @enum {string} */
+          reason?:
+            | 'prior_success'
+            | 'when_condition'
+            | 'when_condition_parse_error'
+            | 'trigger_rule'
+            | 'timeout';
+          cause?:
+            | {
+                /** @enum {string} */
+                kind: 'condition';
+                expr: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'condition_parse_error';
+                expr: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'timeout';
+              }
+            | {
+                /** @enum {string} */
+                kind: 'upstream_failed';
+                origin: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'upstream_skipped';
+                origin: string;
+              };
+        }[];
       };
       events: components['schemas']['WorkflowEvent'][];
     };
@@ -4754,6 +4793,11 @@ export interface components {
       /** Format: date-time */
       created_at: string;
       event_order?: number | null;
+      /**
+       * @description What `data.cost_usd` measures, by the engine's rule: `own` is the node's own spend; `total` restates spend other rows of the run carry. Present only on rows with a `cost_usd`.
+       * @enum {string}
+       */
+      cost_scope?: 'own' | 'total';
     };
     ProviderEventsResponse: {
       events: components['schemas']['ProviderEventRecord'][];

@@ -140,6 +140,9 @@
       "src/community/pi/provider.test.ts"
     ],
     [
+      "src/community/pi/provider.integration.test.ts"
+    ],
+    [
       "src/community/pi/provider-lazy-load.test.ts"
     ],
     [

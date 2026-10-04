@@ -1,17 +1,20 @@
 import type { ReactElement } from 'react';
+import type { NodeRun } from '../primitives/event';
 import { formatElapsed, formatRelativeToBaseline, formatClock } from '../lib/format';
 import { useStreamContext } from '../lib/stream-context';
+import type { CostScope } from '../primitives/event';
 
 interface NodeDividerProps {
   /** `step_name` — the scroll-anchor target for the graph panel. */
   nodeId: string;
   nodeName: string;
-  /** Folded lifecycle status; `running` = the node is still in-flight. */
-  status: 'running' | 'completed' | 'failed' | 'skipped';
+  /** The engine's state for the node. */
+  status: NodeRun['status'];
   durationMs: number | null;
   timestamp: string;
   /** From `node_completed` — surfaced inline so per-node spend is visible. */
   costUsd?: number | null;
+  costScope?: CostScope | null;
   numTurns?: number | null;
   /** From `node_completed` — surfaced under the System detail toggle. */
   stopReason?: string | null;
@@ -24,6 +27,7 @@ interface NodeDividerProps {
 }
 
 const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
+  pending: 'pending',
   running: 'running',
   completed: 'completed',
   failed: 'failed',
@@ -31,6 +35,7 @@ const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
 };
 
 const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
+  pending: 'text-text-tertiary',
   running: 'text-text-tertiary',
   completed: 'text-success',
   failed: 'text-error',
@@ -38,8 +43,7 @@ const STATUS_COLOR: Record<NodeDividerProps['status'], string> = {
 };
 
 /**
- * Thin divider heading one DAG node — exactly one per node, folded from its
- * transitions (started + terminal, plus any resume-time skip).
+ * Thin divider heading one DAG node — exactly one per node.
  *   left gutter:  relative timestamp (mono)
  *   left label:   node name in mono
  *   right label:  status + duration (when terminal)
@@ -53,6 +57,7 @@ export function NodeDivider({
   durationMs,
   timestamp,
   costUsd,
+  costScope,
   numTurns,
   stopReason,
   skipReason,
@@ -67,10 +72,12 @@ export function NodeDivider({
       ? ` · ${formatElapsed(Math.floor(durationMs / 1000))}`
       : '';
   // Per-node spend, surfaced inline next to the status. Sub-cent costs keep
-  // more precision so cheap nodes don't all read "$0.00".
+  // more precision so cheap nodes don't all read "$0.00". A scope total restates
+  // spend other nodes already show, so it is labelled rather than read as this
+  // node's own.
   const cost =
     costUsd !== null && costUsd !== undefined && costUsd > 0
-      ? ` · $${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
+      ? ` · ${costScope === 'total' ? 'total ' : ''}$${costUsd >= 0.01 ? costUsd.toFixed(2) : costUsd.toFixed(4)}`
       : '';
   const turns =
     numTurns !== null && numTurns !== undefined && numTurns > 0 ? ` · ${numTurns}t` : '';

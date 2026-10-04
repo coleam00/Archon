@@ -2,12 +2,13 @@ import { finishNodeExecution, startNodeExecution, newNodeInvocation } from './no
 import { readNodeRecordEvent } from './node-record-reader';
 import { describe, expect, it } from 'bun:test';
 import {
+  nodeCostScope,
   serializeNodeEmitter,
   serializeNodeOutput,
   serializeNodeStateRecord,
   serializeNodeTranscript,
 } from './node-record-serialization';
-import type { NodeExecutionRecord } from './schemas/node-execution';
+import { nodeExecutionMetadataSchema, type NodeExecutionRecord } from './schemas/node-execution';
 
 const record = (): NodeExecutionRecord => ({
   runId: 'run-1',
@@ -62,6 +63,15 @@ const record = (): NodeExecutionRecord => ({
 });
 
 describe('node record serializers', () => {
+  it('reads the cost scope the durable row marks, with or without its accounting', () => {
+    for (const accounting of nodeExecutionMetadataSchema.shape.accounting.options) {
+      const { data } = serializeNodeStateRecord({ ...record(), accounting });
+      const scope = nodeCostScope(data);
+      expect(scope === 'total').toBe(data.aggregate === true);
+      expect(nodeCostScope({ ...data, accounting: undefined })).toBe(scope);
+    }
+  });
+
   it('invalid provider numbers cannot erase a completed output on JSON round trip', () => {
     const completed = finishNodeExecution(
       record(),

@@ -6,6 +6,7 @@ import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
+import type { NodeState } from '@archon/workflows/schemas/node-state';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import {
@@ -204,6 +205,13 @@ import {
 } from '../utils/detached-run-control';
 import { resolveCliUserId } from './auth';
 import { RESUME_RUN_CONFIG_CONFLICT } from '../dispatch-guards';
+
+import {
+  DETACHED_RESUME_RECEIPT_ENV,
+  DETACHED_RESUME_RECEIPT_FD,
+  consumeDetachedResumeReceiptRequest,
+  waitForDetachedResumeReceipt,
+} from '../utils/detached-resume-receipt';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -585,7 +593,8 @@ async function spawnDetachedWorkflowRun(
   cwd: string,
   conversationId: string,
   extraArgs: string[],
-  runConfigPayload?: string
+  runConfigPayload?: string,
+  confirmResume = false
 ): Promise<string | null> {
   const cmd = buildDetachedRunCmd(
     BUNDLED_IS_BINARY,
@@ -634,6 +643,7 @@ async function spawnDetachedWorkflowRun(
       env: {
         ...process.env,
         [DETACHED_RUN_OWNER_ENV]: '1',
+        [DETACHED_RESUME_RECEIPT_ENV]: confirmResume ? '1' : '',
         ...(runConfigPayload
           ? {
               // Empty strings preserve meaningful absence: Bun will not fill
@@ -642,7 +652,12 @@ async function spawnDetachedWorkflowRun(
             }
           : {}),
       },
-      stdio: ['ignore', logFd ?? 'ignore', logFd ?? 'ignore'],
+      stdio: [
+        'ignore',
+        logFd ?? 'ignore',
+        logFd ?? 'ignore',
+        ...(confirmResume ? ['pipe' as const] : []),
+      ],
       detached: true,
       windowsHide: true,
     });
@@ -660,7 +675,27 @@ async function spawnDetachedWorkflowRun(
     if (child.pid === undefined) {
       throw new Error(`Failed to start detached workflow child (executable: ${cmd[0]})`);
     }
-    await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
+    if (confirmResume) {
+      const pipe = child.stdio[DETACHED_RESUME_RECEIPT_FD];
+      if (!pipe || !('readable' in pipe)) {
+        child.unref();
+        throw new Error('Detached resume acceptance pipe was not created.');
+      }
+      try {
+        await waitForDetachedResumeReceipt(child, pipe, (code, signal) =>
+          detachedStartupExitError(code, signal, null)
+        );
+      } catch (error) {
+        const tail = logPath ? readDetachedLogTail(logPath) : null;
+        throw new Error(
+          `Detached resume acceptance was not confirmed. ${error instanceof Error ? error.message : String(error)}` +
+            (logPath ? `\nChild output (${logPath}):\n${tail ?? '(no output recorded)'}` : ''),
+          { cause: error }
+        );
+      }
+    } else {
+      await waitForDetachedStartup(child, logPath, cmd[0], conversationId);
+    }
   } finally {
     // The child inherits its own dup of the log fd; close the parent's copy so a
     // synchronous spawn failure (bad execPath, invalid cwd) doesn't leak it.
@@ -1626,7 +1661,8 @@ async function runWorkflowWithOwnedSource(
   workflowName: string,
   userMessage: string,
   options: WorkflowRunOptions = {},
-  detachedProcessOwner: boolean
+  detachedProcessOwner: boolean,
+  notifyResumeAccepted?: (runId: string) => void
 ): Promise<PendingWaitContinuation | undefined> {
   const effectiveDiscoveryCwd = options.discoveryCwd ?? cwd;
   const modelOverrides = options.modelAssignments
@@ -3268,6 +3304,7 @@ async function runWorkflowWithOwnedSource(
             `  ${relaunch}`
         );
       }
+      notifyResumeAccepted?.(admission.runId);
       result = await admission.settled;
     } else {
       const opts = {
@@ -3653,6 +3690,10 @@ export async function workflowRunCommand(
   const detachedProcessOwner = process.env[DETACHED_RUN_OWNER_ENV] === '1';
   if (detachedProcessOwner) Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
 
+  const notifyResumeAccepted = consumeDetachedResumeReceiptRequest((runId, error) => {
+    getLog().warn({ err: error, runId }, 'cli.detached_resume_receipt_failed');
+  });
+
   let attempt: WaitResumeAttempt = { cwd, workflowName, userMessage, options };
   for (;;) {
     let pending: PendingWaitContinuation | undefined;
@@ -3667,7 +3708,8 @@ export async function workflowRunCommand(
           attempt.workflowName,
           attempt.userMessage,
           attempt.options,
-          detachedProcessOwner
+          detachedProcessOwner,
+          notifyResumeAccepted
         )
       );
     } catch (error) {
@@ -3753,7 +3795,7 @@ function formatDuration(ms: number): string {
 
 export interface NodeSummary {
   nodeId: string;
-  state: 'running' | 'completed' | 'failed' | 'skipped';
+  state: NodeState;
   startedAt?: string;
   durationMs?: number;
   outputPreview?: string;
@@ -3804,7 +3846,9 @@ export const NODE_SUMMARY_EVENT_TYPES = [
  * Derive per-node summaries from a run's workflow events.
  * Processes node_started / node_completed / node_failed / node_skipped /
  * node_skipped_prior_success events — the last two mean opposite things and are
- * handled separately — and loop iterations' session ids.
+ * handled separately — loop iterations' session ids, and the resume resets
+ * (node_always_run_reset, node_prior_cache_invalidated) that send a node back
+ * to pending, as the run's terminal record does.
  */
 export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
   const startTimes = new Map<string, number>();
@@ -3841,6 +3885,12 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
           startedAt: event.created_at,
           ...(execution === undefined ? {} : { execution }),
         });
+        break;
+      }
+      case 'node_always_run_reset':
+      case 'node_prior_cache_invalidated': {
+        startTimes.delete(nodeId);
+        summaries.set(nodeId, { nodeId, state: 'pending' });
         break;
       }
       case 'node_suspended': {
@@ -3900,8 +3950,10 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
         // these into `skipped` reported completed work as never run, and the last
         // write erased the original duration and output (#2973). The earlier
         // node_completed summary is the truth about the run, so never overwrite it.
-        if (summaries.has(nodeId)) break;
-        // No summary means the original node_completed is not in this log. The
+        // A reset left nothing to keep: the prior attempt's details went with it.
+        const existing = summaries.get(nodeId);
+        if (existing !== undefined && existing.state !== 'pending') break;
+        // The original node_completed is not in this log or was reset. The
         // replay still carries the prior output, so report the success it
         // describes; there is no start time to derive a duration from.
         summaries.set(nodeId, {
@@ -3933,14 +3985,6 @@ function listRunEvents(runId: string, rawEvents: boolean): Promise<WorkflowEvent
       });
 }
 
-/** A node in the run's declared graph that no lifecycle event has reached yet. */
-export interface PendingNodeSummary {
-  nodeId: string;
-  state: 'pending';
-}
-
-export type RunNodeSummary = NodeSummary | PendingNodeSummary;
-
 /**
  * Per-node state for `workflow runs --json --verbose`: every node the run declared in
  * its `terminal_graph`, in declared order and `pending` until an event reaches it,
@@ -3952,8 +3996,8 @@ export type RunNodeSummary = NodeSummary | PendingNodeSummary;
 export function buildRunNodes(
   run: Pick<WorkflowRun, 'metadata'>,
   events: WorkflowEventRow[]
-): RunNodeSummary[] {
-  const nodes = new Map<string, RunNodeSummary>();
+): NodeSummary[] {
+  const nodes = new Map<string, NodeSummary>();
   const graph = runGraphSchema.safeParse(run.metadata[RUN_GRAPH_METADATA_KEY]);
   if (graph.success)
     for (const nodeId of graph.data.node_ids) nodes.set(nodeId, { nodeId, state: 'pending' });
@@ -3968,7 +4012,7 @@ export function buildRunNodes(
  */
 async function withRunDetail<
   Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
->(runs: Run[]): Promise<(Run & { nodes: RunNodeSummary[]; attention: RunAttention | null })[]> {
+>(runs: Run[]): Promise<(Run & { nodes: NodeSummary[]; attention: RunAttention | null })[]> {
   const eventsByRun = await workflowEventsDb.listEventsForRuns(
     runs.map(run => run.id),
     NODE_SUMMARY_EVENT_TYPES
@@ -4009,15 +4053,17 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
   if (nodes.length === 0) return;
   console.log('  Nodes:');
   for (const node of nodes) {
-    const iconMap: Record<string, string> = {
+    const iconMap: Record<NodeSummary['state'], string> = {
       completed: '✓',
       failed: '✗',
       skipped: '-',
       running: '◌',
+      pending: '○',
     };
-    const icon = iconMap[node.state] ?? '◌';
+    const icon = iconMap[node.state];
     const duration = node.durationMs !== undefined ? ` (${formatDuration(node.durationMs)})` : '';
-    const stateLabel = node.state === 'running' ? ' (running)' : '';
+    const stateLabel =
+      node.state === 'running' || node.state === 'pending' ? ` (${node.state})` : '';
     const skipCause = node.cause ? ` (${formatSkipCause(node.cause)})` : '';
     console.log(`    ${icon} ${node.nodeId}${duration}${stateLabel}${skipCause}`);
     if (node.outputPreview !== undefined) {
@@ -5325,10 +5371,9 @@ async function resolveRunIdArg(
  * working_path: the child re-resolves everything by run-id, and a container run's
  * working_path is a distro path the host cannot spawn into (ENOENT → the detach would
  * silently no-op). Reuses upstream's spawnDetachedWorkflowRun, which rebuilds the child
- * command from process.argv AND awaits the startup window (#2279) — so a child that
- * dies immediately throws here rather than being acked as started. That await is load
- * bearing: dropping it turns every startup failure into an unhandled rejection arriving
- * after the parent has already printed `{ ok: true }`.
+ * command from process.argv. Resume success requires engine admission; the other verbs
+ * retain the startup window (#2279). Awaiting that boundary keeps a launch failure from
+ * arriving after the parent has already printed `{ ok: true }`.
  */
 async function runDetachedControlCommand(
   runId: string,
@@ -5345,7 +5390,13 @@ async function runDetachedControlCommand(
     // repo) after the parent has already acked success. The run's working_path
     // is still never a candidate: a container run's working_path is a distro
     // path the host cannot spawn into, so the child re-resolves by run id.
-    const logPath = await spawnDetachedWorkflowRun(cwd ?? process.cwd(), runId, []);
+    const logPath = await spawnDetachedWorkflowRun(
+      cwd ?? process.cwd(),
+      runId,
+      [],
+      undefined,
+      action === 'resume'
+    );
     if (json) {
       // Through writeJsonLine, like every other --json ack: it writes with a
       // completion callback so a piped consumer can't receive a truncated

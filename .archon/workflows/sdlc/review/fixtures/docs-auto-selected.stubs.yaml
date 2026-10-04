@@ -1,14 +1,14 @@
 # Dry-run fixture: archon-review called directly, not through delivery. `docs` is left
 # at its `auto` default, so the docs lens is gated on the scope node's own selection —
 # the branch archon-deliver never reaches, because it always binds a resolved boolean.
-mode: '{"continuation":false}'
+mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
 scope:
   docs: true
   # A standalone review of the working diff: no pull request to publish to.
   pr: null
 code: "0 findings"
 seams: "0 findings"
-simplify: "0 findings"
+simplify__simplify: { findings: false }
 tests: "0 findings"
 docs: "0 findings"
 review-complete: "settled"
@@ -24,4 +24,4 @@ publish:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fixture:
   expect: completed
-  reached: [code, seams, simplify, tests, docs]
+  reached: [code, seams, simplify__simplify, tests, docs]

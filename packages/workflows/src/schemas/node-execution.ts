@@ -196,6 +196,10 @@ export const nodeExecutionMetadataSchema = z.object({
 });
 export type NodeExecutionMetadata = z.infer<typeof nodeExecutionMetadataSchema>;
 
+/** What a node row's `cost_usd` measures: the node's own spend, or a total restating spend other rows carry. */
+export const nodeCostScopeSchema = z.enum(['own', 'total']);
+export type NodeCostScope = z.infer<typeof nodeCostScopeSchema>;
+
 export const nodeExecutionRecordSchema = nodeExecutionMetadataSchema.extend({
   output: executionOutputSchema.optional(),
   diagnostics: executionDiagnosticsSchema.optional(),

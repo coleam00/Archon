@@ -5,6 +5,8 @@ import {
   runGraphSchema,
   terminalRecordSchema,
   terminalStatusSchema,
+  type RunGraph,
+  type RunNodeState,
   type TerminalRecord,
 } from './schemas/terminal-record';
 import { nodeSkipReasonSchema, skipCauseSchema, type WorkflowRun } from './schemas/workflow-run';
@@ -21,19 +23,22 @@ function eventData(value: unknown): Record<string, unknown> {
   return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
 }
 
-/** Fold ordered durable events; never reconstruct producer values from artifact contents. */
-export async function buildTerminalRecord(input: {
-  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'metadata' | 'output_root'>;
-  events: readonly TerminalRecordEvent[];
-}): Promise<TerminalRecord> {
-  const { run, events } = input;
-  const graph = runGraphSchema.safeParse(run.metadata?.[RUN_GRAPH_METADATA_KEY]);
-  const nodes = new Map<string, TerminalRecord['nodes'][number]>();
+function foldNodeEvents(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): {
+  graph: RunGraph | undefined;
+  nodes: Map<string, RunNodeState>;
+  outputs: Map<string, Record<string, unknown>>;
+  failureOrder: Map<string, number>;
+} {
+  const parsed = runGraphSchema.safeParse(run.metadata?.[RUN_GRAPH_METADATA_KEY]);
+  const graph = parsed.success ? parsed.data : undefined;
+  const nodes = new Map<string, RunNodeState>();
   const outputs = new Map<string, Record<string, unknown>>();
   const failureOrder = new Map<string, number>();
-  if (graph.success)
-    for (const nodeId of graph.data.node_ids)
-      nodes.set(nodeId, { node_id: nodeId, state: 'pending' });
+  if (graph)
+    for (const nodeId of graph.node_ids) nodes.set(nodeId, { node_id: nodeId, state: 'pending' });
   for (const [index, event] of events.entries()) {
     const nodeId = event.step_name;
     if (!nodeId) continue;
@@ -92,13 +97,31 @@ export async function buildTerminalRecord(input: {
       }
     }
   }
+  return { graph, nodes, outputs, failureOrder };
+}
+
+/** The engine's per-node state at any point in a run: the same fold the terminal record uses. */
+export function buildRunNodeStates(
+  run: Pick<WorkflowRun, 'id' | 'metadata'>,
+  events: readonly TerminalRecordEvent[]
+): RunNodeState[] {
+  return [...foldNodeEvents(run, events).nodes.values()];
+}
+
+/** Fold ordered durable events; never reconstruct producer values from artifact contents. */
+export async function buildTerminalRecord(input: {
+  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'metadata' | 'output_root'>;
+  events: readonly TerminalRecordEvent[];
+}): Promise<TerminalRecord> {
+  const { run, events } = input;
+  const { graph, nodes, outputs, failureOrder } = foldNodeEvents(run, events);
   let returns: TerminalRecord['returns'];
-  const selected = graph.success ? graph.data.returns : undefined;
+  const selected = graph?.returns;
   if (selected === undefined) {
     returns = {
       availability: 'unavailable',
       node_id: null,
-      reason: graph.success ? 'not_declared' : 'graph_unavailable',
+      reason: graph ? 'not_declared' : 'graph_unavailable',
     };
   } else {
     const data = outputs.get(selected);

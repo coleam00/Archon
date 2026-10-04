@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { trackTempRoots } from '@archon/paths/test-utils';
 
 import { buildCustomProviderModelsPath, getUserModelsPath } from './request-auth';
 
@@ -12,7 +14,13 @@ import { buildCustomProviderModelsPath, getUserModelsPath } from './request-auth
 // We assert the contract — substitution semantics, protected-env handling,
 // missing-file / missing-provider fallthrough — not the SDK's.
 
-const createdDirs: string[] = [];
+// Every test points tmpdir() at a root it owns, so the per-call files
+// buildCustomProviderModelsPath writes (and the fixture dirs below) are
+// removed with that root instead of piling up in the real tmpdir.
+// node:os tmpdir() reads TMPDIR on POSIX and TMP/TEMP on Windows.
+const trackTempRoot = trackTempRoots();
+const TMP_ENV_KEYS = ['TMPDIR', 'TMP', 'TEMP'] as const;
+const originalTmpEnv = TMP_ENV_KEYS.map(key => process.env[key]);
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalAnthropicKey = process.env.ANTHROPIC_API_KEY;
 const originalOpenAiKey = process.env.OPENAI_API_KEY;
@@ -38,7 +46,6 @@ function createUserModelsDir(apiKeyTemplate?: string, headers?: Record<string, s
   if (apiKeyTemplate !== undefined) provider.apiKey = apiKeyTemplate;
   if (headers !== undefined) provider.headers = headers;
   writeFileSync(join(dir, 'models.json'), JSON.stringify({ providers: { mygw: provider } }));
-  createdDirs.push(dir);
   process.env.PI_CODING_AGENT_DIR = dir;
   return dir;
 }
@@ -51,13 +58,13 @@ function readModelsJson(path: string): { providers: Record<string, Record<string
 
 describe('buildCustomProviderModelsPath', () => {
   beforeEach(() => {
+    const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-pi-request-auth-')));
+    for (const key of TMP_ENV_KEYS) process.env[key] = root;
     process.env.PI_CODING_AGENT_DIR = '/nonexistent';
   });
 
   afterEach(() => {
-    for (const dir of createdDirs.splice(0)) {
-      rmSync(dir, { recursive: true, force: true });
-    }
+    TMP_ENV_KEYS.forEach((key, i) => restoreEnv(key, originalTmpEnv[i]));
     restoreEnv('PI_CODING_AGENT_DIR', originalAgentDir);
     restoreEnv('ANTHROPIC_API_KEY', originalAnthropicKey);
     restoreEnv('OPENAI_API_KEY', originalOpenAiKey);
@@ -366,7 +373,6 @@ describe('buildCustomProviderModelsPath', () => {
       join(customDir, 'models.json'),
       JSON.stringify({ providers: { mygw: { apiKey: 'prefix-${MYGW_API_KEY}' } } })
     );
-    createdDirs.push(customDir);
     process.env.PI_CODING_AGENT_DIR = customDir;
 
     const result = buildCustomProviderModelsPath({
@@ -381,7 +387,6 @@ describe('buildCustomProviderModelsPath', () => {
 
   test('tolerates a user models.json with multiple providers (only targets the scoped one)', () => {
     const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-multi-'));
-    createdDirs.push(dir);
     writeFileSync(
       join(dir, 'models.json'),
       JSON.stringify({
@@ -406,7 +411,6 @@ describe('buildCustomProviderModelsPath', () => {
 
   test('returns undefined when user models.json is invalid JSON', () => {
     const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-broken-'));
-    createdDirs.push(dir);
     writeFileSync(join(dir, 'models.json'), '{not-valid-json');
     process.env.PI_CODING_AGENT_DIR = dir;
 
@@ -470,7 +474,6 @@ describe('buildCustomProviderModelsPath', () => {
 
   test('returns undefined when user models.json has no providers key', () => {
     const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-noprov-'));
-    createdDirs.push(dir);
     writeFileSync(join(dir, 'models.json'), JSON.stringify({ unrelated: 'value' }));
     process.env.PI_CODING_AGENT_DIR = dir;
 
@@ -484,7 +487,6 @@ describe('buildCustomProviderModelsPath', () => {
 
   test('returns undefined when scoped provider entry is not an object', () => {
     const dir = mkdtempSync(join(tmpdir(), 'archon-pi-user-models-nonobj-'));
-    createdDirs.push(dir);
     writeFileSync(
       join(dir, 'models.json'),
       JSON.stringify({ providers: { mygw: 'not-an-object' } })

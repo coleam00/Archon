@@ -13,6 +13,7 @@ export const runGraphSchema = z.object({
   node_ids: z.array(z.string()),
   returns: z.string().optional(),
 });
+export type RunGraph = z.infer<typeof runGraphSchema>;
 export const terminalStatusSchema = terminalWorkflowRunStatusSchema;
 
 export const artifactManifestSchema = z.object({
@@ -41,21 +42,22 @@ export const artifactManifestSchema = z.object({
 });
 export type ArtifactManifest = z.infer<typeof artifactManifestSchema>;
 
+export const runNodeStateSchema = z.object({
+  node_id: z.string(),
+  state: nodeStateSchema,
+  error: z.string().optional(),
+  reason: nodeSkipReasonSchema.optional(),
+  cause: skipCauseSchema.optional(),
+});
+export type RunNodeState = z.infer<typeof runNodeStateSchema>;
+
 export const terminalRecordSchema = z.object({
   run_id: z.string(),
   status: terminalStatusSchema,
   outcome: workflowRunOutcomeSchema.nullable(),
   error: z.string().nullable(),
   first_failed_node: z.string().nullable(),
-  nodes: z.array(
-    z.object({
-      node_id: z.string(),
-      state: nodeStateSchema,
-      error: z.string().optional(),
-      reason: nodeSkipReasonSchema.optional(),
-      cause: skipCauseSchema.optional(),
-    })
-  ),
+  nodes: z.array(runNodeStateSchema),
   returns: z.discriminatedUnion('availability', [
     z.object({ availability: z.literal('available'), node_id: z.string(), value: z.unknown() }),
     z.object({

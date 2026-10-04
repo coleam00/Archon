@@ -16,6 +16,7 @@ import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { readFile } from 'node:fs/promises';
 import type { FanOutInstanceSnapshot } from '@archon/workflows/fan-out-identity';
 import { nodeInvocationKey, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
+import { nodeCostScope } from '@archon/workflows/node-record-serialization';
 import type { NodeExecutionMetadata } from '@archon/workflows/schemas/node-execution';
 import {
   orderProviderEventRecords,
@@ -474,7 +475,7 @@ export async function listWorkflowEventsSince(
  * Throws on DB error — caller owns the degradation policy.
  *
  * Both usage axes are summed from `node_completed` and `node_failed` rows, and only
- * from rows that are not marked `data.aggregate`. Failed rows contribute spend but
+ * from rows whose `nodeCostScope` is their own spend. Failed rows contribute spend but
  * never completed outputs, so their nodes remain eligible for resume.
  *
  * This makes a run's total MONEY BURNED, not the cost of the surviving path — the
@@ -500,7 +501,7 @@ export async function listWorkflowEventsSince(
  *
  * - `node_skipped_prior_success` rows replay a node an earlier pass already counted, so
  *   counting them would multiply that node's usage by the number of resume passes.
- * - `aggregate: true` rows are derived from other rows already in this log — a
+ * - `total`-scope rows are derived from other rows already in this log — a
  *   `loop_group`'s roll-up restates the `cost_usd` its own `<groupId>.<nodeId>` body rows
  *   carry, so summing both counts that group twice (#2469).
  *
@@ -836,7 +837,7 @@ export async function getDagResumeSnapshot(workflowRunId: string): Promise<DagRe
       (row.event_type === 'node_completed' || row.event_type === 'node_failed');
     if (isAuthoritativeInstanceUsage) authoritativeInstanceScopes.add(row.step_name);
     // Other aggregate rows merely restate usage already carried by their leaves.
-    if (data.aggregate === true && !isAuthoritativeInstanceUsage) continue;
+    if (nodeCostScope(data) === 'total' && !isAuthoritativeInstanceUsage) continue;
     const contribution: { stepName: string; tokens?: TokenUsage; costUsd?: number } = {
       stepName: row.step_name,
     };

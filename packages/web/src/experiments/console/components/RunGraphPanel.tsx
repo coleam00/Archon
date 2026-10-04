@@ -9,12 +9,13 @@ import {
   type WorkflowNodeKind,
   type WorkflowNodeStatus,
 } from '../primitives/workflow-graph';
-import type { RunEvent } from '../primitives/event';
+import type { RunNodeState } from '../primitives/event';
 
 interface RunGraphPanelProps {
   workflowName: string;
   projectCwd: string;
-  events: RunEvent[];
+  /** The engine's node states (`run.nodes`). */
+  nodes: readonly RunNodeState[];
   /** The node the main stream should scroll to when a graph node is clicked. */
   onNodeSelect?: (nodeId: string) => void;
 }
@@ -184,7 +185,7 @@ function kindGlyph(k: WorkflowNodeKind): string {
 export function RunGraphPanel({
   workflowName,
   projectCwd,
-  events,
+  nodes: nodeStates,
   onNodeSelect,
 }: RunGraphPanelProps): ReactElement {
   const { data: rawNodes, error } = useEntity<WorkflowGraphNode[]>(
@@ -194,9 +195,9 @@ export function RunGraphPanel({
 
   const laid = useMemo(() => {
     if (rawNodes === undefined) return null;
-    const withStatus = deriveNodeStatuses(rawNodes, events);
+    const withStatus = deriveNodeStatuses(rawNodes, nodeStates);
     return layout(withStatus);
-  }, [rawNodes, events]);
+  }, [rawNodes, nodeStates]);
 
   if (error !== undefined) {
     return (

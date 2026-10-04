@@ -747,7 +747,7 @@ curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/signal \
 
 Use a Better Auth session cookie instead of `X-Archon-User` when browser authentication is enabled. The header is only for a trusted reverse proxy or loopback client; an auth-disabled local install can omit it. The event name must match the run's open wait. The signal and its audit event are committed together; duplicate or wrong-run signals do nothing.
 
-The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. `archon serve`'s continuation scan additionally resumes due waits for runs whose owner is gone — one dispatched by the server, or one whose process died mid-wait. A run can always be advanced by hand with `archon workflow resume <run-id>`; the `/signal` endpoint above still requires the server.
+The process that owns the run enforces a `duration_ms`/`until`/`event` deadline itself: a foreground `archon workflow run` and the child started by `--detach` stay alive through the wait and re-execute the run when its deadline arrives, so a CLI-only install needs no server. If the owner has exited, [`archon workflow wake`](/reference/cli/#workflow-wake) resumes due waits without a server; a running `archon serve` performs the same scan automatically. A run can always be advanced by hand with `archon workflow resume <run-id>`. The `/signal` endpoint above requires the server; [`archon workflow signal`](/reference/cli/#workflow-signal) signals the same exact event occurrence from the CLI.
 
 Read `metadata.wait.resumeAt` from the run before sending the signal and pass it back unchanged. It identifies the open wait occurrence, so a delayed retry from an earlier loop iteration cannot satisfy a later wait for the same event.
 
@@ -2482,7 +2482,10 @@ The record preserves execution status, authored outcome, node states and skip ca
 the selected `returns:` value when available, and an artifact manifest. Execution
 status and authored outcome remain independent; the engine does not infer a delivery
 verdict from filenames or output prose. Runs created before this support may have no
-record. Resumed active runs expose `null` until their next terminal transition.
+record. Resumed active runs expose `null` until their next terminal transition. The same
+response's `run.nodes` carries the engine's node states for every run: the record's when it
+exists, otherwise the same fold over the events recorded so far. Active, resumed, and older
+runs therefore show each node's current state.
 
 The manifest contains file metadata, not content previews. Its `limitations` identify
 incomplete observations. Cancellation can record pending or running nodes and files
