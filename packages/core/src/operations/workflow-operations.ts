@@ -315,9 +315,11 @@ async function publishGateExecution(
     if (event.event_type !== 'node_completed') continue;
     const record = readNodeRecordEvent({ workflow_run_id: run.id, ...event })?.metadata;
     if (record === undefined) {
-      // Not a damaged record: readNodeRecordEvent throws when a row carries only part
-      // of the execution metadata, so `undefined` means it carries none — a gate
-      // paused before `approval.execution` existed (see gateCompletionEvent).
+      // A gate paused by a build predating `approval.execution`, not a damaged
+      // record: gateCompletionEvent built this event in this process and writes all
+      // of an execution or none of it. The reader's other `undefined` return — an
+      // envelope with no step name, or an event type it does not track — is not
+      // reachable from a gate resolution, and its partial-metadata case throws.
       getLog().warn(
         { runId: run.id, step: event.step_name },
         'workflow.gate_transcript_metadata_missing'
