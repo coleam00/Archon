@@ -762,6 +762,18 @@ describe('PiProvider', () => {
       provider: 'nonexistent',
       arrange: (): void => undefined,
       abortSignal: undefined,
+      sessions: 1,
+    },
+    {
+      exit: 'a model registry construction failure',
+      provider: 'mygw',
+      arrange: (): void => {
+        mockModelRegistryConstruct.mockImplementationOnce(() => {
+          throw new Error('registry construction failed');
+        });
+      },
+      abortSignal: undefined,
+      sessions: 0,
     },
     {
       exit: 'an extension failure',
@@ -772,12 +784,14 @@ describe('PiProvider', () => {
         });
       },
       abortSignal: undefined,
+      sessions: 1,
     },
     {
       exit: 'cancellation',
       provider: 'mygw',
       arrange: (): void => undefined,
       abortSignal: AbortSignal.abort(),
+      sessions: 0,
     },
   ])('custom provider: per-call models.json is removed after $exit', async c => {
     c.arrange();
@@ -792,7 +806,7 @@ describe('PiProvider', () => {
         })
       );
       expect(failure ?? error).toBeDefined();
-      expect(mockCreateAgentSession).toHaveBeenCalledTimes(c.abortSignal ? 0 : 1);
+      expect(mockCreateAgentSession).toHaveBeenCalledTimes(c.sessions);
       expect(existsSync(perCallModelsPath())).toBe(false);
     });
   });

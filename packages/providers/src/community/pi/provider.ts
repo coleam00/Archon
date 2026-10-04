@@ -467,12 +467,11 @@ export class PiProvider implements IAgentProvider {
           '(or $PI_CODING_AGENT_DIR/auth.json) is valid JSON and readable.'
       );
     }
-    const modelRuntime = requestModelRuntime.runtime;
-    const modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
-
     // Everything below uses the runtime, so this `finally` runs on every exit:
     // completion, a setup or lookup throw, and a consumer that stops reading.
     try {
+      const modelRuntime = requestModelRuntime.runtime;
+      const modelRegistry = new piCodingAgent.ModelRegistry(modelRuntime);
       // 3. [LOOKUP-1] Check the static catalog first (phase 1 of 2).
       //    Extension providers (e.g. kiro) aren't in the catalog — defer to LOOKUP-2 after bindExtensions().
       let model = modelRegistry.find(parsed.provider, parsed.modelId);
