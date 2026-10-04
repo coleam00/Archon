@@ -73,7 +73,7 @@ export {
 export type { DetachedInstallContext, DetachedInstallContextKey } from './detached-install-context';
 
 // Env loader
-export { loadArchonEnv, isVerboseBoot, getPluginsPath } from './env-loader';
+export { loadArchonEnv, isVerboseBoot, getPluginsPath, getArchonEnvNames } from './env-loader';
 
 // Logger
 export { createLogger, setLogLevel, getLogLevel, setLogDestination, rootLogger } from './logger';

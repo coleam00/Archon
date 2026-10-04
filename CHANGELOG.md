@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Workflow nodes whose output only mentions a credit balance or session limit no longer fail as out of credit. Quota failures now come only from the provider's typed failure, and the node error includes the reset time when reported and tells the operator to resume once the limit reopens. (#3619)
 - Parallel nodes that all declare `mutates_checkout: false` now run in parallel instead of one at a time. When one of them changes the checkout, every guarded node running at that moment fails, and the error names the other guarded nodes that ran in the layer, since the change may not be the failing node's alone. A layer that mixes guarded nodes with any node that isn't checkout-guarded still runs one node at a time. (#3606)
 - Two overlapping runs of one workflow in one conversation no longer share a persisted session. Each run's `persist_session` nodes continue from the session saved when that run started, never from one a sibling run saved later, and a node that finishes without a session id no longer erases the saved one. (#2667)
+- A `script:`/`bash:` node that reads a variable from `.archon/.env`, `~/.archon/.env`, or `config.yaml`'s `env:` section no longer warns as if it were a typo, on a fresh listing or a real run. The bundled `sdlc` pack no longer trips this warning for its own `ARCHON_SDLC_FORGE` operator switch. A name no configured source supplies still warns. (#3509, #3514)
 
 ## [0.11.1] - 2026-09-25
 

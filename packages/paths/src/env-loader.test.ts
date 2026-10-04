@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
-import { getPluginsPath, loadArchonEnv } from './env-loader';
+import { getArchonEnvNames, getPluginsPath, loadArchonEnv } from './env-loader';
 
 /**
  * loadArchonEnv covers the read side of the three-path env model (#1302):
@@ -304,5 +304,31 @@ describe('loadArchonEnv', () => {
 
     const anyLoaded = stderrWrites.find(s => s.includes('[archon] loaded'));
     expect(anyLoaded).toBeUndefined();
+  });
+});
+
+describe('getArchonEnvNames', () => {
+  it('names both files declare, without calling loadArchonEnv first', () => {
+    writeFileSync(join(archonHomeDir, '.env'), 'TEST_EL_HOME_ONLY=from-home\n');
+    writeFileSync(join(repoDir, '.archon', '.env'), 'TEST_EL_REPO_ONLY=from-repo\n');
+
+    const names = getArchonEnvNames(repoDir);
+
+    expect([...names].sort()).toEqual(['TEST_EL_HOME_ONLY', 'TEST_EL_REPO_ONLY']);
+    // A read-only lookup: nothing from either file reaches process.env.
+    expect(process.env.TEST_EL_HOME_ONLY).toBeUndefined();
+    expect(process.env.TEST_EL_REPO_ONLY).toBeUndefined();
+  });
+
+  it('excludes an ambient process.env var that neither file declares', () => {
+    process.env.TEST_EL_OTHER = 'inherited-from-shell-or-ci';
+
+    const names = getArchonEnvNames(repoDir);
+
+    expect(names.has('TEST_EL_OTHER')).toBe(false);
+  });
+
+  it('returns an empty set when neither file exists', () => {
+    expect(getArchonEnvNames(repoDir).size).toBe(0);
   });
 });

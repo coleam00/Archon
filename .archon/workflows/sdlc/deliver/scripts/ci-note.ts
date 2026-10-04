@@ -11,10 +11,9 @@ import { parseQualifiedPr } from '../../.shared/forge.ts';
 import { note, report } from '../../.shared/io.ts';
 
 const boundPr = process.env.INPUTS_PR;
-const selected = process.env.ARCHON_SDLC_FORGE;
 
 try {
-  const read = readPrChecks(parseQualifiedPr(boundPr), selected);
+  const read = readPrChecks(parseQualifiedPr(boundPr));
   if (read.units.length === 0) {
     report(
       'No CI evidence is available for this round (no checks reported). Proceed on the review findings alone.'
