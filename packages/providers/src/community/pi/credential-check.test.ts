@@ -269,10 +269,6 @@ describe('Pi native credentials', () => {
   });
   test('a node runs a models.json key command once, and doctor runs it once', async () => {
     const runs = join(root, 'runs');
-    const keyCommand = join(root, 'key-command.sh');
-    writeFileSync(keyCommand, `#!/bin/sh\necho run >> '${runs}'\nprintf '${secret}'\n`, {
-      mode: 0o755,
-    });
     const runCount = (): number =>
       existsSync(runs) ? readFileSync(runs, 'utf8').trim().split('\n').length : 0;
     writeFileSync(
@@ -283,7 +279,7 @@ describe('Pi native credentials', () => {
             // Port 9 is unbound, so the turn's request fails after Pi resolves its key.
             baseUrl: 'http://127.0.0.1:9/v1',
             api: 'openai-completions',
-            apiKey: `!${keyCommand}`,
+            apiKey: `!printf 'run\\n' >> '${runs}'; printf '${secret}'`,
             models: [{ id: 'model', name: 'Local' }],
           },
         },
@@ -305,7 +301,8 @@ describe('Pi native credentials', () => {
       errors: ['Connection error.'],
     });
     expect(runCount()).toBe(2);
-  });
+    // Windows refuses a connection to an unbound port only after its connect retries.
+  }, 15_000);
   test('checks only the selected provider command-backed key', async () => {
     const selected = join(root, 'selected');
     const unrelated = join(root, 'unrelated');

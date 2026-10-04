@@ -36862,6 +36862,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     );
     mockGetAgentProviderDag.mockImplementation(() => ({
       sendQuery: mockSendQueryDag,
+      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => 'claude',
       getCapabilities: mockClaudeCapabilities,
     }));
