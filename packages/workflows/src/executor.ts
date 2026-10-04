@@ -277,13 +277,9 @@ async function clearManagedProviderCredentialFiles(artifactsDir: string): Promis
  * run's artifacts directory. Returns the env bag to merge LAST into
  * `config.envVars` so a connected user's keys win over file/db/bot-github
  * env, plus exact credential values for failure-path redaction. Returns empty
- * bags when per-user provider keys are disabled, no userId is present, or the
- * deps adapter is absent.
- *
- * Contract: NEVER THROWS. Adapter failures are logged and yield empty bags so the
- * workflow continues with whatever env inheritance was already in place. File
- * write failures also drop the resolved env, but retain the credential values:
- * an earlier file may already contain them and still needs failure-path redaction.
+ * bags when per-user provider keys are disabled, no userId is present, the
+ * deps adapter is absent, or no vendor is required. Delivery and file-write
+ * failures stop execution rather than falling back to ambient credentials.
  */
 async function resolveUserProviderEnvForWorkflow(
   deps: WorkflowDeps,
