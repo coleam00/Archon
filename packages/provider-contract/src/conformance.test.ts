@@ -8,6 +8,7 @@ import {
   runProviderConformance,
   type CredentialStatusCase,
   type ProviderFailureCase,
+  type ProviderForkCase,
   type ProviderTurnCase,
 } from './conformance';
 import { credentialStatusSchema } from './credential-status';
@@ -549,5 +550,71 @@ describe('session id conformance', () => {
         turns: [unnamed],
       })
     ).toEqual([]);
+  });
+});
+
+describe('session fork conformance', () => {
+  const forking = { sessionResume: true, sessionFork: true };
+  const forkTurn: ProviderForkCase = {
+    name: 'fork turn',
+    source: 'session-1',
+    run: turn({ type: 'result', sessionId: 'fork-1', resumed: true }, { type: 'settled' }),
+  };
+
+  test('a fork that restores the source into a new session conforms', async () => {
+    expect(
+      await runProviderConformance({
+        capabilities: forking,
+        failureCases: [conforming],
+        turns: [settlingTurn],
+        forkTurn,
+      })
+    ).toEqual([]);
+  });
+
+  test.each<[string, Record<string, unknown>, string]>([
+    [
+      'reuses the source session',
+      { sessionId: 'session-1', resumed: true },
+      'fork turn: a result names the source session, not a fork',
+    ],
+    [
+      'does not report the source restored',
+      { sessionId: 'fork-1' },
+      'fork turn: a result does not report the source session restored',
+    ],
+  ])('a fork that %s is a violation', async (_label, result, violation) => {
+    expect(
+      await runProviderConformance({
+        capabilities: forking,
+        failureCases: [conforming],
+        turns: [settlingTurn],
+        forkTurn: { ...forkTurn, run: turn({ type: 'result', ...result }, { type: 'settled' }) },
+      })
+    ).toEqual([violation]);
+  });
+
+  test('a provider that declares sessionFork must supply a fork turn', async () => {
+    expect(
+      await runProviderConformance({
+        capabilities: forking,
+        failureCases: [conforming],
+        turns: [settlingTurn],
+      })
+    ).toEqual(['the provider declares sessionFork but the suite has no forkTurn']);
+  });
+
+  test('the fork turn must settle', async () => {
+    expect(
+      await runProviderConformance({
+        capabilities: forking,
+        failureCases: [conforming],
+        turns: [],
+        forkTurn: {
+          ...forkTurn,
+          run: turn({ type: 'result', sessionId: 'fork-1', resumed: true }),
+        },
+      })
+    ).toEqual(['fork turn: expected one settled, got 0']);
   });
 });

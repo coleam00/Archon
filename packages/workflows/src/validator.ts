@@ -69,6 +69,7 @@ import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './mode
 /** A single validation issue with actionable hint */
 export interface ValidationIssue {
   level: 'error' | 'warning';
+  code?: 'shell_output_ref';
   nodeId?: string;
   field: string;
   message: string;
@@ -945,6 +946,7 @@ export async function validateWorkflowResources(
         if (bare) {
           issues.push({
             level: 'warning',
+            code: 'shell_output_ref',
             nodeId: node.id,
             field: slot.path,
             message:
@@ -955,6 +957,7 @@ export async function validateWorkflowResources(
         if (!quoted) return;
         issues.push({
           level: 'warning',
+          code: 'shell_output_ref',
           nodeId: node.id,
           field: slot.path,
           message:
