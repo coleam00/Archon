@@ -970,7 +970,8 @@ export class CodexProvider implements IAgentProvider {
           ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
         ],
         env,
-        this.spawner
+        this.spawner,
+        requestOptions?.protectedEnvKeys
       );
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
@@ -1004,7 +1005,7 @@ export class CodexProvider implements IAgentProvider {
           turnId = id;
         },
       });
-      // A Codex turn has no background work: its result ends it.
+      // Codex does not expose a complete background-work lifecycle here.
       for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
         if (chunk.type === 'result') {
           // An interrupted turn completes before its process ends; a cancel is not a result.
@@ -1038,7 +1039,7 @@ export class CodexProvider implements IAgentProvider {
       abortSignal?.removeEventListener('abort', onAbort);
       await connection?.shutdown(this.shutdownGraceMs);
     }
-    // A Codex turn has no background work: once its result is in, nothing more runs.
+    // Background work is unobserved; this marks the end of the observed turn.
     yield { type: 'settled' };
   }
 

@@ -172,6 +172,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
   checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: () => 'claude',
   getCapabilities: () => ({
+    backgroundWork: 'unobserved' as const,
     sessionResume: true,
     mcp: true,
     hooks: true,

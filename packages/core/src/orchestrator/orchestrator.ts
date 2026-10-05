@@ -82,8 +82,6 @@ import {
   STALE_THRESHOLD_DAYS,
 } from '../services/cleanup-service';
 import { loadRepoConfig } from '../config/config-loader';
-import { isPerUserGitHubEnabled } from '../github-auth/config';
-import { getUserGithubNoreplyEmail } from '../db/user-github-token-store';
 import { toBranchName } from '@archon/git';
 import { startRunLiveOwner } from '../services/run-live-owner';
 
@@ -149,16 +147,6 @@ export async function validateAndResolveIsolation(
   _isRetry = false,
   userId?: string
 ): Promise<IsolationResolution> {
-  // Resolve the originating user's git identity (no-reply email) so a freshly
-  // created worktree stamps commits with the human. Only when per-user GitHub is
-  // enabled and the user is connected; otherwise the worktree uses the ambient
-  // git identity (unchanged behavior).
-  let gitIdentity: { email: string; name?: string } | undefined;
-  if (userId && isPerUserGitHubEnabled()) {
-    const email = await getUserGithubNoreplyEmail(userId);
-    if (email) gitIdentity = { email };
-  }
-
   const result = await getResolver().resolve({
     existingEnvId: conversation.isolation_env_id,
     codebase: codebase
@@ -175,7 +163,6 @@ export async function validateAndResolveIsolation(
     hints,
     platformType: platform.getPlatformType(),
     userId,
-    gitIdentity,
   });
 
   switch (result.status) {

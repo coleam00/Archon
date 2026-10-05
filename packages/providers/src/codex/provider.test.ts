@@ -107,6 +107,7 @@ describe('CodexProvider', () => {
 
   test('getCapabilities returns the Codex capability set', () => {
     expect(new CodexProvider().getCapabilities()).toEqual({
+      backgroundWork: 'unobserved' as const,
       sessionResume: true,
       sessionFork: true,
       mcp: true,
@@ -1062,6 +1063,27 @@ describe('CodexProvider', () => {
       );
       expect(result.failure?.evidence).toContain('login failed for key [REDACTED]');
       expect(JSON.stringify(result)).not.toContain('sk-echoed-secret-1234');
+    });
+
+    test('protected commit author values never reach startup failure evidence', async () => {
+      const env = {
+        GIT_AUTHOR_NAME: 'connected-author',
+        GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
+      };
+      const chunks = await streamOf(
+        {
+          startupFailure: {
+            code: 1,
+            stderr: `bad config for ${env.GIT_AUTHOR_NAME} <${env.GIT_AUTHOR_EMAIL}>`,
+          },
+        },
+        { env, protectedEnvKeys: Object.keys(env) }
+      );
+      expect(resultOf(chunks).failure?.evidence).toContain(
+        'bad config for [REDACTED] <[REDACTED]>'
+      );
+      expect(JSON.stringify(chunks)).not.toContain(env.GIT_AUTHOR_NAME);
+      expect(JSON.stringify(chunks)).not.toContain(env.GIT_AUTHOR_EMAIL);
     });
 
     test('a turn interrupted by someone other than Archon is unknown', async () => {
