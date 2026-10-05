@@ -161,9 +161,14 @@ mock.module('@archon/paths', () => ({
 const mockUpdateConversation = mock<typeof ConversationDb.updateConversation>(() =>
   Promise.resolve()
 );
+const mockDetachConversationProject = mock<typeof ConversationDb.detachConversationProject>();
+const mockGetConversationByPlatformId = mock<typeof ConversationDb.getConversationByPlatformId>(
+  () => Promise.resolve(null)
+);
 mock.module('../db/conversations', () => ({
   getOrCreateConversation: mockGetOrCreateConversation,
-  getConversationByPlatformId: mock(() => Promise.resolve(null)),
+  getConversationByPlatformId: mockGetConversationByPlatformId,
+  detachConversationProject: mockDetachConversationProject,
   updateConversation: mockUpdateConversation,
   touchConversation: mock(() => Promise.resolve()),
 }));
@@ -2202,7 +2207,8 @@ describe('provider cwd resolution', () => {
   });
 
   test('unscoped chat uses ensureArchonWorkspacesPath result', async () => {
-    const conversation = makeConversation({ codebase_id: null });
+    const conversation = makeConversation({ codebase_id: null, cwd: null, isolation_env_id: null });
+    mockGetActiveSession.mockResolvedValueOnce(null);
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
     mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
 
@@ -2211,6 +2217,7 @@ describe('provider cwd resolution', () => {
 
     expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
     expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
+    expect(mockSendQuery.mock.calls[0]?.[2]).toBeUndefined();
   });
 
   test('scoped chat falls back to workspaces root and warns when codebase not found (deleted)', async () => {
@@ -5288,6 +5295,19 @@ describe('handleMessage — /setproject dispatch', () => {
     );
   });
 
+  for (const name of ['none', 'clear', '-']) {
+    test(`selects a project literally named ${name}`, async () => {
+      mockListCodebases.mockResolvedValue([makeNamedCodebase(name)]);
+      mockParseCommand.mockReturnValue({ command: 'setproject', args: [name] });
+      await handleMessage(makePlatform(), 'conv-1', `/setproject ${name}`);
+      expect(mockUpdateConversation).toHaveBeenCalledWith(expect.any(String), {
+        codebase_id: `id-${name}`,
+        cwd: null,
+        isolation_env_id: null,
+      });
+    });
+  }
+
   test('binds conversation to exact-match codebase', async () => {
     const cb = makeNamedCodebase('my-app');
     mockGetOrCreateConversation.mockImplementation(() =>
@@ -6838,6 +6858,156 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       );
       expectSlackSpelling(messages);
     });
+  });
+});
+
+describe('handleMessage — /detach-project dispatch', () => {
+  beforeEach(() => {
+    mockParseCommand.mockReturnValue({ command: 'detach-project', args: ['My App'] });
+    mockGetConversationByPlatformId.mockReset();
+    mockGetConversationByPlatformId.mockResolvedValue(
+      makeConversation({ id: 'database-id', codebase_id: 'project-id' })
+    );
+    mockDetachConversationProject.mockReset();
+    mockDetachConversationProject.mockResolvedValue({ status: 'detached', projectName: 'My App' });
+    mockGetOrCreateConversation.mockClear();
+    mockUpdateConversation.mockClear();
+  });
+
+  for (const platformType of ['telegram', 'web', 'slack', 'discord']) {
+    test(`detaches on ${platformType} before creation or inheritance`, async () => {
+      const platform = {
+        ...makePlatform(),
+        capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
+        getPlatformType: () => platformType,
+      };
+      await handleMessage(platform, 'platform-id', '/detach-project "My App"', {
+        parentConversationId: 'parent-id',
+      });
+      expect(mockDetachConversationProject).toHaveBeenCalledWith({
+        conversationId: 'database-id',
+        projectName: 'My App',
+        platformType,
+        parentPlatformId: 'parent-id',
+      });
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+      expect(mockUpdateConversation).not.toHaveBeenCalled();
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'platform-id',
+        expect.stringContaining('now neutral')
+      );
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'platform-id',
+        expect.stringContaining('remains registered')
+      );
+    });
+  }
+
+  test('refuses undeclared eligibility without mutation', async () => {
+    const platform = makePlatform();
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    expect(mockGetConversationByPlatformId).not.toHaveBeenCalled();
+    expect(mockDetachConversationProject).not.toHaveBeenCalled();
+    expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'platform-id',
+      expect.stringContaining('not supported')
+    );
+  });
+
+  for (const args of [[], [''], ['  '], ['My', 'App']]) {
+    test(`requires one nonempty name: ${JSON.stringify(args)}`, async () => {
+      mockParseCommand.mockReturnValue({ command: 'detach-project', args });
+      const platform = makePlatform();
+      await handleMessage(platform, 'platform-id', '/detach-project');
+      expect(mockDetachConversationProject).not.toHaveBeenCalled();
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'platform-id',
+        expect.stringContaining('Usage:')
+      );
+    });
+  }
+
+  test('missing conversation refuses without creating it', async () => {
+    mockGetConversationByPlatformId.mockResolvedValue(null);
+    const platform = {
+      ...makePlatform(),
+      capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
+    };
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+    expect(mockDetachConversationProject).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'platform-id',
+      expect.stringContaining('does not exist')
+    );
+  });
+
+  test('reports every run and the environment without lifecycle actions', async () => {
+    mockDetachConversationProject.mockResolvedValue({
+      status: 'blocked',
+      runs: [
+        { id: 'full-run-id', status: 'paused' },
+        { id: 'failed-run-id', status: 'failed' },
+      ],
+      environmentId: 'env-id',
+    });
+    const platform = {
+      ...makePlatform(),
+      capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
+    };
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    const reply = String(platform.sendMessage.mock.calls[0]?.[1]);
+    for (const text of [
+      'full-run-id: paused',
+      'failed-run-id: failed',
+      'env-id',
+      'manage_run',
+      'CLI',
+      'Web',
+      'isolation controls',
+    ])
+      expect(reply).toContain(text);
+    expect(mockUpdateConversation).not.toHaveBeenCalled();
+  });
+
+  for (const [reason, reply] of [
+    ['parent-bound', 'inherit'],
+    ['parent-changed', 'Retry'],
+    ['name', 'exact, unambiguous'],
+    ['neutral', 'already neutral'],
+  ] as const) {
+    test(`explains ${reason} refusal before inheritance`, async () => {
+      mockDetachConversationProject.mockResolvedValue({ status: 'refused', reason });
+      const platform = {
+        ...makePlatform(),
+        capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
+      };
+      await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+      expect(platform.sendMessage).toHaveBeenCalledWith(
+        'platform-id',
+        expect.stringContaining(reply)
+      );
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+    });
+  }
+
+  test('persistence failure never confirms success', async () => {
+    mockDetachConversationProject.mockRejectedValue(new Error('detach database unavailable'));
+    const platform = {
+      ...makePlatform(),
+      capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
+    };
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    expect(platform.sendMessage).not.toHaveBeenCalledWith(
+      'platform-id',
+      expect.stringContaining('now neutral')
+    );
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'platform-id',
+      expect.stringContaining('detach database unavailable')
+    );
   });
 });
 

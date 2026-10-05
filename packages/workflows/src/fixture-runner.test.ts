@@ -1146,7 +1146,20 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     await git(cwd, 'init', '-q');
     writeFileSync(join(cwd, 'tracked.txt'), COMMITTED_YAML);
     await git(cwd, 'add', '-A');
-    await git(cwd, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    // No background `git maintenance`: callerFrom copies this tree, and a detached
+    // maintenance process can delete its lock file mid-copy.
+    await git(
+      cwd,
+      '-c',
+      'maintenance.auto=false',
+      '-c',
+      'user.email=t@t',
+      '-c',
+      'user.name=t',
+      'commit',
+      '-qm',
+      'init'
+    );
   }
 
   /**

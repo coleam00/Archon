@@ -19,6 +19,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export class WebAdapter implements IPlatformAdapter {
   readonly capabilities = {
+    canDetachProject: true as const,
     messagePersistence: 'adapter',
     defaultWorkflowDispatch: 'background',
   } as const;
