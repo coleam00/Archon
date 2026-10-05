@@ -1,8 +1,8 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Command handler for slash commands
  * Handles deterministic operations without AI
  */
+import { providerRegistry } from '@archon/providers';
 import type { WorkflowOperations } from '../operations/workflow-operations';
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';

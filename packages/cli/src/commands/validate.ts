@@ -1,10 +1,10 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * CLI commands for `archon validate workflows` and `archon validate commands`.
  *
  * Thin layer over @archon/workflows validator: discovers, validates, formats output.
  */
 
+import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { writeStdout } from '../utils/stdout';
 import {

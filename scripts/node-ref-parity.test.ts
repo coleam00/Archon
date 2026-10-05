@@ -1,4 +1,3 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Repository-level parity checks: the web UI's copies of two engine grammars —
  * the `$<nodeId>.output` reference and the `when:` comparison atom — must stay
@@ -38,6 +37,7 @@ import { providerRegistry } from '@archon/providers';
  *     and — unlike any regex over source text — it cannot be fooled by a
  *     commented-out copy either, because a comment does not execute.
  */
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

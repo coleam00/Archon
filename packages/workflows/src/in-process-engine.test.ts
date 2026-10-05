@@ -1,4 +1,3 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Wires the shared `IWorkflowEngine` contract-test suite
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`
@@ -10,6 +9,7 @@ import { providerRegistry } from '@archon/providers';
  * seams need stubbing here too. This file deliberately does NOT mock
  * `./executor` or `@archon/workflows/executor` itself.
  */
+import { providerRegistry } from '@archon/providers';
 import { mock } from 'bun:test';
 
 // --- Mock logger ---

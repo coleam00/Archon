@@ -1,9 +1,9 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
+import { providerRegistry } from '@archon/providers';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';

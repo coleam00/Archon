@@ -1,4 +1,3 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Unit tests for GitHub adapter
  *
@@ -21,6 +20,7 @@ import { providerRegistry } from '@archon/providers';
  * All three are stubbed below. The package-cwd test preload checks its own
  * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
+import { providerRegistry } from '@archon/providers';
 import {
   describe,
   test,

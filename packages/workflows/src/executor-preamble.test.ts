@@ -1,9 +1,9 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Tests for the executeWorkflow() preamble: concurrent-run guard, staleness
  * detection, and resume logic.  These run before DAG dispatch and are exercised
  * with minimal DAG workflow fixtures.
  */
+import { providerRegistry } from '@archon/providers';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, rm } from 'fs/promises';

@@ -1,4 +1,3 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Installed workflow packs in the one catalog: every consumer resolves them through
  * `discoverWorkflowsWithConfig`, only manifest entrypoints are dispatchable, and a run
@@ -7,6 +6,7 @@ import { providerRegistry } from '@archon/providers';
  * Packs are written the way `archon plugin install` leaves them (a receipt under
  * `plugins/installed/` and a tree under `plugins/packs/`) into a temp ARCHON_HOME.
  */
+import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';

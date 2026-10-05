@@ -1,4 +1,3 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * `archon ai` — per-user AI-provider credentials AND install-wide model config.
  *
@@ -27,6 +26,7 @@ import { providerRegistry } from '@archon/providers';
  * $USER/$USERNAME, resolved to a stable Archon user via the 'cli' platform
  * identity so a connected key attaches to the same user across invocations.
  */
+import { providerRegistry } from '@archon/providers';
 import { password, text, isCancel, cancel } from '@clack/prompts';
 import { writeJsonLine } from '../utils/stdout';
 import { createLogger } from '@archon/paths';

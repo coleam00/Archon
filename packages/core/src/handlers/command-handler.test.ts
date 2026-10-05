@@ -1,4 +1,3 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * Unit tests for command handler
  *
@@ -9,6 +8,7 @@ import { providerRegistry } from '@archon/providers';
  * Instead, we use spyOn for internal modules, which allows spying on specific functions
  * without replacing the entire module in the global cache.
  */
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
