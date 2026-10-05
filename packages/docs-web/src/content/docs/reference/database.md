@@ -139,7 +139,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs
   - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
-  - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`)
+  - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`). A run with neither has no scope, so it reads and writes no rows here
   - A run reads its scope's rows once at start, and each node writes its finished session back, so concurrent runs end with the session that finished last
   - No FK on `scope_key`, so a conversation delete does not cascade here. Soft delete plus a never-reused UUID makes the leftovers harmless; a future hard-delete must delete by `scope_key` itself — the mirror of the cascade caveat on `remote_agent_workflow_runs` above.
 
@@ -229,6 +229,10 @@ It is storage infrastructure: no message history, title, user or isolation state
 belongs to it. Application conversation edits, deletion and history operations
 reject this identity. Do not edit or delete it directly with SQL: deleting the
 row would cascade to its runs.
+
+An origin-free run has no session scope: it reads and writes no
+`remote_agent_workflow_node_sessions` rows and no scope artifacts. A resume,
+from the CLI or the server, runs it headless and records no conversation history.
 
 Schema upgrades preserve shipped columns and older writers. Older binaries can
 open and write the upgraded database, but may display the compatibility anchor
