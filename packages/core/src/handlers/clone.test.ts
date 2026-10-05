@@ -115,10 +115,7 @@ mock.module('@archon/paths', () => ({
 const mockLoadConfig = mock(() => Promise.resolve({ assistant: 'claude' }));
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // Nothing here calls it, but this factory replaces the module process-wide and
-  // child-isolation-resolver.ts imports it by name — omitting it breaks that
-  // import at module-eval for anything in the same batch that pulls it in.
-  loadRepoConfig: mock(() => Promise.resolve(null)),
+  loadRepoConfig: mock(() => Promise.resolve({})),
 }));
 
 // ── utils/commands mock ─────────────────────────────────────────────────────
@@ -373,6 +370,49 @@ describe('cloneRepository', () => {
     delete process.env.GH_TOKEN;
     delete process.env.GITLAB_TOKEN;
     delete process.env.GITEA_TOKEN;
+  });
+
+  test('a failed remote lookup after cloning removes the new clone', async () => {
+    const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+    const remote = spyOn(gitUtils, 'getDefaultRemote').mockRejectedValue(
+      new Error('git remote failed')
+    );
+    try {
+      await expect(
+        cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
+      ).rejects.toThrow('git remote failed');
+      const target = getGitCloneCall()?.[1];
+      expect(target).toBeDefined();
+      // The first rm clears the empty source directory before cloning; the second removes the clone.
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+    } finally {
+      syntax.mockRestore();
+      remote.mockRestore();
+    }
+  });
+
+  test('an unknown explicit branch removes only the new clone and leaves registration retryable', async () => {
+    const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+    const remote = spyOn(gitUtils, 'getDefaultRemote').mockResolvedValue('origin');
+    const inspection = spyOn(gitUtils, 'inspectRemoteBranches').mockResolvedValue({
+      status: 'available',
+      defaultBranch: gitUtils.toBranchName('dev'),
+      branches: [gitUtils.toBranchName('dev')],
+    });
+    try {
+      await expect(
+        cloneRepository('https://github.com/owner/repo', { baseBranch: 'unknown' })
+      ).rejects.toThrow("Configured base branch 'unknown' not found on remote 'origin'");
+      const target = getGitCloneCall()?.[1];
+      expect(target).toBeDefined();
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+    } finally {
+      syntax.mockRestore();
+      remote.mockRestore();
+      inspection.mockRestore();
+    }
   });
 
   // ── URL normalization / happy-path cloning ─────────────────────────────
@@ -1143,7 +1183,7 @@ describe('registerRepository', () => {
     expect(result.alreadyExisted).toBe(false);
     expect(result.name).toBe('owner/repo');
     expect(mockCreateCodebase).toHaveBeenCalledWith(
-      expect.objectContaining({ default_branch: 'develop' })
+      expect.objectContaining({ default_branch: null })
     );
   });
 
@@ -1606,7 +1646,7 @@ describe('name-based deduplication', () => {
     );
   });
 
-  test('fills missing default_branch on existing local codebase', async () => {
+  test('preserves missing default_branch on existing local codebase', async () => {
     const existingCodebase = makeCodebase({
       id: 'existing-id',
       name: 'owner/repo',
@@ -1626,8 +1666,8 @@ describe('name-based deduplication', () => {
 
     const result = await registerRepository('/home/user/repo');
 
-    expect(mockUpdateCodebase).toHaveBeenCalledWith(existingCodebase, { default_branch: 'trunk' });
-    expect(result.defaultBranch).toBe('trunk');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    expect(result.defaultBranch).toBeNull();
   });
 
   test('should not downgrade default_cwd from local to managed path', async () => {

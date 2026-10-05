@@ -27,3 +27,29 @@ export const codebaseRowSchema = z.object({
 });
 
 export type Codebase = z.infer<typeof codebaseRowSchema>;
+
+export const projectBaseBranchInspectionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('folder') }),
+  z.object({
+    kind: z.literal('repo'),
+    defaultBranch: z.string().nullable(),
+    reason: z
+      .enum(['no_remote', 'ambiguous_remote', 'remote_unavailable', 'unknown_head'])
+      .nullable(),
+  }),
+]);
+
+export type ProjectBaseBranchInspection = z.infer<typeof projectBaseBranchInspectionSchema>;
+
+export const codebaseSourceError = 'Provide either "url" or "path", not both and not neither';
+export const codebaseSourceSchema = z.union(
+  [z.object({ url: z.string().min(1) }).strict(), z.object({ path: z.string().min(1) }).strict()],
+  { error: codebaseSourceError }
+);
+
+type SourceVariant = z.infer<typeof codebaseSourceSchema>;
+type UnionKeys<T> = T extends unknown ? keyof T : never;
+type ExclusiveSource<T = SourceVariant> = T extends SourceVariant
+  ? T & Partial<Record<Exclude<UnionKeys<SourceVariant>, keyof T>, never>>
+  : never;
+export type CodebaseSource = ExclusiveSource;
