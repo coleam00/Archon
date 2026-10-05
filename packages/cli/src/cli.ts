@@ -425,7 +425,7 @@ async function main(): Promise<number> {
       const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
       const { workflowContinuationCommand } = await loadRoute(
         () => import('./commands/workflow-continuations'),
-        { database: !schedule }
+        schedule ? { providers: false } : { database: true }
       );
       return await workflowContinuationCommand(subcommand, positionals.slice(2), values);
     }
