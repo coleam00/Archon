@@ -46,6 +46,7 @@ interface Fixture {
 }
 
 const WORKFLOW_NAME = 'resume-thread';
+const ORIGIN_ANCHOR_ID = '00000000-0000-4000-8000-000000003640';
 
 /**
  * A repo, a scratch `ARCHON_HOME`, and a workflow where `settle` succeeds and `boom`
@@ -183,6 +184,50 @@ function removeRecordedConversation(fixture: Fixture, conversationId: string): v
   }
 }
 
+/**
+ * Rewrite the seeded run as one a store or engine caller created without provenance:
+ * an empty origin pointing at the hidden compatibility anchor, as `insertWorkflowRun`
+ * writes it, with the CLI's own conversation and its messages gone.
+ */
+function makeRunOriginFree(fixture: Fixture, run: ThreadState): void {
+  const database = new Database(join(fixture.archonHome, 'archon.db'));
+  try {
+    database.exec('PRAGMA foreign_keys = OFF');
+    database
+      .query(
+        `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id, hidden)
+         VALUES (?, 'archon', 'workflow-store-originless', 1)`
+      )
+      .run(ORIGIN_ANCHOR_ID);
+    database
+      .query(
+        `UPDATE remote_agent_workflow_runs
+            SET origin = '{}', conversation_id = ?, parent_conversation_id = NULL, user_id = NULL
+          WHERE id = ?`
+      )
+      .run(ORIGIN_ANCHOR_ID, run.runId);
+    database.query('DELETE FROM remote_agent_messages').run();
+    database
+      .query('DELETE FROM remote_agent_conversations WHERE id = ?')
+      .run(run.runConversationId);
+  } finally {
+    database.close();
+  }
+}
+
+function countMessages(fixture: Fixture): number {
+  const database = openDatabase(fixture);
+  try {
+    return (
+      database
+        .query<{ total: number }, []>('SELECT COUNT(*) AS total FROM remote_agent_messages')
+        .get()?.total ?? 0
+    );
+  } finally {
+    database.close();
+  }
+}
+
 function countConversations(fixture: Fixture): number {
   const database = openDatabase(fixture);
   try {
@@ -283,6 +328,27 @@ describe('resumed runs keep one conversation', () => {
       `Conversation '${before.runConversationId}' for workflow run '${before.runId}' no longer exists.`
     );
     expect(countConversations(fixture)).toBe(0);
+  }, 120_000);
+
+  // A run created without provenance has no thread to continue. The resume stays
+  // headless instead of inventing a CLI conversation and writing history into it.
+  test('workflow resume <run-id> of an origin-free run creates no conversation', () => {
+    const fixture = makeFixture();
+    makeRunOriginFree(fixture, seedFailedRun(fixture));
+
+    const resumed = runCli(fixture, [
+      'workflow',
+      'resume',
+      '--cwd',
+      fixture.repo,
+      readThreadState(fixture).runId,
+    ]);
+    expect(resumed.output).toContain("Bash node 'boom' failed");
+
+    const after = readThreadState(fixture);
+    expect(after.runConversationId).toBe(ORIGIN_ANCHOR_ID);
+    expect(after.conversationIds).toEqual([ORIGIN_ANCHOR_ID]);
+    expect(countMessages(fixture)).toBe(0);
   }, 120_000);
 
   test('workflow resume <run-id> continues the run existing thread', async () => {

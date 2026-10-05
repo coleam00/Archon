@@ -480,6 +480,20 @@ export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undef
   return metadata.pending_writeback !== undefined && metadata.writeback_resolved !== true;
 }
 
+async function openCliConversation(
+  platformConversationId: string,
+  codebaseId: string | undefined
+): Promise<Awaited<ReturnType<typeof conversationDb.getOrCreateConversation>>> {
+  try {
+    return await conversationDb.getOrCreateConversation('cli', platformConversationId, codebaseId);
+  } catch (error) {
+    const err = error as Error;
+    throw new Error(
+      `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
+    );
+  }
+}
+
 /**
  * The conversation this invocation writes to.
  *
@@ -496,16 +510,19 @@ export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undef
  *
  * A continuation whose conversation cannot be read must stop. Generating a new id in
  * that case would resume successfully into a thread the run does not reference.
+ *
+ * A continuation of a run created without provenance has no thread: it resolves to
+ * undefined and runs headless, so the CLI records no conversation or history for it.
  */
 async function resolveRunConversationId(
   options: WorkflowRunOptions,
   continuationRun: WorkflowRun | undefined
-): Promise<string> {
+): Promise<string | undefined> {
   if (options.conversationId !== undefined) return options.conversationId;
   if (continuationRun !== undefined) {
     const storedConversationId =
       continuationRun.conversation_id ?? continuationRun.parent_conversation_id;
-    if (storedConversationId === null) return continuationRun.id;
+    if (storedConversationId === null) return undefined;
     let conversation;
     try {
       conversation = await conversationDb.getConversationById(storedConversationId);
@@ -2448,6 +2465,10 @@ async function runWorkflowWithOwnedSource(
       // the stamps the executor only writes when IT creates the row. `working_path` is
       // the one field this process cannot know — the child cuts the worktree — so it
       // stays null until the child fills it in (write-once in the store).
+      // Only a continuation can lack a thread; a fresh launch always resolves one.
+      if (childConversationId === undefined) {
+        throw new Error('A fresh detached launch resolved no conversation');
+      }
       let detachedConversation;
       try {
         detachedConversation = await conversationDb.getOrCreateConversation(
@@ -2517,7 +2538,7 @@ async function runWorkflowWithOwnedSource(
     }
     // Pin the conversation id this process resolved — generated, or inherited from the
     // run being continued. An explicit one is already in argv, so it needs no pin.
-    if (options.conversationId === undefined) {
+    if (options.conversationId === undefined && childConversationId !== undefined) {
       extraArgs.push('--conversation-id', childConversationId);
     }
     // Between-run continuation (#2747) — the child re-resolves the adoption
@@ -2572,7 +2593,8 @@ async function runWorkflowWithOwnedSource(
     try {
       logPath = await spawnDetachedWorkflowRun(
         cwd,
-        childConversationId,
+        // Names the log file; an origin-free continuation has only its run id.
+        childConversationId ?? detachedRunId,
         extraArgs,
         runConfigPayload
       );
@@ -2605,7 +2627,7 @@ async function runWorkflowWithOwnedSource(
         runId: detachedRunId,
         workflow: workflow.name,
         branch: pinnedBranch ?? options.branchName ?? null,
-        conversationId: childConversationId,
+        conversationId: childConversationId ?? null,
         transcriptPath,
         logPath,
       });
@@ -2633,7 +2655,10 @@ async function runWorkflowWithOwnedSource(
   const adapter = new CLIAdapter();
 
   // The caller's thread, the continued run's own thread, or a new one — in that order.
-  const conversationId = await resolveRunConversationId(options, continuationRun);
+  // An origin-free continuation has no thread; its run id correlates transport and events.
+  const threadConversationId = await resolveRunConversationId(options, continuationRun);
+  const conversationId = threadConversationId ?? continuationRun?.id;
+  if (conversationId === undefined) throw new Error('Workflow run resolved no conversation');
 
   const {
     codebase,
@@ -2656,20 +2681,11 @@ async function runWorkflowWithOwnedSource(
     throw buildFolderRegistrationFailureError(codebaseRegistrationError);
   }
 
-  // Get or create conversation in database
-  let conversation;
-  try {
-    conversation = await conversationDb.getOrCreateConversation(
-      'cli',
-      conversationId,
-      codebase?.id
-    );
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(
-      `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
-    );
-  }
+  // Get or create the thread's conversation in database
+  const conversation =
+    threadConversationId === undefined
+      ? undefined
+      : await openCliConversation(threadConversationId, codebase?.id);
 
   // Handle isolation (worktree creation)
   let workingCwd = cwd;
@@ -3177,62 +3193,65 @@ async function runWorkflowWithOwnedSource(
     preparedSource = { ...preparedSource, origin: workingCwd };
   }
 
-  // Update conversation with cwd and isolation info
-  try {
-    await conversationDb.updateConversation(conversation.id, {
-      cwd: workingCwd,
-      codebase_id: codebase?.id ?? null,
-      isolation_env_id: isolationEnvId ?? null,
-    });
-  } catch (error) {
-    const err = error as Error;
-    throw new Error(`Failed to update conversation: ${err.message}`);
-  }
-
-  // Wire adapter for assistant message persistence
-  adapter.setConversationDbId(conversationId, conversation.id);
-
-  // Persist user message for Web UI history.
-  try {
-    await messageDb.addMessage(conversation.id, 'user', userMessage, undefined, cliUserId);
-  } catch (error) {
-    getLog().warn(
-      { err: error as Error, conversationId: conversation.id },
-      'cli_user_message_persist_failed'
-    );
-  }
-
-  // Auto-generate title for CLI workflow conversations (fire-and-forget)
-  void (async (): Promise<void> => {
-    let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+  // An origin-free continuation has no thread to update, record into or title.
+  if (conversation !== undefined) {
+    // Update conversation with cwd and isolation info
     try {
-      workflowConfig = await loadConfig(cwd);
+      await conversationDb.updateConversation(conversation.id, {
+        cwd: workingCwd,
+        codebase_id: codebase?.id ?? null,
+        isolation_env_id: isolationEnvId ?? null,
+      });
     } catch (error) {
-      getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
+      const err = error as Error;
+      throw new Error(`Failed to update conversation: ${err.message}`);
     }
 
+    // Wire adapter for assistant message persistence
+    adapter.setConversationDbId(conversationId, conversation.id);
+
+    // Persist user message for Web UI history.
     try {
-      const titleAssistantType = resolveTitleAssistantType(
-        workflowEntry?.declared,
-        workflowConfig?.assistant,
-        conversation.ai_assistant_type
-      );
-      const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
-      await generateAndSetTitle(
-        conversation.id,
-        userMessage,
-        titleAssistantType,
-        workingCwd,
-        workflowName,
-        titleAssistantConfig
-      );
+      await messageDb.addMessage(conversation.id, 'user', userMessage, undefined, cliUserId);
     } catch (error) {
       getLog().warn(
         { err: error as Error, conversationId: conversation.id },
-        'workflow.title_generation_failed'
+        'cli_user_message_persist_failed'
       );
     }
-  })();
+
+    // Auto-generate title for CLI workflow conversations (fire-and-forget)
+    void (async (): Promise<void> => {
+      let workflowConfig: Awaited<ReturnType<typeof loadConfig>> | undefined;
+      try {
+        workflowConfig = await loadConfig(cwd);
+      } catch (error) {
+        getLog().warn({ err: error as Error, cwd }, 'workflow.title_config_load_failed');
+      }
+
+      try {
+        const titleAssistantType = resolveTitleAssistantType(
+          workflowEntry?.declared,
+          workflowConfig?.assistant,
+          conversation.ai_assistant_type
+        );
+        const titleAssistantConfig = workflowConfig?.assistants?.[titleAssistantType] ?? {};
+        await generateAndSetTitle(
+          conversation.id,
+          userMessage,
+          titleAssistantType,
+          workingCwd,
+          workflowName,
+          titleAssistantConfig
+        );
+      } catch (error) {
+        getLog().warn(
+          { err: error as Error, conversationId: conversation.id },
+          'workflow.title_generation_failed'
+        );
+      }
+    })();
+  }
 
   // Graceful-termination guard rails (#1123) settle only THE run this process is
   // driving. The run id is reserved by source capture before a fresh execution and
@@ -3369,10 +3388,6 @@ async function runWorkflowWithOwnedSource(
           cwd: workingCwd,
           legacyWorkflow: workflow,
           userMessage,
-          origin: {
-            conversationId: conversation.id,
-            userId: cliUserId,
-          },
           run: resumable,
           options: commonOptions,
         });
@@ -3447,10 +3462,7 @@ async function runWorkflowWithOwnedSource(
         cwd: workingCwd,
         workflow,
         userMessage,
-        origin: {
-          conversationId: conversation.id,
-          userId: cliUserId,
-        },
+        origin: conversation && { conversationId: conversation.id, userId: cliUserId },
         options: opts,
       });
     }
@@ -3615,7 +3627,7 @@ async function runWorkflowWithOwnedSource(
         `\nWorkflow paused — waiting for '${wait.stepName}' until ${wait.resumeAt}; ` +
           'this process resumes the run at its deadline.'
       );
-      return { run: pausedRun, wait, platformConversationId: conversationId };
+      return { run: pausedRun, wait, platformConversationId: threadConversationId };
     }
     if (!presentRunFacts('\nWorkflow paused — waiting for approval.', 'paused')) {
       console.log('\nWorkflow paused — waiting for approval.');
@@ -3664,9 +3676,10 @@ export interface PendingWaitContinuation {
   /**
    * The platform conversation the first attempt ran under. Threaded into every
    * continuation so the resumed segment's dispatch and result card stay in the run's
-   * original thread instead of generating a second conversation.
+   * original thread instead of generating a second conversation. Undefined for an
+   * origin-free run, which has no thread and resumes headless.
    */
-  platformConversationId: string;
+  platformConversationId: string | undefined;
 }
 
 /**
@@ -3729,7 +3742,7 @@ interface WaitResumeAttempt {
 /** Mirror `workflowResumeCommand`'s continuation options for a run this process owns. */
 async function buildWaitResumeAttempt(
   run: WorkflowRun,
-  platformConversationId: string
+  platformConversationId: string | undefined
 ): Promise<WaitResumeAttempt> {
   if (!run.working_path) {
     throw new Error(
