@@ -322,22 +322,19 @@ function resolveValidationProvider(
 }
 
 /**
- * Bundled workflow definitions, parsed once and cached (#2470). Used only by the
+ * Bundled workflow definitions admitted by the supplied registry. Used only by the
  * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
  * must itself resolve within the bundled set (a bundled workflow can't depend on a
  * project/global workflow that may not exist on another install). Resolution reuses the
  * runtime fuzzy `resolveWorkflowName` so a legal suffix/substring ref isn't reported broken.
  * parseWorkflow never expands includes, so `workflow.name` is the authoritative id here.
  */
-let bundledWorkflowDefsCache: WorkflowDefinition[] | undefined;
 function getBundledWorkflowDefs(providers: ProviderRegistry): WorkflowDefinition[] {
-  if (bundledWorkflowDefsCache) return bundledWorkflowDefsCache;
   const defs: WorkflowDefinition[] = [];
   for (const [filename, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     const { workflow } = parseWorkflow(content, filename, providers);
     if (workflow) defs.push(workflow);
   }
-  bundledWorkflowDefsCache = defs;
   return defs;
 }
 

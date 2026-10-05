@@ -106,17 +106,14 @@ interface BundledSignature {
   signature: readonly string[];
 }
 
-let bundledSignatures: readonly BundledSignature[] | undefined;
-
 /**
  * The bundled workflows as shipped: parsed, pack-owned resources qualified, and includes
  * expanded against the shipped command bodies (`BUNDLED_COMMANDS`). A copy is compared
  * with what Archon ships, not with this install's command overrides: an override changes
- * the prompts the copy runs, so such a copy is truthfully `modified`. Built once per
- * process, in memory. A bundled workflow that fails to parse or expand is left out.
+ * the prompts the copy runs, so such a copy is truthfully `modified`. A bundled workflow
+ * that fails to parse with the supplied registry or expand is left out.
  */
 function getBundledSignatures(providers: ProviderRegistry): readonly BundledSignature[] {
-  if (bundledSignatures) return bundledSignatures;
   const rawByName = new Map<string, WorkflowDefinition>();
   for (const [key, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     const path = BUNDLED_WORKFLOW_PATHS[key];
@@ -130,12 +127,11 @@ function getBundledSignatures(providers: ProviderRegistry): readonly BundledSign
     rawByName,
     new Map(Object.entries(BUNDLED_COMMANDS))
   );
-  bundledSignatures = [...workflows.values()].map(workflow => ({
+  return [...workflows.values()].map(workflow => ({
     name: workflow.name,
     ids: new Set(flattenNodes(workflow.nodes).map(entry => entry.path)),
     signature: signatureOf(workflow),
   }));
-  return bundledSignatures;
 }
 
 function jaccard(a: ReadonlySet<string>, b: ReadonlySet<string>): number {

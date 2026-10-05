@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm, symlink as fsSymlink } from 'fs/promises';
@@ -234,6 +235,42 @@ describe('validateWorkflowResources — command nodes', () => {
 // =============================================================================
 
 describe('validateWorkflowResources — bundled workflow: target check', () => {
+  test('bundled targets use the registry supplied to each call', async () => {
+    const name = 'registry-target-probe';
+    BUNDLED_WORKFLOWS[name] = [
+      `name: ${name}`,
+      'description: Registry admission fixture.',
+      'provider: claude',
+      'nodes:',
+      '  - id: registry-target-probe-node',
+      '    prompt: Check registry admission.',
+    ].join('\n');
+    const emptyRegistry: ProviderRegistry = { get: () => undefined, list: () => [] };
+    const workflow = makeWorkflow('test', [{ id: 'sub', kind: 'workflow', workflow: name }]);
+    const config = { workflowSource: 'bundled' } as const;
+    try {
+      const admitted = await validateWorkflowResources(workflow, tmpDir, providerRegistry, config);
+      expect(admitted.filter(issue => issue.field === 'workflow')).toEqual([]);
+      const rejected = await validateWorkflowResources(workflow, tmpDir, emptyRegistry, config);
+      expect(rejected.filter(issue => issue.field === 'workflow')).toEqual([
+        expect.objectContaining({
+          level: 'error',
+          nodeId: 'sub',
+          message: `Node 'sub' targets sub-run '${name}', which is not a bundled workflow`,
+        }),
+      ]);
+      const readmitted = await validateWorkflowResources(
+        workflow,
+        tmpDir,
+        providerRegistry,
+        config
+      );
+      expect(readmitted.filter(issue => issue.field === 'workflow')).toEqual([]);
+    } finally {
+      delete BUNDLED_WORKFLOWS[name];
+    }
+  });
+
   test('bundled workflow with a real bundled workflow: target passes', async () => {
     const workflow = makeWorkflow('test', [
       { id: 'sub', kind: 'workflow', workflow: 'archon-review' } as DagNode,

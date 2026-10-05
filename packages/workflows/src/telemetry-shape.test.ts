@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { registerBuiltinProviders } from '@archon/providers';
@@ -72,6 +73,30 @@ function resolveProjectCopy(
 }
 
 describe('deriveBundledAncestry', () => {
+  test('bundled ancestry uses the registry supplied to each call', () => {
+    const name = 'registry-ancestry-probe';
+    BUNDLED_WORKFLOWS[name] = [
+      `name: ${name}`,
+      'description: Registry admission fixture.',
+      'provider: claude',
+      'nodes:',
+      '  - id: registry-ancestry-probe-node',
+      '    prompt: Check registry admission.',
+    ].join('\n');
+    const emptyRegistry: ProviderRegistry = { get: () => undefined, list: () => [] };
+    try {
+      const copy = resolve(BUNDLED_WORKFLOWS[name]);
+      expect(deriveBundledAncestry(providerRegistry, copy)).toEqual({
+        derivedFrom: name,
+        derivedSimilarity: 'identical',
+      });
+      expect(deriveBundledAncestry(emptyRegistry, copy)).toBeUndefined();
+      expect(deriveBundledAncestry(providerRegistry, copy)?.derivedFrom).toBe(name);
+    } finally {
+      delete BUNDLED_WORKFLOWS[name];
+    }
+  });
+
   test('a copy with a node added is modified', () => {
     const copy = resolveProjectCopy('archon-implement', 'acme-implement', undefined, yaml =>
       yaml.replace(/^nodes:\n/m, 'nodes:\n  - id: acme-extra\n    bash: echo acme\n')
