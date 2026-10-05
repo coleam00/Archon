@@ -369,6 +369,12 @@ nodes:
 
 Pi is registered as `builtIn: false` — it validates the community-provider seam rather than being a core-team-maintained option. If it proves stable and valuable it may be promoted to `builtIn: true` later.
 
+### Azure models
+
+Pi uses `azure/<model-id>` for Azure models, including Foundry Chat Completions deployments. The `AZURE_OPENAI_*` environment variables remain unchanged. Archon credentials previously connected as `azure-openai-responses` still deliver to `azure`.
+
+When upgrading from Pi 1.0.2 or earlier, change `azure-openai-responses` to `azure` in your Archon model references and in Pi's provider keys in `auth.json` and `models.json`, plus `defaultProvider`, `enabledModels`, and `modelThinkingLevels` in `settings.json`. The API id `azure-openai-responses` is unchanged. Archon does not rewrite native Pi configuration. Existing Pi sessions using the old provider may select another model on resume and lose their prompt cache; see the [Pi 1.0.3 release notes](https://github.com/earendil-works/pi/releases/tag/v1.0.3).
+
 ### Install
 
 Pi is included as a dependency of `@archon/providers` — no separate install needed. It's available immediately.
