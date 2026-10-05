@@ -146,8 +146,8 @@ describe('run live owner', () => {
     const second: RunLiveOwnerWatchEvent[] = [];
     const firstWatch = await watchRunLiveOwner(runId, event => first.push(event));
     const secondWatch = await watchRunLiveOwner(runId, event => second.push(event));
-    expect(firstWatch).not.toBeNull();
-    expect(secondWatch).not.toBeNull();
+    expect(firstWatch.kind).toBe('attached');
+    expect(secondWatch.kind).toBe('attached');
 
     await owner.close();
     await waitForOwnerEvent(() => first.length === 1 && second.length === 1);
@@ -166,7 +166,7 @@ describe('run live owner', () => {
     try {
       await withRunLiveOwner(runId, {}, async () => {
         const watch = await watchRunLiveOwner(runId, event => events.push(event));
-        expect(watch).not.toBeNull();
+        expect(watch.kind).toBe('attached');
         throw executionError;
       });
     } catch (error) {
@@ -197,7 +197,7 @@ describe('run live owner', () => {
     const owner = await startRunLiveOwner(runId, { detachedProcessPid: process.pid });
     const events: RunLiveOwnerWatchEvent[] = [];
     const watch = await watchRunLiveOwner(runId, event => events.push(event));
-    expect(watch).not.toBeNull();
+    expect(watch.kind).toBe('attached');
     const lease = await requestRunLiveOwnerStop(runId);
     try {
       expect(lease.pid).toBe(process.pid);
@@ -325,7 +325,7 @@ describe('run live owner', () => {
     const events: RunLiveOwnerWatchEvent[] = [];
     try {
       const watch = await watchRunLiveOwner(runId, event => events.push(event));
-      expect(watch).not.toBeNull();
+      expect(watch.kind).toBe('attached');
       await waitForOwnerEvent(() => events.length > 0);
       expect(events).toEqual(['disconnected']);
     } finally {
@@ -335,7 +335,9 @@ describe('run live owner', () => {
 
   test('reports an unreachable owner only when nothing accepts the connection', async () => {
     // No endpoint at all: the path does not exist.
-    expect((await stopRefusal(`absent-${crypto.randomUUID()}`)).reason).toBe('unreachable');
+    const absentRunId = `absent-${crypto.randomUUID()}`;
+    expect((await stopRefusal(absentRunId)).reason).toBe('unreachable');
+    expect(await watchRunLiveOwner(absentRunId, () => undefined)).toEqual({ kind: 'unreachable' });
 
     // A socket left behind by an owner that died without closing refuses the
     // connection. A second link keeps the socket inode when close() unlinks the path,
@@ -351,6 +353,7 @@ describe('run live owner', () => {
     renameSync(residue, path);
     try {
       expect((await stopRefusal(runId)).reason).toBe('unreachable');
+      expect(await watchRunLiveOwner(runId, () => undefined)).toEqual({ kind: 'unreachable' });
     } finally {
       rmSync(path, { force: true });
     }
@@ -370,6 +373,7 @@ describe('run live owner', () => {
       const refusal = await stopRefusal(runId);
       expect(refusal.detail).toBe('EACCES');
       expect(refusal.reason).toBe('unproven');
+      expect(await watchRunLiveOwner(runId, () => undefined)).toEqual({ kind: 'unproven' });
     } finally {
       await close(server);
       rmSync(path, { force: true });

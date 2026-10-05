@@ -10,7 +10,7 @@ Archon's provider registry (Phase 2, [#1195](https://github.com/coleam00/Archon/
 
 ## The contract
 
-Every provider implements `IAgentProvider`, defined in [`packages/providers/src/types.ts`](https://github.com/coleam00/Archon/blob/dev/packages/providers/src/types.ts); read the interface there rather than a copy. A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`, where Pi and Codex read their model and env), the caller's `env`, and an abort `signal`.
+Every provider implements `IAgentProvider`, from `@archon/provider-contract`, defined in [`packages/provider-contract/src/agent-provider.ts`](https://github.com/coleam00/Archon/blob/dev/packages/provider-contract/src/agent-provider.ts); read the interface there rather than a copy. A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`, where Pi and Codex read their model and env), the caller's `env`, and an abort `signal`.
 
 
 `checkCredential` checks the native credential used when Archon delivers none, through the provider's runtime. Return `not_checked` when the runtime cannot check without a model session. Derive failure states from structured fields or typed errors; carry vendor text only as evidence and never expose credential values. Test it with `checkCredentialStatuses` from `@archon/provider-contract/conformance`.
@@ -59,8 +59,13 @@ Implement `IAgentProvider`. Pattern:
 ```typescript
 // provider.ts
 import { createLogger } from '@archon/paths';
-import type { CredentialStatus } from '@archon/provider-contract';
-import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../../types';
+import type {
+  CredentialStatus,
+  IAgentProvider,
+  MessageChunk,
+  ProviderCapabilities,
+  SendQueryOptions,
+} from '@archon/provider-contract';
 import { YOUR_CAPABILITIES } from './capabilities';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;

@@ -29,13 +29,13 @@ import {
   isOutputFormatEnforced,
   isWaitNode,
 } from '../schemas';
+import { findStrictSchemaIssues } from '@archon/provider-contract';
 import {
-  findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
   registerBuiltinProviders,
-  validateStructuredOutput,
 } from '@archon/providers';
+import { validateStructuredOutput } from '../structured-output';
 
 registerBuiltinProviders();
 

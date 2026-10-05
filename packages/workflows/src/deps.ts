@@ -5,8 +5,7 @@ import type { CredentialStatus } from '@archon/provider-contract';
  * Defines narrow interfaces for what the workflow engine needs from external systems.
  * Callers in @archon/core satisfy these structurally — no adapter wrappers needed.
  *
- * Provider types are imported directly from @archon/providers/types (contract layer).
- * No more mirror copies — single source of truth for IAgentProvider, MessageChunk, etc.
+ * Provider types are imported directly from @archon/provider-contract.
  */
 import type { IWorkflowStore } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
@@ -20,7 +19,7 @@ import type {
   NodeConfig,
   ProviderDefaultsMap,
   ProviderCapabilities,
-} from '@archon/providers/types';
+} from '@archon/provider-contract';
 import type { RawAliasesConfig, RawTiersConfig } from './model-validation';
 import type {
   WorkflowRunConfigLayer,
@@ -46,7 +45,7 @@ export type {
   ProviderCapabilities,
 };
 
-// Backwards compat alias — deprecated, prefer direct import from @archon/providers/types
+// Backwards compat alias — deprecated, prefer direct import from @archon/provider-contract
 export type WorkflowTokenUsage = TokenUsage;
 
 // ---------------------------------------------------------------------------

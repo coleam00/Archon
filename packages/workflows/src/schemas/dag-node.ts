@@ -11,7 +11,8 @@
  * so a flat schema with superRefine is cleaner than a z.union() with implicit discriminants.
  */
 import { z } from '@hono/zod-openapi';
-import type { ProviderCapabilities } from '@archon/providers/types';
+import { agentDefinitionSchema, type ProviderCapabilities } from '@archon/provider-contract';
+export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
 import { stepRetryConfigSchema } from './retry';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 import { effortLevelSchema, rejectRetiredThinking } from './effort';
@@ -125,33 +126,13 @@ export const sandboxSettingsSchema = z
 export type SandboxSettings = z.infer<typeof sandboxSettingsSchema>;
 
 /**
- * Claude Agent SDK AgentDefinition — inline sub-agent available via the Task tool.
- * Mirrors the SDK's AgentDefinition type (sdk.d.ts), minus mcpServers and the
- * experimental critical-reminder field.
- */
-export const agentDefinitionSchema = z.object({
-  description: z.string().min(1, "'description' is required"),
-  prompt: z.string().min(1, "'prompt' is required"),
-  model: z.string().min(1).optional(),
-  tools: z.array(z.string().min(1)).optional(),
-  disallowedTools: z.array(z.string().min(1)).optional(),
-  skills: z.array(z.string().min(1)).optional(),
-  maxTurns: z.number().int().positive().optional(),
-});
-
-export type AgentDefinition = z.infer<typeof agentDefinitionSchema>;
-
-/**
  * Per-node Pi extension posture — the PORTABLE authoring surface for issue #2133.
  * Mirrors the install-level `assistants.pi.nodes.<nodeId>` override map (#2124),
  * but lives on the node itself so it travels with the workflow instead of a
  * machine's `config.yaml`. Highest-precedence layer: node YAML `pi:` > config
  * `nodes.<id>` > assistant-level `assistants.pi.*`. Structurally identical to the
- * providers-side `PiNodeOverride` (@archon/providers/pi/config) — hand-mirrored
- * because that module is not reachable from here. The constraint is SDK-free,
- * not type-only: @archon/workflows may import runtime values from a leaf subpath
- * with no SDK dependencies (@archon/providers/types), but `pi/config` pulls in the Pi
- * SDK, so this shape stays mirrored.
+ * provider contract's `PiExtensionPosture`; pi-extension-posture.type-test.ts
+ * checks the authoring schema against that SDK-free contract.
  *
  * Pi-only, like Claude's `hooks`/`mcp`/`skills`/`agents`. Other providers ignore
  * it; non-AI node types warn it's ignored (see BASH_NODE_AI_FIELDS).

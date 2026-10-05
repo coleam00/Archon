@@ -9,7 +9,7 @@
  * reads an event's type only to decide side effects (what the user sees, the subtask
  * tracker); it never rebuilds the event.
  */
-import type { ProviderEvent } from '@archon/providers/types';
+import type { ProviderEvent } from '@archon/provider-contract';
 import { subtaskTerminalStatusSchema, toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 
