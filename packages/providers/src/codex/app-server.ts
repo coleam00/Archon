@@ -145,9 +145,10 @@ export class AppServerConnection {
 
   private constructor(
     private readonly child: ChildProcessWithoutNullStreams,
-    env: Record<string, string>
+    env: Record<string, string>,
+    protectedEnvKeys?: readonly string[]
   ) {
-    this.credentialValues = collectCredentialValues(env);
+    this.credentialValues = collectCredentialValues(env, protectedEnvKeys);
     let buffered = '';
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -184,7 +185,8 @@ export class AppServerConnection {
     binary: CodexBinary,
     args: string[],
     env: Record<string, string>,
-    spawner: Spawner = spawn as unknown as Spawner
+    spawner: Spawner = spawn as unknown as Spawner,
+    protectedEnvKeys?: readonly string[]
   ): AppServerConnection {
     const childEnv = { ...env };
     if (binary.pathDirs.length > 0) {
@@ -195,7 +197,7 @@ export class AppServerConnection {
       env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return new AppServerConnection(child, childEnv);
+    return new AppServerConnection(child, childEnv, protectedEnvKeys);
   }
 
   /** Sends a request and resolves with its result, or rejects with a {@link JsonRpcError}. */

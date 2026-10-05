@@ -1,10 +1,29 @@
 /**
  * Database operations for codebases
  */
-import { resolve } from 'path';
+import { resolve } from 'node:path';
+import { assertAbsoluteDefaultCwd } from './codebase-path';
+export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDialect } from './connection';
 import type { Codebase } from '../types';
 import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
+
+function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
+  assertAbsoluteDefaultCwd(row.default_cwd, row.name);
+  return row;
+}
+
+export type CodebaseRegistration = Pick<Codebase, 'id' | 'name'> & {
+  stored_default_cwd: Codebase['default_cwd'];
+};
+
+/** Administrative metadata stays readable so invalid registrations can be repaired or removed. */
+export async function listCodebaseRegistrations(): Promise<readonly CodebaseRegistration[]> {
+  const result = await pool.query<CodebaseRegistration>(
+    'SELECT id, name, default_cwd AS stored_default_cwd FROM remote_agent_codebases ORDER BY name ASC'
+  );
+  return result.rows;
+}
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -21,6 +40,7 @@ export async function createCodebase(data: {
   ai_assistant_type?: string;
   kind?: 'repo' | 'folder';
 }): Promise<Codebase> {
+  assertAbsoluteDefaultCwd(data.default_cwd, data.name);
   const assistantType = data.ai_assistant_type ?? process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
   const result = await pool.query<Codebase>(
     'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
@@ -40,14 +60,15 @@ export async function createCodebase(data: {
   // project). Every registration surface (HTTP clone/register, /register-project
   // chat command) funnels through this INSERT — no name/path/URL is ever sent.
   captureCodebaseRegistered();
-  return result.rows[0];
+  return validateCodebase(result.rows[0]);
 }
 
 export async function getCodebase(id: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases WHERE id = $1', [
     id,
   ]);
-  return result.rows[0] || null;
+  const row = result.rows[0];
+  return row ? validateCodebase(row) : null;
 }
 
 export async function updateCodebaseCommands(
@@ -102,7 +123,8 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
     'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
     [repoUrl]
   );
-  return result.rows[0] || null;
+  const row = result.rows[0];
+  return row ? validateCodebase(row) : null;
 }
 
 export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Codebase | null> {
@@ -110,7 +132,8 @@ export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Code
     'SELECT * FROM remote_agent_codebases WHERE default_cwd = $1 ORDER BY created_at DESC LIMIT 1',
     [defaultCwd]
   );
-  return result.rows[0] || null;
+  const row = result.rows[0];
+  return row ? validateCodebase(row) : null;
 }
 
 /**
@@ -128,7 +151,7 @@ export async function findCodebaseByDefaultCwd(defaultCwd: string): Promise<Code
 export async function findCodebaseByPathPrefix(cwdPath: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases');
   let best: { row: Codebase; rootLength: number } | null = null;
-  for (const row of result.rows) {
+  for (const row of result.rows.map(validateCodebase)) {
     if (!isPathInside(row.default_cwd, cwdPath, { includeRoot: true, lexical: true })) continue;
     // Rank on the normalized root: isPathInside matched it, and a stored spelling
     // with trailing separators would otherwise outrank a nested codebase.
@@ -143,7 +166,8 @@ export async function findCodebaseByName(name: string): Promise<Codebase | null>
     'SELECT * FROM remote_agent_codebases WHERE name = $1 ORDER BY created_at DESC LIMIT 1',
     [name]
   );
-  return result.rows[0] || null;
+  const row = result.rows[0];
+  return row ? validateCodebase(row) : null;
 }
 
 /**
@@ -159,9 +183,10 @@ export class CodebaseNotFoundError extends Error {
 }
 
 export async function updateCodebase(
-  id: string,
+  target: Pick<Codebase, 'id' | 'name'>,
   data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
 ): Promise<void> {
+  if (data.default_cwd !== undefined) assertAbsoluteDefaultCwd(data.default_cwd, target.name);
   const dialect = getDialect();
   const updates: string[] = [];
   const values: (string | null)[] = [];
@@ -185,14 +210,14 @@ export async function updateCodebase(
   if (updates.length === 0) return;
 
   updates.push(`updated_at = ${dialect.now()}`);
-  values.push(id);
+  values.push(target.id);
 
   const result = await pool.query(
     `UPDATE remote_agent_codebases SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
     values
   );
   if ((result.rowCount ?? 0) === 0) {
-    throw new CodebaseNotFoundError(id);
+    throw new CodebaseNotFoundError(target.id);
   }
 }
 
@@ -200,7 +225,7 @@ export async function listCodebases(): Promise<readonly Codebase[]> {
   const result = await pool.query<Codebase>(
     'SELECT * FROM remote_agent_codebases ORDER BY name ASC'
   );
-  return result.rows;
+  return result.rows.map(validateCodebase);
 }
 
 export async function deleteCodebase(id: string): Promise<void> {

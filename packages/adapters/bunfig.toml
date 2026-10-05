@@ -8,6 +8,7 @@
 # Adapters are the one package whose unit tests instantiate production API
 # clients (Octokit, bare fetch against a base URL), so they are the one place a
 # forgotten stub turns into a live request and an intermittent CI timeout.
-# See src/test/no-network.ts and #2186.
+# Missing core mocks can also write real state under ARCHON_HOME (#2308).
+# See src/test/no-network.ts and src/test/no-archon-home-writes.ts.
 [test]
-preload = ["../../scripts/test-telemetry-off.ts", "./src/test/no-network.ts"]
+preload = ["../../scripts/test-telemetry-off.ts", "./src/test/no-network.ts", "./src/test/no-archon-home-writes.ts"]

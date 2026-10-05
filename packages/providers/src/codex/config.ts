@@ -3,7 +3,7 @@
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
 import type { CodexProviderDefaults } from '../types';
-import { EFFORT_LADDER, type EffortRung } from '@archon/paths/effort';
+import { EFFORT_LADDER, type EffortRung } from '@archon/provider-contract';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,

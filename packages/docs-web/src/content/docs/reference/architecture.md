@@ -169,7 +169,7 @@ Each platform must provide a unique, stable conversation ID:
 - **Telegram**: `chat_id` (e.g., `"123456789"`)
 - **GitHub**: `owner/repo#issue_number` (e.g., `"user/repo#42"`)
 - **Slack**: `thread_ts` or `channel_id+thread_ts`
-- **CLI**: `cli-{timestamp}-{random}` (e.g., `"cli-1737400000-abc123"`)
+- **CLI**: `cli-{timestamp}-{random}` for `archon workflow run` and `cli-chat-{timestamp}-{random}` for `archon chat`, where `{timestamp}` is milliseconds since the epoch and `{random}` is 32 hex characters (e.g., `"cli-1737400000000-9f86d081884c7d659a2feaa0c55ad015"`)
 
 #### Message Length Limits
 
@@ -283,7 +283,7 @@ AI agent providers wrap AI SDKs and provide a unified streaming interface. Imple
 
 ### IAgentProvider Interface
 
-**Location:** `packages/providers/src/types.ts` (contract layer — zero SDK deps). That file is the definition; this page does not copy it.
+**Location:** `packages/provider-contract/src/agent-provider.ts` (SDK-free contract), exported by `@archon/provider-contract`. That file is the definition; this page does not copy it.
 
 A provider answers `getType()` and `getCapabilities()`, streams a turn from `sendQuery(prompt, cwd, resumeSessionId, options)`, and checks its native login in `checkCredential`. The `checkCredential` request carries the configured `model`, the assistant's merged config (`assistantConfig`), the caller's `env`, and an abort `signal`.
 
@@ -321,8 +321,13 @@ Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(r
 **2. Implement the interface:**
 
 ```typescript
-import type { CredentialStatus } from '@archon/provider-contract';
-import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
+import type {
+  CredentialStatus,
+  IAgentProvider,
+  MessageChunk,
+  ProviderCapabilities,
+  SendQueryOptions,
+} from '@archon/provider-contract';
 
 export class YourAssistantProvider implements IAgentProvider {
   async checkCredential(): Promise<CredentialStatus> {

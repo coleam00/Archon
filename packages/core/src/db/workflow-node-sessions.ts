@@ -16,7 +16,7 @@
 import { pool, getDialect } from './connection';
 import { createLogger } from '@archon/paths';
 import type { WorkflowNodeSession } from '@archon/workflows/schemas/workflow-node-session';
-import type { WorkflowNodeSessionKey } from '@archon/workflows/store';
+import type { IWorkflowStore, WorkflowNodeSessionKey } from '@archon/workflows/store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -86,11 +86,9 @@ export async function upsertWorkflowNodeSession(
   }
 }
 
-export async function deleteWorkflowNodeSessions(filter: {
-  workflow_name: string;
-  scope_key?: string;
-  node_id?: string;
-}): Promise<{ deleted: number }> {
+export async function deleteWorkflowNodeSessions(
+  filter: Parameters<IWorkflowStore['deleteWorkflowNodeSessions']>[0]
+): Promise<{ deleted: number }> {
   const params: unknown[] = [filter.workflow_name];
   let sql = 'DELETE FROM remote_agent_workflow_node_sessions WHERE workflow_name = $1';
   if (filter.scope_key !== undefined) {

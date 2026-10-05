@@ -12,14 +12,18 @@
   },
   "dependencies": {
     "@archon/plugin-manifest": "workspace:*",
-    "astro": "^6.1.0",
-    "@astrojs/starlight": "^0.38.0",
+    "@astrojs/markdown-remark": "^7.3.1",
+    "astro": "^7.2.10",
+    "@astrojs/starlight": "^0.42.5",
     "sharp": "^0.35.0",
-    "starlight-llms-txt": "^0.10.0"
+    "starlight-llms-txt": "^0.12.0"
   },
   "testGroups": [
     [
       "src/data/plugins.test.ts"
+    ],
+    [
+      "src/reverse-proxy.test.ts"
     ]
   ]
 }

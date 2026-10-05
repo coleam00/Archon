@@ -4909,6 +4909,9 @@ export interface components {
     };
     GetWorkflowResponse: {
       workflow: components['schemas']['WorkflowDefinition'];
+      authored?: {
+        [key: string]: unknown;
+      };
       filename: string;
       source: components['schemas']['WorkflowSource'];
     };
@@ -5009,6 +5012,8 @@ export interface components {
       )[];
     };
     ProviderCapabilities: {
+      /** @enum {string} */
+      backgroundWork: 'reported' | 'none' | 'unobserved';
       sessionResume: boolean;
       sessionFork?: boolean;
       mcp: boolean;

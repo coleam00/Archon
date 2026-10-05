@@ -255,3 +255,72 @@ describe('subscribeKey — resubscribe during an abandoned in-flight load (#2101
     unsubB();
   });
 });
+
+describe('revalidate after an abandoned in-flight load', () => {
+  test('invalidating an abandoned revalidation cannot resurrect a purged key', async () => {
+    const key = 'test:invalidate-abandoned-revalidation';
+    set(key, 'warm');
+
+    let resolveLoad: (v: string) => void = () => {};
+    const unsubscribe = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveLoad = resolve;
+        })
+    );
+
+    invalidate(key); // starts a revalidation while retaining the warm value
+    unsubscribe();
+    invalidate(key); // no loader left: purges the key
+    expect(get(key)).toBeUndefined();
+
+    resolveLoad('stale');
+    await flush();
+    expect(get(key)).toBeUndefined();
+  });
+
+  test('manual revalidation supersedes an abandoned load', async () => {
+    const key = 'test:supersede-abandoned-revalidation';
+    set(key, 'warm');
+
+    let resolveA: (v: string) => void = () => {};
+    const unsubscribeA = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveA = resolve;
+        })
+    );
+    invalidate(key);
+    unsubscribeA();
+
+    let loadsB = 0;
+    let resolveB: (v: string) => void = () => {};
+    const unsubscribeB = subscribeKey(
+      key,
+      () => {},
+      () => {
+        loadsB += 1;
+        return new Promise<string>(resolve => {
+          resolveB = resolve;
+        });
+      }
+    );
+
+    invalidate(key);
+    expect(loadsB).toBe(1);
+
+    resolveB('fresh');
+    await flush();
+    expect(get(key)).toBe('fresh');
+
+    resolveA('stale');
+    await flush();
+    expect(get(key)).toBe('fresh');
+
+    unsubscribeB();
+  });
+});

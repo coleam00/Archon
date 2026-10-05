@@ -124,6 +124,59 @@ export async function checkSettled(cases: readonly ProviderTurnCase[]): Promise<
   return violations;
 }
 
+/** Runtime evidence is sampled as the provider emits, so invented closes cannot pass. */
+export interface ProviderBackgroundCase extends ProviderTurnCase {
+  runtimeStatus(taskId: string): Extract<ProviderChunk, { type: 'subtask' }>['status'] | undefined;
+}
+
+export async function checkBackgroundSettle(
+  cases: readonly ProviderBackgroundCase[]
+): Promise<string[]> {
+  if (cases.length === 0) return ['reported provider has no background conformance cases'];
+  const violations: string[] = [];
+  for (const turn of cases) {
+    const observed = new Set<string>();
+    let resultWhileLive = false;
+    let settled = false;
+    try {
+      for await (const raw of turn.run()) {
+        const parsed = providerChunkSchema.safeParse(raw);
+        if (!parsed.success) continue;
+        const chunk = parsed.data;
+        if (chunk.type === 'subtask') {
+          observed.add(chunk.taskId);
+          if (
+            TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
+            turn.runtimeStatus(chunk.taskId) !== chunk.status
+          ) {
+            violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
+          }
+        } else if (chunk.type === 'result') {
+          resultWhileLive ||= [...observed].some(
+            id => !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')
+          );
+        } else if (chunk.type === 'settled') {
+          settled = true;
+          for (const id of observed) {
+            if (!TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')) {
+              violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      violations.push(
+        `${turn.name}: threw before its background work settled (${(error as Error).message})`
+      );
+      continue;
+    }
+    if (!settled || observed.size === 0 || !resultWhileLive) {
+      violations.push(`${turn.name}: background case must settle after a result with live work`);
+    }
+  }
+  return violations;
+}
+
 const TERMINAL_SUBTASK_STATUSES: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
 
 /**
@@ -135,7 +188,8 @@ const TERMINAL_SUBTASK_STATUSES: ReadonlySet<string> = new Set(subtaskTerminalSt
  *     background work outlives its first `result` may start calls after it; those close
  *     before the following `result`;
  *  3. no `tool_call_update` arrives without an earlier `tool_call` for its id;
- *  4. every subtask's last status before `settled` is `completed`, `failed` or `stopped`.
+ *  4. every subtask's last status before `settled` is `completed`, `failed` or `stopped`,
+ *     as reported by its runtime (verified by `checkBackgroundSettle`).
  *     A stream that never settles is reported by `checkSettled`.
  */
 export async function checkEventVocabulary(cases: readonly ProviderTurnCase[]): Promise<string[]> {
@@ -246,6 +300,37 @@ export async function checkSessionIdReported(
   return violations;
 }
 
+/** A turn that continues the session `source` in a fork. */
+export interface ProviderForkCase extends ProviderTurnCase {
+  /** The session the turn forks; it must already exist for the provider to fork. */
+  source: string;
+}
+
+/**
+ * A fork continues its source in a new session and leaves the source unchanged, so two runs
+ * that continue one session never write into it together. Every result of the fork turn
+ * reports the source's context restored (`resumed: true`) and names a session other than
+ * the source: the engine fails a named resume that gets either one wrong.
+ */
+export async function checkForkedSession(forkTurn: ProviderForkCase): Promise<string[]> {
+  const violations: string[] = [];
+  try {
+    for await (const chunk of forkTurn.run()) {
+      if (!isResultChunk(chunk)) continue;
+      const { sessionId, resumed } = chunk as { sessionId?: unknown; resumed?: unknown };
+      if (resumed !== true) {
+        violations.push(`${forkTurn.name}: a result does not report the source session restored`);
+      }
+      if (sessionId === forkTurn.source) {
+        violations.push(`${forkTurn.name}: a result names the source session, not a fork`);
+      }
+    }
+  } catch {
+    // checkSettled reports the throw.
+  }
+  return violations;
+}
+
 /**
  * The `toolTurn` fixture must exercise what rule 2 is about: at least two tool calls, one of
  * them interrupted and closed as `cancelled`. A smaller fixture would pass rule 2 vacuously.
@@ -322,7 +407,8 @@ export async function checkCredentialStatuses(
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
   /** The provider's declared capabilities; pass `getCapabilities()`. */
-  capabilities: Pick<ProviderCapabilities, 'sessionResume'>;
+  capabilities: Pick<ProviderCapabilities, 'sessionResume' | 'sessionFork' | 'backgroundWork'>;
+  backgroundCases?: readonly ProviderBackgroundCase[];
   failureCases: readonly ProviderFailureCase[];
   /** Turns that succeed, including one whose result arrives before its work drains. */
   turns: readonly ProviderTurnCase[];
@@ -330,19 +416,33 @@ export interface ProviderConformanceSuite {
    * A turn with two tool calls, one of them interrupted. A provider without tools omits it.
    */
   toolTurn?: ProviderTurnCase;
+  /** A turn that forks an existing session. Required when the provider declares `sessionFork`. */
+  forkTurn?: ProviderForkCase;
 }
 
 export async function runProviderConformance(suite: ProviderConformanceSuite): Promise<string[]> {
-  const toolTurns = suite.toolTurn ? [suite.toolTurn] : [];
+  const turns = [
+    ...suite.turns,
+    ...(suite.toolTurn ? [suite.toolTurn] : []),
+    ...(suite.forkTurn ? [suite.forkTurn] : []),
+    ...(suite.backgroundCases ?? []),
+  ];
+  const forkViolations = !suite.capabilities.sessionFork
+    ? []
+    : suite.forkTurn
+      ? await checkForkedSession(suite.forkTurn)
+      : ['the provider declares sessionFork but the suite has no forkTurn'];
   return [
+    ...(suite.capabilities.backgroundWork === 'reported'
+      ? await checkBackgroundSettle(suite.backgroundCases ?? [])
+      : []),
     ...(await checkFailureClasses(suite.failureCases)),
     // A failed turn settles too.
-    ...(await checkSettled([...suite.turns, ...toolTurns, ...suite.failureCases])),
+    ...(await checkSettled([...turns, ...suite.failureCases])),
     // Every fixture streams the vocabulary, a failed turn included.
-    ...(await checkEventVocabulary([...suite.turns, ...toolTurns, ...suite.failureCases])),
+    ...(await checkEventVocabulary([...turns, ...suite.failureCases])),
     ...(suite.toolTurn ? await checkToolTurnShape(suite.toolTurn) : []),
-    ...(suite.capabilities.sessionResume
-      ? await checkSessionIdReported([...suite.turns, ...toolTurns])
-      : []),
+    ...(suite.capabilities.sessionResume ? await checkSessionIdReported(turns) : []),
+    ...forkViolations,
   ];
 }

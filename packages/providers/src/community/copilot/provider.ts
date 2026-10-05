@@ -33,11 +33,11 @@ import type {
   SendQueryOptions,
 } from '../../types';
 import { loadMcpConfig } from '../../mcp/config';
-import { resolveSkillDirectories } from '../../shared/skills';
+import { resolveSkillDirectories } from '@archon/paths/skills';
 import { augmentPromptForJsonSchema } from '../../shared/structured-output';
 import { COPILOT_CAPABILITIES } from './capabilities';
 import { COPILOT_EFFORTS, parseCopilotConfig, type CopilotProviderDefaults } from './config';
-import { clampEffort } from '@archon/paths/effort';
+import { clampEffort } from '@archon/provider-contract';
 import { resolveCopilotBinaryPath } from './binary-resolver';
 import { bridgeSession } from './event-bridge';
 import { closeOpenToolCalls } from '../../shared/tool-calls';

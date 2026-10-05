@@ -13,7 +13,7 @@ import {
   type NodeState,
   type SuspendReason,
 } from './node-state';
-import type { TokenUsage } from '@archon/providers/types';
+import type { TokenUsage } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
 import {
   nodeExecutionMetadataSchema,

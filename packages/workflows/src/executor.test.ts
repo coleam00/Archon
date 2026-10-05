@@ -201,6 +201,24 @@ import { TerminalStatusWriteError } from './terminal-status-write';
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
+    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
+      throw new Error('Unexpected resolveApprovalGate');
+    }),
+    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
+      throw new Error('Unexpected resolveAndCancelApprovalGate');
+    }),
+    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
+      () => {
+        throw new Error('Unexpected cancelResumableRunsForConversation');
+      }
+    ),
+    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
+      throw new Error('Unexpected deleteWorkflowNodeSessions');
+    }),
+    findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
+    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
+      throw new Error('Unexpected listWorkflowRuns');
+    }),
     getActiveWorkflowRunByPath: mock(async () => null),
     findChildRuns: mock(async () => []),
     getRunAncestry: mock(async () => []),
@@ -268,6 +286,7 @@ function makePlatform(): IWorkflowPlatform {
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
     store: store ?? makeStore(),
+    getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({
         assistant: 'claude' as const,
@@ -281,6 +300,7 @@ function makeDeps(store?: IWorkflowStore): WorkflowDeps {
     ),
     getAgentProvider: mock(() => ({
       run: mock(async () => {}),
+      checkCredential: mock(async () => ({ state: 'not_checked', source: 'native' })),
     })),
   } as unknown as WorkflowDeps;
 }
@@ -2592,6 +2612,7 @@ describe('executeWorkflow', () => {
         ),
         getAgentProvider: mock(() => ({
           run: mock(async () => {}),
+          checkCredential: mock(async () => ({ state: 'not_checked', source: 'native' })),
         })),
       } as unknown as WorkflowDeps;
       await executeWorkflow(
@@ -3270,6 +3291,31 @@ describe('executeWorkflow', () => {
   // -------------------------------------------------------------------------
 
   describe('user provider env injection', () => {
+    it('does not read credential delivery for a deterministic-only graph', async () => {
+      const getUserProviderEnv = mock(async (): Promise<never> => {
+        throw new Error('unused vault unavailable');
+      });
+      const deps: WorkflowDeps = {
+        ...makeDeps(makeStore()),
+        isPerUserProviderKeysEnabled: () => true,
+        getUserProviderEnv,
+      };
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow({
+          nodes: [{ id: 'exec', kind: 'exec', runtime: 'sh', script: 'true' }],
+        }),
+        'msg',
+        'db-c1',
+        { userId: 'u-1' }
+      );
+      expect(result.success).toBe(true);
+      expect(getUserProviderEnv).not.toHaveBeenCalled();
+    });
+
     it('skips injection when isPerUserProviderKeysEnabled returns false', async () => {
       const getUserProviderEnv = mock(async () => ({
         env: { SHOULD_NOT_APPEAR: '1' },
@@ -3362,8 +3408,43 @@ describe('executeWorkflow', () => {
       ]);
     });
 
+    for (const [enabled, userId] of [
+      [false, 'u-1'],
+      [true, undefined],
+    ] as const) {
+      it(`does not resolve a commit author with per-user=${enabled} and user=${userId}`, async () => {
+        const author = mock(async () => ({ name: 'other-user', email: 'other@example.test' }));
+        const deps: WorkflowDeps = {
+          ...makeDeps(),
+          isPerUserGitHubEnabled: () => enabled,
+          getUserGithubAuthor: author,
+        };
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          'db-c1',
+          { userId }
+        );
+        expect(author).not.toHaveBeenCalled();
+        expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars).not.toHaveProperty(
+          'GIT_AUTHOR_NAME'
+        );
+        expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars).not.toHaveProperty(
+          'GIT_AUTHOR_EMAIL'
+        );
+      });
+    }
+
     it('protects bot and per-user GitHub credentials beside provider credentials', async () => {
       const store = makeStore({
+        getCodebaseEnvVars: mock(async () => ({
+          GIT_AUTHOR_NAME: 'wrong-user',
+          GIT_AUTHOR_EMAIL: 'wrong@example.test',
+        })),
         getCodebase: mock(async () => ({
           id: 'codebase-1',
           name: 'demo',
@@ -3377,6 +3458,10 @@ describe('executeWorkflow', () => {
         resolveBotGitHubToken: mock(async () => 'bot-token'),
         isPerUserGitHubEnabled: () => true,
         getUserGithubToken: mock(async () => 'user-token'),
+        getUserGithubAuthor: mock(async () => ({
+          name: 'connected-author',
+          email: '42+connected-author@users.noreply.github.com',
+        })),
         isPerUserProviderKeysEnabled: () => true,
         getUserProviderEnv: mock(async () => ({
           env: { ANTHROPIC_API_KEY: 'provider-token' },
@@ -3401,15 +3486,21 @@ describe('executeWorkflow', () => {
         GH_TOKEN: 'user-token',
         GITHUB_TOKEN: 'user-token',
         COPILOT_GITHUB_TOKEN: '',
+        GIT_AUTHOR_NAME: 'connected-author',
+        GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
         ANTHROPIC_API_KEY: 'provider-token',
       });
       expect(configArg?.protectedEnvKeys).toEqual([
         'GH_TOKEN',
         'GITHUB_TOKEN',
         'COPILOT_GITHUB_TOKEN',
+        'GIT_AUTHOR_NAME',
+        'GIT_AUTHOR_EMAIL',
         'ANTHROPIC_API_KEY',
       ]);
       expect(configArg?.protectedCredentialValues).toEqual(['provider-token']);
+      expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
+      expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
     });
 
     it('removes stale credential files before a credential refresh failure', async () => {
@@ -3428,11 +3519,20 @@ describe('executeWorkflow', () => {
         }),
       };
       try {
-        await expect(
-          executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', 'db-c1', {
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          'db-c1',
+          {
             userId: 'u-1',
-          })
-        ).resolves.toBeDefined();
+          }
+        );
+        expect(result.success).toBe(false);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
         await expect(readFile(codexAuthPath, 'utf8')).rejects.toThrow();
         await expect(readFile(piAuthPath, 'utf8')).rejects.toThrow();
       } finally {
@@ -3441,7 +3541,7 @@ describe('executeWorkflow', () => {
       }
     });
 
-    it('retains protected values when a later credential file write fails', async () => {
+    it('blocks DAG entry and cleans partial delivery when a later file write fails', async () => {
       const credentialValue = 'oauth-partial-write-secret';
       const deliveryRoot = await mkdtemp(join(tmpdir(), 'archon-provider-delivery-'));
       const firstFile = join(deliveryRoot, 'codex-auth.json');
@@ -3460,18 +3560,27 @@ describe('executeWorkflow', () => {
       };
 
       try {
-        await expect(
-          executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', 'db-c1', {
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          'db-c1',
+          {
             userId: 'u-1',
-          })
-        ).resolves.toBeDefined();
+          }
+        );
+        expect(result.success).toBe(false);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
 
-        const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
-        expect(await readFile(firstFile, 'utf8')).toBe(credentialValue);
-        expect(configArg?.envVars).not.toHaveProperty('CODEX_HOME');
-        expect(configArg?.protectedCredentialValues).toEqual([credentialValue]);
+        if (result.success) throw new Error('Expected delivery failure');
+        expect(result.error).toBe('Could not safely write provider credential files');
+        expect(result.error).not.toContain(credentialValue);
+        await expect(readFile(firstFile, 'utf8')).rejects.toThrow();
       } finally {
-        await rm(deliveryRoot, { recursive: true, force: true });
+        await removeTempTree(deliveryRoot);
       }
     });
 
@@ -3501,7 +3610,12 @@ describe('executeWorkflow', () => {
         }
       );
 
-      expect(getUserProviderEnv).toHaveBeenCalledWith('persisted-user', expect.any(String));
+      expect(getUserProviderEnv).toHaveBeenCalledWith(
+        'persisted-user',
+        expect.any(String),
+        ['anthropic'],
+        ['anthropic']
+      );
       const configArg = mockExecuteDagWorkflow.mock.calls[0]?.[0].config;
       expect(configArg?.protectedCredentialValues).toEqual(['persisted-user-token']);
     });
@@ -5346,6 +5460,91 @@ describe('run checkout baseline (#3305)', () => {
     expect(store.failWorkflowRun).toHaveBeenCalledWith(
       'run-123',
       'Checkout baseline could not be recorded: disk full'
+    );
+    expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('credential preflight lifecycle', () => {
+  it.each(['paused', 'failed'] as const)(
+    'blocks a %s continuation using its originating identity before DAG entry',
+    async status => {
+      const store = makeStore();
+      const deps = makeDeps(store);
+      deps.isPerUserProviderKeysEnabled = () => true;
+      const getStatus = mock(
+        async (): Promise<import('@archon/provider-contract').CredentialStatus> => ({
+          state: 'unusable',
+          source: 'archon',
+          evidence: 'stored credential unreadable',
+        })
+      );
+      deps.getUserProviderCredentialStatus = getStatus;
+      mockExecuteDagWorkflow.mockClear();
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv',
+        '/tmp',
+        makeWorkflow(),
+        'resume',
+        'db',
+        {
+          userId: 'resumer',
+          preCreatedRun: makeRun({ status, user_id: 'origin' }),
+          priorCompletedNodes: new Map([['completed', { output: 'done' }]]),
+        }
+      );
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected credential refusal');
+      expect(result.error).toBe(
+        "Credential preflight failed for provider 'claude' (vendor 'anthropic'): credential cannot be used: stored credential unreadable"
+      );
+      expect(getStatus).toHaveBeenCalledWith('origin', 'anthropic');
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalledWith(
+        'run-123',
+        result.error,
+        expect.anything()
+      );
+    }
+  );
+
+  it('a delivery refusal after a successful check blocks rather than using ambient credentials', async () => {
+    const store = makeStore();
+    const deps = makeDeps(store);
+    deps.isPerUserProviderKeysEnabled = () => true;
+    const { StoredCredentialDeliveryError } = await import('./run-preflight');
+    deps.getUserProviderCredentialStatus = mock(
+      async () =>
+        ({
+          state: 'usable',
+          source: 'archon',
+        }) as const
+    );
+    deps.getUserProviderEnv = mock(async (_user, _dir, vendors, connectedVendors) => {
+      expect(vendors).toEqual(['anthropic']);
+      expect(connectedVendors).toEqual(['anthropic']);
+      throw new StoredCredentialDeliveryError('anthropic', {
+        state: 'check_failed',
+        source: 'archon',
+        evidence: 'refresh unavailable',
+      });
+    });
+    mockExecuteDagWorkflow.mockClear();
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv',
+      '/tmp',
+      makeWorkflow(),
+      'start',
+      'db',
+      { userId: 'origin' }
+    );
+    if (result.success) throw new Error('Expected credential refusal');
+    expect(result.error).toBe(
+      "Credential preflight failed for provider 'claude' (vendor 'anthropic'): could not verify: refresh unavailable"
     );
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });

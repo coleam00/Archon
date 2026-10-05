@@ -4,7 +4,7 @@ import {
   type DeclaredOutputPaths,
 } from './output-ref';
 import { z } from '@hono/zod-openapi';
-import type { TokenUsage } from '@archon/providers/types';
+import type { TokenUsage } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
 import type { NodeOutput } from './schemas/workflow-run';
 import { nodeSkipReasonSchema, skipCauseSchema } from './schemas/node-state';

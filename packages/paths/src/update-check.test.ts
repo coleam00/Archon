@@ -1,12 +1,14 @@
 import { describe, test, expect, spyOn, beforeEach, afterEach } from 'bun:test';
 import { join } from 'path';
-import { mkdirSync, writeFileSync, readFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
+import { removeTempTree } from './test-utils';
 import {
   isNewerVersion,
   parseLatestRelease,
   checkForUpdate,
   getCachedUpdateCheck,
+  takeCachedUpdateNotice,
 } from './update-check';
 
 // ─── isNewerVersion ──────────────────────────────────────────────────
@@ -81,16 +83,59 @@ describe('checkForUpdate', () => {
     mkdirSync(testDir, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalArchonHome !== undefined) {
       process.env.ARCHON_HOME = originalArchonHome;
     } else {
       delete process.env.ARCHON_HOME;
     }
+    await removeTempTree(testDir);
+  });
+
+  test('old cache allows a notice, then suppresses it for 24 hours', () => {
+    const now = Date.now();
+    const clock = spyOn(Date, 'now').mockReturnValue(now);
+    const cachePath = join(testDir, 'update-check.json');
+    const cache = { latestVersion: '0.5.0', releaseUrl: 'https://example.com', checkedAt: now };
     try {
-      rmSync(testDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
+      writeFileSync(cachePath, JSON.stringify(cache));
+      expect(takeCachedUpdateNotice('0.5.0')).toBeNull();
+      expect(takeCachedUpdateNotice('0.4.0')?.latestVersion).toBe('0.5.0');
+      expect(takeCachedUpdateNotice('0.4.0')).toBeNull();
+      clock.mockReturnValue(now + 24 * 60 * 60 * 1000);
+      writeFileSync(
+        cachePath,
+        JSON.stringify({ ...cache, checkedAt: Date.now(), lastNoticeShownAt: now })
+      );
+      expect(takeCachedUpdateNotice('0.4.0')?.latestVersion).toBe('0.5.0');
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test('refreshing stale release data preserves the notice timestamp', async () => {
+    const lastNoticeShownAt = Date.now() - 2 * 60 * 60 * 1000;
+    writeFileSync(
+      join(testDir, 'update-check.json'),
+      JSON.stringify({
+        latestVersion: '0.5.0',
+        releaseUrl: 'https://example.com',
+        checkedAt: lastNoticeShownAt,
+        lastNoticeShownAt,
+      })
+    );
+    const fetchSpy = spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ tag_name: 'v0.6.0', html_url: 'https://example.com' }))
+    );
+    try {
+      expect(takeCachedUpdateNotice('0.4.0')).toBeNull();
+      await checkForUpdate('0.4.0');
+      expect(
+        JSON.parse(readFileSync(join(testDir, 'update-check.json'), 'utf8')).lastNoticeShownAt
+      ).toBe(lastNoticeShownAt);
+      expect(takeCachedUpdateNotice('0.4.0')).toBeNull();
+    } finally {
+      fetchSpy.mockRestore();
     }
   });
 
@@ -216,17 +261,13 @@ describe('getCachedUpdateCheck', () => {
     mkdirSync(testDir, { recursive: true });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalArchonHome !== undefined) {
       process.env.ARCHON_HOME = originalArchonHome;
     } else {
       delete process.env.ARCHON_HOME;
     }
-    try {
-      rmSync(testDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   test('returns null when no cache file', () => {

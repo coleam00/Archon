@@ -95,6 +95,7 @@ export type { InstallManifest } from './install-manifest';
 export {
   checkForUpdate,
   getCachedUpdateCheck,
+  takeCachedUpdateNotice,
   isNewerVersion,
   parseLatestRelease,
 } from './update-check';
