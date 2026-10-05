@@ -479,6 +479,7 @@ const NOW = new Date().toISOString();
 const NOW_DATE = new Date(NOW);
 
 const MOCK_RUNNING_RUN = {
+  origin: { conversationId: 'conv-uuid-1' },
   id: 'run-uuid-1',
   workflow_name: 'deploy',
   conversation_id: 'conv-uuid-1',
@@ -2103,6 +2104,11 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   });
 
   test('resumes headlessly (no dispatch) when run has no parent_conversation_id (#2008)', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     // A CLI-launched run has no parent conversation to dispatch a chat
     // message through — it now resumes directly, in-process, instead of
     // being stranded until someone runs the CLI.
@@ -2120,14 +2126,35 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Resuming workflow');
     expect(mockHandleMessage).not.toHaveBeenCalled();
-    expect(mockGetConversationById).not.toHaveBeenCalled();
+    expect(mockGetConversationById).toHaveBeenCalledWith('conv-uuid-1');
     expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
     const cwd = mockExecuteWorkflow.mock.calls[0]?.[3];
     expect(cwd).toBe('/tmp/worktrees/run-uuid-4');
   });
 
+  test('resumes an origin-free run without looking up a conversation', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_FAILED_RUN,
+      origin: null,
+      conversation_id: null,
+      parent_conversation_id: null,
+      working_path: '/tmp/worktrees/run-local',
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-local/resume', { method: 'POST' });
+    expect(response.status).toBe(200);
+    expect(mockGetConversationById).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+    expect(mockExecuteWorkflow.mock.calls[0]?.[6]).toBeUndefined();
+  });
+
   test('returns 400 with CLI hint when the run has no parent conversation and cannot be resolved headlessly', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     // Safe degrade: the workflow source is unresolvable (e.g. deleted) —
     // falls back to the existing CLI-hint response instead of a silent 500.
     mockGetWorkflowRun.mockResolvedValue({
@@ -3116,6 +3143,11 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
   });
 
   test('records rejection and increments count when on_reject configured and under limit', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-on-reject',
@@ -3487,6 +3519,11 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('approve: resumes headlessly when parent_conversation_id is null (CLI-dispatched run, #2008)', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: null,
@@ -3511,7 +3548,7 @@ describe('approve/reject auto-resume', () => {
     expect(body.message).toContain('Resuming workflow');
     // No chat message to dispatch through — resumed directly instead.
     expect(mockHandleMessage).not.toHaveBeenCalled();
-    expect(mockGetConversationById).not.toHaveBeenCalled();
+    expect(mockGetConversationById).toHaveBeenCalledWith('conv-uuid-1');
     expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
     // #2008 R1: a git-repo codebase in scope gets a child-isolation resolver
@@ -3527,6 +3564,11 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('approve: falls back to the CLI-hint response when headless resume cannot resolve the workflow', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: null,
@@ -3547,6 +3589,11 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('approve: falls back to the CLI-hint response (not a 500) when headless resume hits an unexpected error (#2008 R2)', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       parent_conversation_id: null,
@@ -3571,6 +3618,11 @@ describe('approve/reject auto-resume', () => {
   });
 
   test('reject: resumes headlessly when parent_conversation_id is null (CLI-dispatched run, #2008)', async () => {
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'conv-uuid-1',
+      platform_type: 'cli',
+      platform_conversation_id: 'cli-thread',
+    });
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-reject-headless',
@@ -3598,7 +3650,7 @@ describe('approve/reject auto-resume', () => {
     const body = (await response.json()) as { message: string };
     expect(body.message).toContain('Running on-reject prompt');
     expect(mockHandleMessage).not.toHaveBeenCalled();
-    expect(mockGetConversationById).not.toHaveBeenCalled();
+    expect(mockGetConversationById).toHaveBeenCalledWith('conv-uuid-1');
     expect(mockHydrateResumableRun).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
   });

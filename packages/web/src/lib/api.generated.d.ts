@@ -4425,9 +4425,14 @@ export interface components {
       };
     };
     DashboardWorkflowRun: {
+      origin: {
+        conversationId?: string;
+        parentConversationId?: string;
+        userId?: string;
+      } | null;
       id: string;
       workflow_name: string;
-      conversation_id: string;
+      conversation_id: string | null;
       parent_conversation_id: string | null;
       codebase_id: string | null;
       /** @enum {string} */
@@ -5051,9 +5056,14 @@ export interface components {
       runs: components['schemas']['WorkflowRun'][];
     };
     WorkflowRun: {
+      origin: {
+        conversationId?: string;
+        parentConversationId?: string;
+        userId?: string;
+      } | null;
       id: string;
       workflow_name: string;
-      conversation_id: string;
+      conversation_id: string | null;
       parent_conversation_id: string | null;
       codebase_id: string | null;
       /** @enum {string} */

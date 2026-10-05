@@ -259,7 +259,7 @@ describe('server resource-start host', () => {
     expect(submitted.options?.preCreatedRun?.id).toBe(runId);
     expect(submitted.options?.preCreatedRun?.status).toBe('pending');
     const run = submitted.options?.preCreatedRun;
-    if (!run) throw new Error('Missing prepared run');
+    if (!run?.conversation_id) throw new Error('Missing prepared run conversation');
     expect(await getConversationById(run.conversation_id)).toMatchObject({
       codebase_id: run.codebase_id,
       ai_assistant_type: 'codex',
@@ -431,7 +431,7 @@ describe('server resource-start host', () => {
       requestId: admitted[0],
       hostId: HOST_ID,
       engine,
-      createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+      createPlatform: () => new HeadlessPlatform(),
     });
     expect(result.success).toBe(false);
     if (result.success) throw new Error('Expected credential refusal');
@@ -472,7 +472,7 @@ describe('server resource-start host', () => {
         requestId,
         hostId: HOST_ID,
         engine,
-        createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+        createPlatform: () => new HeadlessPlatform(),
       });
 
     await Promise.allSettled([start(), start()]);
@@ -498,7 +498,7 @@ describe('server resource-start host', () => {
         requestId,
         hostId: HOST_ID,
         engine: target,
-        createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+        createPlatform: () => new HeadlessPlatform(),
       });
 
     await expect(start(failing)).rejects.toThrow('engine unavailable');

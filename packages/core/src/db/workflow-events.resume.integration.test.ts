@@ -63,6 +63,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     throw new Error(`Unexpected test query: ${sql}`);
   });
   const run: WorkflowRun = {
+    origin: { conversationId: 'test' },
     id: 'resume-invalidation',
     workflow_name: 'resume-invalidation',
     conversation_id: 'test',

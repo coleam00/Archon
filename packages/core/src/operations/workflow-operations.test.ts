@@ -150,6 +150,7 @@ const {
 
 function makePausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-1',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
@@ -1413,6 +1414,7 @@ describe('respondToWorkflow', () => {
 
 describe('assertApprovable / assertRejectable — shared precondition gate', () => {
   const baseRun = {
+    origin: { conversationId: 'conv-1' },
     id: 'run-1',
     status: 'paused',
     workflow_name: 'assist',

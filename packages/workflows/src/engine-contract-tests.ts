@@ -55,6 +55,7 @@ function emptySnapshot(): DagResumeSnapshot {
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-123',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
@@ -173,7 +174,7 @@ function callInput(): Omit<WorkflowEngineSubmitInput, 'options'> {
     cwd: '/tmp/ops',
     workflow: makeWorkflow(),
     userMessage: 'hello',
-    conversationDbId: 'db-conv-1',
+    origin: { conversationId: 'db-conv-1' },
   };
 }
 
@@ -254,9 +255,37 @@ export function runWorkflowEngineContractTests(
 
       expect(result).toMatchObject({ success: true, workflowRunId: 'run-123' });
       expect(createdRuns).toHaveLength(1);
-      expect(createdRuns[0]?.conversation_id).toBe('db-conv-1');
+      expect(createdRuns[0]?.origin).toEqual({ conversationId: 'db-conv-1' });
       expect(messages).toContain('conv-1');
       expect(configLoads).toBe(1);
+    });
+
+    it('submits and resumes without conversation or user provenance', async () => {
+      const originless = makeRun({ origin: null, conversation_id: null, user_id: null });
+      const created: Parameters<IWorkflowStore['createWorkflowRun']>[0][] = [];
+      const store = resumableStore({
+        createWorkflowRun: async input => {
+          created.push(input);
+          return originless;
+        },
+        resumeWorkflowRun: async () => originless,
+        getWorkflowRun: async () => ({ ...originless, status: 'completed' }),
+      });
+      const engine = makeEngine(makeDeps(store));
+      const input = callInput();
+      delete input.origin;
+      expect(await engine.submit(input)).toMatchObject({ success: true });
+      expect(created[0]?.origin).toBeUndefined();
+      const resumeInput = resumeCallInput();
+      delete resumeInput.origin;
+      const admission = await engine.resume({
+        ...resumeInput,
+        run: { ...originless, status: 'paused' },
+      });
+      expect(admission.accepted).toBe(true);
+      if (!admission.accepted) throw new Error('expected resume');
+      expect(await admission.settled).toMatchObject({ success: true });
+      expect(created).toHaveLength(1);
     });
 
     it('allows a pending pre-created row on fresh submit', async () => {

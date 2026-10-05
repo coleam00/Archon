@@ -1271,12 +1271,14 @@ async function dispatchOrchestratorWorkflowOwned(
             cwd: resumableWorkingPath,
             legacyWorkflow: workflow,
             userMessage,
-            conversationDbId: conversation.id,
+            origin: {
+              conversationId: conversation.id,
+              userId,
+              parentConversationId: conversation.id,
+            },
             run: resumableRun,
             options: {
               codebaseId: codebase.id,
-              parentConversationId: conversation.id,
-              userId,
               source,
               parseWarnings,
               baseBranch: codebaseBaseBranch,
@@ -1351,11 +1353,13 @@ async function dispatchOrchestratorWorkflowOwned(
             cwd: resumableWorkingPath,
             workflow,
             userMessage,
-            conversationDbId: conversation.id,
+            origin: {
+              conversationId: conversation.id,
+              userId,
+              parentConversationId: conversation.id,
+            },
             options: {
               codebaseId: codebase.id,
-              parentConversationId: conversation.id,
-              userId,
               source,
               preparedSource: captured.preparedSource,
               parseWarnings,
@@ -1453,11 +1457,13 @@ async function dispatchOrchestratorWorkflowOwned(
         cwd,
         workflow,
         userMessage,
-        conversationDbId: conversation.id,
-        options: {
-          codebaseId: codebase.id,
+        origin: {
+          conversationId: conversation.id,
           parentConversationId: conversation.id,
           userId,
+        },
+        options: {
+          codebaseId: codebase.id,
           source,
           preparedSource: captured.preparedSource,
           preparedAiConfiguration,

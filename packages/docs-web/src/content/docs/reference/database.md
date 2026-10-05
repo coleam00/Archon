@@ -139,7 +139,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs
   - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
-  - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`)
+  - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`). A run with neither has no scope, so it reads and writes no rows here
   - A run reads its scope's rows once at start, and each node writes its finished session back, so concurrent runs end with the session that finished last
   - No FK on `scope_key`, so a conversation delete does not cascade here. Soft delete plus a never-reused UUID makes the leftovers harmless; a future hard-delete must delete by `scope_key` itself — the mirror of the cascade caveat on `remote_agent_workflow_runs` above.
 
@@ -178,6 +178,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_resource_start_requests`** - Durable workflow-start requests
   - Stores prepared launches, overlap policy, admission status, and blockers
+  - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued or admitted request whose run has not started
   - `queue_position` orders waiting requests; optional receipt and binding linkage preserves source provenance
 
 - **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
@@ -214,3 +215,26 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 | `023_add_default_branch_to_codebases.sql` | Detected default branch on codebases |
 
 > The `remote_agent_codebases.kind` column (project `'repo'` | `'folder'` discriminator, commented "From migration 024"), the `remote_agent_users.role` column, and the four `remote_agent_auth_*` Better Auth tables (opt-in web login) are applied inline in `000_combined.sql` rather than as numbered migrations, and converge on startup via the idempotent schema apply.
+
+### Workflow origin compatibility
+
+Runs may have no conversation or user. New writers persist an `origin` object;
+`{}` means no origin, while SQL NULL identifies legacy writers whose conversation,
+parent and user columns supply the origin on read. The public run's `origin` and
+conversation projections are nullable.
+
+The SQL adapter reserves one hidden conversation, UUID
+`00000000-0000-4000-8000-000000003640`, with platform `archon` and platform ID
+`workflow-store-originless`, to satisfy the shipped conversation foreign key.
+It is storage infrastructure: no message history, title, user or isolation state
+belongs to it. Application conversation edits, deletion and history operations
+reject this identity. Do not edit or delete it directly with SQL: deleting the
+row would cascade to its runs.
+
+An origin-free run has no session scope: it reads and writes no
+`remote_agent_workflow_node_sessions` rows and no scope artifacts. A resume,
+from the CLI or the server, runs it headless and records no conversation history.
+
+Schema upgrades preserve shipped columns and older writers. Older binaries can
+open and write the upgraded database, but may display the compatibility anchor
+when reading an origin-free run.

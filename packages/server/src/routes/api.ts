@@ -5234,7 +5234,7 @@ export function registerApiRoutes(
     const lockActiveSet = new Set(stats.activeConversationIds);
     const backgroundConversationIds = runningWorkflowRows
       .map(r => r.conversation_id)
-      .filter(id => !lockActiveSet.has(id));
+      .filter((id): id is string => id !== null && !lockActiveSet.has(id));
     const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 

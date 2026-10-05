@@ -132,6 +132,7 @@ mock.module('@archon/providers', () => ({
 const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
   runLiveOwnerCalls.push('create');
   return Promise.resolve({
+    origin: { conversationId: 'worker-conv-1', parentConversationId: 'parent-conv' },
     id: 'run-1',
     workflow_name: 'bg-workflow',
     conversation_id: 'worker-conv-1',
