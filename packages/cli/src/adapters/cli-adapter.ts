@@ -23,7 +23,6 @@ export interface CLIAdapterOptions {
 
 export class CLIAdapter implements IPlatformAdapter {
   readonly capabilities = {
-    projectBinding: 'ephemeral' as const,
     messagePersistence: 'core',
     defaultWorkflowDispatch: 'foreground',
   } as const;

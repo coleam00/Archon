@@ -54,7 +54,6 @@ type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
 
 export class GitLabAdapter implements IPlatformAdapter {
   readonly capabilities = {
-    projectBinding: 'repository' as const,
     messagePersistence: 'core',
     defaultWorkflowDispatch: 'foreground',
   } as const;

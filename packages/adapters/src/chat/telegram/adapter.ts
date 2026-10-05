@@ -22,7 +22,7 @@ const MAX_LENGTH = 4096;
 
 export class TelegramAdapter implements IPlatformAdapter {
   readonly capabilities = {
-    projectBinding: 'durable' as const,
+    canDetachProject: true as const,
     messagePersistence: 'core',
     defaultWorkflowDispatch: 'foreground',
   } as const;

@@ -3648,15 +3648,8 @@ async function handleDetachProject(
   if (args.length !== 1 || !args[0].trim()) {
     return 'Usage: /detach-project "<current-project-name>". Supply the exact project name; quote names containing spaces.';
   }
-  switch (platform.capabilities.projectBinding) {
-    case 'repository':
-      return 'Cannot detach this repository conversation: the next repository event would reattach its project.';
-    case 'ephemeral':
-      return 'Cannot detach this conversation: it does not survive this invocation.';
-    case 'durable':
-      break;
-    default:
-      return 'Project detachment is not supported on this conversation surface.';
+  if (!platform.capabilities.canDetachProject) {
+    return 'Project detachment is not supported on this conversation surface.';
   }
   const conversation = await db.getConversationByPlatformId(platform.getPlatformType(), platformId);
   if (!conversation) return 'Cannot detach: this conversation does not exist.';

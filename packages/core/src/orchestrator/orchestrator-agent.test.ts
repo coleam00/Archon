@@ -6799,7 +6799,7 @@ describe('handleMessage — /detach-project dispatch', () => {
     test(`detaches on ${platformType} before creation or inheritance`, async () => {
       const platform = {
         ...makePlatform(),
-        capabilities: { ...makePlatform().capabilities, projectBinding: 'durable' as const },
+        capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
         getPlatformType: () => platformType,
       };
       await handleMessage(platform, 'platform-id', '/detach-project "My App"', {
@@ -6824,26 +6824,17 @@ describe('handleMessage — /detach-project dispatch', () => {
     });
   }
 
-  for (const [projectBinding, reply] of [
-    ['repository', 'next repository event'],
-    ['ephemeral', 'does not survive'],
-    [undefined, 'not supported'],
-  ] as const) {
-    test(`refuses ${String(projectBinding)} eligibility without mutation`, async () => {
-      const platform = {
-        ...makePlatform(),
-        capabilities: { ...makePlatform().capabilities, projectBinding },
-      };
-      await handleMessage(platform, 'platform-id', '/detach-project "My App"');
-      expect(mockGetConversationByPlatformId).not.toHaveBeenCalled();
-      expect(mockDetachConversationProject).not.toHaveBeenCalled();
-      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'platform-id',
-        expect.stringContaining(reply)
-      );
-    });
-  }
+  test('refuses undeclared eligibility without mutation', async () => {
+    const platform = makePlatform();
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    expect(mockGetConversationByPlatformId).not.toHaveBeenCalled();
+    expect(mockDetachConversationProject).not.toHaveBeenCalled();
+    expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+    expect(platform.sendMessage).toHaveBeenCalledWith(
+      'platform-id',
+      expect.stringContaining('not supported')
+    );
+  });
 
   for (const args of [[], [''], ['  '], ['My', 'App']]) {
     test(`requires one nonempty name: ${JSON.stringify(args)}`, async () => {
@@ -6863,7 +6854,7 @@ describe('handleMessage — /detach-project dispatch', () => {
     mockGetConversationByPlatformId.mockResolvedValue(null);
     const platform = {
       ...makePlatform(),
-      capabilities: { ...makePlatform().capabilities, projectBinding: 'durable' as const },
+      capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
     };
     await handleMessage(platform, 'platform-id', '/detach-project "My App"');
     expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
@@ -6885,7 +6876,7 @@ describe('handleMessage — /detach-project dispatch', () => {
     });
     const platform = {
       ...makePlatform(),
-      capabilities: { ...makePlatform().capabilities, projectBinding: 'durable' as const },
+      capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
     };
     await handleMessage(platform, 'platform-id', '/detach-project "My App"');
     const reply = String(platform.sendMessage.mock.calls[0]?.[1]);
@@ -6912,7 +6903,7 @@ describe('handleMessage — /detach-project dispatch', () => {
       mockDetachConversationProject.mockResolvedValue({ status: 'refused', reason });
       const platform = {
         ...makePlatform(),
-        capabilities: { ...makePlatform().capabilities, projectBinding: 'durable' as const },
+        capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
       };
       await handleMessage(platform, 'platform-id', '/detach-project "My App"');
       expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -6927,7 +6918,7 @@ describe('handleMessage — /detach-project dispatch', () => {
     mockDetachConversationProject.mockRejectedValue(new Error('detach database unavailable'));
     const platform = {
       ...makePlatform(),
-      capabilities: { ...makePlatform().capabilities, projectBinding: 'durable' as const },
+      capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
     };
     await handleMessage(platform, 'platform-id', '/detach-project "My App"');
     expect(platform.sendMessage).not.toHaveBeenCalledWith(
