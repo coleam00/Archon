@@ -9,18 +9,9 @@
  * this small. Before the text is returned it is parsed back and compared with the definition, so
  * a merge that produced a different document fails the save instead of being written.
  */
-import {
-  Document,
-  Scalar,
-  isAlias,
-  isMap,
-  isNode,
-  isScalar,
-  isSeq,
-  parseDocument,
-  visit,
-} from 'yaml';
+import { Document, isAlias, isMap, isNode, isScalar, isSeq, parseDocument, visit } from 'yaml';
 import type { Alias, Node } from 'yaml';
+import { parseYaml } from '@archon/workflows/loader';
 
 type Plain = Record<string, unknown>;
 
@@ -37,10 +28,6 @@ function isPlainObject(value: unknown): value is Plain {
 /** Id of a sequence item that is a mapping with a string `id` (a DAG node), else undefined. */
 function itemId(value: unknown): string | undefined {
   return isPlainObject(value) && typeof value.id === 'string' ? value.id : undefined;
-}
-
-function isBlockScalar(node: Scalar): boolean {
-  return node.type === Scalar.BLOCK_LITERAL || node.type === Scalar.BLOCK_FOLDED;
 }
 
 interface MergeState {
@@ -69,11 +56,6 @@ function merge(state: MergeState, node: unknown, value: unknown): Node {
     // Same scalar kind keeps the node, and with it its comments and quoting style.
     if (typeof node.value === typeof value) {
       node.value = value;
-      // A quoted or plain scalar spells a line break as a blank line, which Bun's parser reads
-      // as two in a CRLF file. A literal block reads the same under both line endings.
-      if (typeof value === 'string' && value.includes('\n') && !isBlockScalar(node)) {
-        node.type = Scalar.BLOCK_LITERAL;
-      }
       return node;
     }
     return doc.createNode(value);
@@ -168,7 +150,7 @@ export class WorkflowReadBackError extends Error {
 function readsAs(text: string, definition: Record<string, unknown>): boolean {
   let read: unknown;
   try {
-    read = Bun.YAML.parse(text);
+    read = parseYaml(text);
   } catch {
     return false;
   }
@@ -202,9 +184,6 @@ function render(definition: Record<string, unknown>, existingText: string | unde
     // Widened from Document.Parsed: merged-in nodes are created, not parsed.
     const doc: Document = parseDocument(existingText.replace(/\r\n/g, '\n'));
     if (doc.errors.length === 0 && isMap(doc.contents)) {
-      // Unchanged is judged with the loader's parser, as the read-back is: the definition was
-      // read through it, and it does not agree with the library on every file (Bun keeps the
-      // line break of a multi-line quoted scalar in a CRLF file, the library folds it).
       if (readsAs(existingText, definition)) return existingText;
       const state: MergeState = { doc, aliasValues: new Map() };
       doc.contents = merge(state, doc.contents, definition);
