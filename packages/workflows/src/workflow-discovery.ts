@@ -61,11 +61,7 @@ import {
 } from './defaults/bundle-inventory';
 import { createLogger } from '@archon/paths';
 import { isValidCommandName, MAX_DISCOVERY_DEPTH } from './command-validation';
-import {
-  parseWorkflow,
-  collectLoopGroupSinkWarnings,
-  collectConditionalTriggerRuleWarnings,
-} from './loader';
+import { parseWorkflow, collectExpandedGraphWarnings } from './loader';
 import { expandWorkflowIncludes } from './include-expander';
 import { collectFileBackedCommandNames } from './command-file';
 import {
@@ -913,8 +909,7 @@ export async function discoverWorkflows(
       // Includes can supply loop_group sinks and conditional dependencies, so graph-shape
       // warnings must inspect the expanded graph rather than opaque include targets.
       const warnings = [...parseWarnings];
-      collectLoopGroupSinkWarnings(expanded.nodes, warnings);
-      collectConditionalTriggerRuleWarnings(expanded.nodes, warnings);
+      collectExpandedGraphWarnings(expanded.nodes, warnings, expandedByName);
       result.push({
         workflow: expanded,
         source,

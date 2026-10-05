@@ -146,6 +146,68 @@ afterEach(() => {
 });
 
 describe('installed packs in the catalog', () => {
+  test('entrypoint reports advisories from nested composed fan-out support bodies', async () => {
+    await install({
+      id: ID,
+      name: 'review-kit',
+      commit: COMMIT_A,
+      entrypoints: { review: 'review/review.yaml' },
+      files: {
+        'review/review.yaml': `name: review
+description: Entry point
+nodes:
+  - id: items
+    bash: 'echo [true]'
+  - id: outer
+    include: middle
+    depends_on: [items]
+    fan_out:
+      items: "$items.output"
+      as: item
+`,
+        'middle/middle.yaml': `name: middle
+description: Nested fan-out
+inputs:
+  item: {}
+nodes:
+  - id: items
+    bash: 'echo [true]'
+  - id: inner
+    include: body
+    depends_on: [items]
+    fan_out:
+      items: "$items.output"
+      as: item
+`,
+        'body/body.yaml': `name: body
+description: Conditional join
+inputs:
+  item: {}
+nodes:
+  - id: decide
+    bash: echo true
+  - id: optional
+    depends_on: [decide]
+    bash: echo optional
+    when: "$decide.output == true"
+  - id: join
+    depends_on: [optional]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`,
+      },
+    });
+    const { workflows, support, errors } = await discover();
+    expect(errors.filter(error => error.filename.includes('review-kit'))).toEqual([]);
+    const entry = workflows.find(w => w.workflow.name === REVIEW);
+    expect(entry?.parseWarnings).toHaveLength(1);
+    expect(entry?.parseWarnings?.[0]).toContain(
+      "Node 'outer -> acme/review-kit:middle:inner -> acme/review-kit:body:join'"
+    );
+    expect(names(workflows)).not.toContain('acme/review-kit:body');
+    expect(support?.some(w => w.workflow.name === 'acme/review-kit:body')).toBe(true);
+  });
+
   test('entrypoints are dispatchable as owner/plugin:entrypoint; support workflows only compose', async () => {
     await install(reviewKit());
     const { workflows, support, errors } = await discover();

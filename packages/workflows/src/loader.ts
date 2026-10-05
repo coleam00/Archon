@@ -3,6 +3,7 @@
  */
 import type {
   WorkflowDefinition,
+  ResolvedWorkflow,
   WorkflowLoadError,
   DagNode,
   IncludeDirective,
@@ -24,6 +25,7 @@ import {
   persistedSessionHandling,
   isNodeContextResume,
 } from './schemas';
+import { readComposedMeta } from './compiled-command';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
@@ -395,7 +397,7 @@ function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warning
  * terminal sink recurses into this same case, following a chain of well-formed
  * sole-terminal-sink nesting to any depth). A gate that is mid-body or
  * co-terminal with another sink breaks the chain here too — the placement
- * check in `collectLoopGroupSinkWarnings` below already warns about that
+ * check in `collectExpandedGraphWarnings` below already warns about that
  * misplacement on its own. Mirrors `findLoopGroupTerminalSuspendNode`'s doc
  * comment (dag-executor.ts): the runtime has no unambiguous way to escalate
  * a pause through a sink that isn't a bare gate, so this only makes that gap
@@ -411,24 +413,49 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
   return soleSink !== undefined && isUnescalatableInteractiveSink(soleSink);
 }
 
-/**
- * Loop-group sink-shape warnings, judged against the EXPANDED node graph (#2756).
- *
- * Both checks below read resolved nodes only — `depends_on` edges and node kinds —
- * never the raw YAML, so they describe the graph the executor will run rather than
- * what the author typed. That is the point: an `include:` is a legal `loop_group`
- * body entry, and before expansion it is an opaque target name no sink check can
- * classify, so a composed terminal sink is invisible at parse time. This therefore
- * runs once per workflow AFTER `expandWorkflowIncludes`, from the discovery site
- * that pairs warnings with the expanded definition (`workflow-discovery.ts`) — a
- * directly-authored sink keeps its id and its verdict through expansion, so it
- * still warns exactly once.
- */
-export function collectLoopGroupSinkWarnings(
+/** Graph advisories need expanded includes and statically resolved fan-out bodies. */
+export function collectExpandedGraphWarnings(
   nodes: readonly (DagNode | IncludeDirective)[],
-  warnings: string[]
+  warnings: string[],
+  workflows: ReadonlyMap<string, ResolvedWorkflow>,
+  scope = ''
 ): void {
+  const nodesById = new Map(nodes.map(node => [node.id, node]));
   for (const node of nodes) {
+    const dependencies = node.depends_on ?? [];
+    if (
+      node.trigger_rule === 'none_failed_min_one_success' &&
+      dependencies.length > 0 &&
+      dependencies.every(id => {
+        const dependency = nodesById.get(id);
+        return (
+          dependency !== undefined &&
+          (dependency.when !== undefined ||
+            (!isIncludeDirective(dependency) &&
+              readComposedMeta(dependency)?.boundaries?.some(
+                boundary => boundary.when !== undefined
+              )))
+        );
+      })
+    ) {
+      warnings.push(
+        `Node '${scope}${node.id}': 'none_failed_min_one_success' requires at least one successful dependency, ` +
+          "but every dependency has a 'when' (locally or on an include). If all are condition-skipped, this node will also be skipped. " +
+          "Use 'all_done' to run after an optional gate, with a downstream 'when' if needed to prevent " +
+          'running after a failure. See /guides/authoring-workflows/#trigger_rule-values.'
+      );
+    }
+    if (isComposeFanOutNode(node)) {
+      const target = workflows.get(node.include);
+      if (target) {
+        collectExpandedGraphWarnings(
+          target.nodes,
+          warnings,
+          workflows,
+          `${scope}${node.id} -> ${node.include}:`
+        );
+      }
+    }
     if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
 
     // An `include:` is already gone from the body here — expansion replaced it with the
@@ -519,7 +546,7 @@ export function collectLoopGroupSinkWarnings(
       );
     }
 
-    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings);
+    collectExpandedGraphWarnings(node.loop_group.nodes, warnings, workflows, scope);
   }
 }
 
@@ -537,7 +564,7 @@ export function collectLoopGroupSinkWarnings(
  * Every notice here is about one node as its author wrote it — the gate ones read
  * the RAW node to see a key Zod already normalized away. Verdicts about graph
  * SHAPE are not here: the loop_group sink-shape checks live in
- * `collectLoopGroupSinkWarnings`, which judges the expanded graph (#2756).
+ * `collectExpandedGraphWarnings`, which judges the expanded graph (#2756).
  */
 function collectGateAndLoopDeprecationWarnings(
   node: DagNode | IncludeDirective,
@@ -788,31 +815,6 @@ function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group' 
 /** The remedy clause for each rejected producer kind (see freeFormAiProducerKind). */
 const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
-
-export function collectConditionalTriggerRuleWarnings(
-  nodes: readonly (DagNode | IncludeDirective)[],
-  warnings: string[]
-): void {
-  const nodesById = new Map(nodes.map(node => [node.id, node]));
-  for (const node of nodes) {
-    const dependencies = node.depends_on ?? [];
-    if (
-      node.trigger_rule === 'none_failed_min_one_success' &&
-      dependencies.length > 0 &&
-      dependencies.every(id => nodesById.get(id)?.when !== undefined)
-    ) {
-      warnings.push(
-        `Node '${node.id}': 'none_failed_min_one_success' requires at least one successful dependency, ` +
-          "but every dependency has a 'when'. If all are condition-skipped, this node will also be skipped. " +
-          "Use 'all_done' to run after an optional gate, with a downstream 'when' if needed to prevent " +
-          'running after a failure. See /guides/authoring-workflows/#trigger_rule-values.'
-      );
-    }
-    if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
-      collectConditionalTriggerRuleWarnings(node.loop_group.nodes, warnings);
-    }
-  }
-}
 
 /**
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,

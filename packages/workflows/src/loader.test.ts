@@ -113,6 +113,31 @@ function parseWorkflowYaml(
   return { workflow: result.workflow, warnings: result.warnings };
 }
 
+const CONDITIONAL_JOIN_CORPUS = Object.entries({
+  'e2e-joins': ['join-none-failed'],
+  'archon-deliver': ['validate__result', 'ci-recheck__coverage'],
+  'archon-ship': [
+    'deliver__impl__implement',
+    'deliver__validate__result',
+    'deliver__ci-recheck__coverage',
+  ],
+  'archon-upkeep': [
+    'deliver__pr__pr',
+    'deliver__review__coverage',
+    'deliver__gate-ready',
+    'deliver__file-discoveries',
+    'deliver__read-pr-body',
+    'deliver__validate__result',
+    'deliver__await-checks',
+    'deliver__gate-ci-fix',
+    'deliver__ci-recheck__coverage',
+    'deliver__await-fix-checks',
+    'deliver__ci-attention-route',
+    'deliver__flip-ready',
+    'recheck__coverage',
+  ],
+}).flatMap(([workflow, nodes]) => nodes.map(node => ({ workflow, node })));
+
 describe('workflow YAML line endings', () => {
   it.each(['"', "'"])('folds multiline %s-quoted prompts identically for LF and CRLF', quote => {
     const lf = `name: line-endings
@@ -5265,6 +5290,88 @@ nodes:
       expect(top?.parseWarnings?.[0]).toContain("Node 'inc__join'");
       expect(top?.parseWarnings?.[0]).toContain("every dependency has a 'when'");
     });
+    it('warns for an external join after a conditional multi-node include', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `name: block
+description: Multi-node block
+nodes:
+  - id: entry
+    bash: echo entry
+  - id: sink
+    depends_on: [entry]
+    bash: echo sink
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'top.yaml',
+        `name: top
+description: External join after conditional block
+inputs:
+  run: {}
+nodes:
+  - id: inc
+    include: block
+    when: "$INPUTS.run == true"
+  - id: join
+    depends_on: [inc]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const top = result.workflows.find(w => w.workflow.name === 'top');
+      expect(top?.parseWarnings).toHaveLength(1);
+      expect(top?.parseWarnings?.[0]).toContain("Node 'join'");
+    });
+
+    it('reports a composed fan-out target advisory on its parent', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `name: block
+description: Conditional fan-out body
+inputs:
+  item: {}
+nodes:
+  - id: decide
+    bash: echo true
+  - id: optional
+    depends_on: [decide]
+    bash: echo optional
+    when: "$decide.output == true"
+  - id: join
+    depends_on: [optional]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'top.yaml',
+        `name: top
+description: Composing parent
+nodes:
+  - id: items
+    bash: 'echo [true]'
+  - id: fan
+    include: block
+    depends_on: [items]
+    fan_out:
+      items: "$items.output"
+      as: item
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const top = result.workflows.find(w => w.workflow.name === 'top');
+      expect(top?.parseWarnings).toHaveLength(1);
+      expect(top?.parseWarnings?.[0]).toContain("Node 'fan -> block:join'");
+    });
+
     it.each([
       {
         label: 'one conditional dependency',
@@ -5358,7 +5465,7 @@ nodes:
       expect(warnings[0]).toContain("Node 'join'");
     });
 
-    it('bundled workflows warn only on the conditional archon-ship routing join', async () => {
+    it('bundled workflows warn only on known conditional joins', async () => {
       const warnedNodes: { workflow: string; warning: string }[] = [];
       const binaryBuild = spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(true);
       try {
@@ -5374,9 +5481,13 @@ nodes:
             }
           }
         }
-        expect(warnedNodes).toHaveLength(1);
-        expect(warnedNodes[0]?.workflow).toBe('archon-ship');
-        expect(warnedNodes[0]?.warning).toContain("Node 'deliver__impl__implement'");
+        const expected = CONDITIONAL_JOIN_CORPUS.filter(w => w.workflow !== 'e2e-joins');
+        expect(warnedNodes).toHaveLength(expected.length);
+        for (const { workflow, node } of expected) {
+          expect(
+            warnedNodes.filter(w => w.workflow === workflow && w.warning.includes(`Node '${node}'`))
+          ).toHaveLength(1);
+        }
       } finally {
         binaryBuild.mockRestore();
       }
@@ -7863,13 +7974,14 @@ nodes:
           .filter(warning => warning.includes("every dependency has a 'when'"))
           .map(warning => ({ workflow: workflow.name, warning }))
       );
-      expect(conditionalWarnings.map(w => w.workflow).sort()).toEqual(['archon-ship', 'e2e-joins']);
-      expect(conditionalWarnings.find(w => w.workflow === 'e2e-joins')?.warning).toContain(
-        "Node 'join-none-failed'"
-      );
-      expect(conditionalWarnings.find(w => w.workflow === 'archon-ship')?.warning).toContain(
-        "Node 'deliver__impl__implement'"
-      );
+      expect(conditionalWarnings).toHaveLength(CONDITIONAL_JOIN_CORPUS.length);
+      for (const { workflow, node } of CONDITIONAL_JOIN_CORPUS) {
+        expect(
+          conditionalWarnings.filter(
+            w => w.workflow === workflow && w.warning.includes(`Node '${node}'`)
+          )
+        ).toHaveLength(1);
+      }
     });
   });
 
