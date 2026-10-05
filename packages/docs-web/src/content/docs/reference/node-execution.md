@@ -31,7 +31,7 @@ The engine's resume fold treats composed-instance terminal usage as authoritativ
 
 ## Cache decisions and skips
 
-Cache decisions carry no new attempt, provider binding, timing, or newly consumed spend. `serializeNodeStateRecord` projects them as:
+Cache decisions carry no new attempt, provider binding, timing, or newly consumed spend. `serializeNodeStateRecord` projects them as follows. The workflows conformance test checks these action-to-event names against the serializer:
 
 - Replayed: `node_skipped_prior_success`, with the reusable output under the normal output keys.
 - Reset: `node_always_run_reset`, with prior output and its truncation/spill provenance under `prior_*` keys.
@@ -45,7 +45,7 @@ A skipped execution instead carries a lifecycle reason and typed `cause`. The ca
 | --- | --- |
 | `archon workflow get <run-id> --json` | Run and terminal information; no full execution record |
 | `archon workflow get <run-id> --json --verbose` | Node summaries with execution metadata reconstructed from durable events when present |
-| `archon workflow get <run-id> --json --verbose --raw-events` | Durable event envelopes and serialized `data` |
+| `archon workflow get <run-id> --json --verbose --events` | Durable event envelopes and serialized `data` |
 | `GET /api/workflows/runs/{runId}` | Serialized events, with event-level `cost_scope` when `data.cost_usd` is numeric; separate run terminal/node summaries |
 | Live emitter and JSONL transcript | Shared `executionMetadata`, excluding output, diagnostics, and the full session ID |
 

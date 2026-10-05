@@ -11,6 +11,8 @@ import {
   renderSchemaTable,
   updateReference,
 } from './generate-node-execution-reference';
+import { nodeCacheRecordSchema } from '../schemas/node-execution';
+import { serializeNodeStateRecord } from '../node-record-serialization';
 
 const trackTempRoot = trackTempRoots();
 const markers =
@@ -19,7 +21,10 @@ const markers =
 describe('node execution reference', () => {
   it('matches all committed schema tables', async () => {
     const current = await readFile(referencePath, 'utf8');
-    expect(updateReference(current)).toBe(current);
+    expect(updateReference(current)).toBe(current.replaceAll('\r\n', '\n'));
+    expect(updateReference(current.replaceAll('\r\n', '\n').replaceAll('\n', '\r\n'))).toBe(
+      updateReference(current)
+    );
     const rendered = renderReferenceTables();
     for (const title of [
       'Execution record',
@@ -32,6 +37,27 @@ describe('node execution reference', () => {
     expect(rendered).toContain('`spend.tokens.value.cacheRead`');
     expect(rendered).toContain('`cache.invalidatingDeps[]`');
     expect(rendered).toContain('`node_output_spill_path`');
+  });
+
+  it('documents every cache action with the event emitted by its serializer', async () => {
+    const current = await readFile(referencePath, 'utf8');
+    for (const variant of nodeCacheRecordSchema.shape.cache.options) {
+      const action = variant.shape.action.value;
+      const record = nodeCacheRecordSchema.parse({
+        runId: 'reference-run',
+        path: 'node',
+        node: { id: 'node', kind: 'exec', runtime: 'sh' },
+        cache: {
+          action,
+          output: { text: 'output' },
+          prior: { text: 'prior' },
+          invalidatingDeps: ['dependency'],
+        },
+      });
+      const event = serializeNodeStateRecord(record);
+      const label = action[0].toUpperCase() + action.slice(1);
+      expect(current).toContain(`- ${label}: \`${event.event_type}\`,`);
+    }
   });
 
   it('retains nested optional fields, array members, and union conditions', () => {
@@ -90,6 +116,10 @@ describe('node execution reference', () => {
     await generateReference(path);
     await generateReference(path, true);
     expect(await readFile(path, 'utf8')).toBe(renderReferenceTables());
+    const crlf = renderReferenceTables().replaceAll('\n', '\r\n');
+    await writeFile(path, crlf);
+    await generateReference(path, true);
+    expect(await readFile(path, 'utf8')).toBe(crlf);
   });
 
   it('fails on schema constructs it cannot document', () => {
