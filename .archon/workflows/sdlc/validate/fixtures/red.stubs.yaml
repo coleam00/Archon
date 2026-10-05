@@ -3,7 +3,6 @@
 discover:
   checks:
     - { name: "tests", argv: ["bun", "-e", "console.error('1 test failed'); process.exitCode = 1"] }
-  quarantine: []
   notes: "stub: the project's test command"
 classify:
   red_cause: introduced
