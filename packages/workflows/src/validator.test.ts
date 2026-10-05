@@ -19,6 +19,9 @@ import {
   discoverAvailableCommands,
 } from './validator';
 import type { WorkflowDefinition, DagNode } from './schemas';
+import { dagNodeSchema } from './schemas';
+import { parseWorkflow } from './loader';
+import { BUNDLED_WORKFLOWS, BUNDLED_WORKFLOW_OWNERS } from './defaults/bundled-defaults';
 import { makeTestWorkflow } from './test-utils';
 import { formatPackagedResourceReference } from './packaged-workflow';
 
@@ -49,7 +52,11 @@ afterEach(async () => {
   else process.env.ARCHON_DOCKER = originalArchonDocker;
 });
 
-function makeWorkflow(name: string, nodes: DagNode[], provider?: string): WorkflowDefinition {
+function makeWorkflow(
+  name: string,
+  nodes: WorkflowDefinition['nodes'],
+  provider?: string
+): WorkflowDefinition {
   return {
     name,
     description: 'test workflow',
@@ -1009,10 +1016,10 @@ describe('validateWorkflowResources — tool-name validation', () => {
 });
 
 // =============================================================================
-// validateWorkflowResources — bash quoted-output lint
+// validateWorkflowResources — bash output-ref lint
 // =============================================================================
 
-describe('validateWorkflowResources — bash quoted-output lint', () => {
+describe('validateWorkflowResources — bash output-ref lint', () => {
   test('no warning when bash uses correct unquoted idiom', async () => {
     const workflow = makeWorkflow('test', [
       {
@@ -1025,6 +1032,100 @@ describe('validateWorkflowResources — bash quoted-output lint', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir);
     const warnings = issues.filter(i => i.level === 'warning' && i.field === 'bash');
     expect(warnings).toHaveLength(0);
+  });
+
+  test.each([
+    'echo $emit.output',
+    'printf "%s" $emit.output.status',
+    'echo $(cat $emit.output)',
+    '[ -n $emit.output ]',
+    '[[ $LOOP_PREV.emit.output.status = ok ]]',
+    'cat > $emit.output',
+    'echo value=$emit.output',
+    'value=prefix$emit.output',
+    'value=$emit.output/suffix',
+    'echo \\;value=$emit.output',
+    'echo "literal <<EOF"\necho $emit.output',
+    'echo value=#$emit.output',
+    'echo $((1 << MASK))\necho $emit.output',
+    '(( flags << SHIFT ))\necho $emit.output',
+  ])('warns on unsafe shell position: %s', async script => {
+    const workflow = makeWorkflow('test', [{ id: 'check', kind: 'exec', runtime: 'sh', script }]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    const warnings = issues.filter(i => i.field === 'bash');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].level).toBe('warning');
+    expect(warnings[0].message).toContain('bare');
+    expect(warnings[0].hint).toContain('"$var"');
+    expect(makeWorkflowResult('test', issues).valid).toBe(true);
+  });
+
+  test.each([
+    'value=$emit.output; printf "%s" "$value"',
+    'export value=$emit.output.status',
+    'local value=$LOOP_PREV.emit.output.status',
+    'first=ok value=$emit.output',
+    'export first=ok value=$emit.output',
+    'first="two words" value=$emit.output',
+    'local first="two words" value=$emit.output',
+    'value=$emit.output>result',
+    'value=$LOOP_PREV.emit.output.status<input',
+  ])('accepts complete assignment RHS: %s', async script => {
+    const workflow = makeWorkflow('test', [{ id: 'check', kind: 'exec', runtime: 'sh', script }]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.filter(i => i.field === 'bash')).toHaveLength(0);
+  });
+
+  test.each([
+    'cat <<EOF\n$emit.output\nEOF',
+    'cat <<\'EOF\'\n"$emit.output"\nEOF',
+    'cat <<-EOF\n\t$emit.output\n\tEOF',
+    'cat <<\\EOF\n$emit.output\nEOF',
+  ])('ignores heredoc contents and resumes checking after the delimiter', async script => {
+    const workflow = makeWorkflow('test', [{ id: 'check', kind: 'exec', runtime: 'sh', script }]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.filter(i => i.field === 'bash')).toHaveLength(0);
+
+    const continued = makeWorkflow('test', [
+      { id: 'check', kind: 'exec', runtime: 'sh', script: `${script}\necho $emit.output` },
+    ]);
+    const continuedIssues = await validateWorkflowResources(continued, tmpDir);
+    const warnings = continuedIssues.filter(i => i.field === 'bash');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].message).toContain('bare');
+  });
+
+  test('warns on a bare ref in loop until_bash', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'gen',
+        kind: 'loop',
+        loop: {
+          prompt: 'produce output',
+          until_bash: '[ -n $emit.output ]',
+          max_iterations: 2,
+          fresh_context: false,
+        },
+      },
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.find(i => i.field === 'loop.until_bash')?.message).toContain('bare');
+  });
+
+  test('retains both warnings when a shell slot contains quoted and bare refs', async () => {
+    const workflow = makeWorkflow('test', [
+      {
+        id: 'check',
+        kind: 'exec',
+        runtime: 'sh',
+        script: 'echo "$emit.output"; echo $emit.output',
+      },
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir);
+    expect(issues.filter(i => i.field === 'bash').map(i => i.message)).toEqual([
+      expect.stringContaining('bare'),
+      expect.stringContaining('wrapping'),
+    ]);
   });
 
   test('warning when bash body has double-quoted $nodeId.output.field', async () => {
@@ -1253,7 +1354,7 @@ describe('validateWorkflowResources — bash quoted-output lint', () => {
     expect(warnings.every(warning => warning.message.includes('wrapping'))).toBe(true);
   });
 
-  test('does not warn on an unquoted output ref in loop_group until_bash', async () => {
+  test('warns on a bare output ref in loop_group until_bash', async () => {
     const workflow = makeWorkflow('test', [
       {
         id: 'group',
@@ -1266,7 +1367,7 @@ describe('validateWorkflowResources — bash quoted-output lint', () => {
       } as unknown as DagNode,
     ]);
     const issues = await validateWorkflowResources(workflow, tmpDir);
-    expect(issues.some(i => i.field === 'loop_group.until_bash')).toBe(false);
+    expect(issues.find(i => i.field === 'loop_group.until_bash')?.message).toContain('bare');
   });
 });
 
@@ -1819,5 +1920,106 @@ describe('validateWorkflowResources — strict-schema compatibility', () => {
     const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
     const errs = issues.filter(i => i.field === 'output_format' && i.level === 'error');
     expect(errs).toHaveLength(0);
+  });
+});
+
+describe('validateWorkflowResources — loose output schemas', () => {
+  const looseSchema = {
+    type: 'object',
+    properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+  };
+
+  test.each(['claude', 'pi', undefined])(
+    'warns once with provider %s and remains valid',
+    async provider => {
+      const workflow = makeWorkflow('loose', [
+        dagNodeSchema.parse({ id: 'classify', prompt: 'decide', output_format: looseSchema }),
+      ]);
+      const issues = await validateWorkflowResources(workflow, tmpDir, {}, provider);
+      expect(issues).toHaveLength(1);
+      expect(issues[0]).toMatchObject({
+        level: 'warning',
+        nodeId: 'classify',
+        field: 'output_format',
+      });
+      expect(issues[0].message).toContain("Node 'classify'");
+      expect(issues[0].message).toContain('required');
+      expect(issues[0].message).toContain('additionalProperties: false');
+      expect(makeWorkflowResult(workflow.name, issues).valid).toBe(true);
+    }
+  );
+
+  test.each([
+    ['object-or-null', { ...looseSchema, type: ['object', 'null'] }, 1],
+    ['properties without type', { properties: looseSchema.properties }, 1],
+    ['empty required', { ...looseSchema, required: [] }, 1],
+    ['explicitly open', { ...looseSchema, additionalProperties: true }, 1],
+    ['open record', { ...looseSchema, additionalProperties: { type: 'string' } }, 1],
+    ['tight', { ...looseSchema, required: ['verdict'], additionalProperties: false }, 0],
+    ['required only', { ...looseSchema, required: ['verdict'] }, 0],
+    ['additionalProperties only', { ...looseSchema, additionalProperties: false }, 0],
+    ['non-object', { type: 'string' }, 0],
+    ['bare object', { type: 'object' }, 0],
+  ])('%s schema warning count', async (_name, schema, count) => {
+    const workflow = makeWorkflow('test', [
+      dagNodeSchema.parse({ id: 'classify', prompt: 'decide', output_format: schema }),
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+    expect(issues.filter(i => i.field === 'output_format')).toHaveLength(count);
+  });
+
+  test('Codex strict-schema error suppresses the warning', async () => {
+    const workflow = makeWorkflow('test', [
+      dagNodeSchema.parse({ id: 'classify', prompt: 'decide', output_format: looseSchema }),
+    ]);
+    const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'codex');
+    expect(issues.filter(i => i.field === 'output_format')).toEqual([
+      expect.objectContaining({ level: 'error', nodeId: 'classify' }),
+    ]);
+  });
+
+  test('checks enforced exec and loop schemas and body nodes, skipping inert kinds and wait', async () => {
+    const nodes = [
+      { id: 'bash', bash: 'echo {}' },
+      { id: 'script', script: 'console.log("{}")', runtime: 'bun' },
+      { id: 'loop', loop: { prompt: 'decide', until_bash: 'exit 0', max_iterations: 1 } },
+      { id: 'gate', approval: { message: 'approve' } },
+      { id: 'halt', cancel: 'stop' },
+      {
+        id: 'group',
+        loop_group: {
+          until_bash: 'exit 0',
+          max_iterations: 1,
+          nodes: [{ id: 'body', prompt: 'decide', output_format: looseSchema }],
+        },
+      },
+    ].map(node => dagNodeSchema.parse({ ...node, output_format: looseSchema }));
+    nodes.push(dagNodeSchema.parse({ id: 'wait', wait: { duration_ms: 1 } }));
+    const issues = await validateWorkflowResources(
+      makeWorkflow('test', nodes),
+      tmpDir,
+      {},
+      'claude'
+    );
+    expect(issues.filter(i => i.field === 'output_format').map(i => i.nodeId)).toEqual([
+      'bash',
+      'script',
+      'loop',
+      'body',
+    ]);
+  });
+
+  test('bundled SDLC workflows have no loose output schema warnings', async () => {
+    const names = Object.keys(BUNDLED_WORKFLOWS).filter(
+      name => BUNDLED_WORKFLOW_OWNERS[name]?.pack === 'sdlc'
+    );
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      const { workflow, error } = parseWorkflow(BUNDLED_WORKFLOWS[name], name);
+      expect(error).toBeNull();
+      if (!workflow) throw new Error(`Could not parse bundled workflow ${name}`);
+      const issues = await validateWorkflowResources(workflow, tmpDir, {}, 'claude');
+      expect(issues.filter(i => i.field === 'output_format' && i.level === 'warning')).toEqual([]);
+    }
   });
 });

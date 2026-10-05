@@ -20,6 +20,7 @@ import {
   checkClaudeBinary,
   checkCodexBinary,
   checkConfigFiles,
+  checkProviderDeprecation,
   checkOpenCode,
   checkDatabase,
   checkConnectedProviders,
@@ -43,6 +44,7 @@ import {
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 
 // doctor creates its logger on first use and keeps it; hand it one this file can observe.
 // Module scope, so the spy is in place before any test makes doctor log.
@@ -318,23 +320,42 @@ describe('checkCodexBinary', () => {
 describe('checkOpenCode', () => {
   const makeDeps = (over: Partial<OpenCodeDeps> = {}): OpenCodeDeps => ({
     isDefaultAssistant: false,
-    probeRuntimeModule: async () => true,
+    probeRuntime: async () => 'ready',
     ...over,
   });
 
   it('skips when OpenCode is not configured and --full is absent', async () => {
-    const result = await checkOpenCode({}, false, async () => makeDeps());
+    const probe = mock(async () => 'ready' as const);
+    const result = await checkOpenCode({}, false, async () => makeDeps({ probeRuntime: probe }));
+    expect(probe).not.toHaveBeenCalled();
     expect(result.status).toBe('skip');
     expect(result.label).toBe('OpenCode runtime');
     expect(result.message).toContain('pass --full');
   });
 
-  it('passes when OpenCode is the configured assistant and the SDK resolves', async () => {
+  it('passes when OpenCode is the configured assistant and both dependencies are present', async () => {
     const result = await checkOpenCode({}, false, async () =>
       makeDeps({ isDefaultAssistant: true })
     );
     expect(result.status).toBe('pass');
     expect(result.message).toContain('server not started');
+  });
+
+  it('fails when the SDK is present but the executable is missing', async () => {
+    const result = await checkOpenCode({}, true, async () =>
+      makeDeps({ probeRuntime: async () => 'executable-missing' })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('opencode');
+    expect(result.message).toContain('PATH');
+  });
+
+  it('fails for a configured assistant when the executable is missing', async () => {
+    const result = await checkOpenCode({}, false, async () =>
+      makeDeps({ isDefaultAssistant: true, probeRuntime: async () => 'executable-missing' })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('Install the OpenCode CLI');
   });
 
   it('passes under --full even when OpenCode is not configured', async () => {
@@ -349,13 +370,13 @@ describe('checkOpenCode', () => {
     expect(result.status).toBe('pass');
   });
 
-  it('never boots the runtime — only the cheap module probe is called', async () => {
+  it('calls the cheap dependency probe once', async () => {
     let probeCalls = 0;
     await checkOpenCode({}, true, async () =>
       makeDeps({
-        probeRuntimeModule: async () => {
+        probeRuntime: async () => {
           probeCalls += 1;
-          return true;
+          return 'ready';
         },
       })
     );
@@ -365,7 +386,7 @@ describe('checkOpenCode', () => {
   it('fails when the runtime SDK cannot be resolved', async () => {
     const result = await checkOpenCode({}, true, async () =>
       makeDeps({
-        probeRuntimeModule: async () => {
+        probeRuntime: async () => {
           throw new Error('Cannot find module @opencode-ai/sdk');
         },
       })
@@ -377,7 +398,7 @@ describe('checkOpenCode', () => {
 
   it('fails when the SDK resolves but the entrypoint is missing', async () => {
     const result = await checkOpenCode({}, true, async () =>
-      makeDeps({ probeRuntimeModule: async () => false })
+      makeDeps({ probeRuntime: async () => 'sdk-entrypoint-missing' })
     );
     expect(result.status).toBe('fail');
     expect(result.message).toContain('createOpencode');
@@ -761,6 +782,29 @@ describe('checkConfigFiles', () => {
     });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('assistants.codex.modelReasoningEffort');
+  });
+});
+
+describe('checkProviderDeprecation', () => {
+  it('warns with the registry notice when the default assistant is deprecated', async () => {
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const result = await checkProviderDeprecation('/repo', async () => ({ assistant: 'copilot' }));
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('Copilot is deprecated');
+  });
+
+  it('passes when the default assistant carries no notice', async () => {
+    registerBuiltinProviders();
+    const result = await checkProviderDeprecation('/repo', async () => ({ assistant: 'claude' }));
+    expect(result.status).toBe('pass');
+  });
+
+  it('skips when the config does not load, leaving the failure to Config files', async () => {
+    const result = await checkProviderDeprecation('/repo', async () => {
+      throw new Error('bad config');
+    });
+    expect(result.status).toBe('skip');
   });
 });
 

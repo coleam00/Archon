@@ -52,7 +52,7 @@ import {
   type EffortRung,
   type UserAiPrefs,
 } from '@archon/core';
-import { isRegisteredProvider, getProviderInfoList } from '@archon/providers';
+import { isRegisteredProvider, getProviderInfoList, getRegistration } from '@archon/providers';
 import {
   TIER_NAMES,
   buildAiProfile,
@@ -738,6 +738,8 @@ export async function aiDefaultCommand(
         console.log(`✓ Default assistant set to '${provider}'.`);
       }
     }
+    const notice = getRegistration(provider).deprecationNotice;
+    if (notice) console.log(`! ${notice}`);
     return 0;
   } catch (err) {
     getLog().error(

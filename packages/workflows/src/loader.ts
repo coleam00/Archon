@@ -13,6 +13,7 @@ import {
   isAgentNode,
   isLoopNode,
   isLoopGroupNode,
+  definedOutputPaths,
   loopGroupSoleTerminalSink,
   isGateNode,
   isWaitNode,
@@ -63,6 +64,7 @@ import { INPUT_NAME_PATTERN, inputEnvKey } from './schemas/dag-node';
 import { workflowNodeHooksSchema } from './schemas/hooks';
 import {
   findUnsupportedNestedWhenRef,
+  assertSupportedWhenOutputRefs,
   parseLoopPrevWhenAtom,
   parseWhenAtom,
   whenAtoms,
@@ -70,12 +72,15 @@ import {
 } from './when-atom';
 import {
   declaredFieldsFromSchema,
+  assertDeclaredOutputPath,
+  assertSupportedOutputRefs,
+  outputRefText,
+  CURRENT_OUTPUT_PATH_SOURCE,
+  PRIOR_OUTPUT_PATH_SOURCE,
   EXECUTION_CHECKOUT_REF_SOURCE,
-  findUnsupportedNestedOutputRef,
   OUTPUT_REF_SOURCE,
   parseWholeExecutionCheckoutRef,
   parseWholeOutputRef,
-  unsupportedNestedOutputRefMessage,
 } from './output-ref';
 import { isBindingDirective } from './schemas/dag-node';
 import { readComposedBindings } from './compiled-command';
@@ -602,7 +607,7 @@ function collectGateAndLoopDeprecationWarnings(
     const message =
       `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
       "Declare 'loop_group.until_bash' instead — it can read a body node's structured " +
-      'output (e.g. \'test $body-node.output.field = "true"\') (#2707 step 3). While ' +
+      'output (e.g. \'value=$body-node.output.field; test "$value" = "true"\') (#2707 step 3). While ' +
       "supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone " +
       'signal line.';
     warnings.push(message);
@@ -755,7 +760,7 @@ function parseDagNode(
  *   'loop-group'     — `loop_group:`: `output_format` survives the transform here too,
  *                      but the group never calls the provider itself — its completion
  *                      returns `output: lastIterationOutput` with no `structuredOutput`
- *                      and no `declaredFields`, so the whole-output channel is still the
+ *                      and no `declaredOutputPaths`, so the whole-output channel is still the
  *                      last iteration's raw text. Declaring a schema cannot make
  *                      `$group.output` a JSON document. This is the one asymmetry left.
  *
@@ -796,10 +801,14 @@ const GATE_ON_A_SHELL_NODE =
  * `enclosingNodes` carries the enclosing loop scope's nodes BY ID rather than just
  * their ids, because a `loop_group` body's `when:` may reference an outer producer and
  * the free-form-AI check needs that producer's type and `output_format`.
+ *
+ * `includeAliases` maps a flattened producer id back to the include alias the author
+ * referenced, so an output-contract error names `$alias.output.x` as written.
  */
 export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
-  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>
+  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>,
+  includeAliases?: ReadonlyMap<string, string>
 ): string | null {
   // Check ID uniqueness
   const nodesById = new Map<string, DagNode | IncludeDirective>();
@@ -955,12 +964,65 @@ export function validateDagStructure(
       );
     }
     for (const source of sources) {
-      const nestedRef =
-        source.surface === 'condition'
-          ? findUnsupportedNestedWhenRef(source.text)
-          : findUnsupportedNestedOutputRef(source.text);
-      if (nestedRef) {
-        return `Node '${node.id}' field '${source.field}' contains an unsupported output reference. ${unsupportedNestedOutputRefMessage(nestedRef)}`;
+      try {
+        if (source.surface === 'condition') assertSupportedWhenOutputRefs(source.text);
+        else assertSupportedOutputRefs(source.text);
+      } catch (error) {
+        return `Node '${node.id}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;
+      }
+      if (source.surface === 'condition') {
+        const unsupported = findUnsupportedNestedWhenRef(source.text);
+        if (unsupported)
+          return `Node '${node.id}' field '${source.field}' contains nested shorthand '${unsupported.reference}'; use canonical '.output' spelling.`;
+      }
+      const refs: { nodeId: string; field?: string; reference: string; prior: boolean }[] = [];
+      if (source.surface === 'condition') {
+        for (const text of whenAtoms(source.text)) {
+          const atom = parseLoopPrevWhenAtom(text);
+          if (!atom || atom.ref.kind === 'input') continue;
+          const { nodeId, field } = atom.ref;
+          const prior = atom.ref.kind === 'loop_prev';
+          refs.push({
+            nodeId,
+            field,
+            prior,
+            reference: outputRefText(nodeId, field, prior ? 'prior' : 'current'),
+          });
+        }
+      } else {
+        for (const [pattern, prior] of [
+          [CURRENT_OUTPUT_PATH_SOURCE, false],
+          [PRIOR_OUTPUT_PATH_SOURCE, true],
+        ] as const) {
+          for (const match of source.text.matchAll(new RegExp(pattern, 'g'))) {
+            refs.push({ nodeId: match[1], field: match[2], reference: match[0], prior });
+          }
+        }
+      }
+      for (const ref of refs) {
+        if (ref.nodeId === WHEN_INPUTS_SCOPE || ref.field === undefined) continue;
+        const producer = ref.prior
+          ? (source.bodyNodes ?? (enclosingNodes ? nodes : undefined))?.find(
+              candidate => candidate.id === ref.nodeId
+            )
+          : (nodesById.get(ref.nodeId) ??
+            enclosingNodes?.get(ref.nodeId) ??
+            source.bodyNodes?.find(candidate => candidate.id === ref.nodeId));
+        if (!producer || isIncludeDirective(producer)) continue;
+        const paths = definedOutputPaths(producer);
+        if (paths === undefined) continue;
+        // `$LOOP_PREV` refs are never rewritten to an include's sink, so only a current
+        // ref can carry an alias.
+        const alias = ref.prior ? undefined : includeAliases?.get(ref.nodeId);
+        try {
+          if (alias === undefined) {
+            assertDeclaredOutputPath(paths, ref.nodeId, ref.field, ref.reference);
+          } else {
+            assertDeclaredOutputPath(paths, alias, ref.field, outputRefText(alias, ref.field));
+          }
+        } catch (error) {
+          return `Node '${node.id}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;
+        }
       }
 
       let m: RegExpExecArray | null;
@@ -1230,7 +1292,7 @@ export function validateDagStructure(
         ...(enclosingNodes ?? []),
         ...nodesById,
       ]);
-      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes);
+      const bodyError = validateDagStructure(node.loop_group.nodes, scopeNodes, includeAliases);
       if (bodyError) {
         return `loop_group '${node.id}' body: ${bodyError}`;
       }

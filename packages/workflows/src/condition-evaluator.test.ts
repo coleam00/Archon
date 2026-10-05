@@ -25,10 +25,9 @@ import type { NodeOutput } from './schemas';
 
 /**
  * Build a NodeOutput fixture for condition tests.
- * Omits `structuredOutput` when undefined so the field's `'structuredOutput' in nodeOutput`
- * presence check in resolveOutputRef matches real producer behavior (only Pi/Codex/Claude
- * paths populate it; older providers leave it off). `declaredFields` marks a
- * declared-schema producer (output_format with properties) for strict-resolution tests.
+ * Omits `structuredOutput` when undefined, matching producers that emit none (only
+ * Pi/Codex/Claude paths populate it). `declaredFields` marks a declared-schema producer
+ * for strict-resolution tests; each field becomes a depth-1 declared path.
  */
 function makeOutput(
   output: string,
@@ -42,7 +41,9 @@ function makeOutput(
       output,
       error: 'error',
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...(declaredFields !== undefined
+        ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+        : {}),
     };
   if (state === 'skipped') {
     return { state, output, cause: { kind: 'condition', expr: 'false' } };
@@ -51,7 +52,9 @@ function makeOutput(
     state,
     output,
     ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...(declaredFields !== undefined
+      ? { declaredOutputPaths: declaredFields.map(field => [field]) }
+      : {}),
   };
 }
 
@@ -83,14 +86,33 @@ describe('evaluateCondition', () => {
     expect(evaluateCondition("$classify.output.type == 'FEATURE'", outputs).result).toBe(false);
   });
 
-  it('rejects a nested canonical output path loudly', () => {
+  it('resolves a nested canonical output path', () => {
     const outputs = new Map([
       ['review', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
     ]);
 
-    expect(() => evaluateCondition("$review.output.proposal.action == 'add'", outputs)).toThrow(
-      "Reference '$review.output.proposal.action'"
-    );
+    expect(evaluateCondition("$review.output.proposal.action == 'add'", outputs)).toEqual({
+      result: true,
+      parsed: true,
+    });
+  });
+
+  it('rejects indexed current and prior paths instead of silently skipping', () => {
+    for (const reference of [
+      '$review.output.proposal.action[0]',
+      '$LOOP_PREV.review.output.proposal.action[0]',
+    ]) {
+      expect(() => evaluateCondition(`${reference} == 'add'`, new Map())).toThrow(
+        'Unsupported output reference'
+      );
+    }
+  });
+
+  it('treats unsupported-looking output syntax inside a quoted RHS as literal text', () => {
+    const literal = '$review.output.proposal.action[0]';
+    expect(
+      evaluateCondition(`$a.output == '${literal}'`, new Map([['a', makeOutput(literal)]]))
+    ).toEqual({ result: true, parsed: true });
   });
 
   it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
@@ -130,7 +152,7 @@ describe('evaluateCondition', () => {
       evaluateCondition("$LOOP_PREV.work.output.route == 'true'", new Map(), undefined, {
         loopPrevOutputs: priorOutputs,
       })
-    ).toThrow("Condition reference '$work.output.route' resolved to an object");
+    ).toThrow("Condition reference '$LOOP_PREV.work.output.route' resolved to an object");
     expect(mockLogFn).toHaveBeenCalledWith(
       {
         nodeId: 'work',
@@ -142,16 +164,16 @@ describe('evaluateCondition', () => {
     );
   });
 
-  it('rejects a nested prior-iteration output path loudly', () => {
+  it('resolves a nested prior-iteration output path', () => {
     const priorOutputs = new Map([
       ['work', makeOutput(JSON.stringify({ proposal: { action: 'add' } }))],
     ]);
 
-    expect(() =>
+    expect(
       evaluateCondition("$LOOP_PREV.work.output.proposal.action == 'add'", new Map(), undefined, {
         loopPrevOutputs: priorOutputs,
       })
-    ).toThrow("Reference '$LOOP_PREV.work.output.proposal.action'");
+    ).toEqual({ result: true, parsed: true });
   });
 
   it('dot notation: throws on a field ref when schemaless output is not JSON (no-silent-drop)', () => {
@@ -1002,4 +1024,24 @@ describe('structured $INPUTS values in when: (#2999)', () => {
       })
     ).toThrow("Condition reference '$INPUTS.config' resolved to an object");
   });
+});
+
+it('nested conditions still require a scalar', () => {
+  for (const action of [{ ready: true }, [true]]) {
+    expect(() =>
+      evaluateCondition(
+        '$p.output.proposal.action == true',
+        new Map([['p', makeOutput(JSON.stringify({ proposal: { action } }))]])
+      )
+    ).toThrow('resolved to an');
+  }
+});
+
+it('names the reference as written for unknown and missing output refs', () => {
+  expect(() => evaluateCondition("$ghost.output.x == 'a'", new Map())).toThrow("'$ghost.output.x'");
+  expect(() =>
+    evaluateCondition("$LOOP_PREV.work.output.missing == 'a'", new Map(), undefined, {
+      loopPrevOutputs: new Map([['work', makeOutput('{}')]]),
+    })
+  ).toThrow("'$LOOP_PREV.work.output.missing'");
 });

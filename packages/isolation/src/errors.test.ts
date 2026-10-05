@@ -1,5 +1,16 @@
 import { describe, test, expect } from 'bun:test';
-import { classifyIsolationError, isKnownIsolationError, IsolationBlockedError } from './errors';
+import {
+  classifyIsolationError,
+  isKnownIsolationError,
+  IsolationBlockedError,
+  MissingProjectDirectoryError,
+} from './errors';
+
+test('missing project guidance survives isolation classification even with timeout in its path', () => {
+  const error = new MissingProjectDirectoryError('/workspace/timeout/source', 'acme/timeout');
+  expect(isKnownIsolationError(error)).toBe(true);
+  expect(classifyIsolationError(error)).toBe(`**Error:** ${error.message}`);
+});
 
 describe('classifyIsolationError', () => {
   test('matches "permission denied" in message', () => {

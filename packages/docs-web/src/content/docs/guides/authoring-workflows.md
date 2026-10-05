@@ -495,8 +495,8 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
 
 - `$nodeId.output` references the full output string of a completed node
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
-- Field access stops at one top-level field. `$nodeId.output.a.b` is rejected at load time;
-  flatten the producer's schema or pass `$nodeId.output.a` to a script node and inspect it there.
+- `$nodeId.output.a.b` accesses nested object fields, checked against every declared schema
+  segment. Paths stop at arrays; indexing, wildcards, and expressions are unsupported.
 - A field used in a scalar condition must resolve to a string, number, boolean, or null. A present object or array fails the gated node; expose a scalar decision field or inspect structured data in a script node.
 - `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
   run's `--input`). A name this run does not carry **fails the node** — it never quietly
@@ -578,35 +578,75 @@ Variable substitution order:
 1. Standard variables (`$WORKFLOW_ID`, `$USER_MESSAGE`, `$ARTIFACTS_DIR`, etc.)
 2. Node output references (`$nodeId.output`, `$nodeId.output.field`)
 
-In fields that substitute node output references, only one top-level field segment is
-supported. A nested reference such as `$nodeId.output.proposal.text` fails workflow
-validation. Flatten the producer's `output_format`, or pass `$nodeId.output.proposal` to a
-script node and inspect it there.
+Output references can follow nested object fields. For example, this gate receives
+`Proposed: add` when `review` emits `{"proposal":{"action":"add"}}`:
+
+```yaml
+nodes:
+  - id: review
+    prompt: Propose an action
+    output_format:
+      type: object
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: { type: string }
+          required: [action]
+      required: [proposal]
+  - id: gate
+    depends_on: [review]
+    approval:
+      message: "Proposed: $review.output.proposal.action"
+    when: "$review.output.proposal.action == 'add'"
+```
+
+A whole-value binding such as `with: { proposal: "$review.output.proposal" }`
+preserves its object value. `$LOOP_PREV.review.output.proposal.action` uses the same
+path rules for a prior loop iteration (empty on the first iteration). Paths contain
+object field names only: no array indexing, wildcards, or expressions. `when:` still
+requires a scalar, and `$node.field` shorthand cannot nest.
 
 A reference to a **failed** producer — fielded or whole-text — fails the node doing the
 substitution instead of splicing in the failed producer's leftover output; a `bash:`/
 `prompt:`/`command:` body must not assume a dependency succeeded just because it was
 allowed to run (`trigger_rule: all_done`).
 
-:::caution[Double-quoting `$node.output` in `bash:` nodes is a silent footgun]
-In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected pre-quoted by Archon. For small outputs, values are **single-quoted inline** — the quoting is already provided by the substitution. For outputs exceeding 32 KB, Archon spills to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). Wrapping the substitution in double quotes breaks the **small (inline) case**: `var="$n.output"` becomes `var="'value'"`, embedding the literal single-quotes as part of the value. (For the large `$(cat ...)` case, double-quoting is harmless — `var="$(cat ...)"` is correct bash — but you can't know the output's size at author time, so the rule is unconditional: never double-quote.)
+:::caution[Assign output references, then quote the variable in shell bodies]
+In `bash:` and `until_bash:`, Archon injects `$nodeId.output`, `$nodeId.output.field`, and `$LOOP_PREV.nodeId.output[.field]` using two forms:
+
+- Small string outputs are single-quoted inline, such as `'a b   c *'`.
+- Outputs exceeding 32 KB spill to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and become `$(cat '<path>')`. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon).
+
+A bare argument such as `printf '%s' $emit.output` works with the inline form, but the unquoted command substitution in the spill form splits words and expands globs. Wrapping the reference in double quotes breaks the inline form instead: `value="$emit.output"` becomes `value="'a b   c *'"`, preserving the single quotes as data. Single quotes around a reference also produce the wrong value.
+
+**Rule: assign, then quote the variable.** Keep the reference as the whole, unquoted assignment value; quote the shell variable wherever you use it:
 
 ```bash
-# WRONG — produces status="'ok'" (single quotes become part of the value)
-status="$emit.output.status"
-[ "$status" = "ok" ]   # → always false
+value=$emit.output
+printf '%s' "$value"
 
-# CORRECT — leave unquoted; bash assigns: status=ok
 status=$emit.output.status
-[ "$status" = "ok" ]   # → true
+[ "$status" = "ok" ]
 ```
 
-**Rule:** use `var=$node.output.field`, never `var="$node.output.field"`. This applies whether the output is small (single-quoted inline) or large (`$(cat ...)`). Numeric and boolean fields are injected raw (without quotes), so double-quoting accidentally "works" for them — making the bug intermittent and hard to spot.
+Assignments suppress word splitting and glob expansion in both regimes. `export value=$emit.output` and `local value=$emit.output` are also safe. Numeric and boolean fields are injected raw, but use the same idiom so a change to a string value remains safe.
+
+`archon validate workflows` warns about quoted references and bare references outside complete assignments. Heredoc bodies remain outside this check.
 :::
 
 ### `output_format` for Structured JSON
 
 Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex, the schema is sent as the turn's `outputSchema` and the agent's final JSON message is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
+
+`archon validate workflows` warns when an enforced object schema declares `properties`
+but has neither a non-empty `required` array nor `additionalProperties: false`. Such a
+schema can accept missing fields or a schema-echo response, leaving downstream field
+references empty and skipping gated work. Require the fields downstream nodes need;
+use `additionalProperties: false` to reject undeclared fields, and string `enum` values
+to constrain decisions. The warning leaves runtime semantics unchanged: intentionally
+optional fields and open-record maps remain supported. Codex strict-mode errors take
+precedence over this warning.
 
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
 >
@@ -631,7 +671,7 @@ nodes:
 - The output is captured as a JSON string and available via `$classify.output` (full JSON) or `$classify.output.type` (field access)
 - Use `output_format` when downstream nodes need to branch on specific values via `when:`
 - **Validated + reask + fail-fast.** The parsed output is validated against your schema for *every* provider (a net for refusals / `max_tokens` truncation that bypass even SDK enforcement). On a miss, best-effort providers (Pi/Copilot) re-ask up to 3× with the schema errors appended; enforced providers fail immediately. A node that declares `output_format` but still has no schema-valid output **fails** — it no longer completes-with-prose and silently feeds `''` downstream.
-- **Field access is strict and top-level only.** `$classify.output.type` resolves only when `type` is in the schema. A reference to a field **not declared** in the schema fails the consuming node (a typo no longer silently becomes `''`); a field you declared **optional** but the model omitted resolves to `''`. Nested paths such as `$classify.output.details.type` fail workflow validation. For schemaless `bash`/`script` nodes, a `.field` ref requires the output to be JSON containing that key — otherwise the consuming node fails, so always emit every key you reference (or use whole-text `$node.output`).
+- **Field access is strict at every depth.** Each segment in `$classify.output.details.type` must be an explicit `properties` entry. An undeclared segment, at any depth, fails workflow validation when the local schema is known, and fails the consumer at runtime otherwise. Arrays, `additionalProperties`, `$ref`, and schema combinators do not authorize nested properties. Declared missing/null fields or parents resolve to `''`, after the entire path is checked. A schemaless `bash:`/`script:` producer must emit every nested key and every intermediate value must be an object. Child workflow results carry the selected producer's declared paths through completion and resume; a child result recorded before nested paths carries only its top-level fields, so a nested read from it fails as undeclared until the producer reruns. See [node output references](/reference/variables/#node-output-references).
 
 `output_format` is not AI-only, and it is not only a branching aid: it is how *any* producing node declares the shape of the value it hands downstream, including a workflow's own result. [Result contracts](#result-contracts) is the one description of that ownership — who declares a schema, what an `include:` alias and a `workflow:` sub-run each guarantee, and how a small result points at a large file.
 

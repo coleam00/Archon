@@ -11,6 +11,7 @@ import {
   serializeNodeStateRecord,
   serializeNodeTranscript,
   serializeNodeOutput,
+  persistedOutputContract,
   type NodeExecutionResult,
 } from './node-record-serialization';
 import {
@@ -117,6 +118,7 @@ import {
   isExecNode,
   isAgentNode,
   isLoopGroupNode,
+  definedOutputPaths,
   loopGroupBodySinks,
   loopGroupSoleTerminalSink,
   isGateNode,
@@ -156,21 +158,23 @@ import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { evaluateCondition } from './condition-evaluator';
 import {
-  declaredFieldsFromSchema,
+  declaredOutputPathsFromSchema,
+  rootOutputFields,
+  outputRefText,
+  type DeclaredOutputPaths,
   resolveNodeOutputField,
   assertProducerNotFailed,
   OutputRefError,
   similarNodeIds,
   canonicalValueText,
-  findUnsupportedNestedOutputRef,
   parseWholeOutputRef,
   parseWholeExecutionCheckoutRef,
   resolveExecutionCheckoutStart,
   parseWholeInputsRef,
   substituteInputRefs,
-  SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE,
-  SUPPORTED_OUTPUT_REF_SOURCE,
-  unsupportedNestedOutputRefMessage,
+  PRIOR_OUTPUT_PATH_SOURCE,
+  CURRENT_OUTPUT_PATH_SOURCE,
+  assertSupportedOutputRefs,
   type JsonValue,
 } from './output-ref';
 import { buildTruncationMarker } from './utils/output-truncation';
@@ -337,7 +341,8 @@ function inputEnvVars(node: DagNode, ctx: ShellInputContext): NodeJS.ProcessEnv 
 function wholeRefLogicalValue(
   producer: NodeOutput,
   nodeId: string,
-  field: string | undefined
+  field: string | undefined,
+  reference: string
 ): JsonValue {
   if (field === undefined) {
     assertProducerNotFailed(
@@ -354,7 +359,7 @@ function wholeRefLogicalValue(
   }
   // A failed producer's fielded form is rejected inside resolveNodeOutputField itself
   // (#2713) — the same 'producer-failed' guard as the unfielded branch above.
-  const resolution = resolveNodeOutputField(producer, nodeId, field);
+  const resolution = resolveNodeOutputField(producer, nodeId, field, reference);
   return resolution.kind === 'empty' ? '' : (resolution.value as JsonValue);
 }
 
@@ -380,8 +385,6 @@ function resolveWorkflowValue(
   strictWholeRef: boolean
 ): JsonValue {
   if (typeof rawValue !== 'string') return rawValue;
-  const nestedRef = findUnsupportedNestedOutputRef(rawValue);
-  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
   const inputsName = parseWholeInputsRef(rawValue);
   if (inputsName !== undefined) {
     const name = inputsName;
@@ -401,15 +404,13 @@ function resolveWorkflowValue(
   if (wholeRef !== undefined) {
     const producer = ctx.nodeOutputs.get(wholeRef.nodeId);
     if (producer !== undefined) {
-      return wholeRefLogicalValue(producer, wholeRef.nodeId, wholeRef.field);
+      return wholeRefLogicalValue(producer, wholeRef.nodeId, wholeRef.field, rawValue.trim());
     }
     if (wholeRef.field !== undefined) {
-      throw new OutputRefError(
-        wholeRef.nodeId,
-        wholeRef.field,
-        'unknown-node',
-        similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys())
-      );
+      throw new OutputRefError(wholeRef.nodeId, wholeRef.field, 'unknown-node', {
+        reference: rawValue.trim(),
+        candidates: similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys()),
+      });
     }
     if (strictWholeRef) {
       const candidates = similarNodeIds(wholeRef.nodeId, ctx.nodeOutputs.keys());
@@ -494,8 +495,6 @@ function resolveBindingDirective(
   directive: BindingDirective,
   ctx: ShellInputContext
 ): JsonValue {
-  const nestedRef = findUnsupportedNestedOutputRef(directive.from);
-  if (nestedRef) throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
   const ref = parseWholeOutputRef(directive.from);
   if (ref === undefined) {
     throw new Error(
@@ -530,7 +529,7 @@ function resolveBindingDirective(
       `failure, or guard '${consumerId}' with a 'when:' condition that excludes the ` +
       'failed branch.'
   );
-  return wholeRefLogicalValue(producer, ref.nodeId, ref.field);
+  return wholeRefLogicalValue(producer, ref.nodeId, ref.field, directive.from.trim());
 }
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -705,13 +704,12 @@ export interface ChildWorkflowOutcome {
    */
   structuredOutput?: unknown;
   /**
-   * Top-level field names the child's selected `returns:` node declared (#2453), read
-   * from `metadata.summary_declared_fields`. This is what authorizes a parent's
-   * `$<node>.output.field`: the child owns the contract, and a `workflow:` node cannot
-   * declare one of its own. Absent for schemaless children and pre-#2453 rows — those
-   * carry no field contract at all.
+   * Field paths the child's selected `returns:` node declared (#2453), read from the
+   * run's subrun metadata. This is what authorizes a parent's `$<node>.output.a.b`: the
+   * child owns the contract, and a `workflow:` node cannot declare one of its own.
+   * Absent for schemaless children and pre-#2453 rows — those carry no contract at all.
    */
-  declaredFields?: readonly string[];
+  declaredOutputPaths?: DeclaredOutputPaths;
   /** Child run's total cost, rolled up into the parent node's costUsd (D8). */
   costUsd?: number;
   tokens?: TokenUsage;
@@ -817,7 +815,7 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
   // Presence-keyed (#2637): `false`/`0`/`null` are legitimate structured values, so
   // reading through readSubrunMetadata's summaryValue keeps them distinguishable
   // from "not stamped".
-  const { summaryValue, summaryDeclaredFields } = readSubrunMetadata(md);
+  const { summaryValue, summaryDeclaredOutputPaths } = readSubrunMetadata(md);
   return {
     childRunId: run.id,
     status: run.status,
@@ -826,7 +824,9 @@ export function childOutcomeFromRun(run: WorkflowRun): ChildWorkflowOutcome {
     // The child's own field contract (#2453) — read from the row so the synchronous
     // path and the parent re-entry/resume path stay one source, exactly like the
     // summary and usage above.
-    ...(summaryDeclaredFields !== undefined ? { declaredFields: summaryDeclaredFields } : {}),
+    ...(summaryDeclaredOutputPaths !== undefined
+      ? { declaredOutputPaths: summaryDeclaredOutputPaths }
+      : {}),
     costUsd: typeof md.total_cost_usd === 'number' ? md.total_cost_usd : undefined,
     tokens,
     error: typeof md.error === 'string' ? md.error : undefined,
@@ -1217,7 +1217,7 @@ async function assertCheckoutUntouched(
         output: {
           text: result.output,
           structured: result.structuredOutput,
-          declaredFields: result.declaredFields,
+          declaredOutputPaths: result.declaredOutputPaths,
         },
       }
     )
@@ -1312,15 +1312,9 @@ export function substituteNodeOutputRefs(
   artifactsDir?: string,
   requiredContext?: RequiredOutputRefContext
 ): string {
-  const nestedRef = findUnsupportedNestedOutputRef(prompt);
-  if (nestedRef) {
-    const detail = unsupportedNestedOutputRefMessage(nestedRef);
-    throw requiredContext
-      ? requiredOutputRefError(requiredContext, nestedRef.reference, detail)
-      : new Error(detail);
-  }
+  assertSupportedOutputRefs(prompt);
   return prompt.replace(
-    new RegExp(SUPPORTED_OUTPUT_REF_SOURCE, 'g'),
+    new RegExp(CURRENT_OUTPUT_PATH_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = nodeOutputs.get(nodeId);
       if (!nodeOutput) {
@@ -1333,12 +1327,10 @@ export function substituteNodeOutputRefs(
         // `until_bash` opts into requiredContext because empty text would become an
         // input to a completion decision rather than merely missing display text.
         if (field) {
-          const error = new OutputRefError(
-            nodeId,
-            field,
-            'unknown-node',
-            similarNodeIds(nodeId, nodeOutputs.keys())
-          );
+          const error = new OutputRefError(nodeId, field, 'unknown-node', {
+            reference: match,
+            candidates: similarNodeIds(nodeId, nodeOutputs.keys()),
+          });
           throw requiredContext
             ? requiredOutputRefError(requiredContext, match, error.message)
             : error;
@@ -1400,7 +1392,7 @@ export function substituteNodeOutputRefs(
       // value that resolves to empty is an author-declared-optional field.
       let resolution: ReturnType<typeof resolveNodeOutputField>;
       try {
-        resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+        resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
       } catch (error) {
         if (requiredContext && error instanceof OutputRefError) {
           throw requiredOutputRefError(requiredContext, match, error.message);
@@ -1488,18 +1480,15 @@ export function substituteLoopPrevRefs(
   knownBodyIds?: ReadonlySet<string>,
   directBodyIds?: ReadonlySet<string>
 ): string {
-  const nestedRef = findUnsupportedNestedOutputRef(prompt, 'loop_prev');
-  if (nestedRef) {
-    throw new Error(unsupportedNestedOutputRefMessage(nestedRef));
-  }
   // Fast path: no refs to resolve. When refs ARE present but the map is empty/undefined
   // (iteration 1 — no prior iteration), we still run the replace so each ref resolves to
   // '' via the `!nodeOutput` branch below, rather than leaving a literal `$LOOP_PREV.…`.
+  assertSupportedOutputRefs(prompt);
   if (!prompt.includes('$LOOP_PREV.')) {
     return prompt;
   }
   return prompt.replace(
-    new RegExp(SUPPORTED_LOOP_PREV_OUTPUT_REF_SOURCE, 'g'),
+    new RegExp(PRIOR_OUTPUT_PATH_SOURCE, 'g'),
     (match, nodeId: string, field: string | undefined) => {
       const nodeOutput = loopPrevOutputs?.get(nodeId);
       if (!nodeOutput || nodeOutput.state === 'skipped' || nodeOutput.state === 'pending') {
@@ -1512,12 +1501,10 @@ export function substituteLoopPrevRefs(
             // is required: the runtime `loopPrevOutputs` map is empty on iteration 1, so it
             // alone cannot tell a typo from a legitimate first-pass absence.
             if (field) {
-              throw new OutputRefError(
-                nodeId,
-                field,
-                'unknown-node',
-                similarNodeIds(nodeId, knownBodyIds)
-              );
+              throw new OutputRefError(nodeId, field, 'unknown-node', {
+                reference: match,
+                candidates: similarNodeIds(nodeId, knownBodyIds),
+              });
             }
           } else if (directBodyIds && !directBodyIds.has(nodeId)) {
             // Known id owned by a NESTED loop_group, not this group's own body. Leave the
@@ -1541,7 +1528,7 @@ export function substituteLoopPrevRefs(
           ? shellQuoteOrFile(nodeOutput.output, nodeId, undefined, outputFileDir)
           : nodeOutput.output;
       }
-      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field);
+      const resolution = resolveNodeOutputField(nodeOutput, nodeId, field, match);
       if (resolution.kind === 'empty') return escapedForBash ? "''" : '';
       const value = resolution.value;
       if (typeof value === 'number' || typeof value === 'boolean') return String(value);
@@ -2747,7 +2734,7 @@ async function executeNodeInternal(
     // Capture the producer's declared field set so downstream `$node.output.field`
     // refs can tell a declared-optional-absent field ('') from a typo (throws).
     // Only present when output_format declares an object with `properties`.
-    const declaredFields = declaredFieldsFromSchema(node.output_format);
+    const declaredOutputPaths = declaredOutputPathsFromSchema(node.output_format);
 
     return {
       state: 'completed',
@@ -2756,7 +2743,7 @@ async function executeNodeInternal(
       costUsd: nodeCostUsd,
       ...(nodeTokens !== undefined ? { tokens: nodeTokens } : {}),
       ...(structuredOutput !== undefined ? { structuredOutput } : {}),
-      ...(declaredFields !== undefined ? { declaredFields } : {}),
+      ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
       ...(nodeResumed !== undefined ? { resumed: nodeResumed } : {}),
     };
   };
@@ -2799,7 +2786,7 @@ async function executeNodeInternal(
         output: {
           text: result.output,
           structured: result.structuredOutput,
-          declaredFields: result.declaredFields,
+          declaredOutputPaths: result.declaredOutputPaths,
         },
         tokens: nodeTokens,
         costUsd: nodeCostUsd,
@@ -3260,7 +3247,11 @@ function certifyExecOutput(
   node: ExecNode,
   stdout: string,
   credentialValues: readonly string[]
-): { output: string; structuredOutput?: JsonValue; declaredFields?: string[] } {
+): {
+  output: string;
+  structuredOutput?: JsonValue;
+  declaredOutputPaths?: DeclaredOutputPaths;
+} {
   if (node.output_format === undefined) return { output: stdout };
 
   const label = `${node.runtime === 'sh' ? 'Bash' : 'Script'} node '${node.id}'`;
@@ -3295,11 +3286,11 @@ function certifyExecOutput(
 
   // Same projection an AI producer captures: it lets a downstream `.field` ref tell a
   // declared-but-absent optional field ('') from a typo (throws).
-  const declaredFields = declaredFieldsFromSchema(node.output_format);
+  const declaredOutputPaths = declaredOutputPathsFromSchema(node.output_format);
   return {
     output: canonicalValueText(value),
     structuredOutput: value,
-    ...(declaredFields !== undefined ? { declaredFields } : {}),
+    ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
   };
 }
 
@@ -3542,7 +3533,7 @@ async function executeBashNode(
         output: {
           text: output,
           structured: certified.structuredOutput,
-          declaredFields: certified.declaredFields,
+          declaredOutputPaths: certified.declaredOutputPaths,
           persisted: {
             text: persistedOutput.nodeOutput,
             truncated: persistedOutput.truncated,
@@ -3891,7 +3882,7 @@ async function executeScriptNode(
         output: {
           text: output,
           structured: certified.structuredOutput,
-          declaredFields: certified.declaredFields,
+          declaredOutputPaths: certified.declaredOutputPaths,
           persisted: {
             text: persistedOutput.nodeOutput,
             truncated: persistedOutput.truncated,
@@ -4048,7 +4039,7 @@ async function finalizeLoopFromSignal(
   const output = {
     text: finalizeOutput,
     structured: finalizeStructuredOutput,
-    declaredFields: declaredFieldsFromSchema(node.output_format),
+    declaredOutputPaths: declaredOutputPathsFromSchema(node.output_format),
   };
   if (execution !== undefined) {
     return recordNodeState(
@@ -4077,7 +4068,9 @@ async function finalizeLoopFromSignal(
       ...(finalizeStructuredOutput !== undefined
         ? { structured_output: finalizeStructuredOutput }
         : {}),
-      ...(output.declaredFields !== undefined ? { declared_fields: output.declaredFields } : {}),
+      ...(output.declaredOutputPaths !== undefined
+        ? persistedOutputContract(output.declaredOutputPaths)
+        : {}),
       ...(finalizeUsage?.costUsd !== undefined ? { cost_usd: finalizeUsage.costUsd } : {}),
       ...(finalizeUsage?.tokens !== undefined ? { tokens: finalizeUsage.tokens } : {}),
     },
@@ -4090,7 +4083,9 @@ async function finalizeLoopFromSignal(
     ...(finalizeStructuredOutput !== undefined
       ? { structuredOutput: finalizeStructuredOutput }
       : {}),
-    ...(output.declaredFields !== undefined ? { declaredFields: output.declaredFields } : {}),
+    ...(output.declaredOutputPaths !== undefined
+      ? { declaredOutputPaths: output.declaredOutputPaths }
+      : {}),
     ...finalizeUsage,
     ...(sessionId !== undefined ? { sessionId } : {}),
   };
@@ -4356,23 +4351,19 @@ async function executeLoopGroupBody(
     for (const id of directBodyIds) {
       const prior = outerNodeOutputs.get(bodyStepNamePrefix + id);
       if (!prior) continue;
-      // The persisted row's dotted `<groupId>.<bodyId>` step name never matches a
-      // TOP-LEVEL node id, so the pre-population `prior` came from (executeDagWorkflow's
-      // resume loop) can only supply a contract the ROW itself carried — a body
-      // `workflow:` node's child-owned projection (#2453). Otherwise re-derive from the
-      // body node's OWN current definition — the same source the in-process per-iteration
-      // path uses (~line 3111) — so a resumed $LOOP_PREV.<id>.output.<field> ref keeps
-      // the same schema-typo strictness a live iteration has, instead of silently
-      // degrading to lenient '' for a genuinely undeclared field.
+      // Same rule as executeDagWorkflow's resume loop: the body node's OWN current
+      // definition owns its contract — the source a live iteration uses — so a resumed
+      // $LOOP_PREV.<id>.output.<path> ref keeps the same strictness, and a row an older
+      // binary wrote (top-level fields only) cannot narrow it. The persisted row supplies
+      // only a contract the definition cannot state: a body `workflow:` node's
+      // child-owned projection (#2453).
       const bodyNodeDef = bodyNodesById.get(id);
-      const declaredFields =
-        ('declaredFields' in prior ? prior.declaredFields : undefined) ??
-        (bodyNodeDef !== undefined && !isLoopGroupNode(bodyNodeDef)
-          ? declaredFieldsFromSchema(bodyNodeDef.output_format)
-          : undefined);
+      const declaredOutputPaths =
+        (bodyNodeDef !== undefined ? definedOutputPaths(bodyNodeDef) : undefined) ??
+        ('declaredOutputPaths' in prior ? prior.declaredOutputPaths : undefined);
       restoredLoopPrevOutputs.set(id, {
         ...prior,
-        ...(declaredFields !== undefined ? { declaredFields } : {}),
+        ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
       });
     }
     // Kept as an empty-map guard for clarity only — substituteLoopPrevRefs reads via
@@ -5047,7 +5038,7 @@ async function executeLoopGroupBody(
         ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
         loopIterations: i,
         // The final iteration's sink payload, so downstream `$group.output.field`
-        // resolves from the logical value (#2637). No declaredFields: a group's
+        // resolves from the logical value (#2637). No declaredOutputPaths: a group's
         // own output_format is ignored, so field access stays tier-2 lenient.
         ...(lastIterationStructuredOutput !== undefined
           ? { structuredOutput: lastIterationStructuredOutput }
@@ -6522,7 +6513,7 @@ async function executeLoopNode(
             output: {
               text: lastIterationOutput,
               structured: lastIterationStructuredOutput,
-              declaredFields: declaredFieldsFromSchema(node.output_format),
+              declaredOutputPaths: declaredOutputPathsFromSchema(node.output_format),
             },
             tokens: loopTotalTokens,
             costUsd: loopTotalCostUsd,
@@ -6915,7 +6906,7 @@ async function executeWaitNode(
             output: {
               text: output,
               structured: result,
-              declaredFields: declaredFieldsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
+              declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
             },
           }
         );
@@ -6942,7 +6933,7 @@ async function executeWaitNode(
     state: 'completed',
     output,
     structuredOutput: result,
-    declaredFields: declaredFieldsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
+    declaredOutputPaths: declaredOutputPathsFromSchema(WAIT_NODE_OUTPUT_FORMAT),
   };
 }
 
@@ -7330,7 +7321,7 @@ async function executeWorkflowNode(
     // certified the value and stamped the field projection beside it. Nothing is
     // re-validated here — a `workflow:` node cannot declare a schema of its own (that is
     // a load error), so there is no caller side to check against.
-    const declaredFields = outcome.declaredFields;
+    const declaredOutputPaths = outcome.declaredOutputPaths;
     // The same holds for an artifact pointer in the child's value (#2453): the child's
     // producer proved it against the child's own run, and this node relays it unchanged.
     if (outcome.output === undefined) {
@@ -7356,7 +7347,7 @@ async function executeWorkflowNode(
             ...(outcome.structuredOutput !== undefined
               ? { structured: outcome.structuredOutput }
               : {}),
-            ...(declaredFields !== undefined ? { declaredFields: [...declaredFields] } : {}),
+            ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
           },
           costUsd: outcome.costUsd,
           tokens: outcome.tokens,
@@ -9538,6 +9529,11 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                           : {}),
                       }
                     : formatThisNodesPriorOutput(skipStepName);
+                  // Return the pre-populated output (already in nodeOutputs)
+                  const cachedOutput = ctx.nodeOutputs.get(node.id);
+                  if (cachedOutput === undefined) {
+                    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
+                  }
                   await recordNodeState(
                     { store: ctx.deps.store, logDir: ctx.logDir },
                     {
@@ -9548,20 +9544,18 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         action: 'replayed',
                         output: {
                           ...persistedExecutionOutput(priorSkipOutput, prior?.output ?? ''),
-                          structured: prior?.structuredOutput,
-                          declaredFields:
-                            prior?.declaredFields === undefined
-                              ? undefined
-                              : [...prior.declaredFields],
+                          structured:
+                            'structuredOutput' in cachedOutput
+                              ? cachedOutput.structuredOutput
+                              : undefined,
+                          declaredOutputPaths:
+                            'declaredOutputPaths' in cachedOutput
+                              ? cachedOutput.declaredOutputPaths
+                              : undefined,
                         },
                       },
                     }
                   );
-                  // Return the pre-populated output (already in nodeOutputs)
-                  const cachedOutput = ctx.nodeOutputs.get(node.id);
-                  if (cachedOutput === undefined) {
-                    throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
-                  }
                   return {
                     nodeId: node.id,
                     output: cachedOutput,
@@ -11202,18 +11196,16 @@ export async function executeDagWorkflow(
       const node = nodesById.get(nodeId);
       // Nodes flagged always_run re-execute on resume — leave them for fresh output.
       if (node?.always_run) continue;
-      // Prefer the contract the node actually completed under (#2453) — a `workflow:`
-      // node's is the CHILD's, which this definition does not state and re-derivation
-      // would therefore lose. Otherwise re-derive a schema-capable producer's declared
-      // field set from the loaded definition so its strict `$node.output.field` contract
-      // survives resume (#2091). A loop_group is the exception: its output_format is
-      // ignored, so it never gets declaredFields — but its persisted terminal payload
-      // (below) still rehydrates, matching fresh completion since #2637.
-      const declaredFields =
-        prior.declaredFields ??
-        (node !== undefined && !isLoopGroupNode(node)
-          ? declaredFieldsFromSchema(node.output_format)
-          : undefined);
+      // A local producer's loaded definition owns its contract, so its strict
+      // `$node.output.<path>` contract survives resume (#2091) and matches the load-time
+      // check, even when the row was written by an older binary that recorded only
+      // top-level fields. The persisted contract serves producers whose definition states
+      // none: a `workflow:` node's is the CHILD's (#2453), and a wait node's is fixed by
+      // the engine. A loop_group gets none: its output_format is ignored, but its
+      // persisted terminal payload (below) still rehydrates, matching fresh completion
+      // since #2637.
+      const declaredOutputPaths =
+        (node !== undefined ? definedOutputPaths(node) : undefined) ?? prior.declaredOutputPaths;
       nodeOutputs.set(nodeId, {
         state: 'completed',
         output: prior.output,
@@ -11223,7 +11215,7 @@ export async function executeDagWorkflow(
         ...(prior.structuredOutput !== undefined
           ? { structuredOutput: prior.structuredOutput }
           : {}),
-        ...(declaredFields !== undefined ? { declaredFields: [...declaredFields] } : {}),
+        ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
         ...(prior.execution !== undefined ? { execution: prior.execution } : {}),
       });
       prepopulatedCount++;
@@ -11299,7 +11291,12 @@ export async function executeDagWorkflow(
     const selectedOutput = nodeOutputs.get(returns);
     if (selectedOutput?.state !== 'completed') return;
 
-    const resolution = resolveNodeOutputField(selectedOutput, returns, field);
+    const resolution = resolveNodeOutputField(
+      selectedOutput,
+      returns,
+      field,
+      outputRefText(returns, field)
+    );
     if (resolution.kind !== 'value' || typeof resolution.value !== 'boolean') {
       throw new Error(
         `Workflow outcome_field '${field}' on returns node '${returns}' did not resolve to a boolean`
@@ -11807,11 +11804,11 @@ export async function executeDagWorkflow(
   // summary as `metadata.summary_value` so a parent `workflow:` node threads the
   // LOGICAL value back (fan-out aggregation and `.field` access keep the type).
   let terminalStructuredOutput: unknown;
-  // The selected node's declared field names (#2453) — the callee-owned half of the
+  // The selected node's declared field paths (#2453) — the callee-owned half of the
   // result contract. Stamped beside `summary_value` so the parent's `workflow:` node can
-  // authorize `$<node>.output.field` from the CHILD's schema instead of requiring the
+  // authorize `$<node>.output.a.b` from the CHILD's schema instead of requiring the
   // caller to repeat it. Only the projection travels; the schema stays in captured source.
-  let terminalDeclaredFields: readonly string[] | undefined;
+  let terminalDeclaredOutputPaths: DeclaredOutputPaths | undefined;
   if (workflow.returns !== undefined && workflowRun.parent_run_id) {
     const returnsOutput = nodeOutputs.get(workflow.returns);
     const value = returnsOutput?.state === 'completed' ? returnsOutput.output : undefined;
@@ -11824,10 +11821,8 @@ export async function executeDagWorkflow(
       // Taken from the completed node rather than re-derived from the definition: the
       // node already resolved its own contract (a wait node's fixed schema, a resumed
       // node's persisted projection), and re-deriving here would silently disagree.
-      terminalDeclaredFields =
-        returnsOutput !== undefined && 'declaredFields' in returnsOutput
-          ? returnsOutput.declaredFields
-          : undefined;
+      terminalDeclaredOutputPaths =
+        returnsOutput?.state === 'completed' ? returnsOutput.declaredOutputPaths : undefined;
     } else {
       getLog().warn(
         { workflowRunId: workflowRun.id, returns: workflow.returns },
@@ -11844,10 +11839,8 @@ export async function executeDagWorkflow(
     // it here too keeps the two channels together: a child without `returns:` has threaded
     // its terminal LOGICAL value to the parent since #2637, and a value whose field
     // authorization stayed behind would read as schemaless downstream.
-    terminalDeclaredFields =
-      terminalSink !== undefined && 'declaredFields' in terminalSink
-        ? terminalSink.declaredFields
-        : undefined;
+    terminalDeclaredOutputPaths =
+      terminalSink?.state === 'completed' ? terminalSink.declaredOutputPaths : undefined;
     terminalStructuredOutput =
       terminalSink !== undefined && 'structuredOutput' in terminalSink
         ? terminalSink.structuredOutput
@@ -11888,11 +11881,17 @@ export async function executeDagWorkflow(
         ...(workflowRun.parent_run_id && terminalOutput && terminalStructuredOutput !== undefined
           ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminalStructuredOutput }
           : {}),
-        // `summary_declared_fields` (#2453) is the callee-owned field projection. Gated
-        // on the same terminal output as the two keys above, so a blank/incomplete
-        // `returns:` node stamps no contract at all rather than one nothing satisfies.
-        ...(workflowRun.parent_run_id && terminalOutput && terminalDeclaredFields !== undefined
-          ? { [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: [...terminalDeclaredFields] }
+        // The callee-owned field contract (#2453). Gated on the same terminal output as
+        // the two keys above, so a blank/incomplete `returns:` node stamps no contract
+        // at all rather than one nothing satisfies. `summary_declared_fields` is derived
+        // from the paths and still written for older binaries, which read only it.
+        ...(workflowRun.parent_run_id && terminalOutput && terminalDeclaredOutputPaths !== undefined
+          ? {
+              [SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths]: terminalDeclaredOutputPaths,
+              [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: rootOutputFields(
+                terminalDeclaredOutputPaths
+              ),
+            }
           : {}),
       }
     ),

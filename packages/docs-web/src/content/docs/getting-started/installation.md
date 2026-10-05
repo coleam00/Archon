@@ -123,6 +123,8 @@ archon version
 
 ## Next Steps
 
+See [Updating Archon](/getting-started/updating/) for your install method.
+
 - [Core Concepts](/getting-started/concepts/) — Understand workflows, nodes, commands, and isolation
 - [Quick Start](/getting-started/quick-start/) — Run your first workflow
 - [Configuration](/getting-started/configuration/) — Set up API keys and preferences

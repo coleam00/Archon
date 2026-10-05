@@ -1,3 +1,4 @@
+import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
@@ -207,16 +208,9 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // getRunAncestry), and the ancestor-aware path lock.
 // ---------------------------------------------------------------------------
 
-interface StoreEvent {
-  workflow_run_id: string;
-  event_type: string;
-  step_name?: string;
-  data?: Record<string, unknown>;
-}
-
 class InMemoryStore implements IWorkflowStore {
   runs = new Map<string, WorkflowRun>();
-  events: StoreEvent[] = [];
+  events: InMemoryStoreEvent[] = [];
   private seq = 0;
 
   private clone(r: WorkflowRun): WorkflowRun {
@@ -499,68 +493,8 @@ class InMemoryStore implements IWorkflowStore {
 
   listProviderEvents: IWorkflowStore['listProviderEvents'] = () => Promise.resolve([]);
 
-  getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
-    const completedNodeOutputs = new Map<
-      string,
-      { output: string; structuredOutput?: unknown; declaredFields?: readonly string[] }
-    >();
-    const tokens = { input: 0, output: 0 };
-    let costUsd = 0;
-    for (const e of this.events) {
-      if (
-        e.workflow_run_id === workflowRunId &&
-        (e.event_type === 'node_completed' || e.event_type === 'node_skipped_prior_success') &&
-        typeof e.step_name === 'string'
-      ) {
-        // Mirrors the real store (#2637): the logical value rides beside the text, and
-        // (#2453) the field contract the node completed under rides beside both.
-        const rawDeclaredFields = e.data?.declared_fields;
-        completedNodeOutputs.set(e.step_name, {
-          output: String(e.data?.node_output ?? ''),
-          ...(e.data?.structured_output !== undefined
-            ? { structuredOutput: e.data.structured_output }
-            : {}),
-          ...(Array.isArray(rawDeclaredFields) &&
-          rawDeclaredFields.every(f => typeof f === 'string')
-            ? { declaredFields: rawDeclaredFields as string[] }
-            : {}),
-        });
-        // Mirrors the real store: a derived row (loop_group roll-up) restates usage
-        // other rows already carry, so it contributes output but never usage (#2469).
-        if (e.data?.aggregate === true) continue;
-        const eventTokens = e.data?.tokens;
-        if (
-          e.event_type === 'node_completed' &&
-          typeof eventTokens === 'object' &&
-          eventTokens !== null &&
-          'input' in eventTokens &&
-          'output' in eventTokens &&
-          typeof eventTokens.input === 'number' &&
-          typeof eventTokens.output === 'number' &&
-          Number.isFinite(eventTokens.input) &&
-          Number.isFinite(eventTokens.output)
-        ) {
-          tokens.input += eventTokens.input;
-          tokens.output += eventTokens.output;
-        }
-        const eventCost = e.data?.cost_usd;
-        if (
-          e.event_type === 'node_completed' &&
-          typeof eventCost === 'number' &&
-          Number.isFinite(eventCost)
-        ) {
-          costUsd += eventCost;
-        }
-      }
-    }
-    return Promise.resolve({
-      completedNodeOutputs,
-      fanOutSnapshots: new Map(),
-      unresolvedNodeStarts: new Set(),
-      tokens,
-      costUsd,
-    });
-  };
+  getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId =>
+    Promise.resolve(inMemoryDagResumeSnapshot(this.events, workflowRunId));
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
   getCodebaseEnvVars = (): Promise<Record<string, string>> => Promise.resolve({});
@@ -6825,6 +6759,84 @@ nodes:
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
+  it('keeps a child nested contract through two cold resumes and both result selections', async () => {
+    const paths = [['proposal'], ['proposal', 'action']];
+    for (const returns of ['returns: emit', '']) {
+      await writeWorkflow(
+        'nested-child',
+        `
+name: nested-child
+description: nested producer
+${returns}
+nodes:
+  - id: emit
+    bash: printf '%s' '{"proposal":{"action":"add"}}'
+    output_format:
+      type: object
+      properties:
+        proposal:
+          type: object
+          properties:
+            action: {type: string}
+          required: [action]
+      required: [proposal]
+`
+      );
+      await writeWorkflow(
+        'nested-parent',
+        `
+name: nested-parent
+description: reads after two restarts
+nodes:
+  - id: sub
+    workflow: nested-child
+  - id: read
+    depends_on: [sub]
+    bash: |
+      if [ ! -f "$STATE_DIR/once-${returns ? 'return' : 'sink'}" ]; then touch "$STATE_DIR/once-${returns ? 'return' : 'sink'}"; exit 1; fi
+      if [ ! -f "$STATE_DIR/twice-${returns ? 'return' : 'sink'}" ]; then touch "$STATE_DIR/twice-${returns ? 'return' : 'sink'}"; exit 1; fi
+      printf '%s' $sub.output.proposal.action
+`
+      );
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const run = (options?: Parameters<typeof executeWorkflow>[7]) =>
+        executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-plat',
+          cwd,
+          discoverResolved,
+          'goal',
+          'conv-db',
+          options
+        );
+      const discoverResolved = await discover('nested-parent');
+      expect((await run()).success).toBe(false);
+      const parent = [...store.runs.values()].find(r => r.workflow_name === 'nested-parent');
+      const child = [...store.runs.values()].find(r => r.workflow_name === 'nested-child');
+      expect(child?.metadata?.summary_declared_output_paths).toEqual(paths);
+      for (const success of [false, true]) {
+        const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
+        expect(hydrated?.priorCompletedNodes.get('sub')?.declaredOutputPaths).toEqual(paths);
+        expect((await run({ ...hydrated! })).success).toBe(success);
+      }
+      expect(
+        store.events
+          .filter(e => e.step_name === 'sub' && e.event_type === 'node_skipped_prior_success')
+          .map(e => e.data?.declared_output_paths)
+      ).toEqual([paths, paths]);
+      expect(
+        store.events.find(
+          e =>
+            e.workflow_run_id === parent?.id &&
+            e.step_name === 'read' &&
+            e.event_type === 'node_completed'
+        )?.data?.node_output
+      ).toBe('add');
+    }
+  });
+
   it('a parent with NO caller output_format reads the child-declared field', async () => {
     await writeContractChild();
     await writeWorkflow(
@@ -6951,7 +6963,10 @@ nodes:
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
     expect(hydrated).not.toBeNull();
     // The snapshot carries the CHILD's contract; the parent's own definition never had it.
-    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredFields).toEqual(['green', 'note']);
+    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredOutputPaths).toEqual([
+      ['green'],
+      ['note'],
+    ]);
 
     const second = await executeWorkflow(
       deps,
@@ -7570,7 +7585,13 @@ nodes:
     ).toBe(false);
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent!.id))!);
     // The parent's own definition never carried the contract; the snapshot does.
-    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredFields).toEqual(['units', 'plan']);
+    expect(hydrated?.priorCompletedNodes.get('sub')?.declaredOutputPaths).toEqual([
+      ['units'],
+      ['plan'],
+      ['plan', 'type'],
+      ['plan', 'run_id'],
+      ['plan', 'path'],
+    ]);
 
     const second = await executeWorkflow(
       deps,

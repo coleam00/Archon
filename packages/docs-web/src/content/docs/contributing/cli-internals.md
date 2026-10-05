@@ -404,9 +404,9 @@ Implements `IPlatformAdapter` for terminal output.
 
 CLI conversations use ID format: `cli-{timestamp}-{random}`
 
-Example: `cli-1705932847321-a7f3b2`
+The random suffix contains 16 cryptographically random bytes encoded as 32 hex characters.
 
-Generated at: `packages/cli/src/commands/workflow.ts`
+Generated at: `packages/cli/src/utils/conversation-id.ts`
 
 ---
 

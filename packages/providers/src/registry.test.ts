@@ -1,4 +1,5 @@
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
+import * as paths from '@archon/paths';
 import {
   getAgentProvider,
   getProviderCapabilities,
@@ -17,6 +18,14 @@ import { registerOpencodeProvider } from './community/opencode/registration';
 import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider } from './types';
 import { EFFORT_LADDER } from '@archon/provider-contract';
+
+// The registry creates its logger on first use and keeps it; hand it one this file can
+// observe. Module scope, so the spy is in place before any test makes the registry log.
+const registryLog = paths.createLogger('provider.registry');
+const realCreateLogger = paths.createLogger;
+spyOn(paths, 'createLogger').mockImplementation(module =>
+  module === 'provider.registry' ? registryLog : realCreateLogger(module)
+);
 
 /** Minimal mock provider for testing registration. */
 function makeMockProvider(id: string): IAgentProvider {
@@ -110,6 +119,23 @@ describe('registry', () => {
       const provider2 = getAgentProvider('claude');
 
       expect(provider1).not.toBe(provider2);
+    });
+
+    test('logs a deprecated provider once per process, however often it is resolved', () => {
+      registerProvider(makeMockRegistration('old', { deprecationNotice: 'old is deprecated' }));
+      const warn = spyOn(registryLog, 'warn').mockImplementation(() => undefined);
+      try {
+        getAgentProvider('old');
+        getAgentProvider('old');
+        getAgentProvider('claude');
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(
+          { provider: 'old', notice: 'old is deprecated' },
+          'provider.deprecated'
+        );
+      } finally {
+        warn.mockRestore();
+      }
     });
 
     test('providers expose getCapabilities', () => {
@@ -283,6 +309,15 @@ describe('registry', () => {
       expect(isRegisteredProvider('opencode')).toBe(true);
       expect(isRegisteredProvider('pi')).toBe(true);
       expect(isRegisteredProvider('copilot')).toBe(true);
+    });
+
+    test('only OpenCode and Copilot are deprecated', () => {
+      registerCommunityProviders();
+      const deprecated = getRegisteredProviders()
+        .filter(p => p.deprecationNotice)
+        .map(p => p.id)
+        .sort();
+      expect(deprecated).toEqual(['copilot', 'opencode']);
     });
 
     test('is idempotent', () => {

@@ -271,7 +271,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // orchestrator.ts imports createChildWorktreeResolver, which imports
+  // orchestrator.ts imports createCodebaseChildResolver, which imports
   // loadRepoConfig by name. This factory replaces the module process-wide, so
   // omitting it fails that import at module-eval even though no test calls it.
   loadRepoConfig: mock(() => Promise.resolve(null)),
@@ -816,42 +816,6 @@ describe('orchestrator-agent handleMessage', () => {
       );
       expect(mockDiscoverWorkflows).not.toHaveBeenCalled();
       expect(mockExecuteWorkflow).toHaveBeenCalled();
-    });
-
-    test('validates workflow exists in auto-selected project before dispatch', async () => {
-      const workflowDefinition = makeTestResolvedWorkflow({
-        name: 'test-workflow',
-        description: 'A test workflow',
-      });
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockHandleCommand.mockResolvedValue({
-        success: true,
-        message: 'Starting workflow: `test-workflow`',
-        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
-      });
-      mockDiscoverWorkflows.mockResolvedValue({
-        workflows: [
-          {
-            workflow: makeTestResolvedWorkflow({ name: 'other-workflow' }),
-            source: 'bundled' as const,
-          },
-        ],
-        errors: [],
-      });
-
-      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
-
-      expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
-        '/workspace/test-project',
-        expect.any(Function),
-        undefined // non-worktree cwd: source root is the cwd itself
-      );
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        'Workflow `test-workflow` not found.\n\nUse /workflow list to see available workflows.'
-      );
-      expect(mockUpdateConversation).not.toHaveBeenCalled();
-      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     });
 
     test('non-deterministic commands go to AI orchestrator', async () => {

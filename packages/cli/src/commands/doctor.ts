@@ -23,6 +23,7 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
+import type { probeOpencodeRuntime } from '@archon/providers/community/opencode/runtime';
 import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 import type { CredentialStatus } from '@archon/provider-contract';
@@ -69,6 +70,28 @@ export async function checkConfigFiles(
   } catch (err) {
     return { label, status: 'fail', message: (err as Error).message };
   }
+}
+
+/**
+ * Warn when the configured default assistant is a deprecated provider. Skips
+ * when the config cannot load: Config files already reports that failure.
+ */
+export async function checkProviderDeprecation(
+  cwd: string = process.cwd(),
+  load: (cwd: string) => Promise<Pick<MergedConfig, 'assistant'>> = defaultLoadMergedConfig
+): Promise<CheckResult> {
+  const label = 'Provider support';
+  let assistant: string;
+  try {
+    assistant = (await load(cwd)).assistant;
+  } catch {
+    return { label, status: 'skip', message: 'config did not load' };
+  }
+  const { getRegistration } = await import('@archon/providers');
+  const notice = getRegistration(assistant).deprecationNotice;
+  return notice
+    ? { label, status: 'warn', message: notice }
+    : { label, status: 'pass', message: `${assistant} is supported` };
 }
 
 async function defaultLoadMergedConfig(cwd: string): Promise<MergedConfig> {
@@ -280,16 +303,12 @@ async function defaultLoadCodexBinaryDeps(env: NodeJS.ProcessEnv): Promise<Codex
 export interface OpenCodeDeps {
   /** True when the merged default assistant is opencode. */
   isDefaultAssistant: boolean;
-  /** Cheap module-presence probe — resolves the SDK WITHOUT booting the server. */
-  probeRuntimeModule: () => Promise<boolean>;
+  probeRuntime: typeof probeOpencodeRuntime;
 }
 
 /**
- * Report whether the embedded OpenCode runtime SDK is present. OpenCode's
- * runtime is heavyweight to start (spawns a child process and binds a port),
- * so doctor NEVER boots it — it only probes that the SDK module resolves. Skips
- * unless OpenCode is the configured assistant or `--full` is passed, matching
- * the lazy-start posture of `GET /api/providers/opencode/credentials`.
+ * OpenCode startup spawns a child process and binds a port. Doctor checks its
+ * dependencies without booting it, only when configured or requested with --full.
  */
 export async function checkOpenCode(
   env: NodeJS.ProcessEnv,
@@ -314,7 +333,7 @@ export async function checkOpenCode(
     return {
       label,
       status: 'skip',
-      message: 'OpenCode not configured (pass --full to probe the runtime SDK)',
+      message: 'OpenCode not configured (pass --full to probe the runtime dependencies)',
     };
   }
 
@@ -328,10 +347,9 @@ export async function checkOpenCode(
     };
   }
 
-  let present: boolean;
+  let availability: Awaited<ReturnType<OpenCodeDeps['probeRuntime']>>;
   try {
-    // Cheap probe only — resolves the SDK module without starting the server.
-    present = await deps.probeRuntimeModule();
+    availability = await deps.probeRuntime();
   } catch (err) {
     return {
       label,
@@ -340,29 +358,41 @@ export async function checkOpenCode(
     };
   }
 
-  if (present) {
-    return {
-      label,
-      status: 'pass',
-      message: 'embedded runtime SDK present (module resolves; server not started)',
-    };
+  switch (availability) {
+    case 'ready':
+      return {
+        label,
+        status: 'pass',
+        message: 'embedded runtime SDK and opencode executable present (server not started)',
+      };
+    case 'executable-missing':
+      return {
+        label,
+        status: 'fail',
+        message:
+          'opencode executable not found on PATH. Install the OpenCode CLI and add it to PATH.',
+      };
+    case 'sdk-entrypoint-missing':
+      return {
+        label,
+        status: 'fail',
+        message:
+          '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
+      };
+    default: {
+      const unhandled: never = availability;
+      throw new Error(`unhandled OpenCode availability: ${String(unhandled)}`);
+    }
   }
-  return {
-    label,
-    status: 'fail',
-    message:
-      '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
-  };
 }
 
 async function defaultLoadOpenCodeDeps(): Promise<OpenCodeDeps> {
   const { loadConfig } = await import('@archon/core');
-  const { probeOpencodeRuntimeModule } =
-    await import('@archon/providers/community/opencode/runtime');
+  const { probeOpencodeRuntime } = await import('@archon/providers/community/opencode/runtime');
   const config = await loadConfig(process.cwd());
   return {
     isDefaultAssistant: config.assistant === 'opencode',
-    probeRuntimeModule: probeOpencodeRuntimeModule,
+    probeRuntime: probeOpencodeRuntime,
   };
 }
 
@@ -476,11 +506,11 @@ export async function checkAssistantLogin(
 
 async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<AssistantLoginDeps> {
   const config = await defaultLoadMergedConfig(process.cwd());
-  const { getRegistration, getAgentProvider, normalizeCredentialVendor } =
-    await import('@archon/providers');
+  const { getRegistration, normalizeCredentialVendor } = await import('@archon/providers');
   const configuredModel = config.assistants[config.assistant]?.model;
   const model = typeof configuredModel === 'string' ? configuredModel : undefined;
-  const { credentials } = getRegistration(config.assistant);
+  const registration = getRegistration(config.assistant);
+  const { credentials } = registration;
   const usableVendors =
     credentials.kind === 'static' ? credentials.specs.map(spec => spec.vendor) : [];
   const cliId = env.ARCHON_USER_ID || env.USER || env.USERNAME;
@@ -508,7 +538,9 @@ async function defaultLoadAssistantLoginDeps(env: NodeJS.ProcessEnv): Promise<As
     model,
     vendor: credentials.vendorFor(model),
     connectedVendors,
-    provider: getAgentProvider(config.assistant),
+    // The factory, not getAgentProvider: a credential check is not a run, so it must not
+    // log the deprecation notice the Provider support check already shows.
+    provider: registration.factory(),
   };
 }
 
@@ -998,6 +1030,7 @@ export async function doctorCommand(
         checkCodexBinary(env),
         checkGhAuth(env),
         checkAssistantLogin(env),
+        checkProviderDeprecation(),
         checkOpenCode(env, full),
         checkDatabase(),
         checkFolderProject(),

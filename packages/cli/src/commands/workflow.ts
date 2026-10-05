@@ -2,6 +2,7 @@
  * Workflow command - list and run workflows
  */
 
+import { generateConversationId } from '../utils/conversation-id';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
@@ -75,7 +76,7 @@ import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { toHydratedTimestamp } from '@archon/core/db/timestamps';
-import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
+import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
@@ -477,15 +478,6 @@ export function resolveContainerBackendConfig(
 export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undefined): boolean {
   if (!metadata) return false;
   return metadata.pending_writeback !== undefined && metadata.writeback_resolved !== true;
-}
-
-/**
- * Generate a unique conversation ID for CLI usage
- */
-function generateConversationId(): string {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 8);
-  return `cli-${String(timestamp)}-${random}`;
 }
 
 /**
@@ -3229,20 +3221,13 @@ async function runWorkflowWithOwnedSource(
             ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
           }
         : undefined;
-    // Per-child isolation resolver (#2121 slice 2, PR-A): built for git-repo codebases
-    // only — a folder project can't make worktrees, so a `workflow:` node requesting
-    // `isolation: 'worktree'` there fails fast in the engine (no resolver injected).
-    const resolveChildIsolation =
-      codebase && codebase.kind !== 'folder'
-        ? createChildWorktreeResolver({
-            codebaseId: codebase.id,
-            codebaseName: codebase.name,
-            canonicalRepoPath: codebase.default_cwd,
-            baseBranch: codebaseDefaultBranch,
-            createdByPlatform: 'cli',
-            createdByUserId: cliUserId,
-          })
-        : undefined;
+    const resolveChildIsolation = codebase
+      ? createCodebaseChildResolver(codebase, {
+          baseBranch: codebaseDefaultBranch,
+          createdByPlatform: 'cli',
+          createdByUserId: cliUserId,
+        })
+      : undefined;
     const commonOptions = {
       codebaseId: codebase?.id,
       source: workflowSource,

@@ -1,0 +1,16 @@
+---
+import StarlightPage from '@astrojs/starlight/components/StarlightPage.astro';
+import PluginMetadata from '../../components/PluginMetadata.astro';
+import { getPluginIndex, type ListedPlugin } from '../../data/plugins';
+export async function getStaticPaths() {
+  return (await getPluginIndex()).map(plugin => ({ params: { id: plugin.id }, props: { plugin } }));
+}
+interface Props { plugin: ListedPlugin }
+const { plugin } = Astro.props;
+---
+<StarlightPage frontmatter={{ title: plugin.manifest.name, description: plugin.manifest.description }}>
+  <p><a href="/plugins/">All plugins</a></p>
+  <PluginMetadata plugin={plugin} />
+  <p>This manifest was read at the indexed commit. Install resolves the current default branch for workflow packs, or the latest GitHub release for forge plugins. Use <code>@tag</code> to choose a version.</p>
+  <p>Listing does not execute or review plugin code. Inspect the source and README before installing.</p>
+</StarlightPage>

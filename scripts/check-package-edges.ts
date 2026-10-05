@@ -50,8 +50,9 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   },
   // The browser consumes generated API types through its local API layer.
   web: { runtime: [] },
-  // Documentation builds independently of the runtime packages.
-  'docs-web': { runtime: [] },
+  // Documentation builds independently of the runtime packages; the plugin catalog
+  // validates listed manifests against the shared manifest vocabulary.
+  'docs-web': { runtime: ['plugin-manifest'] },
 };
 
 export interface PackageManifest {

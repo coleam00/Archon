@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
 import { findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
 import { getStartReceipt } from '@archon/core/db/resource-starts';
@@ -220,6 +221,7 @@ beforeEach(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'archon-server-resource-host-')));
   process.env.ARCHON_HOME = join(root, 'home');
   delete process.env.DATABASE_URL;
+  setPlatformPolicies([]);
   resetDatabase();
   await getDatabase().query(
     `INSERT INTO remote_agent_users (id, display_name) VALUES ($1, 'Trigger actor')`,

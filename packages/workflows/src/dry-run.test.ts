@@ -2810,3 +2810,41 @@ describe('all_done tolerance vs a placeholder that cannot be generated (#2869)',
     expect(result.toleratedMissingStubs).toEqual([]);
   });
 });
+
+test('dry-run nested conditions enforce the same declared contract as live outputs', async () => {
+  const workflow = (field: string) =>
+    makeTestWorkflow({
+      name: 'nested-stub',
+      nodes: [
+        {
+          id: 'review',
+          bash: 'echo json',
+          output_format: {
+            type: 'object',
+            properties: {
+              proposal: { type: 'object', properties: { action: { type: 'string' } } },
+            },
+          },
+        },
+        {
+          id: 'read',
+          bash: 'echo read',
+          depends_on: ['review'],
+          when: `$review.output.proposal.${field} == 'add'`,
+        },
+      ],
+    });
+  const run = (field: string) =>
+    dryRunWorkflow({
+      workflow: workflow(field),
+      userMessage: '',
+      cwd: process.cwd(),
+      stubs: { review: { proposal: { action: 'add' } }, read: 'read' },
+    });
+  const valid = await run('action');
+  expect(valid.outcome).toBe('completed');
+  expect(valid.trace.find(node => node.nodeId === 'read')?.state).toBe('stubbed');
+  const typo = await run('typo');
+  expect(typo.outcome).toBe('failed');
+  expect(typo.trace.find(node => node.nodeId === 'read')?.reason).toContain("field 'typo'");
+});
