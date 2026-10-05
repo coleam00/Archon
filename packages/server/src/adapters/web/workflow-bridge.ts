@@ -11,7 +11,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/core/db/workflow-events';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
-import { SSETransport } from './transport';
+import { DASHBOARD_STREAM, type SSETransport } from './transport';
 import type { DagNodeSseEvent } from './workflow-event.schemas';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -353,11 +353,11 @@ export class WorkflowEventBridge {
         if (conversationId) {
           this.transport.emitWorkflowEvent(conversationId, sseEvent);
         }
-        // Fan-out to dashboard stream — no-op when no dashboard client connected.
+        // Fan-out to dashboard connections.
         // Provider events stay on the run's own stream: the dashboard reads lifecycle
         // only, and a run streams thousands of them, tool output included.
         if (event.type !== 'provider_event') {
-          this.transport.emitWorkflowEvent('__dashboard__', sseEvent);
+          this.transport.emitWorkflowEvent(DASHBOARD_STREAM, sseEvent);
         }
       }
     });

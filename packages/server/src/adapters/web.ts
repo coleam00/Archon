@@ -39,8 +39,7 @@ export class WebAdapter implements IPlatformAdapter {
   ) {}
 
   /**
-   * Register an SSE stream for a conversation.
-   * Closes any existing stream (browser refresh / new tab replaces old).
+   * Dashboard connections coexist; a conversation reconnect replaces its old stream.
    */
   registerStream(conversationId: string, stream: SSEWriter): void {
     this.transport.registerStream(conversationId, stream);

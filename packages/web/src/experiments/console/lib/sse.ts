@@ -41,8 +41,7 @@ function parse(raw: string): ParsedEvent | null {
  * Subscribe to the dashboard SSE stream, invalidate the runs feed on any
  * lifecycle change, and report the changed run to `onRunChanged` (keep it
  * stable: a new callback reconnects). Mounted once, at the console root, so
- * every route stays live: the server keeps a single `__dashboard__` stream, and
- * a second connection replaces the first.
+ * every route stays live across navigation.
  *
  * Events we care about:
  *   workflow_status   — run created / status changed / completed / failed
