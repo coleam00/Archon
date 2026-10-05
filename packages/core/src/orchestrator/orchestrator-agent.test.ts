@@ -4896,7 +4896,6 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       name: 'ExampleProject',
       default_cwd: expectedCwd,
       default_branch: null,
-      ai_assistant_type: 'claude',
       kind: 'repo',
     });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
@@ -4932,7 +4931,6 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       name: 'ExampleProject',
       default_cwd: expectedCwd,
       default_branch: null,
-      ai_assistant_type: 'claude',
       kind: 'repo',
     });
     const allCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
@@ -5052,7 +5050,6 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
       name: 'MyApp',
       default_cwd: await canonicalizeProjectPath('/path/to/app'),
       default_branch: null,
-      ai_assistant_type: 'claude',
       kind: 'repo',
     });
   });

@@ -39,7 +39,6 @@ import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
-  execFileAsync,
   findRepoRoot,
   getDefaultRemote,
   syncWorkspace,
@@ -2451,7 +2450,7 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    let systemAppend = await buildOrchestratorSystemAppend(conversation, codebases, workflows);
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the
@@ -3404,9 +3403,6 @@ async function handleRegisterProject(
     return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
   }
 
-  // Use config default provider instead of hardcoding 'claude'
-  const config = await loadConfig();
-
   // Detect whether the path is a git repository. Non-git paths (multi-repo roots
   // or plain ops folders) register as folder projects — run-in-place, no branch.
   // findRepoRoot returns null ONLY for a definitive "not a git repository"; it
@@ -3426,12 +3422,10 @@ async function handleRegisterProject(
     );
   }
   const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
-  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(canonicalPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,
-    default_branch: detectedBranch,
-    ai_assistant_type: config.assistant,
+    default_branch: null,
     kind,
   });
 
@@ -3446,20 +3440,6 @@ async function handleRegisterProject(
       'If this should be a git repo, resolve the error and re-register.';
   }
   return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
-}
-
-async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', projectPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
-      { timeout: 5000 }
-    );
-    const branch = stdout.trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
-  }
 }
 
 /**

@@ -558,7 +558,7 @@ export async function findWorkflowRunsByIdPrefix(
   if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
   try {
     const result = await pool.query<WorkflowRunSqlRow>(
-      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND CAST(id AS TEXT) LIKE $2 LIMIT 2',
       [codebaseId, `${idPrefix}%`]
     );
     return result.rows.map(normalizeWorkflowRun);

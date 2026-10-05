@@ -589,6 +589,7 @@ describe('dispatchBackgroundWorkflow', () => {
         await flushBackgroundExecution();
         const workerId = mockGetOrCreateConversation.mock.calls[0]?.[1];
         expect(mockGetOrCreateConversation.mock.calls[0]?.[0]).toBe('matrix-chat');
+        expect(mockGetOrCreateConversation.mock.calls[0]?.[2]).toBe('cb-1');
         expect(workerId).toStartWith('matrix-chat-worker-');
         expect(prepare).toHaveBeenCalledWith({
           workerConversationId: workerId,

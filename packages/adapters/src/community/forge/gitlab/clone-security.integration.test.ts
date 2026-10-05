@@ -53,10 +53,6 @@ mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mock(async () => undefined),
 }));
 
-mock.module('@archon/core/config/resolve-assistant', () => ({
-  resolveDefaultAssistant: mock(async () => 'claude'),
-}));
-
 const { GitLabAdapter } = await import('./adapter');
 const trackTempRoot = trackTempRoots();
 
