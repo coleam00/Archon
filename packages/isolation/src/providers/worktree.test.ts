@@ -1536,6 +1536,16 @@ describe('WorktreeProvider', () => {
         winningProvider.generateBranchName(request),
         winningConfig
       );
+      const losingPath = losingProvider.getWorktreePath(
+        request,
+        losingProvider.generateBranchName(request),
+        losingConfig
+      );
+      const defaultAccess = mockAccess.getMockImplementation();
+      mockAccess.mockImplementation(async path => {
+        if (path === losingPath) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return defaultAccess?.(path);
+      });
 
       let releaseInitialLookups!: () => void;
       const initialLookupsComplete = new Promise<void>(resolve => {
@@ -1613,6 +1623,16 @@ describe('WorktreeProvider', () => {
         winningProvider.generateBranchName(request),
         winningConfig
       );
+      const losingPath = losingProvider.getWorktreePath(
+        request,
+        losingProvider.generateBranchName(request),
+        losingConfig
+      );
+      const defaultAccess = mockAccess.getMockImplementation();
+      mockAccess.mockImplementation(async path => {
+        if (path === losingPath) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return defaultAccess?.(path);
+      });
       const destroySpy = spyOn(losingProvider, 'destroy').mockResolvedValue({
         worktreeRemoved: true,
         branchDeleted: null,
@@ -1826,6 +1846,12 @@ describe('WorktreeProvider', () => {
         prBranch: git.toBranchName('feature/auth'),
         isForkPR: true,
       };
+      const worktreePath = provider.getWorktreePath(request, provider.generateBranchName(request));
+      const defaultAccess = mockAccess.getMockImplementation();
+      mockAccess.mockImplementation(async path => {
+        if (path === worktreePath) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        return defaultAccess?.(path);
+      });
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
         if (args.includes('worktree') && args.includes('add')) {
           throw new Error('simulated worktree add failure');

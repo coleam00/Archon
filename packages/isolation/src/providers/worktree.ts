@@ -1433,7 +1433,8 @@ export class WorktreeProvider implements IIsolationProvider {
             toRepoPath(repoPath),
             worktreePath
           );
-          canAdoptConcurrentCheckout = registration?.lockReason !== setupLockReason;
+          canAdoptConcurrentCheckout =
+            registration === null && !(await this.directoryExists(worktreePath));
         } catch (ownershipError) {
           getLog().warn(
             { repoPath, worktreePath, err: ownershipError },

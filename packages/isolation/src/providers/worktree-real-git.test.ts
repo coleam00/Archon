@@ -112,7 +112,7 @@ describe('WorktreeProvider against real git', () => {
     await git(repoPath, 'checkout', '-q', TASK_BRANCH);
     await writeFile(
       join(repoPath, '.gitmodules'),
-      `[submodule "sub"]\n\tpath = sub\n\turl = ${join(root, 'missing.git')}\n`
+      `[submodule "sub"]\n\tpath = sub\n\turl = ${join(root, 'missing.git').replaceAll('\\', '/')}\n`
     );
     await git(repoPath, 'add', '.gitmodules');
     const head = (await git(repoPath, 'rev-parse', 'HEAD')).trim();
@@ -261,15 +261,14 @@ describe('WorktreeProvider against real git', () => {
         await git(repoPath, 'checkout', '-q', TASK_BRANCH);
         await writeFile(
           join(repoPath, '.gitmodules'),
-          `[submodule "sub"]\n\tpath = sub\n\turl = ${subRepo}\n`
+          `[submodule "sub"]\n\tpath = sub\n\turl = ${subRepo.replaceAll('\\', '/')}\n`
         );
         const head = (await git(subRepo, 'rev-parse', 'HEAD')).trim();
         await git(repoPath, 'update-index', '--cacheinfo', `160000,${head},sub`);
         await git(repoPath, 'add', '.gitmodules');
         await git(repoPath, 'commit', '-qm', 'use local submodule');
         await git(repoPath, 'checkout', '-q', 'main');
-        submoduleSetup =
-          'git -c protocol.file.allow=always submodule update --init >/dev/null 2>&1 || exit 99\n';
+        submoduleSetup = 'git -c protocol.file.allow=always submodule update --init || exit 99\n';
       }
       await writeFile(
         join(repoPath, '.git', 'hooks', 'post-checkout'),
@@ -466,6 +465,41 @@ describe('WorktreeProvider against real git', () => {
     expect(await registeredWorktrees()).toContain(resolve(otherPath));
     expect(existsSync(otherPath)).toBe(true);
   });
+
+  test.each(['unlocked', 'another-attempt'])(
+    'a fork add that loses its setup lock (%s) preserves the original error',
+    async reason => {
+      const remotePath = join(root, 'remote.git');
+      await git(root, 'init', '--bare', '-q', remotePath);
+      await git(repoPath, 'remote', 'add', 'origin', remotePath);
+      await git(repoPath, 'push', '-q', 'origin', 'main', 'main:refs/pull/42/head');
+      const attempt: IsolationRequest = {
+        codebaseId: request.codebaseId,
+        codebaseName: request.codebaseName,
+        canonicalRepoPath: request.canonicalRepoPath,
+        workflowType: 'pr',
+        identifier: '42',
+        baseBranch: toBranchName('main'),
+        prBranch: toBranchName('pr-feature'),
+        isForkPR: true,
+      };
+      const path = provider.getWorktreePath(attempt, provider.generateBranchName(attempt));
+      const changeLock =
+        reason === 'unlocked' ? 'rm "$gd/locked"' : 'printf "operator lock" > "$gd/locked"';
+      await writeFile(
+        join(repoPath, '.git', 'hooks', 'post-checkout'),
+        `#!/bin/sh\ngd=$(git rev-parse --absolute-git-dir)\n${changeLock}\necho lock-lost-hook-failure >&2\nexit 42\n`,
+        { mode: 0o755 }
+      );
+      const error = await provider.create(attempt).catch((error: unknown) => error);
+      if (!(error instanceof Error)) throw new Error('Expected hook failure');
+      expect(error.message).toContain('lock-lost-hook-failure');
+      expect(classifyIsolationError(error)).toContain('was left behind');
+      expect(await registeredWorktrees()).toContain(resolve(path));
+      expect(existsSync(path)).toBe(true);
+      expect(await lockReasonOf(path)).toBe(reason === 'unlocked' ? null : 'operator lock');
+    }
+  );
 
   test('a dirty fork-PR hook failure keeps the original error through adoption fallback', async () => {
     const remotePath = join(root, 'remote.git');
