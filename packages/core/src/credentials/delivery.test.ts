@@ -4,7 +4,6 @@ import {
   deliverCredential,
   buildPiAuthJson,
   KNOWN_VENDORS,
-  LEGACY_VENDOR_ALIASES,
   normalizeCredentialVendor,
   type ResolvedCredential,
 } from './delivery';
@@ -53,9 +52,20 @@ describe('credentials/delivery', () => {
       }
     });
 
-    test('alias table covers exactly the three pre-#1955 ids', () => {
-      expect(Object.keys(LEGACY_VENDOR_ALIASES).sort()).toEqual(['claude', 'codex', 'copilot']);
+    test('maps the renamed Pi Azure credential vendor', () => {
+      expect(normalizeCredentialVendor('azure-openai-responses')).toBe('azure');
     });
+  });
+
+  test.each(['azure', 'azure-openai-responses'])('delivers an Azure key stored as %s', vendor => {
+    expect(deliverCredential(vendor, apiKey('azure-key'), { artifactsDir: ART_DIR })).toEqual({
+      env: { AZURE_OPENAI_API_KEY: 'azure-key' },
+    });
+    expect(JSON.parse(buildPiAuthJson([{ provider: vendor, cred: apiKey('azure-key') }])!)).toEqual(
+      {
+        azure: { type: 'api_key', key: 'azure-key' },
+      }
+    );
   });
 
   describe('anthropic', () => {

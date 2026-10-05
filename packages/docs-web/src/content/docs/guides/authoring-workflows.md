@@ -311,8 +311,8 @@ Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `
 The ladder is the union of every provider's vocabulary. Codex accepts all eight
 rungs. Other providers clamp an unsupported rung to the nearest weaker value;
 only when no weaker value exists do they use the shallowest stronger value.
-For example, `persistent` and `ultra` become `max` on Claude and Pi or `xhigh`
-on Copilot, while `minimal` becomes `low` on Claude and Copilot.
+For example, `persistent` and `ultra` become `max` on Claude, Pi,
+and Copilot, while `minimal` becomes `low` on Claude and Copilot.
 
 `thinking:` has been removed. A workflow, node, tier, or alias that still uses
 it fails validation with an error directing the author to `effort:`.
