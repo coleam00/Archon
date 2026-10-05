@@ -39,6 +39,9 @@
   },
   "testGroups": [
     [
+      "src/forge/github/project-assistant.integration.test.ts"
+    ],
+    [
       "src/chat/slack/adapter.test.ts",
       "src/chat/slack/auth.test.ts",
       "src/chat/slack/blocks.test.ts",

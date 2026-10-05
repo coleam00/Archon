@@ -19,7 +19,7 @@ import { effortOptionsForAgent, normalizeEffortForAgent } from '../lib/model-opt
 import { useCancelledRef } from '../lib/use-cancelled-ref';
 import { errorDetail } from '../lib/http';
 import { SettingsSection } from './SettingsSection';
-import { ScopeToggle } from './ScopeToggle';
+import { UserScopeSlot, userScopeStatus } from './ScopeToggle';
 import { SELECT_CLASS, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
 
@@ -54,7 +54,8 @@ function defaultHint(cfg: SafeConfigTiers, t: TierName, scope: SettingsScope): s
  * (ungated; works on solo installs), "Just me" writes the caller's per-user
  * prefs row via PATCH /api/auth/me/ai-prefs/tiers (highest precedence at run
  * time). The "Just me" scope is hidden when GET /api/auth/me/ai-prefs 401s (no
- * web identity — solo-PAT or logged out), mirroring AgentsPanel.
+ * web identity — solo-PAT or logged out), mirroring AgentsPanel; any other
+ * failure of that read is shown in its place.
  * A row left on "Default" is sent as an unset and falls back to the next layer.
  */
 export function ModelTiersPanel(): ReactElement {
@@ -78,10 +79,11 @@ export function ModelTiersPanel(): ReactElement {
     skill.listProviderKeys
   );
 
-  // No web identity (401) or any other prefs read failure → install scope only,
-  // so the editor never mislabels install values as "Just me".
-  const userScopeAvailable = userPrefsError === undefined;
-  const [scope, setScope] = useState<SettingsScope>('install');
+  const userScope = userScopeStatus(userPrefsError);
+  const [selectedScope, setScope] = useState<SettingsScope>('install');
+  // Without per-user prefs the editor is install-only, so it never labels
+  // install values as "Just me".
+  const scope: SettingsScope = userScope.kind === 'available' ? selectedScope : 'install';
 
   const [form, setForm] = useState<TiersForm | null>(null);
   const baselineRef = useRef('');
@@ -155,7 +157,7 @@ export function ModelTiersPanel(): ReactElement {
           these models. Leave a row on “Default” to use the next layer’s preset.
           {scope === 'user' ? ' Your rows override the install rows for runs you start.' : ''}
         </p>
-        {userScopeAvailable ? <ScopeToggle scope={scope} onChange={setScope} /> : null}
+        <UserScopeSlot status={userScope} scope={scope} onChange={setScope} />
       </div>
 
       <div className="flex flex-col gap-[11px]">

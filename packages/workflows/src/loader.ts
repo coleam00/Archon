@@ -124,10 +124,12 @@ function parseOptionalField<S extends z.ZodType>(
 }
 
 /**
- * Parse YAML using Bun's native YAML parser
+ * Parse workflow YAML with Bun's parser. Every reader of a workflow file goes through here.
+ * CRLF is normalized first: Bun keeps the line break of a multi-line quoted scalar in a CRLF
+ * file where the YAML spec (and LF input) folds it to a space.
  */
-function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+export function parseYaml(content: string): unknown {
+  return Bun.YAML.parse(content.replaceAll('\r\n', '\n'));
 }
 
 /**

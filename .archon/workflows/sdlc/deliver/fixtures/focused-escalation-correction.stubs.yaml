@@ -1,0 +1,84 @@
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
+pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+review__code: "2 blocking findings"
+review__simplify__simplify: { findings: false }
+review__focused: { full_review: true, reason: "stub: integration boundary" }
+review__seams: "0 findings"
+shape__simplify: { findings: false }
+review__tests: "0 findings"
+review__errors: "0 findings"
+review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 3 blocking findings open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: 3 blocking findings open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+ci-note: "CI state for this pull request (head abc123def456): No concluded failures. 2 check(s) still running — never wait on them."
+fix__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: findings fixed, pushed"
+fix__assert-changed: "2 files changed"
+gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"recheck__mode","invocation":{"loopPath":[]}}}'
+recheck__coverage: { full: false }
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
+# No recheck specialist stubs: continuation mode must skip the fan-out and let
+# the deciding agent review the prior report and correction delta itself.
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no open blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+# gate-ready is deliberately unstubbed: under --exec-code the real script runs,
+# proving the $corrections.output whole-ref binding on a completed loop_group.
+read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/1" }
+publish-pr-body: {}
+sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
+ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
+ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
+outcome: { pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
+review-policy: { risks: "fixture-owned-policy" }
+classify:
+  tier: focused
+  errors: true
+  docs: false
+  reasons:
+    tier: "stub: touches persisted state"
+    errors: "stub: the diff adds a retry and a fallback"
+    docs: "stub: no doc-facing changes"
+file-discoveries: '{"issues":[]}'
+fork: '{"fork":true}'
+fixture:
+  expect: completed
+  reached: [review__focused, review__code, review__tests, review__errors, review__simplify__simplify, ci-note, recheck__synthesize, gate-ready, flip-ready]
+exec-code: true

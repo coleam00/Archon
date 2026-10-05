@@ -1,0 +1,28 @@
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
+focused: { full_review: true, reason: "stub: lifecycle ownership" }
+scope:
+  docs: false
+  # A standalone review of the working diff: no pull request to publish to.
+  pr: null
+code: "0 findings"
+seams: "0 findings"
+simplify__simplify: { findings: false }
+tests: "0 findings"
+review-complete: "settled"
+synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean, docs lens skipped"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean, docs lens skipped"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+fixture:
+  inputs: { tier: focused }
+  expect: completed
+  reached: [focused, code, seams, simplify__simplify, tests, synthesize]
+  resolved-text-contains:
+    synthesize: 'a report without its completed artifact is incomplete coverage'
+exec-code: true
