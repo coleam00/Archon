@@ -176,17 +176,7 @@ export function createWorkflowDeps(): WorkflowDeps {
     // undefined → engine falls back to env inheritance, preserving legacy
     // behaviour for solo installs.
     resolveBotGitHubToken: provider
-      ? async (owner: string, repo: string): Promise<string | undefined> => {
-          try {
-            return await provider.getInstallationToken(owner, repo);
-          } catch (err) {
-            getLog().warn(
-              { err: err as Error, owner, repo },
-              'workflow_deps.bot_token_resolve_failed'
-            );
-            return undefined;
-          }
-        }
+      ? (owner, repo): Promise<string> => provider.getInstallationToken(owner, repo)
       : undefined,
     // Per-user token policy (PR-C): when per-user mode is on, route a run's
     // gh/git through the originating user's personal token (decrypted, refreshed

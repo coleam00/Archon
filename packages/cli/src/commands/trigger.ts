@@ -18,7 +18,7 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createCliWorkflowDeps } from '../utils/workflow-deps';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
@@ -172,7 +172,7 @@ export async function triggerCommand(
     const result = await startAdmittedResourceStart({
       requestId: args[0],
       hostId: options.host,
-      engine: new InProcessWorkflowEngine(createWorkflowDeps()),
+      engine: new InProcessWorkflowEngine(createCliWorkflowDeps()),
       createPlatform: ({ conversationId, conversationDbId }) => {
         adapter.setConversationDbId(conversationId, conversationDbId);
         return adapter;

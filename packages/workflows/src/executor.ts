@@ -202,38 +202,19 @@ function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null
   return null;
 }
 
-/**
- * Resolve a fresh GH_TOKEN/GITHUB_TOKEN pair from the registered bot-token
- * provider, if any. Used at the top of executeWorkflow to inject the token
- * into the workflow's envVars so bash/script subprocesses pick it up.
- *
- * Contract: NEVER THROWS. On any failure (no codebase, non-GitHub URL,
- * provider rejected, network blip) returns {} — the workflow continues with
- * whatever env inheritance was already in place. This matches the
- * resolveBotGitHubToken? contract in deps.ts.
- */
 async function resolveBotGitHubEnvForWorkflow(
   deps: WorkflowDeps,
   codebaseId: string | undefined
 ): Promise<Record<string, string>> {
   if (!codebaseId || !deps.resolveBotGitHubToken) return {};
-  try {
-    const codebase = await deps.store.getCodebase(codebaseId);
-    if (!codebase?.repository_url) return {};
-    const parsed = parseGithubRepoUrl(codebase.repository_url);
-    if (!parsed) return {};
-    const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
-    if (!token) return {};
-    getLog().debug(
-      { owner: parsed.owner, repo: parsed.repo },
-      'workflow.bot_github_token_injected'
-    );
-    return { GH_TOKEN: token, GITHUB_TOKEN: token };
-  } catch (err) {
-    // Resolution failure must not block the workflow — log and fall back.
-    getLog().warn({ err: err as Error, codebaseId }, 'workflow.bot_github_token_resolve_failed');
-    return {};
-  }
+  const codebase = await deps.store.getCodebase(codebaseId);
+  if (!codebase?.repository_url) return {};
+  const parsed = parseGithubRepoUrl(codebase.repository_url);
+  if (!parsed) return {};
+  const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
+  if (!token) throw new Error('GitHub App token resolution returned no installation token');
+  getLog().debug({ owner: parsed.owner, repo: parsed.repo }, 'workflow.bot_github_token_injected');
+  return { GH_TOKEN: token, GITHUB_TOKEN: token };
 }
 
 /**
@@ -1949,29 +1930,6 @@ export async function executeWorkflow(
     effectiveRunConfig,
     runConfigMetadata,
   } = prepared;
-  // Resolve a fresh bot GitHub token once at workflow start when:
-  //   (a) the codebase URL is a github.com repo, and
-  //   (b) deps.resolveBotGitHubToken is registered (App mode).
-  // Injected into envVars so bash/script subprocesses authenticate `gh` and
-  // initial `git push` via inherited GH_TOKEN. Workflows that run >1h still
-  // need the credential helper for live token rotation (handled at clone
-  // time in the GitHub adapter), but the env injection is enough for the
-  // typical <1h workflow.
-  const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
-  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
-  config.envVars = {
-    ...config.envVars,
-    // The injected bot token is system-set; the per-user override
-    // wins last so a run routes through the originating human's token (or scrubs
-    // the org/bot token when they haven't connected). Empty-string values from
-    // the per-user policy scrub the corresponding key via the subprocess merge.
-    ...botGitHubEnv,
-    ...userGitHubEnv,
-  };
-  const protectedEnvKeys = new Set([...Object.keys(botGitHubEnv), ...Object.keys(userGitHubEnv)]);
-  if (protectedEnvKeys.size > 0) {
-    config.protectedEnvKeys = [...protectedEnvKeys];
-  }
   const configuredCommandFolder = config.commands.folder;
 
   // What the run recorded when it started (#2454). A continuation re-enters with whatever
@@ -2886,6 +2844,24 @@ export async function executeWorkflow(
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
   try {
+    // The environment stays fixed for this execution; resumed segments resolve again
+    // through the provider's refresh cache. Resolve inside the run's failure boundary.
+    const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+    const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
+    config.envVars = {
+      ...config.envVars,
+      // The injected bot token is system-set; the per-user override
+      // wins last so a run routes through the originating human's token (or scrubs
+      // the org/bot token when they haven't connected). Empty-string values from
+      // the per-user policy scrub the corresponding key via the subprocess merge.
+      ...botGitHubEnv,
+      ...userGitHubEnv,
+    };
+    const protectedEnvKeys = new Set([...Object.keys(botGitHubEnv), ...Object.keys(userGitHubEnv)]);
+    if (protectedEnvKeys.size > 0) {
+      config.protectedEnvKeys = [...protectedEnvKeys];
+    }
+
     // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
     // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
     // under it. Clear files from an earlier invocation first: a disconnected

@@ -1,16 +1,10 @@
 import { afterEach, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { generateKeyPairSync } from 'node:crypto';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { canConnectToRunLiveOwner, runLiveOwnerPath } from '@archon/core/services/run-live-owner';
 import { requestDetachedRunStop } from '@archon/core/services/run-owner-stop';
@@ -99,15 +93,34 @@ async function run(
   return { code, output, stdout };
 }
 async function fixture(
-  options: { wait?: 'event' | 'timer'; fail?: boolean; mode?: CredentialMode } = {}
+  options: {
+    wait?: 'event' | 'timer';
+    fail?: boolean;
+    mintFailure?: boolean;
+    git?: boolean;
+    repositoryUrl?: string;
+    mode?: CredentialMode;
+  } = {}
 ): Promise<Fixture> {
-  const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-cli-app-')));
+  const root = await canonicalizeProjectPath(mkdtempSync(join(tmpdir(), 'archon-cli-app-')));
   roots.push(root);
-  const project = join(root, 'project');
+  let project = join(root, 'project');
   const home = join(root, 'home');
   const entry = join(root, 'entry.ts');
   mkdirSync(join(project, '.archon/workflows'), { recursive: true });
+  project = await canonicalizeProjectPath(project);
+  const marker = join(root, 'marker');
+  if (options.git) {
+    for (const args of [
+      ['init', '-q', '-b', 'main'],
+      ['config', 'user.name', 'Fixture'],
+      ['config', 'user.email', 'fixture@example.test'],
+    ]) {
+      expect(Bun.spawnSync(['git', ...args], { cwd: project }).exitCode).toBe(0);
+    }
+  }
   const mode = options.mode ?? 'bot';
+  const deliveryMode = options.mintFailure ? 'absent' : mode;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     ARCHON_HOME: home,
@@ -147,6 +160,7 @@ mock.module(${JSON.stringify(Bun.resolveSync('@octokit/rest', join(repo, 'packag
       return { data: { id: 42 } };
     }
     if (route !== 'POST /app/installations/{installation_id}/access_tokens' || args.installation_id !== 42) throw new Error('Unexpected GitHub request');
+    if (${options.mintFailure === true}) throw new Error('Stub installation mint refused');
     currentToken = 'stub-installation-' + (++minted) + '-' + process.pid;
     appendFileSync(${JSON.stringify(join(root, 'mint'))}, 'minted\\n');
     return { data: { token: currentToken, expires_at: new Date(Date.now() + 1000).toISOString() } };
@@ -161,17 +175,20 @@ mock.module(${source('packages/core/src/db/user-github-token-store.ts')}, () => 
 const { ClaudeProvider } = await import(${source('packages/providers/src/claude/provider.ts')});
 ClaudeProvider.prototype.checkCredential = async () => ({ state: 'valid' });
 ClaudeProvider.prototype.sendQuery = async function* (_prompt, _cwd, _session, options) {
-  const expected = ${mode === 'user' ? "'stub-user-credential'" : mode === 'scrub' ? "''" : mode === 'absent' ? "'explicit-fixture'" : 'currentToken'};
+  const expected = ${deliveryMode === 'user' ? "'stub-user-credential'" : deliveryMode === 'scrub' ? "''" : deliveryMode === 'absent' ? "'explicit-fixture'" : 'currentToken'};
   if (options?.env?.GH_TOKEN !== expected || options?.env?.GITHUB_TOKEN !== expected) throw new Error('AI credential delivery failed');
-  if (${mode !== 'absent'} && !['GH_TOKEN', 'GITHUB_TOKEN'].every(key => options?.protectedEnvKeys?.includes(key))) throw new Error('Injected credentials unprotected');
-  appendFileSync(${JSON.stringify(join(project, 'marker'))}, 'ai\\n');
+  if (${deliveryMode !== 'absent'} && !['GH_TOKEN', 'GITHUB_TOKEN'].every(key => options?.protectedEnvKeys?.includes(key))) throw new Error('Injected credentials unprotected');
+  appendFileSync(${JSON.stringify(marker)}, 'ai\\n');
   yield { type: 'result', text: 'verified', sessionId: 'fixture-session' };
   yield { type: 'settled' };
 };
 if (process.argv[2] === 'seed') {
   const { createCodebase } = await import(${source('packages/core/src/db/codebases.ts')});
   const { closeDatabase } = await import(${source('packages/core/src/db/connection.ts')});
-  await createCodebase({ name: 'fixture', default_cwd: ${JSON.stringify(project)}, kind: 'folder', repository_url: 'https://github.com/fixture-owner/fixture-repo.git' });
+  await createCodebase({ name: 'fixture', default_cwd: ${JSON.stringify(project)}, kind: '${options.git ? 'repo' : 'folder'}', repository_url: ${JSON.stringify(options.repositoryUrl ?? 'https://github.com/fixture-owner/fixture-repo.git')} });
+  const { findOrCreateUserByPlatformIdentity } = await import(${source('packages/core/src/db/users.ts')});
+  const user = await findOrCreateUserByPlatformIdentity('cli', 'trigger-fixture');
+  appendFileSync(${JSON.stringify(join(root, 'user'))}, user.id);
   await closeDatabase();
 } else if (process.argv[2] === 'pause') {
   const { registerBuiltinProviders } = await import(${source('packages/providers/src/index.ts')});
@@ -189,7 +206,7 @@ if (process.argv[2] === 'seed') {
   setPlatformPolicies([]);
   registerBuiltinProviders();
   const cwd = ${JSON.stringify(project)};
-  const codebase = await createCodebase({ name: 'pause', default_cwd: cwd, kind: 'folder', repository_url: 'https://github.com/fixture-owner/fixture-repo' });
+  const codebase = await createCodebase({ name: 'pause', default_cwd: cwd, kind: '${options.git ? 'repo' : 'folder'}', repository_url: 'https://github.com/fixture-owner/fixture-repo' });
   const user = await findOrCreateUserByPlatformIdentity('cli', 'app-fixture');
   const conversation = await getOrCreateConversation('cli', 'app-fixture', codebase.id, undefined, user.id);
   const deps = createCliWorkflowDeps();
@@ -207,19 +224,19 @@ if (process.argv[2] === 'seed') {
 `
   );
   const check =
-    mode === 'scrub'
+    deliveryMode === 'scrub'
       ? '[ -z "$GH_TOKEN" ] && [ -z "$GITHUB_TOKEN" ]'
-      : mode === 'absent'
+      : deliveryMode === 'absent'
         ? '[ "$GH_TOKEN" = "explicit-fixture" ] && [ "$GITHUB_TOKEN" = "explicit-fixture" ]'
-        : mode === 'user'
+        : deliveryMode === 'user'
           ? '[ "$GH_TOKEN" = "stub-user-credential" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]'
           : '[ "${GH_TOKEN#stub-installation-}" != "$GH_TOKEN" ] && [ "$GITHUB_TOKEN" = "$GH_TOKEN" ]';
   const scriptCheck =
-    mode === 'scrub'
+    deliveryMode === 'scrub'
       ? '!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN'
-      : mode === 'absent'
+      : deliveryMode === 'absent'
         ? "process.env.GH_TOKEN === 'explicit-fixture' && process.env.GITHUB_TOKEN === 'explicit-fixture'"
-        : mode === 'user'
+        : deliveryMode === 'user'
           ? "process.env.GH_TOKEN === 'stub-user-credential' && process.env.GITHUB_TOKEN === process.env.GH_TOKEN"
           : "process.env.GH_TOKEN?.startsWith('stub-installation-') && process.env.GITHUB_TOKEN === process.env.GH_TOKEN";
   writeFileSync(
@@ -231,7 +248,7 @@ nodes:
   - id: bash
     bash: |
       ${check} || exit 41
-      echo bash >> marker
+      echo bash >> '${marker.replaceAll('\\', '/')}'
 ${options.fail ? '  - id: refuse\n    depends_on: [bash]\n    bash: test -f allow\n' : ''}${
       options.wait
         ? `  - id: pause
@@ -245,7 +262,7 @@ ${options.wait === 'event' ? '      event: ready\n      deadline_ms: 60000' : ' 
     runtime: bun
     script: |
       if (!(${scriptCheck})) throw new Error('Script credential delivery failed');
-      require('node:fs').appendFileSync('marker', 'script\\n');
+      require('node:fs').appendFileSync(${JSON.stringify(marker)}, 'script\\n');
   - id: ai
     depends_on: [script]
     prompt: Verify delivery.
@@ -253,16 +270,30 @@ ${options.wait === 'event' ? '      event: ready\n      deadline_ms: 60000' : ' 
   );
   writeFileSync(
     join(project, '.archon/config.yaml'),
-    'env:\n  GH_TOKEN: explicit-fixture\n  GITHUB_TOKEN: explicit-fixture\n'
+    'env:\n  GH_TOKEN: explicit-fixture\n  GITHUB_TOKEN: explicit-fixture\n' +
+      (options.git ? 'worktree:\n  path: .worktrees\n  baseBranch: main\n' : '')
   );
+  if (options.git) {
+    writeFileSync(join(project, '.gitignore'), '.worktrees/\n');
+    expect(Bun.spawnSync(['git', 'add', '.archon', '.gitignore'], { cwd: project }).exitCode).toBe(
+      0
+    );
+    expect(Bun.spawnSync(['git', 'commit', '-qm', 'Fixture'], { cwd: project }).exitCode).toBe(0);
+    const remote = join(root, 'remote.git');
+    expect(Bun.spawnSync(['git', 'init', '--bare', '-q', '-b', 'main', remote]).exitCode).toBe(0);
+    expect(
+      Bun.spawnSync(['git', 'remote', 'add', 'origin', remote], { cwd: project }).exitCode
+    ).toBe(0);
+    expect(
+      Bun.spawnSync(['git', 'push', '-q', '-u', 'origin', 'main'], { cwd: project }).exitCode
+    ).toBe(0);
+  }
   const f = { root, project, home, entry, env };
   expect((await run(f, ['seed'])).code).toBe(0);
   return f;
 }
 function markers(f: Fixture): string {
-  return existsSync(join(f.project, 'marker'))
-    ? readFileSync(join(f.project, 'marker'), 'utf8')
-    : '';
+  return existsSync(join(f.root, 'marker')) ? readFileSync(join(f.root, 'marker'), 'utf8') : '';
 }
 const runArgs = ['workflow', 'run', 'app', 'verify', '--no-worktree'];
 
@@ -380,4 +411,81 @@ test('cold wake initializes credentials before admitting a due workflow', async 
   expect((await run(f, ['workflow', 'wake', '--json'])).code).toBe(0);
   expect(row(f)?.status).toBe('completed');
   expect(markers(f)).toBe('bash\nscript\nai\n');
+}, 30000);
+
+test('default worktree CLI execution delivers repository-scoped App credentials to every node', async () => {
+  const f = await fixture({ git: true });
+  expect((await run(f, ['workflow', 'run', 'app', 'verify'])).code).toBe(0);
+  expect(markers(f)).toBe('bash\nscript\nai\n');
+  expect(readFileSync(join(f.root, 'scope'), 'utf8')).toBe('scoped\n');
+  expect(row(f)?.status).toBe('completed');
+  const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+  try {
+    const isolation = db
+      .query<
+        { working_path: string },
+        []
+      >('SELECT working_path FROM remote_agent_isolation_environments')
+      .get();
+    expect(isolation).not.toBeNull();
+    expect(isolation?.working_path).not.toBe(f.project);
+  } finally {
+    db.close();
+  }
+}, 30000);
+
+test('App mint failure fails the run before nodes can use configured or ambient credentials', async () => {
+  const f = await fixture({ mintFailure: true });
+  f.env.GH_TOKEN = 'ambient-fixture';
+  const result = await run(f, runArgs);
+  expect(result.code).not.toBe(0);
+  expect(result.output.includes('Stub installation mint refused')).toBe(true);
+  expect(readFileSync(join(f.root, 'scope'), 'utf8')).toBe('scoped\n');
+  expect(row(f)?.status).toBe('failed');
+  expect(markers(f)).toBe('');
+}, 30000);
+
+test('registered App auth leaves non-GitHub codebases using their existing environment', async () => {
+  const f = await fixture({ mintFailure: true, repositoryUrl: 'https://example.com/owner/repo' });
+  expect((await run(f, runArgs)).code).toBe(0);
+  expect(row(f)?.status).toBe('completed');
+  expect(markers(f)).toBe('bash\nscript\nai\n');
+  expect(existsSync(join(f.root, 'scope'))).toBe(false);
+  expect(existsSync(join(f.root, 'mint'))).toBe(false);
+}, 30000);
+
+test('trigger execution in a cold child delivers repository-scoped App credentials', async () => {
+  const f = await fixture();
+  const config = join(f.root, 'trigger.json');
+  writeFileSync(
+    config,
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'app-fixture',
+      binding: {
+        bindingId: 'app-fixture',
+        bindingRevision: null,
+        hostId: 'app-fixture',
+        runAsUserId: readFileSync(join(f.root, 'user'), 'utf8'),
+        resource: 'app-fixture',
+        overlap: 'queue',
+        launch: {
+          cwd: f.project,
+          workflowName: 'app',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+      schedule: { intervalSeconds: 60, runAtLoad: false },
+    })
+  );
+  expect((await run(f, ['trigger', 'fire', '--config', config])).code).toBe(0);
+  const deadline = Date.now() + 20000;
+  while (!['completed', 'failed'].includes(row(f)?.status ?? '') && Date.now() < deadline)
+    await Bun.sleep(25);
+  const triggered = row(f);
+  if (triggered) detachedRuns.push({ id: triggered.id, home: f.home });
+  expect(triggered?.status).toBe('completed');
+  expect(markers(f)).toBe('bash\nscript\nai\n');
+  expect(readFileSync(join(f.root, 'scope'), 'utf8')).toBe('scoped\n');
 }, 30000);
