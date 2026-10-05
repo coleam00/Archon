@@ -2825,13 +2825,51 @@ test('include aliases and prior-iteration namespaces retain complete nested suff
 });
 
 describe('loop_group structured completion after include expansion (#2998)', () => {
-  test.each([false, true])('checks an included terminal schema (until_bash: %s)', withBash => {
-    const block = wf('structured-review', [
-      {
-        id: 'review',
-        prompt: 'Review',
-        output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
-      },
+  test.each([
+    { type: 'object', properties: { done: { type: 'boolean' } } },
+    { enum: [{ done: true }] },
+    { const: { done: true } },
+    { anyOf: [{ type: 'object' }, { type: 'boolean' }] },
+  ])('checks an included terminal schema: %j', outputFormat => {
+    for (const withBash of [false, true]) {
+      const block = wf('structured-review', [
+        {
+          id: 'review',
+          prompt: 'Review',
+          output_format: outputFormat,
+        },
+      ]);
+      const parent = wf('parent', [
+        {
+          id: 'refine',
+          loop_group: {
+            until: 'DONE',
+            max_iterations: 3,
+            ...(withBash ? { until_bash: 'exit 0' } : {}),
+            nodes: [{ id: 'check', include: 'structured-review' }],
+          },
+        },
+      ]);
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+      if (withBash) {
+        expect(errors).toEqual([]);
+        expect(workflows.has('parent')).toBe(true);
+      } else {
+        expect(errors).toHaveLength(1);
+        expect(errors[0].error).toContain("terminal node 'check__review'");
+        expect(errors[0].error).toContain('until_bash');
+        expect(workflows.has('parent')).toBe(false);
+      }
+    }
+  });
+
+  test.each([
+    { enum: ['DONE', { done: true }] },
+    { const: 'DONE' },
+    { anyOf: [{ type: 'object' }, { type: 'string' }] },
+  ])('preserves included schemas that permit strings: %j', outputFormat => {
+    const block = wf('string-review', [
+      { id: 'review', prompt: 'Review', output_format: outputFormat },
     ]);
     const parent = wf('parent', [
       {
@@ -2839,20 +2877,12 @@ describe('loop_group structured completion after include expansion (#2998)', () 
         loop_group: {
           until: 'DONE',
           max_iterations: 3,
-          ...(withBash ? { until_bash: 'exit 0' } : {}),
-          nodes: [{ id: 'check', include: 'structured-review' }],
+          nodes: [{ id: 'check', include: 'string-review' }],
         },
       },
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
-    if (withBash) {
-      expect(errors).toEqual([]);
-      expect(workflows.has('parent')).toBe(true);
-    } else {
-      expect(errors).toHaveLength(1);
-      expect(errors[0].error).toContain("terminal node 'check__review'");
-      expect(errors[0].error).toContain('until_bash');
-      expect(workflows.has('parent')).toBe(false);
-    }
+    expect(errors).toEqual([]);
+    expect(workflows.has('parent')).toBe(true);
   });
 });

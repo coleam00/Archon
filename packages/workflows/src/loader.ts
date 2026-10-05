@@ -27,6 +27,7 @@ import {
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
+import { outputSchemaExcludesStrings } from './output-schema-strings';
 import {
   isRegisteredProvider,
   getRegisteredProviders,
@@ -1455,21 +1456,14 @@ export function validateLoopGroupProseCompletion(
     const bodyError = validateLoopGroupProseCompletion(node.loop_group.nodes);
     if (bodyError) return bodyError;
     const soleSink = loopGroupSoleTerminalSink(node.loop_group.nodes);
-    const terminalOutputType =
-      soleSink !== undefined && !isIncludeDirective(soleSink)
-        ? soleSink.output_format?.type
-        : undefined;
-    const excludesString =
-      typeof terminalOutputType === 'string'
-        ? terminalOutputType !== 'string'
-        : Array.isArray(terminalOutputType) && !terminalOutputType.includes('string');
     if (
       node.loop_group.until !== undefined &&
       node.loop_group.until_bash === undefined &&
       soleSink !== undefined &&
       !isIncludeDirective(soleSink) &&
       isOutputFormatEnforced(soleSink) &&
-      excludesString
+      soleSink.output_format !== undefined &&
+      outputSchemaExcludesStrings(soleSink.output_format)
     ) {
       return `loop_group '${node.id}': terminal node '${soleSink.id}' declares a non-string output_format, so the prose until signal cannot be detected in serialized structured output. Use loop_group.until_bash to read the terminal node's structured field instead`;
     }

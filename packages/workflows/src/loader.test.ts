@@ -9301,6 +9301,41 @@ describe('loop_group prose completion with structured terminal output (#2998)', 
     }
   );
 
+  it.each([
+    { enum: [{ done: true }] },
+    { const: { done: true } },
+    { allOf: [{ enum: [{ done: true }] }] },
+    { anyOf: [{ type: 'object' }, { const: false }] },
+    { oneOf: [{ type: 'object' }, { type: 'number' }] },
+    { not: { type: 'string' } },
+    { oneOf: [{ type: 'string' }, { type: ['string', 'object'] }] },
+    { $ref: '#/definitions/result', definitions: { result: { enum: [{}] } } },
+    { if: { type: 'string' }, then: { type: 'object' } },
+    { enum: ['DONE', {}], pattern: '^other$' },
+    { allOf: [{ enum: ['DONE', {}] }, { not: { const: 'DONE' } }] },
+  ])('rejects a schema that excludes strings without a root type: %j', schema => {
+    expect(parseGroup(schema).error?.errorType).toBe('validation_error');
+    expect(parseGroup(schema, 'exit 0').error).toBeNull();
+  });
+
+  it.each([
+    { enum: ['DONE', { done: true }] },
+    { const: 'DONE' },
+    { allOf: [{ type: 'string' }, { minLength: 1 }] },
+    { anyOf: [{ type: 'object' }, { type: 'string' }] },
+    { oneOf: [{ type: 'object' }, { enum: ['DONE'] }] },
+    { not: { type: 'object' } },
+    { properties: { done: { type: 'boolean' } } },
+    { $ref: '#/definitions/result', definitions: { result: { enum: ['DONE', {}] } } },
+    { not: { pattern: '^other$' } },
+    { oneOf: [false, { type: 'string' }] },
+    { if: { type: 'object' }, then: false, else: { type: 'string' } },
+    { type: 'string', pattern: '^DONE$' },
+    { not: { oneOf: [{ type: 'string' }, { type: 'string' }] } },
+  ])('preserves string-permitting schema constraints: %j', schema => {
+    expect(parseGroup(schema).error).toBeNull();
+  });
+
   it('accepts a terminal node without output_format', () => {
     expect(parseGroup().error).toBeNull();
   });
