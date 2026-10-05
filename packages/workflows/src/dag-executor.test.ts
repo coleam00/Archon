@@ -16628,12 +16628,74 @@ describe('executeDagWorkflow -- approval node', () => {
 
     // Nobody was told how to approve, so the run must not wait for an approval.
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(store.failPausedApproval).toHaveBeenCalled();
+    // The store fails the gate only on an exact match of the persisted context,
+    // so the caller must pass the paused context, minted pauseId included.
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(failed?.data?.error).toBe(
       "Approval message failed to deliver for node 'review' — cannot pause safely"
     );
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: 'loop',
+      node: {
+        id: 'refine',
+        kind: 'loop',
+        loop: {
+          fresh_context: false,
+          prompt: 'Refine.',
+          until: 'APPROVED',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+        },
+      },
+    },
+    {
+      kind: 'loop_group',
+      node: {
+        id: 'refine',
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+          nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'draft' } }],
+        },
+      },
+    },
+  ])('fails the persisted $kind gate when its prompt cannot be delivered', async ({ node }) => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Draft.' };
+      yield { type: 'result', sessionId: 'undelivered-loop' };
+    });
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
+      if (message.includes('Input required')) throw new Error('401 unauthorized');
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        conversationId: 'conv-loop',
+        cwd: testDir,
+        workflow: { name: 'loop-undelivered', nodes: [node] as DagNode[] },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
   });
 
   it('delivers the nested proposal action at the approval gate, including legacy local resumes', async () => {
