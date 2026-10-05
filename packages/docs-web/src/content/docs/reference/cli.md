@@ -577,6 +577,10 @@ archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
 ```
 
+For a paused gate, human-readable output lists its declared decision IDs and optional
+labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
+for each choice. JSON exposes these choices in `metadata.approval.decisions`.
+
 `workflow status`, `workflow runs`, and `workflow get` report two independent facts:
 
 - **Execution status** (`pending`, `running`, `paused`, `completed`, `failed`, or `cancelled`)

@@ -252,7 +252,8 @@ describe('approveWorkflow', () => {
           step_name: 'review',
           data: { decision: 'approved', comment: 'Looks good' },
         },
-      ]
+      ],
+      undefined
     );
 
     // Anonymous telemetry: binary resolution captured exactly once
@@ -457,7 +458,8 @@ describe('approveWorkflow', () => {
           step_name: 'iterate',
           data: { decision: 'approved', comment: 'fix the tests', iteration: 2 },
         },
-      ]
+      ],
+      undefined
     );
   });
 
@@ -501,7 +503,8 @@ describe('approveWorkflow', () => {
           step_name: 'iterate',
           data: { decision: 'approved', comment: 'Approved', iteration: 1 },
         },
-      ]
+      ],
+      undefined
     );
   });
 
@@ -555,7 +558,7 @@ describe('approveWorkflow', () => {
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
 
     await expect(approveWorkflow('run-1', 'ship it')).rejects.toThrow(
-      'already resolved and is awaiting resume'
+      'already resolved or is no longer paused at the expected gate'
     );
 
     // The CAS was attempted (unlike the fast-path guard) but lost — no side effects.
@@ -686,7 +689,8 @@ describe('approveWorkflow', () => {
           step_name: '__writeback__',
           data: { decision: 'approved', comment: 'Approved', gate: 'writeback' },
         },
-      ]
+      ],
+      undefined
     );
     // No node_completed — there is no DAG node behind the write-back gate.
     const casEvents = mockResolveApprovalGate.mock.calls[0]?.[2] ?? [];
@@ -785,7 +789,8 @@ describe('rejectWorkflow', () => {
           step_name: 'review',
           data: { decision: 'rejected', reason: 'needs more tests' },
         },
-      ]
+      ],
+      undefined
     );
 
     expect(mockCaptureApprovalResolved).toHaveBeenCalledTimes(1);
@@ -831,7 +836,7 @@ describe('rejectWorkflow', () => {
     mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
 
     await expect(rejectWorkflow('run-1', 'needs work')).rejects.toThrow(
-      'already resolved and is awaiting resume'
+      'already resolved or is no longer paused at the expected gate'
     );
 
     expect(mockResolveApprovalGate).toHaveBeenCalledTimes(1);
@@ -870,7 +875,8 @@ describe('rejectWorkflow', () => {
           data: { decision: 'rejected', reason: 'still broken' },
         },
       ],
-      { step_name: 'review', reason: 'approval_rejected' }
+      { step_name: 'review', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -894,7 +900,8 @@ describe('rejectWorkflow', () => {
           data: { decision: 'rejected', reason: 'no good' },
         },
       ],
-      { step_name: 'review', reason: 'approval_rejected' }
+      { step_name: 'review', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -977,7 +984,8 @@ describe('rejectWorkflow', () => {
           step_name: 'review',
           data: { decision: 'rejected', reason: 'needs changes' },
         },
-      ]
+      ],
+      undefined
     );
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
   });
@@ -1063,7 +1071,7 @@ describe('rejectWorkflow', () => {
     mockResolveAndCancelApprovalGate.mockResolvedValueOnce({ resolved: false });
 
     await expect(rejectWorkflow('run-1', 'no good')).rejects.toThrow(
-      'already resolved and is awaiting resume'
+      'already resolved or is no longer paused at the expected gate'
     );
 
     expect(mockResolveAndCancelApprovalGate).toHaveBeenCalledTimes(1);
@@ -1101,7 +1109,8 @@ describe('rejectWorkflow', () => {
           step_name: '__writeback__',
           data: { decision: 'rejected', gate: 'writeback' },
         },
-      ]
+      ],
+      undefined
     );
   });
 
@@ -1369,6 +1378,30 @@ describe('respondToWorkflow', () => {
     const approvalReceived = events.find(e => e.event_type === 'approval_received');
     expect(approvalReceived).toMatchObject({ step_name: 'grp' });
   });
+
+  test.each(['approve', 'reject', 'revise'])(
+    'passes the expected node to the atomic resolver for a %s button',
+    async decision => {
+      mockGetWorkflowRun.mockResolvedValue(
+        makePausedRun({
+          metadata: {
+            approval: {
+              nodeId: 'later',
+              message: 'Choose',
+              type: 'approval',
+              decisionsAuthored: true,
+              decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            },
+          },
+        })
+      );
+      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+      await expect(respondToWorkflow('run-1', decision, undefined, 'earlier')).rejects.toThrow(
+        'no longer paused at the expected gate'
+      );
+      expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toBe('earlier');
+    }
+  );
 
   test('delegates approve/reject to the dedicated functions unchanged', async () => {
     mockGetWorkflowRun.mockResolvedValue(makePausedRun());

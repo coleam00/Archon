@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from './node-record-reader';
 import {
   startNodeExecution,
@@ -5087,7 +5088,7 @@ async function executeLoopGroupBody(
         const { failed } = await requireTerminalStatusWrite(
           deps.store.failPausedApproval(
             workflowRun.id,
-            approvalContext,
+            paused,
             undeliveredGatePromptError('Loop-group gate', node.id)
           ),
           { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
@@ -6615,7 +6616,7 @@ async function executeLoopNode(
         const { failed } = await requireTerminalStatusWrite(
           deps.store.failPausedApproval(
             workflowRun.id,
-            approvalContext,
+            paused,
             undeliveredGatePromptError('Loop gate', node.id)
           ),
           { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
@@ -6677,6 +6678,9 @@ function undeliveredGatePromptError(
  * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
  * External stops retain ownership of terminal state; other store failures propagate.
  * Write-back requires a successful pause before its apply/teardown path can proceed.
+ * Returns the persisted context, including its minted `pauseId`, so callers that later
+ * compare against the stored gate (failPausedApproval) match it exactly; undefined when
+ * the gate did not pause.
  */
 async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
@@ -6687,8 +6691,9 @@ async function pauseGateRespectingExternalTransition(
     failClosed?: boolean;
     suspension?: ReturnType<typeof serializeNodeStateRecord>;
   } = {}
-): Promise<boolean> {
+): Promise<ApprovalContext | undefined> {
   const { extraMetadata, failClosed = false } = options;
+  approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
     await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.suspension);
   } catch (pauseErr) {
@@ -6710,7 +6715,7 @@ async function pauseGateRespectingExternalTransition(
           { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
           'dag.gate_deferred'
         );
-        return false;
+        return undefined;
       }
       if (
         !isApprovalContext(active) ||
@@ -6722,21 +6727,23 @@ async function pauseGateRespectingExternalTransition(
         { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
         'dag.gate_deferred'
       );
-      return false;
+      return undefined;
     }
     getLog().warn(
       { workflowRunId: runId, status, err: pauseErr as Error },
       'dag.gate_pause_skipped_external_transition'
     );
-    return false;
+    return undefined;
   }
   getWorkflowEventEmitter().emit({
     type: 'approval_pending',
     runId,
     nodeId: approvalContext.nodeId,
     message: approvalContext.message,
+    decisions: approvalContext.decisions,
+    pauseId: approvalContext.pauseId,
   });
-  return true;
+  return approvalContext;
 }
 
 /** Execute a durable wait without holding a subprocess or provider slot. */
@@ -7141,6 +7148,17 @@ async function executeApprovalNode(
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
   const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs);
+  const choices = node.decisions.map(decision => {
+    const label =
+      decision.label ??
+      (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
+    const display = decision.label ? `${label} (${decision.id})` : label;
+    const command =
+      decision.id === 'approve' || decision.id === 'reject'
+        ? `${decision.id} ${workflowRun.id}`
+        : `respond ${workflowRun.id} ${decision.id} [text]`;
+    return `${display}: \`${spellWorkflowCommand(platform, command)}\``;
+  });
   const suspended = finishNodeExecution(
     execution,
     { status: 'suspended', point: 'approval' },
@@ -7183,13 +7201,12 @@ async function executeApprovalNode(
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
-    `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
-    `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+    choices.join(' | ');
   if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
     const { failed } = await requireTerminalStatusWrite(
       deps.store.failPausedApproval(
         workflowRun.id,
-        approvalContext,
+        paused,
         undeliveredGatePromptError('Approval', node.id)
       ),
       { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }

@@ -380,9 +380,9 @@ const mockUpdateWorkflowRun = mock(async (_id: string, _update: unknown) => {});
 // terminal reject outcomes. Default to "won the race".
 // The 3rd arg (approve) / 2nd arg (cancel) is the audit-event batch written in the
 // same transaction as the resolution (#2146).
-const mockResolveApprovalGate = mock(async (_id: string, _md: unknown, _events?: unknown) => ({
-  resolved: true,
-}));
+const mockResolveApprovalGate = mock<
+  (typeof import('@archon/core/db/workflows'))['resolveApprovalGate']
+>(async () => ({ resolved: true }));
 const mockResolveAndCancelApprovalGate = mock(async (_id: string, _events?: unknown) => ({
   resolved: true,
 }));
@@ -3108,7 +3108,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           data: { decision: 'rejected', reason: 'needs work' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
@@ -3161,7 +3162,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           step_name: 'review-gate',
           data: { decision: 'rejected', reason: 'needs more tests' },
         },
-      ]
+      ],
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -3202,7 +3204,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           data: { decision: 'rejected', reason: 'still bad' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
@@ -3330,6 +3333,73 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
       },
     });
   });
+
+  test('forwards the current occurrence when the decision succeeds', async () => {
+    const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-current' };
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_PAUSED_RUN,
+      metadata: {
+        approval: {
+          ...expectedGate,
+          type: 'approval',
+          message: 'Review',
+          decisions: [{ id: 'approve' }, { id: 'revise' }],
+          decisionsAuthored: true,
+        },
+      },
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'revise', expectedGate }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toEqual(expectedGate);
+  });
+
+  test('rejects a partial expected gate instead of silently discarding its identity', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
+      method: 'POST',
+      body: JSON.stringify({ decision: 'approve', expectedGate: { nodeId: 'review-gate' } }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(response.status).toBe(400);
+    expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+  });
+
+  test.each(['approve', 'reject', 'revise'])(
+    'forwards the displayed occurrence for %s after the same node re-pauses',
+    async decision => {
+      const expectedGate = { nodeId: 'review-gate', pauseId: 'pause-before' };
+      mockGetWorkflowRun.mockResolvedValue({
+        ...MOCK_PAUSED_RUN,
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: expectedGate.nodeId,
+            pauseId: 'pause-after',
+            message: 'Review again',
+            decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            decisionsAuthored: true,
+          },
+        },
+      });
+      mockResolveApprovalGate.mockResolvedValueOnce({ resolved: false });
+      const { app } = makeApp();
+      const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
+        method: 'POST',
+        body: JSON.stringify({ decision, text: 'feedback', expectedGate }),
+        headers: { 'Content-Type': 'application/json' },
+      });
+      expect(response.status).toBe(500);
+      expect(mockResolveApprovalGate.mock.calls[0]?.[3]).toEqual(expectedGate);
+      expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
+      expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
 
   test("'approve' produces the exact same resolution as POST .../approve", async () => {
     mockGetWorkflowRun.mockResolvedValue({
@@ -3683,7 +3753,8 @@ describe('approve/reject auto-resume', () => {
           data: { decision: 'rejected', reason: 'no' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
   });
 });

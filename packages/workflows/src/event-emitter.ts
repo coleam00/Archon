@@ -1,3 +1,4 @@
+import type { ApprovalContext } from './schemas/workflow-run';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
 /**
  * WorkflowEventEmitter - typed event emitter for workflow execution observability.
@@ -161,6 +162,8 @@ interface ApprovalPendingEvent {
   runId: string;
   nodeId: string;
   message: string;
+  decisions?: ApprovalContext['decisions'];
+  pauseId?: ApprovalContext['pauseId'];
 }
 
 interface WorkflowCancelledEvent {

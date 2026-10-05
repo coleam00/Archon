@@ -7,19 +7,11 @@ import {
   type DeclaredOutputPaths,
 } from '../output-ref';
 import { z } from '@hono/zod-openapi';
-import {
-  skipCauseSchema,
-  suspendReasonSchema,
-  type NodeState,
-  type SuspendReason,
-} from './node-state';
-import type { TokenUsage } from '@archon/provider-contract';
+import { approvalDecisionConfigSchema } from './dag-node';
+import { skipCauseSchema, suspendReasonSchema, type NodeState } from './node-state';
+import { tokenUsageSchema } from '@archon/provider-contract';
 import { providerFailureSchema } from '@archon/provider-contract';
-import {
-  nodeExecutionMetadataSchema,
-  nodeFailureKindSchema,
-  type NodeExecutionMetadata,
-} from './node-execution';
+import { nodeExecutionMetadataSchema, nodeFailureKindSchema } from './node-execution';
 import { checkoutObservationSchema } from './checkout-observation';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
@@ -688,9 +680,11 @@ export function isRecognizedSuspendReason(type: string | undefined): boolean {
 }
 
 /** Approval context stored in workflow run metadata when paused for human review. */
-export interface ApprovalContext {
-  nodeId: string;
-  message: string;
+export const approvalContextSchema = z.object({
+  nodeId: z.string(),
+  /** Unique occurrence identity; absent only on pauses created by older builds. */
+  pauseId: z.string().optional(),
+  message: z.string(),
   /**
    * Distinguishes the pause kind — see `SuspendReason` above for the resume-path
    * pointer each variant carries:
@@ -709,20 +703,20 @@ export interface ApprovalContext {
    *    workflow node, finds the child terminal, and threads its output. NO
    *    node_completed is written for the parent's node on this pause.
    */
-  type?: SuspendReason;
+  type: suspendReasonSchema.optional(),
   /**
    * Child run id when `type === 'child_workflow'` — the specific paused sub-run
    * the parent is blocked on. Read by the parent auto-resume guard so a DIFFERENT
    * child of the same parent can't trigger the wrong re-entry.
    */
-  childRunId?: string;
+  childRunId: z.string().optional(),
   /**
    * Set only on an ESCALATED pause: a `gate:` node that is the sole terminal sink
    * of a `loop_group` body (#2707 step 3), still `type: 'approval'`. The enclosing
    * loop_group's own id occupies `nodeId` — required for the top-level DAG's
    * resume walk to find it (it only knows top-level node ids, never a nested body
    * id) — so this field carries the body gate's own bare id, the one piece the
-   * rewrite would otherwise lose. `approveWorkflow`/`rejectWorkflow`/
+   * group address would otherwise hide. `approveWorkflow`/`rejectWorkflow`/
    * `respondToWorkflowWithDeclaredDecision` read it to namespace the resolution's
    * `node_completed` event as `<nodeId>.<bodyGateId>` instead of bare `nodeId` —
    * the exact `<groupId>.<bodyId>` step name #2748's `outerNodeOutputs`
@@ -730,15 +724,15 @@ export interface ApprovalContext {
    * findable again after a resume the same way any other body node's output is.
    * Absent for every other pause kind, including an ordinary top-level gate.
    */
-  bodyGateId?: string;
+  bodyGateId: z.string().optional(),
   /** Current loop iteration when paused (interactive loops only). */
-  iteration?: number;
+  iteration: z.number().optional(),
   /**
    * Session ID to restore on resume (interactive loops only). Gate pauses write an
    * explicit null when the loop has no session cursor to restore; readers treat that
    * exactly like an absent key.
    */
-  sessionId?: string | null;
+  sessionId: z.string().nullable().optional(),
   /**
    * Provider that created `sessionId` (#1992). Persisted by loop_group gates and
    * restored together with the session id so a resumed loop never threads the
@@ -747,13 +741,13 @@ export interface ApprovalContext {
    * Absent on single-node loop gates — those restore the session into the same
    * node, so the provider is the same by construction.
    */
-  sessionProvider?: string | null;
+  sessionProvider: z.string().nullable().optional(),
   /** When true, the user's approval comment is stored as `$nodeId.output`. Legacy-mode gates only (see `onRejectPrompt`). */
-  captureResponse?: boolean;
+  captureResponse: z.boolean().optional(),
   /** The on_reject prompt template (stored at pause time so reject handlers don't need the workflow def). */
-  onRejectPrompt?: string;
+  onRejectPrompt: z.string().optional(),
   /** Max rejection attempts before cancellation (default 3). */
-  onRejectMaxAttempts?: number;
+  onRejectMaxAttempts: z.number().optional(),
   /**
    * The gate's declared decisions (#2707 step 1), snapshotted at pause time so
    * approve/reject handlers don't need the workflow def to know the vocabulary
@@ -763,7 +757,7 @@ export interface ApprovalContext {
    * the actual mode signal. Absent on gates paused by builds that predate
    * this field.
    */
-  decisions?: { id: string; label?: string }[];
+  decisions: z.array(approvalDecisionConfigSchema).optional(),
   /**
    * True only when the author wrote `approval.decisions:` explicitly in YAML
    * (mirrors `GateNode.decisionsAuthored` — see its doc for the full
@@ -777,7 +771,7 @@ export interface ApprovalContext {
    * on gates paused by builds that predate this field, which resolves to
    * legacy behavior — the safe default.
    */
-  decisionsAuthored?: boolean;
+  decisionsAuthored: z.boolean().optional(),
   /**
    * Gate resolution marker. Set by approve/reject handlers while the run STAYS
    * 'paused' awaiting auto-resume (#2075): 'approved' = approval recorded,
@@ -790,7 +784,7 @@ export interface ApprovalContext {
    * approval object, so a gate that sets no `resolved` stores none and a prior
    * gate's 'approved' cannot survive to block it (#2673).
    */
-  resolved?: 'approved' | 'rejected' | null;
+  resolved: z.enum(['approved', 'rejected']).nullable().optional(),
   /**
    * Interactive-loop only. True when the iteration this gate paused on emitted the
    * completion signal (detectCompletionSignal / until_bash exit 0). Read at resume by
@@ -798,13 +792,13 @@ export interface ApprovalContext {
    * finalizes the node from `signaledOutput` instead of re-running. Cleared by the next
    * fresh pause the same way `resolved` is — the whole approval object is replaced.
    */
-  completionSignaled?: boolean | null;
+  completionSignaled: z.boolean().nullable().optional(),
   /**
    * Interactive-loop only. The (stripped) output of the signal-bearing paused iteration,
    * persisted so the finalize path can write node_completed with the real output for
    * downstream `$nodeId.output` refs. Only set when completionSignaled is true; null otherwise.
    */
-  signaledOutput?: string | null;
+  signaledOutput: z.string().nullable().optional(),
   /**
    * Interactive-loop only. The signal-bearing iteration's structured payload (#2637),
    * persisted beside `signaledOutput` so a bare-approve finalize attaches the same
@@ -815,7 +809,7 @@ export interface ApprovalContext {
    * null otherwise. Absent on gates paused by builds predating this field — those
    * finalize text-only, exactly as before.
    */
-  signaledStructuredOutput?: unknown;
+  signaledStructuredOutput: z.unknown().optional(),
   /**
    * Interactive-loop only, and written by the single-node `loop` gate ONLY. Cumulative
    * token usage through this pause, restored when the loop resumes so later gates and
@@ -823,11 +817,11 @@ export interface ApprovalContext {
    * compatibility with already-paused runs. A `loop_group` gate deliberately omits it:
    * body nodes persist their own namespaced usage rows before the pause.
    */
-  signaledTokens?: TokenUsage | null;
+  signaledTokens: tokenUsageSchema.nullable().optional(),
   /** Cumulative USD cost through this single-node loop pause; paired with signaledTokens. */
-  signaledCostUsd?: number | null;
+  signaledCostUsd: z.number().nullable().optional(),
   /** Original execution facts retained across a gate; no private session handle. */
-  execution?: NodeExecutionMetadata;
+  execution: nodeExecutionMetadataSchema.optional(),
   /**
    * Interactive-loop only. Read-once snapshot of the resolved loop prompt
    * template, whether authored as `loop.prompt` or loaded from `loop.command`,
@@ -836,8 +830,13 @@ export interface ApprovalContext {
    * load-time compiled prompt/error after rediscovery. Absent on runs paused by builds
    * that predate this field; those resume from the current prompt or command source.
    */
-  commandSnapshot?: string | null;
-}
+  commandSnapshot: z.string().nullable().optional(),
+});
+
+export type ApprovalContext = z.infer<typeof approvalContextSchema>;
+
+/** Old node-only buttons may resolve only contexts without a pause identity. */
+export type ExpectedApprovalGate = string | Required<Pick<ApprovalContext, 'nodeId' | 'pauseId'>>;
 
 /**
  * Top-level (non-`approval`) run-metadata keys of the interactive-loop gate

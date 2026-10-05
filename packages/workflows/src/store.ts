@@ -1,3 +1,4 @@
+import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
@@ -315,13 +316,15 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   resolveApprovalGate(
     id: string,
     metadata: Record<string, unknown>,
-    events: GateResolutionEvent[]
+    events: GateResolutionEvent[],
+    expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
   /** Resolve, cancel and commit gate plus terminal events atomically; reports telemetry after a winning commit. */
   resolveAndCancelApprovalGate(
     id: string,
     events: GateResolutionEvent[],
-    cancellation: WorkflowCancellationEventDetails
+    cancellation: WorkflowCancellationEventDetails,
+    expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
   /** Atomically cancel conversation-scoped resumable runs and their descendants; return only winning rows. */
   cancelResumableRunsForConversation(conversationId: string): Promise<WorkflowRun[]>;
