@@ -485,8 +485,8 @@ export class CopilotProvider implements IAgentProvider {
       yield { type: 'warning', ...w };
     }
 
-    // Best-effort structured output: Copilot has no native JSON-mode, so we
-    // augment the prompt with the schema. bridgeSession parses the
+    // Best-effort structured output: augment the prompt with the schema.
+    // bridgeSession parses the
     // accumulated assistant transcript and attaches `structuredOutput` to
     // the terminal result chunk.
     const outputFormat = requestOptions?.outputFormat;

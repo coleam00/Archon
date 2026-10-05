@@ -229,7 +229,7 @@ describe('workflow run config', () => {
       { kind: 'http', label: 'inline' }
     );
 
-    expect(parsed.layer.assistants?.copilot).toEqual({ modelReasoningEffort: 'xhigh' });
+    expect(parsed.layer.assistants?.copilot).toEqual({ modelReasoningEffort: 'max' });
     expect(
       parseWorkflowRunConfig(
         { assistants: { opencode: { model: ' anthropic / claude-sonnet-4-5 ' } } },

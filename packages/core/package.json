@@ -148,6 +148,9 @@
       "src/db/workflows.resume-cas.integration.test.ts"
     ],
     [
+      "src/db/workflow-gate-deferral.integration.test.ts"
+    ],
+    [
       "src/db/workflow-terminal-telemetry.integration.test.ts"
     ],
     [
@@ -293,6 +296,9 @@
     ],
     [
       "src/workflows/commit-author.integration.test.ts"
+    ],
+    [
+      "src/db/users.sqlite.integration.test.ts"
     ]
   ]
 }

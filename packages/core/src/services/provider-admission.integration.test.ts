@@ -114,6 +114,21 @@ function gated(): {
   };
 }
 
+/** Resolves once an attempt has been refused a slot and is polling for one. */
+function waitingEvent(): {
+  onAdmission: (event: ProviderAdmissionEvent) => void;
+  reached: Promise<void>;
+} {
+  let markWaiting!: () => void;
+  const reached = new Promise<void>(resolve => (markWaiting = resolve));
+  return {
+    reached,
+    onAdmission: event => {
+      if (event.state === 'waiting') markWaiting();
+    },
+  };
+}
+
 async function drain(stream: AsyncGenerator<MessageChunk>): Promise<void> {
   for await (const _ of stream) {
     // consume
@@ -157,8 +172,7 @@ describe('provider admission wrapper', () => {
     const second = gated();
     scripts.set('a', first.script).set('b', second.script);
     const events: ProviderAdmissionEvent[] = [];
-    let markWaiting!: () => void;
-    const waiting = new Promise<void>(resolve => (markWaiting = resolve));
+    const waiting = waitingEvent();
     const provider = getAgentProvider(PROVIDER, POLL_MS);
 
     const firstRun = drain(provider.sendQuery('a', '/tmp'));
@@ -167,11 +181,11 @@ describe('provider admission wrapper', () => {
       provider.sendQuery('b', '/tmp', undefined, {
         onAdmission: event => {
           events.push(event);
-          if (event.state === 'waiting') markWaiting();
+          waiting.onAdmission(event);
         },
       })
     );
-    await waiting;
+    await waiting.reached;
     expect(calls).toHaveLength(1);
     expect(events.map(e => e.state)).toEqual(['waiting']);
     expect(await holderCount()).toBe(1);
@@ -197,10 +211,14 @@ describe('provider admission wrapper', () => {
     await first.started;
 
     const controller = new AbortController();
+    const waiting = waitingEvent();
     const waiter = drain(
-      provider.sendQuery('b', '/tmp', undefined, { abortSignal: controller.signal })
+      provider.sendQuery('b', '/tmp', undefined, {
+        abortSignal: controller.signal,
+        onAdmission: waiting.onAdmission,
+      })
     );
-    await Bun.sleep(POLL_MS * 3);
+    await waiting.reached;
     controller.abort();
     await expect(waiter).rejects.toBeInstanceOf(ProviderAdmissionAbortedError);
     expect(calls).toHaveLength(1);
@@ -256,16 +274,11 @@ describe('provider admission wrapper', () => {
     await runA;
     // C starts once only B holds: one live holder already meets the lowered cap, so
     // C's first poll is refused.
-    let markWaiting!: () => void;
-    const waiting = new Promise<void>(resolve => (markWaiting = resolve));
+    const waiting = waitingEvent();
     const runC = drain(
-      provider.sendQuery('c', '/tmp', undefined, {
-        onAdmission: event => {
-          if (event.state === 'waiting') markWaiting();
-        },
-      })
+      provider.sendQuery('c', '/tmp', undefined, { onAdmission: waiting.onAdmission })
     );
-    await waiting;
+    await waiting.reached;
     expect(calls).toHaveLength(2);
     expect(await holderCount()).toBe(1);
 
@@ -301,8 +314,11 @@ describe('provider admission wrapper', () => {
     const provider = getAgentProvider(PROVIDER, POLL_MS);
     const runA = drain(provider.sendQuery('a', '/tmp'));
     await a.started;
-    const runB = drain(provider.sendQuery('b', '/tmp'));
-    await Bun.sleep(POLL_MS * 3);
+    const bWaiting = waitingEvent();
+    const runB = drain(
+      provider.sendQuery('b', '/tmp', undefined, { onAdmission: bWaiting.onAdmission })
+    );
+    await bWaiting.reached;
     expect(calls).toHaveLength(1);
 
     // Raised while B waits: B is admitted beside A.
@@ -312,8 +328,11 @@ describe('provider admission wrapper', () => {
 
     // Removed while C waits: C proceeds uncapped without a holder.
     await writeCaps({ [PROVIDER]: 2 });
-    const runC = drain(provider.sendQuery('c', '/tmp'));
-    await Bun.sleep(POLL_MS * 3);
+    const cWaiting = waitingEvent();
+    const runC = drain(
+      provider.sendQuery('c', '/tmp', undefined, { onAdmission: cWaiting.onAdmission })
+    );
+    await cWaiting.reached;
     expect(calls).toHaveLength(2);
     await writeCaps({ claude: 1 });
     await c.started;
