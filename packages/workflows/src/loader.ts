@@ -126,8 +126,8 @@ function parseOptionalField<S extends z.ZodType>(
 /**
  * Parse YAML using Bun's native YAML parser
  */
-function parseYaml(content: string): unknown {
-  return Bun.YAML.parse(content);
+export function parseYaml(content: string): unknown {
+  return Bun.YAML.parse(content.replaceAll('\r\n', '\n'));
 }
 
 /**
