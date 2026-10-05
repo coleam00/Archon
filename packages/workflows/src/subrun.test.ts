@@ -695,7 +695,7 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
   });
 
   afterEach(async () => {
-    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
@@ -3609,6 +3609,201 @@ nodes:
     );
     expect(String(nodeFailed?.data?.error)).toContain('all_success');
     expect(String(nodeFailed?.data?.error)).toContain('child 0');
+  });
+
+  it('#2821: all-refused all_done fails at the fan-out and re-dispatches on resume', async () => {
+    await writeWorkflow(
+      'refused-child',
+      `
+name: refused-child
+description: requires the correctly named input
+mutates_checkout: false
+inputs:
+  expected:
+    required: true
+nodes:
+  - id: run
+    bash: "echo should-not-run"
+`
+    );
+    await writeWorkflow(
+      'refused-parent',
+      `
+name: refused-parent
+description: all children violate the input contract
+nodes:
+  - id: work
+    workflow: refused-child
+    fan_out:
+      items: '[1,2,3]'
+      as: wrong
+      join: all_done
+  - id: collector
+    depends_on: [work]
+    bash: "echo should-not-run"
+`
+    );
+    const store = new InMemoryStore();
+    const ancestry = mock(store.getRunAncestry);
+    store.getRunAncestry = ancestry;
+    const deps = makeDeps(store);
+    const platform = makePlatform();
+    const workflow = await discover('refused-parent');
+    const first = await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' }
+    );
+    expect(first.success).toBe(false);
+    const parent = [...store.runs.values()].find(r => r.workflow_name === 'refused-parent')!;
+    expect(parent.status).toBe('failed');
+    expect(await store.findChildRuns(parent.id)).toEqual([]);
+    expect(ancestry).toHaveBeenCalledTimes(3);
+    const failures = () =>
+      store.events.filter(e => e.event_type === 'node_failed' && e.step_name === 'work');
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0].data?.failure_kind).toBe('child_failed');
+    expect(String(failures()[0].data?.error)).toContain(
+      "fan_out node 'work' refused all 3 children at spawn:"
+    );
+    expect(String(failures()[0].data?.error)).toContain("does not declare input 'wrong'");
+    expect(
+      store.events.some(e => e.step_name === 'collector' && e.event_type === 'node_started')
+    ).toBe(false);
+    expect(
+      store.events.some(e => e.step_name === 'work' && e.event_type === 'node_completed')
+    ).toBe(false);
+
+    await store.createWorkflowRun({
+      workflow_name: 'other-node-child',
+      origin: { conversationId: 'conv-db' },
+      user_message: '',
+      parent_run_id: parent.id,
+      metadata: { parent_node_id: 'other-node', child_index: 0 },
+    });
+    for (const metadata of [
+      { parent_node_id: 'work' },
+      { parent_node_id: 'work', child_index: -1 },
+      { parent_node_id: 'work', child_index: 3 },
+    ]) {
+      const historical = await store.createWorkflowRun({
+        workflow_name: 'historical-child',
+        origin: { conversationId: 'conv-db' },
+        user_message: '',
+        parent_run_id: parent.id,
+        metadata,
+      });
+      await store.failWorkflowRun(historical.id, 'historical failure');
+    }
+    const resume = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+    expect(resume).not.toBeNull();
+    const second = await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      { ...resume! }
+    );
+    expect(second.success).toBe(false);
+    expect(ancestry).toHaveBeenCalledTimes(6);
+    expect(failures()).toHaveLength(2);
+    expect(failures()[1].data?.error).toBe(failures()[0].data?.error);
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(messages).toContain("Re-driving fan_out node 'work'");
+    expect(messages).toContain('no child run rows');
+  });
+
+  it('#2821: partial refusal preserves failed-child markers and reports them when resume skips', async () => {
+    await writeWorkflow(
+      'partial-child',
+      `
+name: partial-child
+description: starts and fails
+mutates_checkout: false
+nodes:
+  - id: run
+    bash: "exit 1"
+`
+    );
+    await writeWorkflow(
+      'partial-parent',
+      `
+name: partial-parent
+description: one child starts, two are refused
+nodes:
+  - id: work
+    workflow: partial-child
+    isolation: worktree
+    fan_out:
+      items: '[1,2,3]'
+      join: all_done
+  - id: collector
+    depends_on: [work]
+    bash: "exit 1"
+`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const platform = makePlatform();
+    const workflow = await discover('partial-parent');
+    const resolve = mock(async (request: ChildIsolationRequest): Promise<ChildIsolationResult> => {
+      if (request.childIndex !== 0) throw new Error('resource unavailable');
+      return { cwd, envId: 'test-child', branchName: 'test-child' };
+    });
+    const options = { resolveChildIsolation: { resolve } };
+    await executeWorkflow(deps, platform, 'conv-plat', cwd, workflow, 'goal', { conversationId: 'conv-db' }, options);
+    const parent = [...store.runs.values()].find(r => r.workflow_name === 'partial-parent')!;
+    const children = await store.findChildRuns(parent.id);
+    expect(children).toHaveLength(1);
+    expect(children[0].status).toBe('failed');
+    const completed = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    const aggregate: unknown = JSON.parse(String(completed?.data?.node_output));
+    if (!Array.isArray(aggregate)) throw new Error('Expected a fan-out aggregate array');
+    expect(aggregate).toHaveLength(3);
+    expect(aggregate[0]).toEqual({
+      archon_failed: true,
+      status: 'failed',
+      error: expect.any(String),
+    });
+    expect(aggregate.slice(1)).toEqual(
+      [1, 2].map(() => ({
+        archon_failed: true,
+        status: 'failed',
+        error:
+          "Failed to create isolated worktree for sub-run 'partial-child': resource unavailable",
+      }))
+    );
+
+    const resume = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+    expect(resume?.priorCompletedNodes.has('work')).toBe(true);
+    await executeWorkflow(deps, platform, 'conv-plat', cwd, workflow, 'goal', { conversationId: 'conv-db' }, {
+      ...options,
+      ...resume!,
+    });
+    expect(resolve).toHaveBeenCalledTimes(3);
+    expect(await store.findChildRuns(parent.id)).toHaveLength(1);
+    expect(
+      store.events.some(
+        e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'work'
+      )
+    ).toBe(true);
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(messages).toContain(
+      "Skipping fan_out node 'work': fan-out previously refused 2 of 3 children"
+    );
   });
 
   it('all_done: a partial failure still completes the node; the failed entry is represented', async () => {

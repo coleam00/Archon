@@ -1,7 +1,7 @@
 import type { ProviderCapabilities } from '../types';
 
 export const CODEX_CAPABILITIES: ProviderCapabilities = {
-  backgroundWork: 'unobserved',
+  backgroundWork: 'reported',
   sessionResume: true,
   sessionFork: true, // `thread/fork` copies a thread into a new one
   mcp: true,
