@@ -156,8 +156,10 @@ async function* admittedQuery(
 /** A registered provider whose `sendQuery` is admitted against its configured cap. */
 export function getAgentProvider(id: string, pollMs = DEFAULT_POLL_MS): IAgentProvider {
   const provider = getRegisteredAgentProvider(id);
+  const resolveCredentialModel = provider.resolveCredentialModel?.bind(provider);
   return {
     checkCredential: request => provider.checkCredential(request),
+    ...(resolveCredentialModel ? { resolveCredentialModel } : {}),
     getType: () => provider.getType(),
     getCapabilities: () => provider.getCapabilities(),
     sendQuery: (prompt, cwd, resumeSessionId, options) =>

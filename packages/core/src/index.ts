@@ -171,6 +171,7 @@ export type {
   RunLiveOwnerStopLease,
   RunLiveOwnerWatch,
   RunLiveOwnerWatchEvent,
+  RunLiveOwnerWatchResult,
 } from './services/run-live-owner';
 
 // =============================================================================

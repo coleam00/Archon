@@ -85,6 +85,9 @@
         "sessionId": {
           "type": "string"
         },
+        "text": {
+          "type": "string"
+        },
         "tokens": {
           "$ref": "#/$defs/TokenUsage"
         },
@@ -136,6 +139,14 @@
     "ProviderCapabilities": {
       "type": "object",
       "properties": {
+        "backgroundWork": {
+          "type": "string",
+          "enum": [
+            "reported",
+            "none",
+            "unobserved"
+          ]
+        },
         "sessionResume": {
           "type": "boolean"
         },
@@ -237,6 +248,7 @@
         }
       },
       "required": [
+        "backgroundWork",
         "sessionResume",
         "mcp",
         "hooks",
@@ -586,6 +598,9 @@
           "type": "object",
           "properties": {
             "sessionId": {
+              "type": "string"
+            },
+            "text": {
               "type": "string"
             },
             "tokens": {

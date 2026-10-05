@@ -55,6 +55,9 @@
   },
   "testGroups": [
     [
+      "src/workflows/branch-launch-source.test.ts"
+    ],
+    [
       "src/db/resource-starts.integration.test.ts"
     ],
     [
@@ -187,6 +190,9 @@
       "src/services/run-attention-watch.test.ts"
     ],
     [
+      "src/services/run-attention-watch.integration.test.ts"
+    ],
+    [
       "src/workflows/store-adapter.test.ts",
       "src/workflows/child-isolation-resolver.test.ts"
     ],
@@ -268,6 +274,9 @@
     ],
     [
       "src/db/isolation-environments.retention.integration.test.ts"
+    ],
+    [
+      "src/workflows/commit-author.integration.test.ts"
     ]
   ]
 }

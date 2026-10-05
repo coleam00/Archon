@@ -10,6 +10,7 @@ import type { ProviderCapabilities } from '../../types';
  * model's reasoning budget.
  */
 export const COPILOT_CAPABILITIES: ProviderCapabilities = {
+  backgroundWork: 'unobserved',
   sessionResume: true,
   mcp: true,
   hooks: false,

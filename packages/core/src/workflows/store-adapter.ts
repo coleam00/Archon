@@ -1,3 +1,4 @@
+import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
  * IWorkflowStore trait defined in @archon/workflows.
@@ -20,7 +21,7 @@ import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
-import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import { getDecryptedAccessToken, getUserGithubAuthor } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { join } from 'node:path';
 import {
@@ -29,7 +30,27 @@ import {
   PI_AUTH_JSON_RELATIVE_PATH,
   PI_AUTH_PATH_ENV,
 } from '../credentials/delivery';
-import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-store';
+import {
+  listUserProviderKeys,
+  getDecryptedProviderCredential,
+  getStoredCredentialStatus,
+} from '../db/user-provider-key-store';
+import { normalizeCredentialVendor } from '@archon/providers';
+import { StoredCredentialDeliveryError } from '@archon/workflows/run-preflight';
+
+async function requiredCredentialRows(
+  userId: string,
+  vendors: readonly string[]
+): Promise<{ vendor: string; provider: string }[]> {
+  const rows = await listUserProviderKeys(userId);
+  return vendors.flatMap(vendor => {
+    const row =
+      rows.find(r => r.provider === vendor) ??
+      rows.find(r => normalizeCredentialVendor(r.provider) === vendor);
+    return row ? [{ vendor, provider: row.provider }] : [];
+  });
+}
+
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { sealWorkflowRunConfig, unsealWorkflowRunConfig } from '../config/run-config';
 
@@ -163,6 +184,7 @@ export function createWorkflowDeps(): WorkflowDeps {
     // gh/git through the originating user's personal token (decrypted, refreshed
     // on read), or scrub the org/bot token when they haven't connected.
     isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
+    getUserGithubAuthor,
     getUserGithubToken: async (userId: string): Promise<string | undefined> => {
       try {
         return (await getDecryptedAccessToken(userId)) ?? undefined;
@@ -171,62 +193,69 @@ export function createWorkflowDeps(): WorkflowDeps {
         return undefined;
       }
     },
-    // Per-user AI-provider credentials (Phase 2): list the user's decrypted
-    // credentials and translate each through the delivery map into an env bag
-    // (and optional file deliveries) for the run. Exact decrypted values travel
+    // Deliver only this graph's vendors. A failed connected credential must not
+    // disappear and allow the provider to use another account.
+    // Exact decrypted values travel
     // beside that bag only so the workflow subprocess boundary can scrub echoed
     // file-delivered credentials without knowing provider-specific file shapes.
     isPerUserProviderKeysEnabled: () => isPerUserProviderKeysEnabled(),
+    getUserProviderCredentialStatus: async (userId, vendor): Promise<CredentialStatus> => {
+      const [row] = await requiredCredentialRows(userId, [vendor]);
+      return row
+        ? getStoredCredentialStatus(userId, row.provider)
+        : { state: 'not_connected', source: 'archon' };
+    },
     getUserProviderEnv: async (
       userId: string,
-      artifactsDir: string
+      artifactsDir: string,
+      vendors: readonly string[],
+      connectedVendors: readonly string[]
     ): Promise<{
       env: Record<string, string>;
       files: { path: string; contents: string }[];
       protectedValues: string[];
     }> => {
-      try {
-        const creds = await listDecryptedUserProviderCredentials(userId);
-        const env: Record<string, string> = {};
-        const files: { path: string; contents: string }[] = [];
-        const protectedValues = new Set<string>();
-        for (const { provider, cred } of creds) {
-          try {
-            const result = deliverCredential(provider, cred, { artifactsDir });
-            Object.assign(env, result.env);
-            if (result.files) files.push(...result.files);
-            if (cred.kind === 'api_key') {
-              protectedValues.add(cred.apiKey);
-            } else {
-              protectedValues.add(cred.oauthApiKey);
-              collectOAuthCredentialValues(cred.rawCreds, protectedValues);
-            }
-          } catch (err) {
-            // Unknown provider / shape mismatch — log at ERROR (no per-credential
-            // user-facing skip event yet) and skip this credential rather than
-            // abort all delivery.
-            getLog().error(
-              { err: err as Error, userId, provider },
-              'workflow_deps.provider_creds_deliver_failed'
-            );
-          }
+      const rows = await requiredCredentialRows(userId, vendors);
+      for (const vendor of connectedVendors) {
+        if (!rows.some(row => row.vendor === vendor)) {
+          throw new StoredCredentialDeliveryError(vendor, {
+            state: 'not_connected',
+            source: 'archon',
+          });
         }
-        // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
-        // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
-        // a real artifactsDir (file delivery); the chat path is env-only.
-        if (artifactsDir) {
-          const piAuthJson = buildPiAuthJson(creds);
-          if (piAuthJson) {
-            const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
-            files.push({ path: piAuthPath, contents: piAuthJson });
-            env[PI_AUTH_PATH_ENV] = piAuthPath;
-          }
-        }
-        return { env, files, protectedValues: [...protectedValues] };
-      } catch (err) {
-        getLog().warn({ err: err as Error, userId }, 'workflow_deps.provider_creds_resolve_failed');
-        return { env: {}, files: [], protectedValues: [] };
       }
+      const creds = [];
+      for (const { vendor, provider } of rows) {
+        const stored = await getDecryptedProviderCredential(userId, provider);
+        if (stored.state === 'usable') creds.push({ provider, cred: stored.credential });
+        else throw new StoredCredentialDeliveryError(vendor, stored);
+      }
+      const env: Record<string, string> = {};
+      const files: { path: string; contents: string }[] = [];
+      const protectedValues = new Set<string>();
+      for (const { provider, cred } of creds) {
+        const result = deliverCredential(provider, cred, { artifactsDir });
+        Object.assign(env, result.env);
+        if (result.files) files.push(...result.files);
+        if (cred.kind === 'api_key') {
+          protectedValues.add(cred.apiKey);
+        } else {
+          protectedValues.add(cred.oauthApiKey);
+          collectOAuthCredentialValues(cred.rawCreds, protectedValues);
+        }
+      }
+      // Aggregate Pi auth.json (the user's keys + subscriptions) so a `pi` node
+      // consumes them via AuthStorage(authPath) without moving Pi's home. Needs
+      // a real artifactsDir (file delivery); the chat path is env-only.
+      if (artifactsDir) {
+        const piAuthJson = buildPiAuthJson(creds);
+        if (piAuthJson) {
+          const piAuthPath = join(artifactsDir, PI_AUTH_JSON_RELATIVE_PATH);
+          files.push({ path: piAuthPath, contents: piAuthJson });
+          env[PI_AUTH_PATH_ENV] = piAuthPath;
+        }
+      }
+      return { env, files, protectedValues: [...protectedValues] };
     },
     // Per-user AI prefs (Phase 3): personal tiers/aliases/default-provider,
     // folded into buildAiProfile as the highest-precedence layer. Non-throwing —

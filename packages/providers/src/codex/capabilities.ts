@@ -1,8 +1,9 @@
 import type { ProviderCapabilities } from '../types';
 
 export const CODEX_CAPABILITIES: ProviderCapabilities = {
+  backgroundWork: 'unobserved',
   sessionResume: true,
-  sessionFork: false,
+  sessionFork: true, // `thread/fork` copies a thread into a new one
   mcp: true,
   hooks: false,
   // Codex has native filesystem skills, but does not implement Archon's per-node

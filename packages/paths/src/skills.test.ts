@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+
+import { removeTempTree } from './test-utils';
 
 import { resolveClaudeSkillDirectories, resolveSkillDirectories } from './skills';
 
@@ -48,10 +50,10 @@ describe('resolveSkillDirectories', () => {
     process.env.HOME = fake.home;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
-    rmSync(fake.root, { recursive: true, force: true });
+    await removeTempTree(fake.root);
   });
 
   test('returns empty paths and missing for undefined input', () => {
@@ -149,10 +151,10 @@ describe('resolveClaudeSkillDirectories', () => {
     process.env.HOME = fake.home;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     if (originalHome === undefined) delete process.env.HOME;
     else process.env.HOME = originalHome;
-    rmSync(fake.root, { recursive: true, force: true });
+    await removeTempTree(fake.root);
   });
 
   test('resolves project and user Claude-native skills', () => {

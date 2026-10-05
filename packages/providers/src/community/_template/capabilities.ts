@@ -7,6 +7,7 @@ import type { ProviderCapabilities } from '../../types';
  * missing from the template a contributor copies.
  */
 export const YOUR_CAPABILITIES: ProviderCapabilities = {
+  backgroundWork: 'unobserved',
   sessionResume: false,
   mcp: false,
   hooks: false,

@@ -12,18 +12,18 @@ const fromRoot = (path: string): string => join(REPO_ROOT, path);
 
 describe('planRequestedRuns', () => {
   test('places a path inside a package with that package', () => {
-    const runs = planRequestedRuns([fromRoot('packages/paths/src/effort.test.ts')]);
+    const runs = planRequestedRuns([fromRoot('packages/paths/src/skills.test.ts')]);
 
     expect(runs).toHaveLength(1);
     expect(runs[0].owner.label).toBe('packages/paths');
     expect(runs[0].owner.cwd).toBe(fromRoot('packages/paths'));
-    expect(runs[0].args).toEqual(['src/effort.test.ts']);
+    expect(runs[0].args).toEqual(['src/skills.test.ts']);
   });
 
   test('reads a relative path against the repository root', () => {
-    const relativePath = relative(REPO_ROOT, fromRoot('packages/paths/src/effort.test.ts'));
+    const relativePath = relative(REPO_ROOT, fromRoot('packages/paths/src/skills.test.ts'));
 
-    expect(planRequestedRuns([relativePath])[0].args).toEqual(['src/effort.test.ts']);
+    expect(planRequestedRuns([relativePath])[0].args).toEqual(['src/skills.test.ts']);
   });
 
   test('keeps a root-owned path at the repository root', () => {
@@ -37,7 +37,7 @@ describe('planRequestedRuns', () => {
   test('plans one run per owner, in the order the owners were named', () => {
     const runs = planRequestedRuns([
       fromRoot('packages/isolation/src/resolver.test.ts'),
-      fromRoot('packages/paths/src/effort.test.ts'),
+      fromRoot('packages/paths/src/skills.test.ts'),
       fromRoot('packages/isolation/src/pr-state.test.ts'),
     ]);
 
@@ -46,26 +46,26 @@ describe('planRequestedRuns', () => {
       'packages/paths',
     ]);
     expect(runs[0].args).toEqual(['src/resolver.test.ts', 'src/pr-state.test.ts']);
-    expect(runs[1].args).toEqual(['src/effort.test.ts']);
+    expect(runs[1].args).toEqual(['src/skills.test.ts']);
   });
 
   test('forwards flags and substring filters to the owner the paths named', () => {
     const runs = planRequestedRuns([
       '--bail',
       '-t',
-      'effort',
-      fromRoot('packages/paths/src/effort.test.ts'),
+      'resolveSkillDirectories',
+      fromRoot('packages/paths/src/skills.test.ts'),
     ]);
 
     expect(runs).toHaveLength(1);
-    expect(runs[0].args).toEqual(['--bail', '-t', 'effort', 'src/effort.test.ts']);
+    expect(runs[0].args).toEqual(['--bail', '-t', 'resolveSkillDirectories', 'src/skills.test.ts']);
   });
 
   test('forwards an unplaced argument to every owner the paths named', () => {
     const runs = planRequestedRuns([
       '--bail',
       fromRoot('packages/isolation/src/resolver.test.ts'),
-      fromRoot('packages/paths/src/effort.test.ts'),
+      fromRoot('packages/paths/src/skills.test.ts'),
     ]);
 
     expect(runs.map((run): string => run.owner.label)).toEqual([
@@ -73,7 +73,7 @@ describe('planRequestedRuns', () => {
       'packages/paths',
     ]);
     expect(runs[0].args).toEqual(['--bail', 'src/resolver.test.ts']);
-    expect(runs[1].args).toEqual(['--bail', 'src/effort.test.ts']);
+    expect(runs[1].args).toEqual(['--bail', 'src/skills.test.ts']);
   });
 
   test('plans no run when no argument names an owner', () => {
@@ -120,7 +120,7 @@ describe('repo-tests exit codes', () => {
     // A real file so the argument routes, plus a filter `bun test` cannot match, so the
     // child exits non-zero and the runner has a real failure to carry back.
     const { exitCode } = invoke([
-      fromRoot('packages/paths/src/effort.test.ts'),
+      fromRoot('packages/paths/src/skills.test.ts'),
       '-t',
       'no-such-test-name-exists',
     ]);
@@ -129,7 +129,7 @@ describe('repo-tests exit codes', () => {
   });
 
   test('exits 0 when the routed run passes', () => {
-    const { exitCode } = invoke([fromRoot('packages/paths/src/effort.test.ts')]);
+    const { exitCode } = invoke([fromRoot('packages/paths/src/skills.test.ts')]);
 
     expect(exitCode).toBe(0);
   });

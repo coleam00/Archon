@@ -1,21 +1,14 @@
-// Types (contract layer — re-exported for convenience)
+// Contract types owned by @archon/provider-contract, re-exported for existing consumers
 export type {
   IAgentProvider,
-  AgentRequestOptions,
   SendQueryOptions,
-  NodeConfig,
-  ProviderDefaults,
   ProviderDefaultsMap,
-  ProviderConfigParser,
-  ProviderConfigScope,
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,
   MessageChunk,
   TokenUsage,
   CredentialKind,
-  CredentialSpec,
-  ProviderCredentialCatalog,
   ProviderAdmissionEvent,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
@@ -39,19 +32,7 @@ export {
 } from './registry';
 
 // Error
-export { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
-
-// Shared structured-output helpers (cross-provider; the dag-executor validates
-// every provider's output_format result against the declared schema).
-export {
-  compileOutputSchema,
-  validateStructuredOutput,
-  formatSchemaErrors,
-  findStrictSchemaIssues,
-  isObjectSchemaNode,
-  type StrictSchemaIssue,
-  type StructuredValidationResult,
-} from './shared/structured-output';
+export { InvalidProviderRunConfigError } from '@archon/provider-contract';
 
 // Provider classes
 export { ClaudeProvider } from './claude/provider';
@@ -75,9 +56,6 @@ export {
   type CodexBinarySource,
 } from './codex/binary-resolver';
 export { resolveClaudeBinaryPath, fileExists as claudeFileExists } from './claude/binary-resolver';
-
-// Skills resolution
-export { claudeSkillSearchRoots, findInstalledSkillNames, skillSearchRoots } from './shared/skills';
 
 // Community providers
 export {
