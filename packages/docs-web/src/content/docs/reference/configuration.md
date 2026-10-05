@@ -75,7 +75,9 @@ assistants:
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
-    # Source/dev mode auto-resolves.
+    # In all modes: CLAUDE_BIN_PATH wins, then claudeBinaryPath.
+    # Source/dev mode uses SDK resolution only when neither pin is set.
+    # Invalid explicit pins fail instead of falling back.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.6-terra
