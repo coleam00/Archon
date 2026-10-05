@@ -454,18 +454,6 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ cleared: false });
   };
 
-  rewriteApprovalContext: IWorkflowStore['rewriteApprovalContext'] = (id, approvalContext) => {
-    const r = this.runs.get(id);
-    // Mirrors the real store's CAS guard (unresolvedGateClause): only while still
-    // paused and unresolved — a human resolving the gate first wins the race.
-    const approval = r?.metadata?.approval as { resolved?: string } | undefined;
-    if (r && r.status === 'paused' && approval?.resolved == null) {
-      r.metadata = { ...r.metadata, approval: { ...approvalContext } };
-      return Promise.resolve({ resolved: true });
-    }
-    return Promise.resolve({ resolved: false });
-  };
-
   claimWriteback = (): Promise<{ claimed: boolean }> => Promise.resolve({ claimed: true });
   releaseWritebackClaim = (): Promise<void> => Promise.resolve();
 

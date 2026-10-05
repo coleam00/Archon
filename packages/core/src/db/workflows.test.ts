@@ -66,7 +66,12 @@ describe('workflows database', () => {
     const metadata = { approval: { nodeId: 'review', resolved: 'approved' } };
     expect(await resolveApprovalGate('run-1', metadata, [], 'review')).toEqual({ resolved: false });
     expect(mockQuery.mock.calls[0]?.[0]).toContain("metadata->'approval'->>'nodeId' = $3");
-    expect(mockQuery.mock.calls[0]?.[1]).toEqual(['run-1', JSON.stringify(metadata), 'review']);
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual([
+      'run-1',
+      JSON.stringify(metadata),
+      'review',
+      null,
+    ]);
   });
 
   test('terminal rejection binds the expected gate node in the PostgreSQL CAS', async () => {
@@ -74,7 +79,7 @@ describe('workflows database', () => {
       await resolveAndCancelApprovalGate('run-1', [], { step_name: 'review' }, 'review')
     ).toEqual({ resolved: false });
     expect(mockQuery.mock.calls[0]?.[0]).toContain("metadata->'approval'->>'nodeId' = $2");
-    expect(mockQuery.mock.calls[0]?.[1]).toEqual(['run-1', 'review']);
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual(['run-1', 'review', null]);
   });
 
   const mockWorkflowRun: WorkflowRun = {

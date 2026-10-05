@@ -12,6 +12,7 @@ import {
   workflowSourceSchema as engineWorkflowSourceSchema,
 } from '@archon/workflows/schemas/workflow';
 import {
+  approvalContextSchema,
   workflowRunSchema as engineWorkflowRunSchema,
   workflowRunOutcomeSchema as engineWorkflowRunOutcomeSchema,
   workflowWaitContextSchema as engineWorkflowWaitContextSchema,
@@ -140,11 +141,12 @@ export const workflowWaitContextSchema =
 export const runStopReasonSchema = engineRunStopReasonSchema.openapi('RunStopReason');
 
 /**
- * Run metadata stays open-ended, but its durable-wait and stop-reason contracts are
+ * Run metadata stays open-ended, but its approval, durable-wait and stop-reason contracts are
  * engine-owned and typed.
  */
 export const workflowRunMetadataSchema = z
   .object({
+    approval: approvalContextSchema.optional(),
     wait: workflowWaitContextSchema.optional(),
     [RUN_STOP_REASON_METADATA_KEY]: runStopReasonSchema.optional(),
   })

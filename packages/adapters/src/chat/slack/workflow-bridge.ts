@@ -26,8 +26,10 @@ import {
   REACTION_SUCCESS,
   buildApprovalBlocks,
   buildApprovalResolutionBlocks,
+  slackApprovalActionSchema,
   buildClosedApprovalBlocks,
   buildStatusBlocks,
+  type SlackApprovalAction,
   type NodeSnapshot,
   type NodeState,
   type RunSnapshot,
@@ -274,6 +276,7 @@ export class SlackWorkflowBridge {
       nodeId: event.nodeId,
       message: event.message,
       decisions: event.decisions,
+      pauseId: event.pauseId,
     });
     const postResult = this.adapter
       .getApp()
@@ -281,7 +284,7 @@ export class SlackWorkflowBridge {
         channel: state.channel,
         thread_ts: state.threadTs,
         text: fallbackText,
-        blocks,
+        ...(blocks.length > 0 ? { blocks } : {}),
       })
       .then(result => result.ts ?? undefined)
       .catch(error => {
@@ -542,9 +545,9 @@ export class SlackWorkflowBridge {
     const actorId = body.user?.id;
     if (!this.assertAuthorized(actorId, 'respond')) return;
 
-    const parsed = parseApprovalAction(action.action_id);
+    const parsed = parseApprovalAction(action);
     if (!parsed) return;
-    const { runId, nodeId, decision } = parsed;
+    const { runId, nodeId, decision, pauseId } = parsed;
     const state = this.runs.get(runId);
     if (state && !state.approvals.has(nodeId)) return;
 
@@ -554,7 +557,12 @@ export class SlackWorkflowBridge {
     let outcomeNote: string | undefined;
     try {
       try {
-        const result = await this.operations.respondToWorkflow(runId, decision, undefined, nodeId);
+        const result = await this.operations.respondToWorkflow(
+          runId,
+          decision,
+          undefined,
+          pauseId ? { nodeId, pauseId } : nodeId
+        );
         if (!('cancelled' in result)) {
           const resumed = await this.tryResumeWorkflow(runId, actorId);
           // Interactive-loop approves are outcome-ambiguous from here: a gate that
@@ -769,10 +777,18 @@ function splitConversationId(conversationId: string): [string, string | undefine
   return [conversationId.slice(0, idx), conversationId.slice(idx + 1)];
 }
 
-function parseApprovalAction(
-  actionId: string
-): { runId: string; nodeId: string; decision: string } | null {
-  const [prefix, runId, ...path] = actionId.split(':');
+function parseApprovalAction(action: ButtonAction): SlackApprovalAction | null {
+  if (action.value !== undefined) {
+    let value: unknown;
+    try {
+      value = JSON.parse(action.value);
+    } catch {
+      return null;
+    }
+    const parsed = slackApprovalActionSchema.safeParse(value);
+    return parsed.success ? parsed.data : null;
+  }
+  const [prefix, runId, ...path] = action.action_id.split(':');
   if (!runId) return null;
   const decision = prefix === 'respond' ? path.pop() : prefix;
   if (!decision || (prefix !== 'respond' && prefix !== 'approve' && prefix !== 'reject'))

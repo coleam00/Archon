@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   buildApprovalBlocks,
+  slackApprovalActionSchema,
   buildApprovalResolutionBlocks,
   buildStatusBlocks,
   formatCostFooter,
@@ -71,14 +72,74 @@ describe('buildApprovalBlocks', () => {
     const actions = blocks.find(block => block.type === 'actions');
     expect(actions).toMatchObject({
       elements: [
-        { text: { text: 'Ship it' }, action_id: 'approve:r1:review' },
-        { text: { text: 'Try again' }, action_id: 'respond:r1:review:revise' },
-        { text: { text: 'cancel' }, action_id: 'respond:r1:review:cancel' },
+        { text: { text: 'Ship it' }, action_id: 'respond:0' },
+        { text: { text: 'Try again' }, action_id: 'respond:1' },
+        { text: { text: 'cancel' }, action_id: 'respond:2' },
       ],
     });
     expect(fallbackText).toContain('/archon-workflow respond r1 revise [text]');
     expect(fallbackText).toContain('Try again (revise)');
     expect(fallbackText).not.toContain('reject');
+  });
+
+  test('renders all 26 decisions across bounded action blocks', () => {
+    const decisions = Array.from({ length: 26 }, (_, i) => ({
+      id: i === 0 ? 'approve' : `choice-${String(i)}`,
+    }));
+    const { blocks } = buildApprovalBlocks({
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions,
+    });
+    const actions = blocks.filter(block => block.type === 'actions');
+    expect(actions).toHaveLength(2);
+    for (const block of actions) expect(block.elements.length).toBeLessThanOrEqual(25);
+    expect(
+      actions
+        .flatMap(block => block.elements)
+        .map(element => ('action_id' in element ? element.action_id : undefined))
+    ).toEqual(decisions.map((_, i) => `respond:${String(i)}`));
+    expect(
+      actions
+        .flatMap(block => block.elements)
+        .map(element =>
+          'value' in element && typeof element.value === 'string'
+            ? slackApprovalActionSchema.parse(JSON.parse(element.value)).decision
+            : undefined
+        )
+    ).toEqual(decisions.map(d => d.id));
+  });
+
+  test('a 256-character decision ID fits the Slack action transport', () => {
+    const decision = 'a'.repeat(256);
+    const { blocks } = buildApprovalBlocks({
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions: [{ id: 'approve' }, { id: decision }],
+    });
+    const actions = blocks.filter(block => block.type === 'actions');
+    expect(actions).toHaveLength(1);
+    for (const element of actions.flatMap(block => block.elements)) {
+      if ('action_id' in element) expect(element.action_id?.length).toBeLessThanOrEqual(255);
+    }
+    expect(actions[0]?.elements[1]).toMatchObject({
+      value: JSON.stringify({ runId: 'r1', nodeId: 'review', decision }),
+    });
+  });
+
+  test('oversized decision values render commands without invalid controls', () => {
+    const decision = 'a'.repeat(2001);
+    const { blocks, fallbackText } = buildApprovalBlocks({
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions: [{ id: 'approve' }, { id: decision }],
+    });
+    expect(blocks.some(block => block.type === 'actions')).toBe(false);
+    expect(fallbackText).toContain(`/archon-workflow respond r1 ${decision} [text]`);
+    expect(blocks).toEqual([]);
   });
 
   test('produces section + actions block with both buttons', () => {
@@ -105,11 +166,11 @@ describe('buildApprovalBlocks', () => {
       elements: Array<{ type: string; action_id: string; style?: string }>;
     };
     expect(actions.type).toBe('actions');
-    expect(actions.block_id).toBe('approval:a1b2c3d4-deadbeef:review-step');
+    expect(actions.block_id).toBe('approval:0');
     expect(actions.elements).toHaveLength(2);
-    expect(actions.elements[0]?.action_id).toBe('approve:a1b2c3d4-deadbeef:review-step');
+    expect(actions.elements[0]?.action_id).toBe('respond:0');
     expect(actions.elements[0]?.style).toBe('primary');
-    expect(actions.elements[1]?.action_id).toBe('reject:a1b2c3d4-deadbeef:review-step');
+    expect(actions.elements[1]?.action_id).toBe('respond:1');
     expect(actions.elements[1]?.style).toBe('danger');
   });
 });

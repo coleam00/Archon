@@ -1229,6 +1229,28 @@ describe('durable wait continuation races — real SQLite', () => {
 });
 
 describe('stale gate actions — real SQLite', () => {
+  test.each(['resolve', 'cancel'] as const)(
+    '%s requires the current pause occurrence',
+    async mode => {
+      const runId = `occurrence-${mode}`;
+      const approval = { nodeId: 'review', pauseId: 'current', message: 'Choose' };
+      await seedPausedRun(runId, 'wf-occurrence', approval);
+      const resolve = (expected: string | { nodeId: string; pauseId: string }) =>
+        mode === 'resolve'
+          ? resolveApprovalGate(
+              runId,
+              { approval: { ...approval, resolved: 'approved' } },
+              [],
+              expected
+            )
+          : resolveAndCancelApprovalGate(runId, [], { step_name: 'review' }, expected);
+      expect(await resolve('review')).toEqual({ resolved: false });
+      expect(await resolve({ nodeId: 'review', pauseId: 'old' })).toEqual({ resolved: false });
+      expect((await getWorkflowRun(runId))?.metadata.approval).toEqual(approval);
+      expect(await resolve({ nodeId: 'review', pauseId: 'current' })).toEqual({ resolved: true });
+    }
+  );
+
   test.each([
     { name: 'approve', decision: 'approve', extra: {} },
     { name: 'declared reject', decision: 'reject', extra: {} },
@@ -1246,13 +1268,19 @@ describe('stale gate actions — real SQLite', () => {
       const runId = `stale-${name}`;
       const earlier = {
         nodeId: 'earlier',
+        pauseId: 'pause-one',
         message: 'Choose',
         type: 'approval',
         decisionsAuthored: true,
         decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
         ...extra,
       };
-      const later = { nodeId: 'later', message: 'Next choice', type: 'approval' as const };
+      const later = {
+        nodeId: 'earlier',
+        pauseId: 'pause-two',
+        message: 'Next choice',
+        type: 'approval' as const,
+      };
       await seedPausedRun(runId, 'wf-stale', earlier);
       const operations = createWorkflowOperations({
         ...operationDeps,
@@ -1277,7 +1305,10 @@ describe('stale gate actions — real SQLite', () => {
       });
 
       await expect(
-        operations.respondToWorkflow(runId, decision, 'feedback', 'earlier')
+        operations.respondToWorkflow(runId, decision, 'feedback', {
+          nodeId: 'earlier',
+          pauseId: 'pause-one',
+        })
       ).rejects.toThrow('no longer paused at the expected gate');
       const current = await getWorkflowRun(runId);
       expect(current?.status).toBe('paused');

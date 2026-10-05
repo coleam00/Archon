@@ -264,11 +264,12 @@ test('live approval frames retain the exact declared vocabulary', () => {
       nodeId: 'review',
       message: 'Choose',
       decisions,
+      pauseId: 'pause-one',
     }) ?? '{}'
   );
   expect(payload).toMatchObject({
     type: 'workflow_status',
     status: 'paused',
-    approval: { nodeId: 'review', message: 'Choose', decisions },
+    approval: { nodeId: 'review', message: 'Choose', decisions, pauseId: 'pause-one' },
   });
 });

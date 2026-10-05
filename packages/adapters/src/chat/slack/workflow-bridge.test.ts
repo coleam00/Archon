@@ -10,6 +10,7 @@
  * invocation so it doesn't pollute other suites.
  */
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
+import type { types } from '@slack/bolt';
 import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import type {
   ApprovalOperationResult,
@@ -115,10 +116,7 @@ void isSlackUserAuthorized;
 
 // ─── Test doubles for the SlackAdapter ────────────────────────────────────
 
-interface SlackBlock {
-  type?: string;
-  elements?: Array<{ action_id?: string; text?: string }>;
-}
+type SlackBlock = types.KnownBlock;
 
 interface PostedMessage {
   channel: string;
@@ -197,13 +195,13 @@ function makeFakeAdapter(allowedUserIds: string[] = []) {
     reactionsRemoved,
     triggerMap,
     actions: () => registeredActions,
-    dispatchAction: async (actionId: string, body: Record<string, unknown>) => {
+    dispatchAction: async (actionId: string, body: Record<string, unknown>, value?: string) => {
       for (const { pattern, handler } of registeredActions) {
         if (pattern.test(actionId)) {
           await handler({
             ack: async () => undefined,
             body,
-            action: { action_id: actionId },
+            action: { action_id: actionId, ...(value === undefined ? {} : { value }) },
           });
         }
       }
@@ -339,8 +337,11 @@ describe('SlackWorkflowBridge', () => {
     expect(approval?.thread_ts).toBe('111.0');
     expect(approval?.text).toContain('Approval needed');
     const actionsBlock = (approval?.blocks ?? []).find(block => block.type === 'actions');
-    expect(actionsBlock?.elements?.[0]?.action_id).toBe('approve:r1:review');
-    expect(actionsBlock?.elements?.[1]?.action_id).toBe('reject:r1:review');
+    const buttons = actionsBlock?.elements.filter(
+      (element): element is types.Button => element.type === 'button'
+    );
+    expect(buttons?.[0]?.action_id).toBe('respond:0');
+    expect(buttons?.[1]?.action_id).toBe('respond:1');
   });
 
   test('approval_pending updates the run status with a persisted authored outcome', async () => {
@@ -467,12 +468,59 @@ describe('SlackWorkflowBridge', () => {
     }
   );
 
-  test('custom button responds with the declared ID and gate identity', async () => {
-    const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
-    const resumeWorkflow = mock(async () => true);
+  test.each(['revise', 'a'.repeat(256)])(
+    'custom button responds with exact ID %s and pause identity',
+    async decision => {
+      const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+      const resumeWorkflow = mock(async () => true);
+      triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+      mockGetConversationId.mockReturnValue('C1:111.0');
+      new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
+      await dispatchEvent({
+        type: 'workflow_started',
+        runId: 'r1',
+        workflowName: 'assist',
+        conversationId: 'conv-db-uuid',
+        transcriptPath: '/logs/r1.jsonl',
+      });
+      await dispatchEvent({
+        type: 'approval_pending',
+        runId: 'r1',
+        nodeId: 'review',
+        message: 'Choose',
+        pauseId: 'pause-one',
+        decisions: [{ id: 'approve' }, { id: decision, label: 'Try again' }, { id: 'cancel' }],
+      });
+      expect(posted.at(-1)?.text).toContain(`Try again (${decision})`);
+      const selected = posted.at(-1)?.blocks?.find(block => block.type === 'actions')
+        ?.elements?.[1];
+      if (selected?.type !== 'button' || !selected.action_id || !selected.value)
+        throw new Error('Expected posted decision button');
+      await dispatchAction(
+        selected.action_id,
+        {
+          user: { id: 'U123' },
+          channel: { id: 'C1' },
+          message: { ts: '2.000' },
+        },
+        selected.value
+      );
+      expect(mockRespondToWorkflow).toHaveBeenCalledWith('r1', decision, undefined, {
+        nodeId: 'review',
+        pauseId: 'pause-one',
+      });
+      expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
+      expect(updated.find(message => message.ts === '2.000')?.text).toContain(
+        `Selected ${decision}`
+      );
+    }
+  );
+
+  test('oversized choices post actionable text without Block Kit', async () => {
+    const { adapter, posted, triggerMap } = makeFakeAdapter();
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
     mockGetConversationId.mockReturnValue('C1:111.0');
-    new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
+    new SlackWorkflowBridge(adapter as never).attach();
     await dispatchEvent({
       type: 'workflow_started',
       runId: 'r1',
@@ -480,22 +528,17 @@ describe('SlackWorkflowBridge', () => {
       conversationId: 'conv-db-uuid',
       transcriptPath: '/logs/r1.jsonl',
     });
+    const decision = 'a'.repeat(2001);
     await dispatchEvent({
       type: 'approval_pending',
       runId: 'r1',
       nodeId: 'review',
       message: 'Choose',
-      decisions: [{ id: 'approve' }, { id: 'revise', label: 'Try again' }, { id: 'cancel' }],
+      pauseId: 'pause-one',
+      decisions: [{ id: 'approve' }, { id: decision }],
     });
-    expect(posted.at(-1)?.text).toContain('Try again (revise)');
-    await dispatchAction('respond:r1:review:revise', {
-      user: { id: 'U123' },
-      channel: { id: 'C1' },
-      message: { ts: '2.000' },
-    });
-    expect(mockRespondToWorkflow).toHaveBeenCalledWith('r1', 'revise', undefined, 'review');
-    expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
-    expect(updated.find(message => message.ts === '2.000')?.text).toContain('Selected revise');
+    expect(posted.at(-1)?.blocks).toBeUndefined();
+    expect(posted.at(-1)?.text).toContain(`/archon-workflow respond r1 ${decision} [text]`);
   });
 
   test('a failed response leaves the gate actionable and does not report success or resume', async () => {
@@ -957,7 +1000,8 @@ describe('SlackWorkflowBridge', () => {
     });
     expect(updated.length).toBeGreaterThan(0);
     const ctx = (updated[updated.length - 1]?.blocks ?? []).find(block => block.type === 'context');
-    expect(ctx?.elements?.[0]?.text).toContain('total cost: $0.0234');
+    const footer = ctx?.elements[0];
+    expect(footer && 'text' in footer ? footer.text : undefined).toContain('total cost: $0.0234');
     const header = updated[updated.length - 1]?.blocks?.[0] as
       | { text?: { text?: string } }
       | undefined;
@@ -1230,6 +1274,7 @@ describe('SlackWorkflowBridge', () => {
       name: 'x',
     });
     const ctx = (updated[updated.length - 1]?.blocks ?? []).find(block => block.type === 'context');
-    expect(ctx?.elements?.[0]?.text).toContain('plan node crashed');
+    const footer = ctx?.elements[0];
+    expect(footer && 'text' in footer ? footer.text : undefined).toContain('plan node crashed');
   });
 });

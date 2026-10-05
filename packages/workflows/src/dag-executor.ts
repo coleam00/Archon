@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from './node-record-reader';
 import {
   startNodeExecution,
@@ -4619,7 +4620,12 @@ async function executeLoopGroupBody(
     // needed (the body is sealed against depends_on, but prompt refs remain valid).
     const scopedNodeOutputs = new Map<string, NodeOutput>(outerNodeOutputs);
 
+    const terminalSuspendNode = findLoopGroupTerminalSuspendNode(iterBodyNodes);
     const iterCtx: RunLayersContext = {
+      approvalLoopOwner:
+        terminalSuspendNode && isGateNode(terminalSuspendNode)
+          ? { groupId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
+          : undefined,
       unfinishedInvocations: ctx.unfinishedInvocations,
       deps: ctx.deps,
       platform: ctx.platform,
@@ -4731,59 +4737,24 @@ async function executeLoopGroupBody(
     // that iteration's turns (#3532).
     loopLastSequentialSession = iterCtx.lastSequentialSession;
 
-    // #2707 step 3: pause escalation. A gate node that is the body's sole terminal
-    // sink pauses generically via executeApprovalNode (called through runLayers,
-    // like any other body node) — that pause alone does NOT stop this loop: the
-    // `paused` tolerance above (needed for a genuinely unrelated sibling gate
-    // pausing in the same layer) would otherwise let the loop barrel straight into
-    // the next iteration, immediately re-pausing and burning cost every time. This
-    // detects THAT specific pause and escalates it: rewrite the ApprovalContext so
-    // it points at THIS group (the top-level DAG only knows top-level node ids,
-    // never a nested body id — mirrors exactly how the interactive_loop gate below
-    // already works) and return the same "paused" shape that path uses. Placed
-    // AFTER the usage accumulation above (not right after runLayers) so this
-    // iteration's own spend — the 'work' node plus the gate check that just ran —
-    // is already folded into loopTotalCostUsd/loopTotalTokens by the time the
-    // escalation return reads them; reading them any earlier would silently drop
-    // this iteration's cost from the run's live totals for the whole pause window.
-    const terminalSuspendNode = findLoopGroupTerminalSuspendNode(iterBodyNodes);
     if (terminalSuspendNode && postBodyStatus === 'paused') {
-      // Fresh read — workflowRun is this call's stale snapshot from before
-      // runLayers ran; the gate's own pause just wrote metadata.approval.
       const freshRun = await deps.store.getWorkflowRun(workflowRun.id);
       const freshApproval = isApprovalContext(freshRun?.metadata?.approval)
         ? freshRun.metadata.approval
         : undefined;
-      if (isGateNode(terminalSuspendNode) && freshApproval?.nodeId === terminalSuspendNode.id) {
-        const rewritten: ApprovalContext = {
-          ...freshApproval,
-          nodeId: node.id,
-          bodyGateId: terminalSuspendNode.id,
-          iteration: i,
-          sessionId: loopLastSequentialSession?.sessionId ?? null,
-          sessionProvider: loopLastSequentialSession?.provider ?? null,
+      if (
+        isGateNode(terminalSuspendNode) &&
+        freshApproval?.nodeId === node.id &&
+        freshApproval.bodyGateId === terminalSuspendNode.id
+      ) {
+        return {
+          state: 'running',
+          output: lastIterationOutput,
+          costUsd: loopTotalCostUsd,
+          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+          loopIterations: i,
+          suspensionPoint: 'approval',
         };
-        const { resolved } = await deps.store.rewriteApprovalContext(workflowRun.id, rewritten);
-        if (resolved) {
-          return {
-            state: 'running',
-            output: lastIterationOutput,
-            costUsd: loopTotalCostUsd,
-            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-            loopIterations: i,
-            suspensionPoint: 'approval',
-          };
-        }
-        // A human resolved the ORIGINAL bare-gate pause before the rewrite landed
-        // (an astronomically narrow race) — fall through rather than error or
-        // corrupt state. This does NOT behave the same as a normal resolved gate,
-        // though: the resolution was written under the bare gate id, with
-        // bodyGateId still unset, so it's unreachable by the namespaced restore
-        // path this mechanism depends on — the loop proceeds toward
-        // max_iterations instead of honoring the human's answer. Accepted for
-        // this race's vanishingly narrow window rather than built out further.
-        // (The postBodyStatus tolerance above already let a 'paused' status
-        // through; nothing here re-checks it.)
       }
       const freshWait = isWorkflowWaitContext(freshRun?.metadata?.wait)
         ? freshRun.metadata.wait
@@ -6689,6 +6660,7 @@ async function pauseGateRespectingExternalTransition(
   options: { extraMetadata?: Record<string, unknown>; failClosed?: boolean } = {}
 ): Promise<boolean> {
   const { extraMetadata, failClosed = false } = options;
+  approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
     await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata);
   } catch (pauseErr) {
@@ -6713,6 +6685,7 @@ async function pauseGateRespectingExternalTransition(
     nodeId: approvalContext.nodeId,
     message: approvalContext.message,
     decisions: approvalContext.decisions,
+    pauseId: approvalContext.pauseId,
   });
   return true;
 }
@@ -7179,7 +7152,15 @@ async function executeApprovalNode(
   const paused = await pauseGateRespectingExternalTransition(deps, workflowRun.id, {
     execution: executionMetadata(suspended),
     message: renderedMessage,
-    nodeId: node.id,
+    nodeId: ctx.approvalLoopOwner?.bodyGateId === node.id ? ctx.approvalLoopOwner.groupId : node.id,
+    ...(ctx.approvalLoopOwner?.bodyGateId === node.id
+      ? {
+          bodyGateId: node.id,
+          iteration: ctx.approvalLoopOwner.iteration,
+          sessionId: ctx.lastSequentialSession?.sessionId ?? null,
+          sessionProvider: ctx.lastSequentialSession?.provider ?? null,
+        }
+      : {}),
     type: 'approval',
     captureResponse: node.captureResponse,
     onRejectPrompt: rework?.prompt,
@@ -9110,6 +9091,7 @@ interface RunDerived {
  * in `data`. The in-process emitter payloads stay raw (unprefixed) — see #2090.
  */
 interface RunLayersContext extends RunInputs, RunDerived {
+  approvalLoopOwner?: { groupId: string; bodyGateId: string; iteration: number };
   /** One node dispatch, shared by its inner retry attempts. Never mutate the parent context. */
   nodeInvocation?: NodeInvocation;
   /** Last captured attempt for this isolated dispatch; unexpected failures retain its attribution. */

@@ -163,6 +163,7 @@ interface ApprovalPendingEvent {
   nodeId: string;
   message: string;
   decisions?: ApprovalContext['decisions'];
+  pauseId?: ApprovalContext['pauseId'];
 }
 
 interface WorkflowCancelledEvent {

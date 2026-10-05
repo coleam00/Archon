@@ -31,6 +31,7 @@ import type {
   WorkflowRunOutcome,
   WorkflowRunStatus,
   ApprovalContext,
+  ExpectedApprovalGate,
   WorkflowAttentionWaitContext,
   WorkflowWaitContext,
   ScheduledWorkflowResume,
@@ -181,11 +182,20 @@ function unresolvedGateClause(expectedNodeParamIndex?: number): string {
     getDatabaseType() === 'postgresql'
       ? "metadata->'approval'->>'nodeId'"
       : "json_extract(metadata, '$.approval.nodeId')";
+  const pauseExpr =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval'->>'pauseId'"
+      : "json_extract(metadata, '$.approval.pauseId')";
   const expectedNodeClause =
     expectedNodeParamIndex === undefined
       ? ''
-      : ` AND ${nodeExpr} = $${String(expectedNodeParamIndex)}`;
+      : ` AND ${nodeExpr} = $${String(expectedNodeParamIndex)} AND ${pauseExpr} IS NOT DISTINCT FROM $${String(expectedNodeParamIndex + 1)}`;
   return `status = 'paused' AND ${resolvedExpr} IS NULL${expectedNodeClause}`;
+}
+
+function expectedGateParams(expected: ExpectedApprovalGate | undefined): (string | null)[] {
+  if (expected === undefined) return [];
+  return typeof expected === 'string' ? [expected, null] : [expected.nodeId, expected.pauseId];
 }
 
 /**
@@ -235,7 +245,7 @@ function replaceWaitMetadata(paramIndex: number): string {
  * (unresolvedGateClause). When the CAS matches, the same transaction inserts
  * `events`; when it loses (rowCount 0) nothing is written. Returns
  * `{ resolved }`: `true` = this caller won the race and its events are committed;
- * `false` = the gate is no longer open or its node differs from `expectedNodeId`.
+ * `false` = the gate is no longer open or its occurrence differs from `expectedGate`.
  *
  * This closes the read-then-write TOCTOU window in approveWorkflow /
  * rejectWorkflow: the atomic conditional UPDATE — not a prior in-memory
@@ -258,7 +268,7 @@ export async function resolveApprovalGate(
   id: string,
   metadata: Record<string, unknown>,
   events: GateResolutionEvent[],
-  expectedNodeId?: string
+  expectedGate?: ExpectedApprovalGate
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   try {
@@ -266,8 +276,8 @@ export async function resolveApprovalGate(
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET metadata = ${dialect.jsonMerge('metadata', 2)}
-         WHERE id = $1 AND ${unresolvedGateClause(expectedNodeId === undefined ? undefined : 3)}`,
-        [id, JSON.stringify(metadata), ...(expectedNodeId === undefined ? [] : [expectedNodeId])]
+         WHERE id = $1 AND ${unresolvedGateClause(expectedGate === undefined ? undefined : 3)}`,
+        [id, JSON.stringify(metadata), ...expectedGateParams(expectedGate)]
       );
       const resolved = (result.rowCount ?? 0) > 0;
       if (resolved) {
@@ -308,13 +318,13 @@ export async function resolveApprovalGate(
  * The status flip and every audit event commit in ONE transaction (#2146), so a
  * failed event write rolls the cancellation back rather than terminating the run
  * with no audit trail. Returns `{ resolved }`; `false` means a concurrent
- * resolver already won or the node differs from `expectedNodeId`, so nothing is written.
+ * resolver already won or the occurrence differs from `expectedGate`, so nothing is written.
  */
 export async function resolveAndCancelApprovalGate(
   id: string,
   events: GateResolutionEvent[],
   cancellation: WorkflowCancellationEventDetails,
-  expectedNodeId?: string
+  expectedGate?: ExpectedApprovalGate
 ): Promise<{ resolved: boolean }> {
   const dialect = getDialect();
   let outcome: { resolved: boolean };
@@ -324,8 +334,8 @@ export async function resolveAndCancelApprovalGate(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled',
              completed_at = ${dialect.now()}
-         WHERE id = $1 AND ${unresolvedGateClause(expectedNodeId === undefined ? undefined : 2)}`,
-        [id, ...(expectedNodeId === undefined ? [] : [expectedNodeId])]
+         WHERE id = $1 AND ${unresolvedGateClause(expectedGate === undefined ? undefined : 2)}`,
+        [id, ...expectedGateParams(expectedGate)]
       );
       const resolved = (result.rowCount ?? 0) > 0;
       if (resolved) {

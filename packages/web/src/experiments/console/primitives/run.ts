@@ -4,6 +4,7 @@ import type { components } from '@/lib/api.generated';
 export type RunOrigin = 'web' | 'cli' | 'slack' | 'telegram' | 'discord' | 'github' | 'unknown';
 export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
 type WorkflowRunMetadata = components['schemas']['WorkflowRunMetadata'];
+type WorkflowApproval = NonNullable<WorkflowRunMetadata['approval']>;
 type WorkflowWait = NonNullable<WorkflowRunMetadata['wait']>;
 type WorkflowRunStopReason = NonNullable<WorkflowRunMetadata['stop_reason']>;
 type WorkflowWaitOwnerField =
@@ -65,7 +66,7 @@ export interface Run {
     nodeId: string;
     message: string;
     completionSignaled: boolean;
-    decisions: { id: string; label?: string }[];
+    decisions: NonNullable<WorkflowApproval['decisions']>;
     decisionsAuthored: boolean;
   } | null;
   /** Active durable wait cursor. Mutually exclusive with approval metadata. */
@@ -194,45 +195,15 @@ export function toRun(raw: RawWorkflowRun): Run {
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
     : [];
   const approval = raw.metadata?.approval;
-  const isApprovalShape =
-    approval !== null &&
-    typeof approval === 'object' &&
-    approval !== undefined &&
-    'nodeId' in approval &&
-    typeof (approval as { nodeId: unknown }).nodeId === 'string';
-  // A resolved gate (approved/rejected, run paused only while awaiting
-  // auto-resume — see ApprovalContext.resolved on the server) is NOT a
-  // pending approval: surface it via gateResolved instead so approve/reject
-  // buttons never render for an already-resolved gate.
-  const resolvedRaw = isApprovalShape ? (approval as { resolved?: unknown }).resolved : undefined;
-  const gateResolved =
-    resolvedRaw === 'approved' || resolvedRaw === 'rejected' ? resolvedRaw : null;
-  const decisionsField = isApprovalShape
-    ? (approval as { decisions?: unknown }).decisions
-    : undefined;
-  const rawDecisions = Array.isArray(decisionsField) ? decisionsField : [];
-  const decisions = rawDecisions
-    .filter(
-      (d): d is { id: string; label?: string } =>
-        d !== null && typeof d === 'object' && typeof (d as { id?: unknown }).id === 'string'
-    )
-    .map(d => ({
-      id: d.id,
-      ...(typeof d.label === 'string' ? { label: d.label } : {}),
-    }));
+  const gateResolved = approval?.resolved ?? null;
   const parsedApproval =
-    isApprovalShape && gateResolved === null
+    approval !== undefined && gateResolved === null
       ? {
-          nodeId: (approval as { nodeId: string }).nodeId,
-          message:
-            'message' in approval && typeof (approval as { message: unknown }).message === 'string'
-              ? (approval as { message: string }).message
-              : '',
-          completionSignaled:
-            (approval as { completionSignaled?: unknown }).completionSignaled === true,
-          decisions: decisions.length > 0 ? decisions : [{ id: 'approve' }, { id: 'reject' }],
-          decisionsAuthored:
-            (approval as { decisionsAuthored?: unknown }).decisionsAuthored === true,
+          nodeId: approval.nodeId,
+          message: approval.message,
+          completionSignaled: approval.completionSignaled === true,
+          decisions: approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }],
+          decisionsAuthored: approval.decisionsAuthored === true,
         }
       : null;
   const wait = raw.metadata?.wait;

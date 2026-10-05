@@ -26,6 +26,7 @@ import {
 import type {
   WorkflowRun,
   ApprovalContext,
+  ExpectedApprovalGate,
   ExecutionOwnerRecord,
   LoopGateRunMetadata,
   RunAttention,
@@ -681,7 +682,7 @@ export interface WorkflowOperations {
     runId: string,
     decision: string,
     text?: string,
-    expectedNodeId?: string
+    expectedGate?: ExpectedApprovalGate
   ) => Promise<ApprovalOperationResult | RejectionOperationResult>;
   resetWorkflowNodeSessions: (
     filter: Parameters<IWorkflowStore['deleteWorkflowNodeSessions']>[0]
@@ -1116,7 +1117,7 @@ export function createWorkflowOperations({
   async function approveWorkflow(
     runId: string,
     comment?: string,
-    expectedNodeId?: string
+    expectedGate?: ExpectedApprovalGate
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
     const approval = assertApprovable(run);
@@ -1252,7 +1253,7 @@ export function createWorkflowOperations({
       runId,
       metadataPayload,
       events,
-      expectedNodeId
+      expectedGate
     );
     if (!won) {
       throw new Error(
@@ -1286,7 +1287,7 @@ export function createWorkflowOperations({
   async function rejectWorkflow(
     runId: string,
     reason?: string,
-    expectedNodeId?: string
+    expectedGate?: ExpectedApprovalGate
   ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
     const approval = assertRejectable(run);
@@ -1315,7 +1316,7 @@ export function createWorkflowOperations({
             runId,
             { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
             [rejectionEvent],
-            expectedNodeId
+            expectedGate
           );
           if (!won) {
             throw new Error(
@@ -1422,7 +1423,7 @@ export function createWorkflowOperations({
         runId,
         { approval: { ...approval, resolved: 'rejected' } },
         [nodeCompletedEvent, rejectionEvent],
-        expectedNodeId
+        expectedGate
       ));
     } else if (willStageRework) {
       ({ resolved: won } = await store.resolveApprovalGate(
@@ -1433,7 +1434,7 @@ export function createWorkflowOperations({
           rejection_count: currentCount + 1,
         },
         [rejectionEvent],
-        expectedNodeId
+        expectedGate
       ));
     } else {
       // The CAS writes `workflow_cancelled` itself; this only names the gate that
@@ -1444,7 +1445,7 @@ export function createWorkflowOperations({
         runId,
         [rejectionEvent],
         { step_name: approval?.nodeId ?? 'unknown', reason: 'approval_rejected' },
-        expectedNodeId
+        expectedGate
       ));
     }
     if (!won) {
@@ -1491,7 +1492,7 @@ export function createWorkflowOperations({
     runId: string,
     decision: string,
     text?: string,
-    expectedNodeId?: string
+    expectedGate?: ExpectedApprovalGate
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
     const approval = assertRespondable(run, decision);
@@ -1515,7 +1516,7 @@ export function createWorkflowOperations({
       runId,
       { approval: { ...approval, resolved: 'approved' }, approval_response: decision },
       events,
-      expectedNodeId
+      expectedGate
     );
     if (!won) {
       throw new Error(
@@ -1550,17 +1551,17 @@ export function createWorkflowOperations({
    * keeps its exact prior behavior byte-for-byte. Any other decision resolves
    * through `respondToWorkflowWithDeclaredDecision`, which only accepts a
    * decision the gate actually declared. Button actions also supply the expected
-   * node ID, checked atomically when the store commits the resolution.
+   * gate occurrence, checked atomically when the store commits the resolution.
    */
   async function respondToWorkflow(
     runId: string,
     decision: string,
     text?: string,
-    expectedNodeId?: string
+    expectedGate?: ExpectedApprovalGate
   ): Promise<ApprovalOperationResult | RejectionOperationResult> {
-    if (decision === 'approve') return approveWorkflow(runId, text, expectedNodeId);
-    if (decision === 'reject') return rejectWorkflow(runId, text, expectedNodeId);
-    return respondToWorkflowWithDeclaredDecision(runId, decision, text, expectedNodeId);
+    if (decision === 'approve') return approveWorkflow(runId, text, expectedGate);
+    if (decision === 'reject') return rejectWorkflow(runId, text, expectedGate);
+    return respondToWorkflowWithDeclaredDecision(runId, decision, text, expectedGate);
   }
 
   /**

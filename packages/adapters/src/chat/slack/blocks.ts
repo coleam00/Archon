@@ -4,6 +4,7 @@
  * workflow bridge, both of which feed the output into `chat.postMessage`
  * / `chat.update`.
  */
+import { z } from 'zod';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import type { types } from '@slack/bolt';
 import type { TokenUsage } from '@archon/providers/types';
@@ -102,11 +103,21 @@ function formatTokenCount(n: number): string {
   return String(n);
 }
 
+export const slackApprovalActionSchema = z.object({
+  runId: z.string().min(1),
+  nodeId: z.string().min(1),
+  pauseId: z.string().min(1).optional(),
+  decision: z.string().min(1),
+});
+
+export type SlackApprovalAction = z.infer<typeof slackApprovalActionSchema>;
+
 export function buildApprovalBlocks(input: {
   runId: string;
   nodeId: string;
   message: string;
   decisions?: ApprovalContext['decisions'];
+  pauseId?: string;
 }): {
   blocks: KnownBlock[];
   fallbackText: string;
@@ -121,12 +132,21 @@ export function buildApprovalBlocks(input: {
       },
     },
   ];
-  // Slack permits at most 25 elements in an actions block and 75 characters in a button label.
-  for (let offset = 0; offset < decisions.length; offset += 25) {
+  const values = decisions.map(decision =>
+    JSON.stringify({
+      runId: input.runId,
+      nodeId: input.nodeId,
+      pauseId: input.pauseId,
+      decision: decision.id,
+    } satisfies z.input<typeof slackApprovalActionSchema>)
+  );
+  const controlsFit = decisions.length <= 49 * 25 && values.every(value => value.length <= 2000);
+  // Slack allows 50 blocks, 25 controls per actions block, 2000 characters per value, and 75 per label.
+  for (let offset = 0; controlsFit && offset < decisions.length; offset += 25) {
     blocks.push({
       type: 'actions',
-      block_id: `approval:${input.runId}:${input.nodeId}${offset ? `:${String(offset)}` : ''}`,
-      elements: decisions.slice(offset, offset + 25).map(decision => ({
+      block_id: `approval:${String(offset)}`,
+      elements: decisions.slice(offset, offset + 25).map((decision, index) => ({
         type: 'button',
         ...(decision.id === 'approve'
           ? { style: 'primary' as const }
@@ -146,10 +166,8 @@ export function buildApprovalBlocks(input: {
           ),
           emoji: true,
         },
-        action_id:
-          decision.id === 'approve' || decision.id === 'reject'
-            ? `${decision.id}:${input.runId}:${input.nodeId}`
-            : `respond:${input.runId}:${input.nodeId}:${decision.id}`,
+        action_id: `respond:${String(offset + index)}`,
+        value: values[offset + index],
       })),
     });
   }
@@ -158,7 +176,7 @@ export function buildApprovalBlocks(input: {
     return `${display}: /archon-workflow respond ${input.runId} ${decision.id} [text]`;
   });
   return {
-    blocks,
+    blocks: controlsFit ? blocks : [],
     fallbackText: `Approval needed for run ${shortRunId(input.runId)}\n${input.message}\n${choices.join('\n')}`,
   };
 }
