@@ -99,6 +99,7 @@ import {
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
+  visitProviderInvokingNodes,
   collectStrictSchemaViolations,
   containerCommandName,
   buildSubprocessDockerArgs,
@@ -118,6 +119,7 @@ import { loadMcpConfig } from '@archon/providers/mcp/config';
 import type {
   DagNode,
   AgentNode,
+  GateNode,
   ExecNode,
   LoopGroupNode,
   LoopGroupNodeConfig,
@@ -29342,6 +29344,190 @@ describe('collectContainerIncompatibleProviders', () => {
     } as unknown as DagNode;
     const bad = collectContainerIncompatibleProviders([group], 'claude');
     expect([...bad]).toEqual(['codex']);
+  });
+});
+
+describe('container preflight provider equivalence with dispatch', () => {
+  const aiProfile = buildAiProfile('claude', {
+    repoTiers: { medium: { provider: 'codex', model: 'gpt-5.5' } },
+    repoAliases: { '@review': { provider: 'claude', model: 'claude-sonnet-4-6' } },
+  });
+  const agent = (extra: Partial<AgentNode> = {}): AgentNode => ({
+    id: 'work',
+    kind: 'agent',
+    source: { kind: 'inline', prompt: 'Do the work' },
+    ...extra,
+  });
+  const group = (body: DagNode, extra: Partial<LoopGroupNode> = {}): LoopGroupNode => ({
+    id: 'group',
+    kind: 'loop_group',
+    loop_group: {
+      max_iterations: 1,
+      fresh_context: false,
+      nodes: [body],
+    },
+    ...extra,
+  });
+  const gate = (extra: Partial<GateNode> = {}): GateNode => ({
+    id: 'review',
+    kind: 'gate',
+    message: 'Approve?',
+    decisions: [{ id: 'approve' }, { id: 'reject', rework: { prompt: 'Revise', maxAttempts: 3 } }],
+    decisionsAuthored: false,
+    captureResponse: false,
+    ...extra,
+  });
+  const cases: { name: string; node: DagNode; workflowProvider: string; provider: string }[] = [
+    { name: 'workflow claude', node: agent(), workflowProvider: 'claude', provider: 'claude' },
+    { name: 'workflow codex', node: agent(), workflowProvider: 'codex', provider: 'codex' },
+    {
+      name: 'node override codex',
+      node: agent({ provider: 'codex' }),
+      workflowProvider: 'claude',
+      provider: 'codex',
+    },
+    {
+      name: 'node override claude',
+      node: agent({ provider: 'claude' }),
+      workflowProvider: 'codex',
+      provider: 'claude',
+    },
+    {
+      name: 'tier',
+      node: agent({ model: 'medium' }),
+      workflowProvider: 'claude',
+      provider: 'codex',
+    },
+    {
+      name: 'tier overrides node',
+      node: agent({ provider: 'claude', model: 'medium' }),
+      workflowProvider: 'claude',
+      provider: 'codex',
+    },
+    {
+      name: 'alias',
+      node: agent({ model: '@review' }),
+      workflowProvider: 'codex',
+      provider: 'claude',
+    },
+    {
+      name: 'alias overrides node',
+      node: agent({ provider: 'codex', model: '@review' }),
+      workflowProvider: 'codex',
+      provider: 'claude',
+    },
+    {
+      name: 'literal inherits workflow',
+      node: agent({ model: 'literal-model' }),
+      workflowProvider: 'codex',
+      provider: 'codex',
+    },
+    {
+      name: 'literal preserves node',
+      node: agent({ provider: 'claude', model: 'literal-model' }),
+      workflowProvider: 'codex',
+      provider: 'claude',
+    },
+    {
+      name: 'group provider inheritance',
+      node: group(agent(), { provider: 'codex' }),
+      workflowProvider: 'claude',
+      provider: 'codex',
+    },
+    {
+      name: 'nested group tier inheritance',
+      node: group(group(agent(), { id: 'inner' }), { model: 'medium' }),
+      workflowProvider: 'claude',
+      provider: 'codex',
+    },
+    {
+      name: 'body provider override',
+      node: group(agent({ provider: 'codex' })),
+      workflowProvider: 'claude',
+      provider: 'codex',
+    },
+    {
+      name: 'gate rework',
+      node: gate({ provider: 'codex' }),
+      workflowProvider: 'claude',
+      provider: 'claude',
+    },
+    {
+      name: 'gate rework alias',
+      node: gate({ provider: 'codex', model: '@review' }),
+      workflowProvider: 'codex',
+      provider: 'codex',
+    },
+  ];
+
+  it.each(cases)('$name', async ({ node, workflowProvider, provider }) => {
+    const cwd = join(tmpdir(), `preflight-equivalence-${crypto.randomUUID()}`);
+    await mkdir(cwd, { recursive: true });
+    try {
+      const deps = createMockDeps();
+      const dispatched: string[] = [];
+      deps.getAgentProvider = selected => {
+        dispatched.push(selected);
+        return settlingProvider({
+          sendQuery: async function* () {
+            yield { type: 'agent_message_chunk', text: 'Done' };
+            yield { type: 'result', sessionId: 'equivalence-session' };
+          },
+          checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+          getType: () => selected,
+          getCapabilities: () => getProviderCapabilities(selected),
+        });
+      };
+      const workflowRun = makeWorkflowRun(
+        'equivalence',
+        node.kind === 'gate'
+          ? {
+              metadata: {
+                approval: {
+                  type: 'approval',
+                  nodeId: node.id,
+                  message: 'Approve?',
+                  onRejectPrompt: 'Revise',
+                  onRejectMaxAttempts: 3,
+                },
+                rejection_reason: 'Needs revision',
+                rejection_count: 1,
+              },
+            }
+          : {}
+      );
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd,
+          workflowRun,
+          workflowProvider,
+          aiProfile,
+          workflow: { name: 'equivalence', nodes: [node] },
+        })
+      );
+      expect([...new Set(dispatched)]).toEqual([provider]);
+      const preflightProviders: string[] = [];
+      visitProviderInvokingNodes([node], workflowProvider, aiProfile, (visited, selected) => {
+        if (visited.kind !== 'loop_group') preflightProviders.push(selected);
+      });
+      expect([...new Set(preflightProviders)]).toEqual([...new Set(dispatched)]);
+      const incompatible = dispatched.filter(p => !getProviderCapabilities(p).containerExec);
+      expect(collectContainerIncompatibleProviders([node], workflowProvider, aiProfile)).toEqual(
+        new Set(incompatible)
+      );
+    } finally {
+      await removeTempTree(cwd);
+    }
+  });
+
+  it('skips deterministic nodes and gates without rework, and leaves unknown providers to dispatch', () => {
+    const nodes: DagNode[] = [
+      { id: 'exec', kind: 'exec', runtime: 'sh', script: 'echo hi', provider: 'codex' },
+      gate({ provider: 'codex', decisions: [{ id: 'approve' }, { id: 'reject' }] }),
+      agent({ provider: 'unknown-provider' }),
+    ];
+    expect(collectContainerIncompatibleProviders(nodes, 'codex', aiProfile)).toEqual(new Set());
   });
 });
 
