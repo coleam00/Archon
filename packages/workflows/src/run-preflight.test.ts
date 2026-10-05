@@ -25,6 +25,7 @@ function fixture(status: CredentialStatus = { state: 'not_checked', source: 'nat
     checkCredential,
     getType: () => 'claude',
     getCapabilities: () => ({
+      backgroundWork: 'unobserved',
       sessionResume: false,
       mcp: false,
       hooks: false,

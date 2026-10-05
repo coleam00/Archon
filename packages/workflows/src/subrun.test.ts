@@ -529,6 +529,7 @@ function makeProvider() {
   return {
     getType: () => 'claude',
     getCapabilities: () => ({
+      backgroundWork: 'unobserved' as const,
       sessionResume: true,
       mcp: true,
       hooks: true,

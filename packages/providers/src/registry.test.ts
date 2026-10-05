@@ -32,6 +32,7 @@ function makeMockProvider(id: string): IAgentProvider {
     getType: () => id,
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     getCapabilities: () => ({
+      backgroundWork: 'unobserved' as const,
       sessionResume: false,
       mcp: false,
       hooks: false,
@@ -217,6 +218,7 @@ describe('registry', () => {
         capabilities: {
           ...makeMockProvider('invalid-fork').getCapabilities(),
           sessionFork: true,
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
         },
       });

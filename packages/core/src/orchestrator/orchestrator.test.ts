@@ -201,6 +201,7 @@ const mockGetAgentProvider = mock<typeof Providers.getAgentProvider>(() => {
   throw new Error('Agent provider mock is not configured');
 });
 const providerCapabilities: ProviderCapabilities = {
+  backgroundWork: 'unobserved' as const,
   sessionResume: true,
   mcp: true,
   hooks: true,

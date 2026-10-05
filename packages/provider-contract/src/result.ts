@@ -57,6 +57,9 @@ export function sessionPreview(sessionId: string): string {
 export const providerResultSchema = z.object({
   /** Required on every non-failing turn of a provider that declares `sessionResume`. */
   sessionId: z.string().optional(),
+  /** Complete reply for this result, when the runtime reports it. */
+  text: z.string().optional(),
+  /** Usage of this result; consumers sum usage across results before settlement. */
   tokens: tokenUsageSchema.optional(),
   structuredOutput: z.unknown().optional(),
   /**
