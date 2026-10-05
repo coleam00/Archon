@@ -495,6 +495,50 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('returns the authored (un-normalized) form of a project workflow alongside it', async () => {
+    // The builder edits the authored shape; the normalized `workflow` cannot be
+    // saved back (the server's own validate rejects it), so the raw file must reach it.
+    const testDir = join(tmpdir(), `wf-get-authored-${Date.now()}`);
+    const workflowDir = join(testDir, '.archon', 'workflows');
+    await mkdir(workflowDir, { recursive: true });
+    await writeFile(
+      join(workflowDir, 'authored.yaml'),
+      'name: authored\ndescription: Raw\nnodes:\n  - id: plan\n    command: plan\n    settingSources: []\n'
+    );
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/authored?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { authored?: unknown };
+      expect(body.authored).toEqual({
+        name: 'authored',
+        description: 'Raw',
+        nodes: [{ id: 'plan', command: 'plan', settingSources: [] }],
+      });
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
+  test('returns the authored form of a bundled workflow', async () => {
+    const app = createTestApp();
+    registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+    mockListCodebases.mockImplementationOnce(async () => []);
+
+    const response = await app.request('/api/workflows/archon-review');
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { authored?: unknown };
+    expect(body.authored).toEqual({
+      name: 'archon-review',
+      description: 'Archon Review',
+      nodes: [],
+    });
+  });
+
   test('returns project workflow when file uses .yml extension (matches discovery)', async () => {
     const testDir = join(tmpdir(), `wf-yml-test-${Date.now()}`);
     const workflowDir = join(testDir, '.archon', 'workflows');
@@ -1186,6 +1230,81 @@ describe('PUT /api/workflows/:name', () => {
       defaultsPathSpy.mockRestore();
       await rm(testDir, { recursive: true, force: true });
     }
+  });
+
+  describe('keeps the authored YAML text', () => {
+    const commentedYaml = [
+      '# Top-level comment about the flow',
+      'name: my-flow',
+      "description: 'Commented flow'",
+      '',
+      'nodes:',
+      '  # the planning step',
+      '  - id: plan',
+      '    command: plan # inline note',
+      '',
+      '  # the build step',
+      '  - id: build',
+      '    depends_on: [plan]',
+      '    bash: |',
+      '      # not a YAML comment, part of the script',
+      '      echo build',
+      '',
+    ].join('\n');
+    const definition = {
+      name: 'my-flow',
+      description: 'Commented flow',
+      nodes: [
+        { id: 'plan', command: 'plan' },
+        {
+          id: 'build',
+          depends_on: ['plan'],
+          bash: '# not a YAML comment, part of the script\necho build\n',
+        },
+      ],
+    };
+
+    async function putOverCommentedFile(
+      body: typeof definition
+    ): Promise<{ status: number; saved: string }> {
+      const testDir = join(tmpdir(), `wf-put-comments-${Date.now()}-${Math.random()}`);
+      const filePath = join(testDir, '.archon', 'workflows', 'my-flow.yaml');
+      await mkdir(dirname(filePath), { recursive: true });
+      await writeFile(filePath, commentedYaml);
+      try {
+        const app = createTestApp();
+        registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+        mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+        const response = await app.request(`/api/workflows/my-flow?cwd=${testDir}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ definition: body }),
+        });
+        return { status: response.status, saved: await readFile(filePath, 'utf-8') };
+      } finally {
+        await removeTempTree(testDir);
+      }
+    }
+
+    test('an unchanged definition leaves the file byte-for-byte as it was', async () => {
+      const { status, saved } = await putOverCommentedFile(definition);
+      expect(status).toBe(200);
+      expect(saved).toBe(commentedYaml);
+    });
+
+    test('one changed field keeps the comments of everything else', async () => {
+      const edited = structuredClone(definition);
+      edited.nodes[0].command = 'plan-v2';
+      const { status, saved } = await putOverCommentedFile(edited);
+      expect(status).toBe(200);
+      expect(saved).toContain('command: plan-v2');
+      expect(saved).toContain('# Top-level comment about the flow');
+      expect(saved).toContain('# the planning step');
+      expect(saved).toContain('# the build step');
+      expect(saved).toContain('# not a YAML comment, part of the script');
+      expect(saved).toContain("description: 'Commented flow'");
+      expect(saved).toContain('depends_on: [plan]');
+    });
   });
 });
 

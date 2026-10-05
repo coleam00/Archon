@@ -156,7 +156,7 @@ describe('workflow run API wait metadata', () => {
 // resumeRunHeadless (#2008) — stubbed so a future change to it or its
 // neighbors can't silently start touching the real workflow store or the
 // real isolation provider (see #2240 for what an un-stubbed export costs).
-const mockCreateChildWorktreeResolver = mock((_config: unknown) =>
+const mockCreateCodebaseChildResolver = mock((_codebase: unknown, _surface: unknown) =>
   mock(async () => ({}) as unknown)
 );
 
@@ -182,7 +182,7 @@ mock.module('@archon/core', () => ({
   generateAndSetTitle: mockGenerateAndSetTitle,
   resolveTitleRequest: mockResolveTitleRequest,
   createWorkflowDeps: mock(() => ({ store: {} })),
-  createChildWorktreeResolver: mockCreateChildWorktreeResolver,
+  createCodebaseChildResolver: mockCreateCodebaseChildResolver,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -3362,7 +3362,7 @@ describe('approve/reject auto-resume', () => {
     mockHydrateResumableRun.mockClear();
     mockExecuteWorkflow.mockClear();
     mockGetCodebase.mockReset();
-    mockCreateChildWorktreeResolver.mockClear();
+    mockCreateCodebaseChildResolver.mockClear();
   });
 
   test('approve: dispatches resume when parent_conversation_id is set', async () => {
@@ -3427,36 +3427,13 @@ describe('approve/reject auto-resume', () => {
     // #2008 R1: a git-repo codebase in scope gets a child-isolation resolver
     // wired into the resumed execution, same as CLI/chat resume, so a
     // downstream `workflow:` node with isolation:worktree doesn't fail.
-    expect(mockCreateChildWorktreeResolver).toHaveBeenCalledWith(
-      expect.objectContaining({ codebaseId: 'cb-uuid-1', codebaseName: 'owner/repo' })
+    expect(mockCreateCodebaseChildResolver).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'cb-uuid-1', name: 'owner/repo' }),
+      expect.objectContaining({ baseBranch: 'main' })
     );
     const opts = mockExecuteWorkflow.mock.calls[0]?.[7];
     expect(opts?.resolveChildIsolation).toBeDefined();
     expect(opts?.baseBranch).toBe('main');
-  });
-
-  test('approve: skips the child-isolation resolver for a folder-project codebase', async () => {
-    mockGetWorkflowRun.mockResolvedValue({
-      ...MOCK_PAUSED_RUN,
-      parent_conversation_id: null,
-    });
-    mockGetCodebase.mockResolvedValueOnce({
-      id: 'cb-folder-1',
-      name: 'ops-folder',
-      kind: 'folder',
-      default_cwd: '/home/u/ops-folder',
-      default_branch: null,
-    });
-
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs/run-paused-1/approve', {
-      method: 'POST',
-      body: JSON.stringify({ comment: 'LGTM' }),
-      headers: { 'Content-Type': 'application/json' },
-    });
-
-    expect(response.status).toBe(200);
-    expect(mockCreateChildWorktreeResolver).not.toHaveBeenCalled();
   });
 
   test('approve: falls back to the CLI-hint response when headless resume cannot resolve the workflow', async () => {

@@ -51,8 +51,10 @@ nodes:
       set -euo pipefail
 
       echo "::: Validating release preconditions :::"
-      echo "Bump:    $parse-args.output.bump"
-      echo "Dry run: $parse-args.output.dryRun"
+      bump=$parse-args.output.bump
+      dry_run=$parse-args.output.dryRun
+      echo "Bump:    $bump"
+      echo "Dry run: $dry_run"
       echo
 
       git fetch origin --quiet
@@ -318,15 +320,11 @@ nodes:
   # String.raw template substitution. Necessary because AI-generated content
   # routinely contains backticks (markdown code spans) that would terminate
   # a JS template literal mid-string.
-  #
-  # CRITICAL: do NOT wrap $draft-changelog.output in your own quotes. Archon
-  # already wraps it in single quotes via shellQuote(). Adding your own quotes
-  # like '$node.output' produces ''<raw>'' which collapses to bare unquoted
-  # JSON, and bash brace-expands the {...} into separate words.
   - id: save-draft-json
     bash: |
       mkdir -p "$ARTIFACTS_DIR"
-      printf '%s' $draft-changelog.output > "$ARTIFACTS_DIR/draft-changelog.json"
+      draft=$draft-changelog.output
+      printf '%s' "$draft" > "$ARTIFACTS_DIR/draft-changelog.json"
       echo "wrote $ARTIFACTS_DIR/draft-changelog.json ($(wc -c < $ARTIFACTS_DIR/draft-changelog.json) bytes)"
     timeout: 10000
     depends_on: [draft-changelog]
@@ -536,7 +534,8 @@ nodes:
       git add -A
       git status --short
 
-      git commit -m "Release $bump-version.output.newVersion"
+      version=$bump-version.output.newVersion
+      git commit -m "Release $version"
       git push origin dev
     timeout: 60000
     depends_on: [write-files, bump-version]

@@ -1,4 +1,7 @@
 import { execFileSync } from 'node:child_process';
+import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
+import { getWorkflowRun } from '@archon/core/db/workflows';
+import { execFileAsync } from '@archon/git';
 /**
  * The server hosting resource starts against a real SQLite database, a real workflow
  * checkout and a real source-plugin module. Only the engine is recorded: it claims the
@@ -382,6 +385,61 @@ describe('server resource-start host', () => {
     });
     await host.requestDrain();
     expect(engine.submitted).toHaveLength(1);
+  });
+
+  test('a dead connected credential fails before worktree creation and releases the resource slot on the next drain', async () => {
+    const { deliver, engine } = await fixture(false, { kind: 'worktree' });
+    const project = join(root, 'project');
+    await writeFile(
+      join(project, '.archon', 'workflows', 'hosted.yaml'),
+      'name: hosted\ndescription: AI start\nnodes:\n  - id: one\n    provider: claude\n    prompt: do work\n'
+    );
+    await saveUserProviderKey({
+      userId: USER_ID,
+      provider: 'anthropic',
+      kind: 'api_key',
+      apiKey: 'planted-secret',
+    });
+    await getDatabase().query(
+      "UPDATE remote_agent_user_provider_keys SET api_key_encrypted = 'unreadable' WHERE user_id = $1",
+      [USER_ID]
+    );
+    const before = (
+      await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: project })
+    ).stdout;
+    expect((await deliver('dead', 'queue')).status).toBe(200);
+    const admitted: string[] = [];
+    await drainResourceStartHost({
+      hostId: HOST_ID,
+      startAdmitted: async id => {
+        admitted.push(id);
+      },
+    });
+    const result = await startAdmittedResourceStart({
+      requestId: admitted[0],
+      hostId: HOST_ID,
+      engine,
+      createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+    });
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Expected credential refusal');
+    expect(result.error).toBe(
+      "Credential preflight failed for provider 'claude' (vendor 'anthropic'): credential cannot be used: The stored credential cannot be read."
+    );
+    expect(result.error).not.toContain('planted-secret');
+    expect((await getWorkflowRun(admitted[0]))?.status).toBe('failed');
+    expect(engine.submitted).toHaveLength(0);
+    expect(
+      (await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: project })).stdout
+    ).toBe(before);
+    expect((await deliver('next', 'queue')).status).toBe(200);
+    await drainResourceStartHost({
+      hostId: HOST_ID,
+      startAdmitted: async id => {
+        admitted.push(id);
+      },
+    });
+    expect(admitted).toHaveLength(2);
   });
 
   test('two starters of one admitted request execute it once', async () => {

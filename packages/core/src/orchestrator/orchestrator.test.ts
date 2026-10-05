@@ -1,3 +1,10 @@
+mock.module('../workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
 import * as git from '@archon/git';
 import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { mkdtemp, realpath } from 'fs/promises';
@@ -219,6 +226,10 @@ const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilitie
 );
 
 mock.module('@archon/providers', () => ({
+  getRegistration: () => ({
+    parseConfig: (raw: Record<string, unknown>) => raw,
+    credentials: { vendorFor: () => 'anthropic' },
+  }),
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
   // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
@@ -245,9 +256,17 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: {},
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
+    store: { getCodebaseEnvVars: async () => ({}) },
+    sealRunConfig: (_layer: unknown, source: unknown) => ({
+      version: 1,
+      ciphertext: 'sealed',
+      source,
+      keys: [],
+    }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    }),
+    loadConfig: async () => ({ assistant: 'claude', assistants: { claude: {} }, commands: {} }),
   })),
 }));
 
@@ -272,7 +291,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // orchestrator.ts imports createChildWorktreeResolver, which imports
+  // orchestrator.ts imports createCodebaseChildResolver, which imports
   // loadRepoConfig by name. This factory replaces the module process-wide, so
   // omitting it fails that import at module-eval even though no test calls it.
   loadRepoConfig: mock(() => Promise.resolve(null)),

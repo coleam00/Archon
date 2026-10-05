@@ -30,7 +30,12 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import { registerBuiltinProviders, clearRegistry, type ProviderDefaults } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  clearRegistry,
+  type ProviderDefaults,
+} from '@archon/providers';
 clearRegistry();
 registerBuiltinProviders();
 
@@ -6806,10 +6811,12 @@ nodes:
       expect(mismatch.error?.error).toContain("source 'source' uses provider 'claude'");
       expect(mismatch.error?.error).toContain("consumer uses 'codex'");
 
-      const incapable = parseAddressable(`
+      registerCommunityProviders();
+      try {
+        const incapable = parseAddressable(`
 name: incapable
 description: incapable
-provider: codex
+provider: copilot
 nodes:
   - id: source
     prompt: source
@@ -6818,7 +6825,11 @@ nodes:
     depends_on: [source]
     context: { resume: source }
 `);
-      expect(incapable.error?.error).toContain("provider 'codex' does not support sessionFork");
+        expect(incapable.error?.error).toContain("provider 'copilot' does not support sessionFork");
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
     });
 
     it('defers implicit provider resolution to runtime', () => {
@@ -6976,14 +6987,20 @@ nodes:
     });
 
     it('warns, and still loads, when the provider cannot fork the persisted session', () => {
-      const codex = parseWorkflow(
-        `name: t\ndescription: t\nprovider: codex\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
-        't.yaml'
-      );
-      expect(codex.error).toBeNull();
-      expect(codex.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
-        expect.stringContaining("Node 'planner'"),
-      ]);
+      registerCommunityProviders();
+      try {
+        const copilot = parseWorkflow(
+          `name: t\ndescription: t\nprovider: copilot\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+          't.yaml'
+        );
+        expect(copilot.error).toBeNull();
+        expect(copilot.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+          expect.stringContaining("Node 'planner'"),
+        ]);
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
 
       const claude = parseWorkflow(
         `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
@@ -7404,7 +7421,7 @@ nodes:
       expect(pw.some(w => w.includes('unknown key'))).toBe(false);
       expect(pw).toEqual([
         "Node 'refine': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.",
-        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'test $body-node.output.field = \"true\"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
+        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'value=$body-node.output.field; test \"$value\" = \"true\"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
         "Node 'gate': 'approval.on_reject' is deprecated. Declare 'approval.decisions' and wire a rework node with \"when: \\\"$gate.output.decision == 'reject'\\\"\" instead (loop it with loop_group if it should iterate). This gate keeps running via the legacy mechanism until migrated.",
       ]);
     });

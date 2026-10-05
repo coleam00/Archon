@@ -292,7 +292,7 @@ Archon always runs OpenCode as a **managed embedded runtime** — it spawns and 
 
 ### Install
 
-OpenCode is included as a dependency of `@archon/providers` — `bun install` pulls in the SDK automatically. It's available immediately.
+`bun install` pulls in `@opencode-ai/sdk` through `@archon/providers`, but the SDK does not include the `opencode` executable. Install the [OpenCode CLI](https://opencode.ai/docs/#install) separately and put it on the Archon process's `PATH`. For Docker, install it in a derived image on `appuser`'s `PATH` (see [Customizing the Image](/deployment/docker/#customizing-the-image)). Run `archon doctor --full` to check both dependencies without starting the server.
 
 ### Authenticate
 
@@ -802,6 +802,10 @@ DEFAULT_AI_ASSISTANT=copilot
 ## Per-user credentials and AI Settings
 
 Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
+
+Runs check the credentials required by their AI nodes before creating isolation and again when execution starts or resumes. An unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
+
+Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime during each native check. Launch and execution checks are separate, so a key command can run or prompt more than once.
 
 ### When you need this
 
