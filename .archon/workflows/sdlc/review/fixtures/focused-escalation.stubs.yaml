@@ -1,8 +1,5 @@
-# Dry-run fixture: the other half of `docs: auto` — the scope node finds no shipped-doc
-# change, so the docs lens stays off. It has no stub, so a regression that runs it anyway
-# fails the run instead of passing quietly.
 mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
-coverage: { full: true }
+focused: { full_review: true, reason: "stub: lifecycle ownership" }
 scope:
   docs: false
   # A standalone review of the working diff: no pull request to publish to.
@@ -23,5 +20,9 @@ publish:
   findings_summary: "stub: clean, docs lens skipped"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 fixture:
+  inputs: { tier: focused }
   expect: completed
-  reached: [code, seams, simplify__simplify, tests]
+  reached: [focused, code, seams, simplify__simplify, tests, synthesize]
+  resolved-text-contains:
+    synthesize: 'a report without its completed artifact is incomplete coverage'
+exec-code: true

@@ -46,7 +46,7 @@ The review judges the change against what the contract says completion looks lik
 
 From the originating contract, list every **acceptance** item (how completed behavior will be recognized), every stated **invariant**, and every **steering** constraint on how the work is done, each as its own numbered item, quoted as the contract words it. A document that counts, mentions, or paraphrases acceptance without stating each item has not given you the items; go to its source. When you cannot reach a source the contract depends on, say which items could not be read rather than standing in other text for them. Finding these items is your reading of the contract, not a parse: never extract them with scripts, regexes, or heading matches, and never invent an item the contract does not state.
 
-A derived document decides how the work is done; it cannot drop what the originating contract requires. When one declares out of scope something the originating outcome, acceptance, or invariants require, keep the originating item, and record the narrowing under the contract as a conflict for the reviewer to judge rather than as an accepted non-goal.
+An explicit narrowing in the operator's trigger, or a plan the trigger explicitly names as this delivery, is an accepted boundary. Preserve all originating items and their sources; mark items explicitly assigned to future parts deferred with their authorization and owning part. Do not infer an assignment from a plan merely used to explain a broad request. Unassigned or unexplained omissions remain current requirements. A derived document without that authorization cannot drop originating acceptance: record its narrowing as a conflict. Correctness, truth, documentation and proof inside the delivered slice remain required.
 
 ## Select docs review
 
@@ -64,7 +64,7 @@ When a prior-report path is supplied, read it in full. The cursor is the previou
 
 Write `$ARTIFACTS_DIR/review/scope.md` containing:
 
-1. **Accepted contract** — the source you read it from (the originating contract, and the work order, PR body, or requested scope/repository contracts that led there); the required outcome; then three subsections, **Acceptance**, **Invariants**, and **Steering**, each holding its numbered quoted items or the sentence that the contract states none of that kind or that its items could not be read; then explicit non-goals or boundaries, each naming its source — the operator's originating contract, or the derived document that inferred it — and any recorded narrowing.
+1. **Accepted contract** — the source you read it from (the originating contract, and the work order, PR body, or requested scope/repository contracts that led there); the required outcome; then three subsections, **Acceptance**, **Invariants**, and **Steering**, each holding its numbered quoted items or the sentence that the contract states none of that kind or that its items could not be read; then explicit non-goals or boundaries, each naming its source — the operator's originating contract, or the derived document that inferred it — and any recorded narrowing, the authorized delivery slice, deferred items and their explicit authorization and later owner.
 2. **Target** — PR reference or "working diff", base branch, and the **head SHA under review**: the commit under review, in full.
 3. **Mode** — full review, or light (delta since `<cursor>`).
 4. **Changed files** — path list with a one-line shape of the change per file (added/modified/deleted, rough size).

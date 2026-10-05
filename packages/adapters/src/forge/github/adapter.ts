@@ -554,7 +554,10 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Does NOT handle:
    * - issues.opened / pull_request.opened → returns null (see #96)
    */
-  private parseEvent(event: WebhookEvent): {
+  private parseEvent(
+    event: WebhookEvent,
+    githubEvent?: string
+  ): {
     owner: string;
     repo: string;
     number: number;
@@ -565,8 +568,13 @@ export class GitHubAdapter implements IPlatformAdapter {
     isCloseEvent?: boolean;
     isMerged?: boolean;
   } | null {
-    const owner = event.repository.owner.login;
-    const repo = event.repository.name;
+    const repository = event.repository;
+    if (!repository?.owner) {
+      getLog().debug({ githubEvent }, 'github.repositoryless_webhook_ignored');
+      return null;
+    }
+    const owner = repository.owner.login;
+    const repo = repository.name;
 
     // Detect issue closed
     if (event.issue && event.action === 'closed') {
@@ -1097,7 +1105,7 @@ ${userComment}`;
       return; // Silent rejection - no error response
     }
 
-    const parsed = this.parseEvent(event);
+    const parsed = this.parseEvent(event, githubEvent);
     if (!parsed) return;
 
     const { owner, repo, number, comment, eventType, issue, pullRequest, isCloseEvent, isMerged } =
