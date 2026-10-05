@@ -1,6 +1,5 @@
 import { afterAll, expect, test } from 'bun:test';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { isDeepStrictEqual } from 'node:util';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { z } from 'zod';
@@ -39,28 +38,6 @@ const configSchema = z.object({
 interface Finding {
   file: string;
   issue: ValidationIssue;
-}
-
-interface Allowance extends Finding {
-  reason: string;
-}
-
-const allowlist: readonly Allowance[] = [];
-
-function assertCorpus(findings: readonly Finding[], allowances = allowlist): void {
-  for (const allowance of allowances) {
-    expect(allowance.reason.trim().length).toBeGreaterThan(0);
-    expect(allowance.file.startsWith('sdlc/')).toBe(false);
-    expect(findings).toContainEqual({ file: allowance.file, issue: allowance.issue });
-  }
-  const unexpected = findings.filter(
-    finding =>
-      !allowances.some(
-        allowance =>
-          allowance.file === finding.file && isDeepStrictEqual(allowance.issue, finding.issue)
-      )
-  );
-  expect(unexpected).toEqual([]);
 }
 
 async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files: string[] }> {
@@ -122,7 +99,7 @@ test('repository workflows have no errors or unsafe shell output references', as
   const { findings, files } = await validateCorpus(repo);
   expect(files.length).toBeGreaterThan(0);
   expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
-  assertCorpus(findings);
+  expect(findings).toEqual([]);
 });
 
 test.each<[string, string, ValidationIssue['code']]>([
@@ -150,14 +127,5 @@ nodes:
   expect(findings[0].file).toBe('broken.yaml');
   if (code) expect(findings[0].issue.code).toBe(code);
   else expect(findings[0].issue.level).toBe('error');
-  expect(() => assertCorpus(findings)).toThrow();
-  const allowance = { ...findings[0], reason: 'Synthetic finding to exercise allowlist matching' };
-  assertCorpus(findings, [allowance]);
-  expect(() => assertCorpus([], [allowance])).toThrow();
-  expect(() =>
-    assertCorpus(
-      [{ ...findings[0], file: 'sdlc/broken.yaml' }],
-      [{ ...allowance, file: 'sdlc/broken.yaml' }]
-    )
-  ).toThrow();
+  expect(() => expect(findings).toEqual([])).toThrow();
 });
