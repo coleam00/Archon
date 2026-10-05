@@ -720,6 +720,9 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
       default:
         break;
     }
+    // The lifecycle contract covers starts observed before the parent's turn/completed
+    // and their descendants. After that, the parent model cannot initiate new work;
+    // later starts belong to already-live work, so an empty observed set can settle.
     if (parentCompleted && liveTasks.size === 0) {
       if (pendingFailure) yield pendingFailure;
       return;
