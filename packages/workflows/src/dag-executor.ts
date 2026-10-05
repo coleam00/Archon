@@ -10444,7 +10444,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
  * spawn). For each visited node the resolved provider is passed to `visit`.
  * Unknown providers are passed through — the caller decides how to handle them.
  */
-function visitProviderInvokingNodes(
+export function visitProviderInvokingNodes(
   nodes: readonly (DagNode | IncludeDirective)[],
   workflowProvider: string,
   aiProfile: ResolvedAiProfile | undefined,

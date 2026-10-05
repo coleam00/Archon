@@ -99,6 +99,7 @@ import {
   applyLoopPrevToBodyNode,
   executeDagWorkflow,
   collectContainerIncompatibleProviders,
+  visitProviderInvokingNodes,
   collectStrictSchemaViolations,
   containerCommandName,
   buildSubprocessDockerArgs,
@@ -29256,6 +29257,11 @@ describe('container preflight provider equivalence with dispatch', () => {
         })
       );
       expect([...new Set(dispatched)]).toEqual([provider]);
+      const preflightProviders: string[] = [];
+      visitProviderInvokingNodes([node], workflowProvider, aiProfile, (visited, selected) => {
+        if (visited.kind !== 'loop_group') preflightProviders.push(selected);
+      });
+      expect([...new Set(preflightProviders)]).toEqual([...new Set(dispatched)]);
       const incompatible = dispatched.filter(p => !getProviderCapabilities(p).containerExec);
       expect(collectContainerIncompatibleProviders([node], workflowProvider, aiProfile)).toEqual(
         new Set(incompatible)
