@@ -43,7 +43,7 @@ function initRepo(repo: string, remote: string, file: string): void {
     '-qm',
     'fixture',
   ]);
-  git(repo, ['init', '--bare', '-q', remote]);
+  git(repo, ['init', '--bare', '-q', '--initial-branch=main', remote]);
   git(repo, ['remote', 'add', 'origin', remote]);
   git(repo, ['push', '-qu', 'origin', 'main']);
 }
