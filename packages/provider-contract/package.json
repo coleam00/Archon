@@ -19,6 +19,9 @@
   "dependencies": {
     "zod": "^4.4.3"
   },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "1.7.0"
+  },
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
