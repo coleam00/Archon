@@ -259,7 +259,7 @@ describe('server resource-start host', () => {
     expect(submitted.options?.preCreatedRun?.id).toBe(runId);
     expect(submitted.options?.preCreatedRun?.status).toBe('pending');
     const run = submitted.options?.preCreatedRun;
-    if (!run) throw new Error('Missing prepared run');
+    if (!run?.conversation_id) throw new Error('Missing prepared run conversation');
     expect(await getConversationById(run.conversation_id)).toMatchObject({
       codebase_id: run.codebase_id,
       ai_assistant_type: 'codex',

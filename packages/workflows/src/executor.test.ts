@@ -1248,7 +1248,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'test message',
-          'db-conv-1'
+          { conversationId: 'db-conv-1' }
         );
 
         expect(result.success).toBe(false);
@@ -1303,7 +1303,7 @@ describe('executeWorkflow', () => {
           '/tmp',
           makeWorkflow(),
           'test message',
-          'db-conv-1'
+          { conversationId: 'db-conv-1' }
         );
 
         expect(result.success).toBe(false);
@@ -1334,7 +1334,7 @@ describe('executeWorkflow', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-1'
+        { conversationId: 'db-conv-1' }
       );
 
       expect(result.success).toBe(false);
