@@ -7,7 +7,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types.ts",
-    "./structured-output": "./src/shared/structured-output.ts",
     "./claude/provider": "./src/claude/provider.ts",
     "./claude/config": "./src/claude/config.ts",
     "./claude/binary-resolver": "./src/claude/binary-resolver.ts",
@@ -38,12 +37,12 @@
     "@opencode-ai/sdk": "^1.17.3",
     "@openai/codex": "0.160.0",
     "@sinclair/typebox": "^0.34.41",
-    "ajv": "^8.20.0",
     "jsonrepair": "^3.14.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "pino": "^9"
+    "pino": "^9",
+    "ajv": "^8.20.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -68,9 +67,6 @@
     ],
     [
       "src/registry.test.ts"
-    ],
-    [
-      "src/types.test.ts"
     ],
     [
       "src/community/_template/capabilities.test.ts"
@@ -180,9 +176,6 @@
     ],
     [
       "src/shared/structured-output.test.ts"
-    ],
-    [
-      "src/shared/skills.test.ts"
     ],
     [
       "src/shared/resumed.test.ts"

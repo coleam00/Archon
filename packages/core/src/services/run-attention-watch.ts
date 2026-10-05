@@ -19,6 +19,7 @@ import {
   watchRunLiveOwner,
   type RunLiveOwnerWatch,
   type RunLiveOwnerWatchEvent,
+  type RunLiveOwnerWatchResult,
 } from './run-live-owner';
 import { DETACHED_RUN_STOP_HANDOFF_GRACE_MS } from './run-stop-bounds';
 
@@ -260,19 +261,21 @@ export async function waitForRunAttention(
 
   const attachOwner = async (
     resolution: Extract<RunResolution, { kind: 'owner_required' }>
-  ): Promise<boolean> => {
+  ): Promise<RunLiveOwnerWatchResult['kind']> => {
     const candidates = await ownerCandidates(resolution);
-    if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return true;
+    if (ownerWatch && !ownerWatchEnded && candidates.includes(ownerWatch.runId)) return 'attached';
     discardOwnerWatch();
+    let attachment: Exclude<RunLiveOwnerWatchResult['kind'], 'attached'> = 'unreachable';
     for (const candidate of candidates) {
       ownerWatchEnded = false;
-      const handle = await watchRunLiveOwner(candidate, onOwnerEvent);
-      if (handle) {
-        ownerWatch = { runId: candidate, handle };
-        return !ownerWatchEnded;
+      const result = await watchRunLiveOwner(candidate, onOwnerEvent);
+      if (result.kind === 'attached') {
+        ownerWatch = { runId: candidate, handle: result.handle };
+        return ownerWatchEnded ? 'unproven' : 'attached';
       }
+      if (result.kind === 'unproven') attachment = 'unproven';
     }
-    return false;
+    return attachment;
   };
 
   try {
@@ -294,8 +297,8 @@ export async function waitForRunAttention(
       }
 
       if (resolution.kind === 'owner_required') {
-        let liveOwnerAttached = await attachOwner(resolution);
-        if (!liveOwnerAttached) {
+        let ownerAttachment = await attachOwner(resolution);
+        if (ownerAttachment !== 'attached') {
           const latestRun = await workflowDb.getWorkflowRun(runId);
           if (!latestRun) return { kind: 'not_found', runId };
           observedStatus = latestRun.status;
@@ -304,11 +307,14 @@ export async function waitForRunAttention(
             return { kind: 'attention', attention: resolution.attention };
           }
           if (resolution.kind === 'owner_required') {
-            liveOwnerAttached = await attachOwner(resolution);
-            if (!liveOwnerAttached) {
+            ownerAttachment = await attachOwner(resolution);
+            if (ownerAttachment !== 'attached') {
               if (controlHandoffUntil !== undefined && Date.now() < controlHandoffUntil) {
                 pendingWake = undefined;
-              } else if (isNonTerminalStatus(latestRun.status)) {
+              } else if (
+                ownerAttachment === 'unreachable' &&
+                isNonTerminalStatus(latestRun.status)
+              ) {
                 controlHandoffUntil = undefined;
                 return {
                   kind: 'owner_lost',
@@ -321,7 +327,7 @@ export async function waitForRunAttention(
             discardOwnerWatch();
           }
         }
-        if (liveOwnerAttached && !attached) {
+        if (ownerAttachment === 'attached' && !attached) {
           const verifiedRun = await workflowDb.getWorkflowRun(runId);
           if (!verifiedRun) return { kind: 'not_found', runId };
           observedStatus = verifiedRun.status;
@@ -331,7 +337,7 @@ export async function waitForRunAttention(
           }
           if (verified.kind !== 'owner_required') {
             discardOwnerWatch();
-          } else if ((await attachOwner(verified)) && !ownerWatchEnded) {
+          } else if ((await attachOwner(verified)) === 'attached' && !ownerWatchEnded) {
             attached = true;
             await opts.onAttached?.(verifiedRun.status);
           }

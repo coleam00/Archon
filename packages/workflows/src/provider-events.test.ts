@@ -3,6 +3,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { subtaskSchema, subtaskTerminalStatusSchema } from '@archon/provider-contract';
 import type { IWorkflowPlatform } from './deps';
 import {
   createAttemptEventSequence,
@@ -65,6 +66,20 @@ describe('createProviderEventHandler', () => {
     await handler.handle({ type: 'subtask', taskId: 't-1', status: 'completed' });
     await handler.handle({ type: 'subtask', taskId: 't-2', status: 'stopped' });
     expect(handler.liveSubtaskIds()).toEqual([]);
+  });
+
+  test('keeps every contract non-terminal status live and removes only terminal statuses', async () => {
+    const { handler } = await makeHandler();
+    const terminalStatuses: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
+    for (const status of subtaskSchema.shape.status.options) {
+      await handler.handle({ type: 'subtask', taskId: status, status });
+      expect(handler.liveSubtaskIds().includes(status)).toBe(!terminalStatuses.has(status));
+    }
+    for (const status of subtaskTerminalStatusSchema.options) {
+      await handler.handle({ type: 'subtask', taskId: 'running', status });
+      expect(handler.liveSubtaskIds()).not.toContain('running');
+      await handler.handle({ type: 'subtask', taskId: 'running', status: 'running' });
+    }
   });
 
   test('records only what the provider reported, with no engine-made completion', async () => {

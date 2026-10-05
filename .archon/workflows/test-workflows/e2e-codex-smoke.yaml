@@ -26,8 +26,8 @@ nodes:
   # Assert both nodes returned output
   - id: assert
     bash: |
-      simple_out="$simple.output"
-      structured_out="$structured.output"
+      simple_out=$simple.output
+      structured_out=$structured.output
       if [ -z "$simple_out" ]; then
         echo "FAIL: simple node returned empty output"
         exit 1

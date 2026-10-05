@@ -21,7 +21,7 @@ import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import type { IGitHubAppAuthProvider } from '../github-auth';
 import { isPerUserGitHubEnabled } from '../github-auth/config';
-import { getDecryptedAccessToken } from '../db/user-github-token-store';
+import { getDecryptedAccessToken, getUserGithubAuthor } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { join } from 'node:path';
 import {
@@ -185,6 +185,7 @@ export function createWorkflowDeps(): WorkflowDeps {
     // gh/git through the originating user's personal token (decrypted, refreshed
     // on read), or scrub the org/bot token when they haven't connected.
     isPerUserGitHubEnabled: () => isPerUserGitHubEnabled(),
+    getUserGithubAuthor,
     getUserGithubToken: async (userId: string): Promise<string | undefined> => {
       try {
         return (await getDecryptedAccessToken(userId)) ?? undefined;
