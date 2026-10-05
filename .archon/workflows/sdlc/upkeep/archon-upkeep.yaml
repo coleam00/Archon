@@ -99,8 +99,8 @@ nodes:
 
   # One return for every legitimate terminal result: a no_action assessment
   # completes with its report path; a delivered update is reported from the
-  # flip's certified URL the deliver branch returned (if_skipped binding, so a
-  # skipped flip arrives as null).
+  # confirmed ready URL the deliver branch returned (if_skipped binding, so a
+  # skipped confirmation arrives as null).
   #
   # A failed delivery cascades an `upstream_failed` skip that blocks this join,
   # so the run's terminal record names the node that failed.

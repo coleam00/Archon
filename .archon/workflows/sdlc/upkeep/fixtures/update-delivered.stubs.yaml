@@ -3,7 +3,7 @@
 # Run with --default-stubs --exec-code.
 #
 # `outcome` is deliberately unstubbed: the real script runs and must report pull
-# request 7 from the delivered flip value alone. The exec workspace is a DETACHED
+# request 7 from the confirmed ready value alone. The exec workspace is a DETACHED
 # worktree, so there is no current branch for an ambient pull request lookup to
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.

@@ -1,17 +1,18 @@
 # Dry-run fixture: the guard seen RED (run with --default-stubs --exec-code).
 #
-# Delivery hands back a flip value that does not satisfy the flip's declared result
-# contract, and the run fails at the flip — nothing downstream is given the chance to
-# build a report from it. flip-ready declares `output_format: { pr_url }`, so its
-# stdout is a contract the engine certifies rather than a convention a reader hopes
-# for, and a stub standing in for that stdout is held to the same contract. Two
+# Delivery hands back a ready URL that does not satisfy confirm-ready's declared
+# result contract, and the run fails there — nothing downstream is given the chance
+# to build a report from it. confirm-ready, deliver's returns node, declares
+# `output_format: { pr_url }`, so its stdout is a contract the engine certifies
+# rather than a convention a reader hopes for, and a stub standing in for that
+# stdout is held to the same contract. Two
 # hand-written copies of a URL sniffer used to do this job at the two composing tails,
 # one whole node later.
 #
 # The pr node's record below stays deliberately COMPLETE, url included, as the record
 # a tail must not fall back on. It no longer catches a fallback on its own: with the
-# flip failed, every consumer is skipped and never reads anything. What keeps that
-# honest is the flip's own contract being the only source of the delivered value —
+# confirmation failed, every consumer is skipped and never reads anything. What keeps
+# that honest is confirm-ready's contract being the only source of the delivered value —
 # `deliver/scripts/outcome.ts` and both composing tails bind `pr_url` and nothing else.
 triage__triage:
   decision: { contract: READY, route: deliver, design_first: false }
@@ -75,15 +76,15 @@ deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gat
 deliver__validate__run: { status: green, summary: "stub: project gate green" }
 deliver__gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
-# The mutation: the flip printed something that is not a URL.
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__publish-pr-body: {}
-deliver__flip-ready: "flip printed something that is not a pull request URL"
+deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/5" }
+# The mutation: the confirmation printed something that is not a URL.
+deliver__confirm-ready: "confirm-ready printed something that is not a pull request URL"
 deliver__file-discoveries: '{"records":[]}'
 deliver__match-discoveries: { matches: [] }
 deliver__fork: '{"fork":true}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/5" }
 fixture:
   expect: failed
-  fail-node: deliver__flip-ready
+  fail-node: deliver__confirm-ready
 exec-code: true

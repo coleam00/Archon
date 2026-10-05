@@ -2,10 +2,10 @@
 # the work is that pull request's findings. The pr node resolves the open PR for
 # the branch (an existing, non-draft number) instead of creating one, the initial
 # review finds a blocker, one correction runs green, its continuation review is
-# ready, and the run flips that same PR. `resolved-text-contains` proves the work
+# ready, and the run marks that same PR ready. `resolved-text-contains` proves the work
 # order names the pull request in implement's resolved prompt; the stubbed pr
 # identity proves an existing non-draft PR flows through review scope, the
-# correction round, and the flip unchanged. Reuse itself is prompt guidance in
+# correction round, and the ready mark unchanged. Reuse itself is prompt guidance in
 # pr.md that dry-run cannot exercise; a real repair run is the proof for that.
 impl__implement:
   done: true

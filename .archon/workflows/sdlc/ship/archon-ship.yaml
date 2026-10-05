@@ -109,8 +109,8 @@ nodes:
 
   # One return for every legitimate terminal result. Negative advisory verdicts
   # complete with the report that explains them; delivery is reported from the
-  # flip's certified URL the deliver branch returned (bound with if_skipped, so a
-  # skipped flip arrives as null) — see scripts/outcome.ts.
+  # confirmed ready URL the deliver branch returned (bound with if_skipped, so a
+  # skipped confirmation arrives as null) — see scripts/outcome.ts.
   #
   # The advisory producers are bound with if_skipped: a route that never ran them
   # reads null. Two dependencies carry the whole graph. `deliver` depends on every spend

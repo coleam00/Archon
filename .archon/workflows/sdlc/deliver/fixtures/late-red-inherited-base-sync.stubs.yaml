@@ -1,7 +1,7 @@
 # Dry-run fixture: CI concludes red at the final wait, inherited from a base that
 # has since been repaired. The one CI correction pass merges the latest base, the
 # workflow pushes it, CI is read once more on the new head, and the pull request
-# flips — instead of correction rounds re-reading the same stale red.
+# stays ready — instead of correction rounds re-reading the same stale red.
 impl__implement:
   done: true
   green: true

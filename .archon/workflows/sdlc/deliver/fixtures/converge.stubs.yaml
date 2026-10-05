@@ -1,5 +1,5 @@
 # Dry-run fixture: the initial review finds blockers, one correction runs green,
-# its continuation review is ready, and the run flips the PR. `until_bash` is not
+# its continuation review is ready, and the run marks the PR ready. `until_bash` is not
 # executed by dry-run, so the simulator honestly assumes completion after this
 # structurally exercised iteration; real multi-iteration convergence is dogfood.
 #

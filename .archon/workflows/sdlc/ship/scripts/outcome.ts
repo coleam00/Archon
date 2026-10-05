@@ -2,7 +2,7 @@
  * One return for every legitimate terminal result of the routed fix chain.
  *
  * Delivery is accepted when the deliver branch actually ran and handed back the
- * pull request it flipped. Every other completion reports, in the producing node's
+ * pull request it confirmed ready. Every other completion reports, in the producing node's
  * own words, why nothing was delivered — and says plainly when requested work was
  * not done, so a completed run that shipped nothing never reads as a success it is
  * not. `delivered` is this workflow's authored outcome: an honest "no work is owed"

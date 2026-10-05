@@ -1,7 +1,7 @@
 # Dry-run fixture: triage finds an open pull request that already carries the
 # outcome and routes the run to continue it. Run with --default-stubs --exec-code.
 # The continue marker opens delivery, which finishes that pull request (the
-# preparing node names it as existing, so publish reuses it) and flips it ready;
+# preparing node names it as existing, so publish reuses it) and marks it ready;
 # the real outcome node reports the delivered URL.
 triage__triage:
   decision:

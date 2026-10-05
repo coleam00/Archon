@@ -1,5 +1,5 @@
 # Dry-run fixture: delivery dies after the pull request exists. The project gate
-# refuses an introduced failure, and the flip and ship's outcome join are skipped.
+# refuses an introduced failure, and the ready mark and ship's outcome join are skipped.
 # Terminal reporting after delivery failure belongs to #3043. This fixture checks
 # that the original validation gate remains the failed node.
 triage__triage:
