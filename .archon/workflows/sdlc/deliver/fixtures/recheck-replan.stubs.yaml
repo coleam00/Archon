@@ -10,6 +10,7 @@ impl__assert-changed: "2 files changed"
 gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 6, url: "https://github.com/example/repo/pull/6", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
   errors: false
@@ -19,7 +20,8 @@ classify:
     errors: "stub"
     docs: "stub"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__coverage: { full: true }
 review__scope:
   # accepted contract recorded
   docs: false
@@ -47,7 +49,8 @@ fix__implement:
   summary: "stub: correction exposed a scope conflict"
 fix__assert-changed: "1 file changed"
 gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":""}'
-recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"recheck__mode","invocation":{"loopPath":[]}}}'
+recheck__coverage: { full: false }
 recheck__scope:
   # light review with original accepted contract
   docs: false

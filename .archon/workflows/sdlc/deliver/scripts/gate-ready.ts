@@ -22,8 +22,9 @@ if (reviewAction === 'none' || (reviewAction === 'correct' && correctionAction =
 } else if (reviewAction === 'replan' || correctionAction === 'replan') {
   refuse(
     'replan required: the review found work no correction inside the accepted work ' +
-      'order can complete (a blocker that crosses a boundary, or a change its tier ' +
-      'under-reviewed). The pull request remains draft; see the canonical review ' +
+      'order can complete because its correction crosses an explicit boundary or ' +
+      'materially redefines the accepted work. ' +
+      'The pull request remains draft; see the canonical review ' +
       'report and discovery artifacts.'
   );
 } else {

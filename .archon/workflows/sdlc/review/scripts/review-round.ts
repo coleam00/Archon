@@ -26,6 +26,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
+import { FULL_REVIEW_RISKS } from '../../.shared/review-policy.ts';
 import { emit, refuse, trimmed } from '../../.shared/io.ts';
 
 /** Where publish-review records the commit a published report reviewed. */
@@ -51,13 +52,16 @@ function descends(head: string, cursor: string): boolean {
 try {
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
+  const execution: unknown = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '');
   if (prior === '') {
-    emit({ continuation: false, head, cursor: '' });
+    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
     if (!existsSync(recorded)) {
-      throw new Error(`the previous review report records no reviewed commit (${recorded} is missing)`);
+      throw new Error(
+        `the previous review report records no reviewed commit (${recorded} is missing)`
+      );
     }
     const cursor = readFileSync(recorded, 'utf8').trim();
     if (!descends(head, cursor)) {
@@ -65,7 +69,7 @@ try {
         `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
       );
     }
-    emit({ continuation: true, head, cursor });
+    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, execution });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);
