@@ -45,6 +45,8 @@ let repo: string;
 let hookLog: string;
 let stub: ReturnType<typeof Bun.serve>;
 let modelRequests: string[] = [];
+/** The request an unscoped turn sends: the control a scoped request is compared against. */
+let unscopedRequest: string;
 
 const bun = process.execPath;
 /** TOML basic strings take JSON string escapes, so a Windows path survives. */
@@ -199,6 +201,11 @@ beforeAll(async () => {
     ].join('\n')
   );
   await installPlugins(marketplaceFile);
+  // The first unscoped turn on a fresh home pays a one-time cost: on windows-latest it
+  // took 6 to 18 s, against 2 to 4 s for each later one. Taking it here, under the setup
+  // budget, keeps it off whichever case would otherwise run first.
+  await runRequest({});
+  unscopedRequest = modelRequests[0] ?? '';
 }, testTimeout(60_000));
 
 afterAll(async () => {
@@ -309,10 +316,7 @@ describe('Codex capability scope on the real binary', () => {
   test(
     'a title keeps native guidance and hooks but has no ambient capabilities and a read-only rollout',
     async () => {
-      await runRequest({});
-      expect(modelRequests[0]).toContain('AMBIENT-CATALOGUE-MARKER');
-      modelRequests = [];
-      await rm(hookLog, { force: true });
+      expect(unscopedRequest).toContain('AMBIENT-CATALOGUE-MARKER');
       const result = resultOf(await runRequest({ purpose: 'title-generation' }));
       expect(result.failure?.evidence).toContain('stub model');
       expect(await seen()).toEqual({ tools: [], skills: [], hooks: ['user'], guidance: true });
