@@ -1,5 +1,6 @@
-import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, spyOn, jest } from 'bun:test';
 import { tmpdir } from 'os';
+import { setImmediate } from 'node:timers/promises';
 import { join } from 'path';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 
@@ -454,6 +455,7 @@ async function captureTelemetry(capture: () => void): Promise<WireEvent[]> {
   const bodies: (string | Blob)[] = [];
   const fetchImpl = Object.assign(
     (url: Parameters<typeof fetch>[0], options?: Parameters<typeof fetch>[1]) => {
+      options?.signal?.throwIfAborted();
       const body = options?.body;
       if (String(url).endsWith('/batch/') && (typeof body === 'string' || body instanceof Blob)) {
         bodies.push(body);
@@ -525,6 +527,40 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     await captureTelemetry(() => {
       expect(() => captureArchonStarted({ surface: 'server' })).not.toThrow();
     });
+  });
+
+  test('wire capture survives compression completing after the production exit deadline', async () => {
+    const compressed = Promise.withResolvers<void>();
+    const releaseCompression = Promise.withResolvers<void>();
+    const originalBlob = Response.prototype.blob;
+    const blobSpy = spyOn(Response.prototype, 'blob').mockImplementation(async function (
+      this: Response
+    ) {
+      const body = await originalBlob.call(this);
+      compressed.resolve();
+      await releaseCompression.promise;
+      return body;
+    });
+    jest.useFakeTimers();
+    try {
+      const captured = captureTelemetry(() => captureArchonStarted({ surface: 'cli' }));
+      await compressed.promise;
+      // Hold the real gzip result past 75 ms, then drain deadline reactions before delivery.
+      jest.advanceTimersByTime(76);
+      await setImmediate();
+      releaseCompression.resolve();
+      const events = await captured;
+      expect(eventProperties(events, 'archon_started')).toMatchObject({
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        surface: 'cli',
+        $ip: '',
+        $process_person_profile: false,
+      });
+    } finally {
+      releaseCompression.resolve();
+      jest.useRealTimers();
+      blobSpy.mockRestore();
+    }
   });
 
   test('captureArchonActive does not throw (disabled)', () => {
