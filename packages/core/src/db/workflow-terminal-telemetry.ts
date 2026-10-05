@@ -6,7 +6,7 @@ import {
 } from '@archon/workflows/run-terminal-telemetry';
 import { pool } from './connection';
 import { getDagResumeSnapshot } from './workflow-events';
-import { normalizeWorkflowRun, type WorkflowRunSqlRow } from './workflow-run-normalization';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -26,7 +26,7 @@ function getLog(): ReturnType<typeof createLogger> {
 export async function reportRunTerminal(runId: string): Promise<void> {
   if (isTelemetryDisabled()) return;
   try {
-    const runResult = await pool.query<WorkflowRunSqlRow>(
+    const runResult = await pool.query<WorkflowRunRow>(
       'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [runId]
     );

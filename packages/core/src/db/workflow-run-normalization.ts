@@ -8,8 +8,30 @@ import {
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
 
-// Select origin as text: PostgreSQL otherwise decodes JSONB null and SQL NULL identically.
-export type WorkflowRunSqlRow = Omit<WorkflowRun, 'origin'> & { origin?: unknown };
+/** Columns whose database value differs from the public `WorkflowRun` value. */
+type RawRunColumn =
+  | 'origin'
+  | 'metadata'
+  | 'started_at'
+  | 'completed_at'
+  | 'last_activity_at'
+  | 'checkout_baseline';
+
+/**
+ * A workflow-run row as either dialect returns it, before `normalizeWorkflowRun`.
+ * SQLite stores JSON as text and timestamps as text datetimes; PostgreSQL returns
+ * parsed JSONB and Dates. Queries select `CAST(origin AS TEXT) AS origin` because
+ * PostgreSQL otherwise decodes JSONB null and SQL NULL identically. The conversation
+ * columns are physical and may hold the reserved compatibility anchor.
+ */
+export type WorkflowRunRow = Omit<WorkflowRun, RawRunColumn> & {
+  origin: unknown;
+  metadata: string | Record<string, unknown> | null;
+  started_at: string | Date;
+  completed_at: string | Date | null;
+  last_activity_at: string | Date | null;
+  checkout_baseline: unknown;
+};
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -18,37 +40,23 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Normalize a WorkflowRun row from the database.
- * SQLite stores metadata as TEXT (JSON string) and timestamps as TEXT datetimes;
- * PostgreSQL returns parsed objects and real Dates. Hydrate those representations
- * without rewriting stored values: malformed metadata text reads as {}, while null
- * remains null. Timestamp hydration prevents raw SQLite strings reaching Date readers
- * such as resolveWorkflowAdoption (#2845).
+ * Normalize a workflow-run row from the database into a public `WorkflowRun`, keeping
+ * any extra projected columns. Malformed or SQL NULL metadata reads as {}. Timestamp hydration prevents raw SQLite strings reaching Date readers such as
+ * resolveWorkflowAdoption (#2845). The public conversation columns are projected from
+ * the origin, so the compatibility anchor never leaves this module.
  */
-export function normalizeWorkflowRun<T extends WorkflowRunSqlRow>(
+export function normalizeWorkflowRun<T extends WorkflowRunRow>(
   row: T
-): Omit<T, 'origin'> & WorkflowRun {
-  if (typeof row.metadata === 'string') {
-    try {
-      row.metadata = JSON.parse(row.metadata) as Record<string, unknown>;
-    } catch (error) {
-      // SyntaxError messages can quote metadata contents; record only the class.
-      getLog().warn(
-        { workflowRunId: row.id, errorType: error instanceof Error ? error.name : typeof error },
-        'db.workflow_run_metadata_parse_failed'
-      );
-      row.metadata = {};
-    }
-  }
-  row.checkout_baseline = readCheckoutBaseline(row);
-  if (typeof row.started_at === 'string') row.started_at = toHydratedTimestamp(row.started_at);
-  if (typeof row.completed_at === 'string')
-    row.completed_at = toHydratedTimestamp(row.completed_at);
-  if (typeof row.last_activity_at === 'string')
-    row.last_activity_at = toHydratedTimestamp(row.last_activity_at);
+): Omit<T, RawRunColumn | 'conversation_id' | 'parent_conversation_id' | 'user_id'> & WorkflowRun {
   const origin = readWorkflowRunOrigin(row);
   return {
     ...row,
+    metadata: readMetadata(row),
+    checkout_baseline: readCheckoutBaseline(row),
+    started_at: toHydratedTimestamp(row.started_at),
+    completed_at: row.completed_at === null ? null : toHydratedTimestamp(row.completed_at),
+    last_activity_at:
+      row.last_activity_at === null ? null : toHydratedTimestamp(row.last_activity_at),
     origin,
     conversation_id: origin?.conversationId ?? null,
     parent_conversation_id: origin?.parentConversationId ?? null,
@@ -56,8 +64,23 @@ export function normalizeWorkflowRun<T extends WorkflowRunSqlRow>(
   };
 }
 
+function readMetadata(row: WorkflowRunRow): Record<string, unknown> {
+  if (row.metadata === null) return {};
+  if (typeof row.metadata !== 'string') return row.metadata;
+  try {
+    return JSON.parse(row.metadata) as Record<string, unknown>;
+  } catch (error) {
+    // SyntaxError messages can quote metadata contents; record only the class.
+    getLog().warn(
+      { workflowRunId: row.id, errorType: error instanceof Error ? error.name : typeof error },
+      'db.workflow_run_metadata_parse_failed'
+    );
+    return {};
+  }
+}
+
 export function readWorkflowRunOrigin(
-  row: Pick<WorkflowRunSqlRow, 'origin' | 'conversation_id' | 'parent_conversation_id' | 'user_id'>
+  row: Pick<WorkflowRunRow, 'origin' | 'conversation_id' | 'parent_conversation_id' | 'user_id'>
 ): WorkflowRun['origin'] {
   const rawOrigin = row.origin;
   const origin = workflowRunOriginSchema.parse(
@@ -89,8 +112,8 @@ export function readWorkflowRunOrigin(
  * cannot parse (corrupt, or written by a newer shape) reads as not recorded and is logged,
  * rather than reaching readers as an untyped object.
  */
-function readCheckoutBaseline(row: WorkflowRunSqlRow): CheckoutObservation | null {
-  const raw: unknown = row.checkout_baseline;
+function readCheckoutBaseline(row: WorkflowRunRow): CheckoutObservation | null {
+  const raw = row.checkout_baseline;
   if (raw === null || raw === undefined) return null;
   let value: unknown = raw;
   if (typeof raw === 'string') {

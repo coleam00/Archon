@@ -280,6 +280,34 @@ describe('workflows database', () => {
       expect(listSql).not.toContain('step_failed');
     });
 
+    test('reads PostgreSQL text counts as numbers', async () => {
+      mockQuery
+        .mockResolvedValueOnce(
+          createQueryResult([
+            {
+              ...mockWorkflowRun,
+              codebase_name: null,
+              platform_type: null,
+              worker_platform_id: null,
+              parent_platform_id: null,
+              agents_completed: '2',
+              agents_failed: '1',
+              agents_total: null,
+            },
+          ])
+        )
+        .mockResolvedValueOnce(createQueryResult([{ status: 'running', cnt: '1' }]))
+        .mockResolvedValueOnce(createQueryResult([]));
+
+      const result = await listDashboardRuns();
+
+      expect(result.runs[0]).toMatchObject({
+        agents_completed: 2,
+        agents_failed: 1,
+        agents_total: null,
+      });
+    });
+
     test('does not collapse parallel active nodes into the singular compatibility fields', async () => {
       mockQuery
         .mockResolvedValueOnce(

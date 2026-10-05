@@ -1,7 +1,7 @@
 import { buildTerminalRecord, type TerminalRecordEvent } from '@archon/workflows/terminal-record';
 import type { RunTerminalStatus } from '@archon/workflows/schemas/workflow-run';
 import type { IDatabase } from './adapters/types';
-import { normalizeWorkflowRun, type WorkflowRunSqlRow } from './workflow-run-normalization';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { insertWorkflowEvent, type WorkflowEventInput } from './workflow-events';
 
 /** The winning status update, its projection, and its event share this transaction. */
@@ -11,7 +11,7 @@ export async function insertTerminalWorkflowEvent(
     event_type: `workflow_${RunTerminalStatus}`;
   }
 ): Promise<void> {
-  const runResult = await query<WorkflowRunSqlRow>(
+  const runResult = await query<WorkflowRunRow>(
     'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
     [event.workflow_run_id]
   );
