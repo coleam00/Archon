@@ -353,7 +353,7 @@ defaults:
 | `Worktree already exists for branch X` | Prior run left a worktree | Run `archon complete X` or `archon isolation cleanup` |
 | `Not a git repository` | Running outside a repo | `cd` into a git repo first — workflow and isolation commands require one |
 | `Unknown provider 'X'. Registered: claude, codex, pi` | Typo in `provider:` (workflow root or node-level) | Set `provider:` to one of the registered ids. Model strings themselves are not validated at load time — the SDK rejects unknown models at request time. |
-| `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Set `worktree.baseBranch` in `.archon/config.yaml` or ensure `main`/`master` exists |
+| `$BASE_BRANCH referenced but could not be detected` | No base branch set and auto-detection failed | Pass `--base` for this run, set `worktree.baseBranch` in `.archon/config.yaml`, or repair the selected remote's symbolic HEAD |
 | Node fails with "timed out with no output" | `idle_timeout` fired before the provider emitted anything (time-to-first-token exceeded the window) | Increase `idle_timeout` on the node or reduce prompt size |
 
 ### Debug Techniques

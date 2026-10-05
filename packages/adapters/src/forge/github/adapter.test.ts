@@ -7,17 +7,15 @@
  * ARCHON_HOME INVARIANT (#2305): this file must create nothing under
  * `$ARCHON_HOME`. `mock.module()` MERGES over the real module rather than
  * replacing it, so every export a factory below omits keeps its REAL
- * implementation and quietly does real I/O. Three such gaps produced a real
- * `archon.db`, `config.yaml` and `bin/git-credential-archon`:
+ * implementation and quietly does real I/O. Two such gaps produced a real
+ * `archon.db` and `bin/git-credential-archon`:
  *
- *   - `resolveDefaultAssistant` (step 6, via getOrCreateCodebaseForRepo)
- *     → loadGlobalConfig() CREATES ~/.archon/config.yaml when absent
  *   - `installCredentialHelper` (step 8, App-mode clone)
  *     → writes the bundled helper script into ~/.archon/bin/
  *   - `handleMessage`           (step 13, orchestrator)
  *     → opens the real SQLite database and creates ~/.archon/workspaces/
  *
- * All three are stubbed below. The package-cwd test preload checks its own
+ * Both are stubbed below. The package-cwd test preload checks its own
  * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
 import {
@@ -127,17 +125,6 @@ const mockFindOrCreateUserByPlatformIdentity = mock(
 );
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
-}));
-
-// getOrCreateCodebaseForRepo passes `await resolveDefaultAssistant(path)` to
-// createCodebase. The real implementation reads the global config and, when
-// ~/.archon/config.yaml does not exist, WRITES a default one (see
-// createDefaultConfig in @archon/core/config/config-loader). Every test that
-// gets past self-filtering reaches it, so leaving it real meant this suite
-// created a config file in the developer's real ~/.archon (#2305).
-const mockResolveDefaultAssistant = mock(async () => 'claude' as const);
-mock.module('@archon/core/config/resolve-assistant', () => ({
-  resolveDefaultAssistant: mockResolveDefaultAssistant,
 }));
 
 // Mock @archon/git for ensureRepoReady integration tests
@@ -359,6 +346,133 @@ describe('GitHubAdapter', () => {
   describe('platform type', () => {
     test('should return github', () => {
       expect(adapter.getPlatformType()).toBe('github');
+    });
+  });
+
+  describe('conversational webhook receipt', () => {
+    let originalAllowedUsers: string | undefined;
+
+    beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      process.env.GITHUB_ALLOWED_USERS = 'user123';
+      adapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token-for-testing' },
+        'fake-webhook-secret',
+        mockLockManager,
+        'archon'
+      );
+      installOctokitStubs(adapter);
+      handleMessageSpy.mockClear();
+      mockAcquireLock.mockClear();
+      mockGetOrCreateConversation.mockClear();
+      mockLogger.debug.mockClear();
+      mockLogger.info.mockClear();
+      mockLogger.error.mockClear();
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers === undefined) delete process.env.GITHUB_ALLOWED_USERS;
+      else process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+    });
+
+    async function receive(eventName: string, event: unknown): Promise<void> {
+      const body = JSON.stringify(event);
+      const signature =
+        'sha256=' + createHmac('sha256', 'fake-webhook-secret').update(body).digest('hex');
+      const handler = spyOn(adapter, 'handleWebhook');
+      try {
+        expect(await adapter.receiveWebhook(body, signature, 'delivery-1', eventName)).toBe(
+          'accepted'
+        );
+        expect(handler).toHaveBeenCalledTimes(1);
+        await handler.mock.results[0].value;
+      } finally {
+        handler.mockRestore();
+      }
+    }
+
+    test.each(['installation', 'installation_repositories', 'future_event'])(
+      'ignores %s without a repository',
+      async eventName => {
+        const event = {
+          action: 'created',
+          installation: { id: 123 },
+          repositories_added: [],
+          repositories_removed: [],
+          sender: { login: 'user123' },
+        };
+        await receive(eventName, event satisfies WebhookEvent);
+        expect(mockLogger.debug).toHaveBeenCalledWith(
+          { githubEvent: eventName },
+          'github.repositoryless_webhook_ignored'
+        );
+        expect(mockLogger.error).not.toHaveBeenCalled();
+        expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+        expect(mockAcquireLock).not.toHaveBeenCalled();
+        expect(handleMessageSpy).not.toHaveBeenCalled();
+      }
+    );
+
+    test('ignores a repository without an owner', async () => {
+      await receive('issue_comment', {
+        repository: { name: 'testrepo' },
+        sender: { login: 'user123' },
+      });
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { githubEvent: 'issue_comment' },
+        'github.repositoryless_webhook_ignored'
+      );
+      expect(mockLogger.error).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('rejects unauthorized senders before the repository check', async () => {
+      await receive('installation', { sender: { login: 'outsider' } });
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { maskedUser: 'out***' },
+        'github.unauthorized_webhook'
+      );
+      expect(mockLogger.debug).not.toHaveBeenCalled();
+      expect(mockLogger.error).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('rejects invalid signatures before parsing or checking repository shape', async () => {
+      expect(
+        await adapter.receiveWebhook('invalid json', 'sha256=invalid', 'id', 'installation')
+      ).toBe('invalid_signature');
+      expect(mockLogger.info).not.toHaveBeenCalled();
+      expect(mockLogger.debug).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('processes an ordinary issue comment', async () => {
+      await receive('issue_comment', {
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: { body: '@archon help', user: { login: 'user123' } },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://github.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'user123' },
+      } satisfies WebhookEvent);
+      expect(mockGetOrCreateConversation).toHaveBeenCalledWith('github', 'testuser/testrepo#42');
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+      expect(handleMessageSpy.mock.calls[0][1]).toBe('testuser/testrepo#42');
+      expect(handleMessageSpy.mock.calls[0][2]).toContain('[GitHub Issue Context]');
+      expect(handleMessageSpy.mock.calls[0][2]).toEndWith('help');
+      expect(mockLogger.error).not.toHaveBeenCalled();
     });
   });
 
@@ -971,7 +1085,8 @@ describe('GitHubAdapter', () => {
       await deliver(adapter, payload, 'guid-1-redelivery');
 
       expect(handleMessageSpy).not.toHaveBeenCalled();
-      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+      expect(octokit.reposGet).toHaveBeenCalledTimes(1);
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({ deliveryId: 'guid-1-redelivery' }),
         'github.duplicate_delivery_dropped'
