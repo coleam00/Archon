@@ -152,22 +152,30 @@ describe('buildOrchestratorSystemAppend', () => {
     },
   ];
 
-  test('returns orchestrator prompt when no codebase is scoped', () => {
-    const result = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+  test('returns orchestrator prompt when no codebase is scoped', async () => {
+    const result = await buildOrchestratorSystemAppend(
+      makeConversation(null),
+      codebases,
+      workflows
+    );
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Registered Projects');
     expect(result).toContain('my-project');
   });
 
-  test('returns project-scoped prompt when codebase is scoped', () => {
-    const result = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows);
+  test('returns project-scoped prompt when codebase is scoped', async () => {
+    const result = await buildOrchestratorSystemAppend(
+      makeConversation('cb-1'),
+      codebases,
+      workflows
+    );
     expect(result).toContain('# Archon Orchestrator');
     expect(result).toContain('## Active Project');
     expect(result).toContain('my-project');
   });
 
-  test('falls back to orchestrator prompt when codebase_id does not match', () => {
-    const result = buildOrchestratorSystemAppend(
+  test('falls back to orchestrator prompt when codebase_id does not match', async () => {
+    const result = await buildOrchestratorSystemAppend(
       makeConversation('nonexistent'),
       codebases,
       workflows
@@ -175,12 +183,20 @@ describe('buildOrchestratorSystemAppend', () => {
     expect(result).toContain('## Registered Projects');
   });
 
-  test('does NOT include the run-management section (orchestrator gates it per-provider)', () => {
+  test('does NOT include the run-management section (orchestrator gates it per-provider)', async () => {
     // The CLI run-management pointer is appended by orchestrator-agent.ts only for
     // project-scoped chats on providers WITHOUT the native manage_run tool — never
     // here, so Claude/Pi (nativeTools) don't get a redundant pointer.
-    const scoped = buildOrchestratorSystemAppend(makeConversation('cb-1'), codebases, workflows);
-    const unscoped = buildOrchestratorSystemAppend(makeConversation(null), codebases, workflows);
+    const scoped = await buildOrchestratorSystemAppend(
+      makeConversation('cb-1'),
+      codebases,
+      workflows
+    );
+    const unscoped = await buildOrchestratorSystemAppend(
+      makeConversation(null),
+      codebases,
+      workflows
+    );
     expect(scoped).not.toContain('## Managing Workflow Runs');
     expect(unscoped).not.toContain('## Managing Workflow Runs');
   });
@@ -227,9 +243,9 @@ describe('workspaces root in the prompt', () => {
     updated_at: new Date(),
   });
 
-  const promptsFor = (): string[] => [
-    buildOrchestratorSystemAppend(conversation(null), [codebase], []),
-    buildOrchestratorSystemAppend(conversation('cb-1'), [codebase], []),
+  const promptsFor = async (): Promise<string[]> => [
+    await buildOrchestratorSystemAppend(conversation(null), [codebase], []),
+    await buildOrchestratorSystemAppend(conversation('cb-1'), [codebase], []),
     buildRunManagementSection(),
   ];
 
@@ -247,11 +263,11 @@ describe('workspaces root in the prompt', () => {
       env: { ARCHON_HOME: join('/srv', 'archon data') },
       root: join('/srv', 'archon data', 'workspaces'),
     },
-  ])('$install: every prompt names the runtime root', ({ env, root }) => {
+  ])('$install: every prompt names the runtime root', async ({ env, root }) => {
     for (const key of envKeys) delete process.env[key];
     Object.assign(process.env, env);
 
-    const [unscoped, scoped, runManagement] = promptsFor();
+    const [unscoped, scoped, runManagement] = await promptsFor();
     for (const prompt of [unscoped, scoped, runManagement]) {
       expect(prompt).toContain(`${root}/`);
       expect(prompt).not.toContain('~/.archon/workspaces');

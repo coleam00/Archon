@@ -75,7 +75,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_codebases`** - Repository metadata
   - Commands stored as JSONB: `{command_name: {path, description}}`
-  - AI assistant type per codebase
+  - Optional explicit AI assistant choice; `NULL` follows project configuration for new conversations
   - Default working directory
   - `kind` (`'repo'` | `'folder'`, default `'repo'`) discriminates git-repo projects from non-git folder projects (which run in place, no worktree)
   - Optional explicit base branch; `NULL` resolves the remote default when needed. Existing stored values remain explicit.

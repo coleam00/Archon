@@ -7,17 +7,15 @@
  * ARCHON_HOME INVARIANT (#2305): this file must create nothing under
  * `$ARCHON_HOME`. `mock.module()` MERGES over the real module rather than
  * replacing it, so every export a factory below omits keeps its REAL
- * implementation and quietly does real I/O. Three such gaps produced a real
- * `archon.db`, `config.yaml` and `bin/git-credential-archon`:
+ * implementation and quietly does real I/O. Two such gaps produced a real
+ * `archon.db` and `bin/git-credential-archon`:
  *
- *   - `resolveDefaultAssistant` (step 6, via getOrCreateCodebaseForRepo)
- *     → loadGlobalConfig() CREATES ~/.archon/config.yaml when absent
  *   - `installCredentialHelper` (step 8, App-mode clone)
  *     → writes the bundled helper script into ~/.archon/bin/
  *   - `handleMessage`           (step 13, orchestrator)
  *     → opens the real SQLite database and creates ~/.archon/workspaces/
  *
- * All three are stubbed below. The package-cwd test preload checks its own
+ * Both are stubbed below. The package-cwd test preload checks its own
  * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
 import {
@@ -127,17 +125,6 @@ const mockFindOrCreateUserByPlatformIdentity = mock(
 );
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUserByPlatformIdentity,
-}));
-
-// getOrCreateCodebaseForRepo passes `await resolveDefaultAssistant(path)` to
-// createCodebase. The real implementation reads the global config and, when
-// ~/.archon/config.yaml does not exist, WRITES a default one (see
-// createDefaultConfig in @archon/core/config/config-loader). Every test that
-// gets past self-filtering reaches it, so leaving it real meant this suite
-// created a config file in the developer's real ~/.archon (#2305).
-const mockResolveDefaultAssistant = mock(async () => 'claude' as const);
-mock.module('@archon/core/config/resolve-assistant', () => ({
-  resolveDefaultAssistant: mockResolveDefaultAssistant,
 }));
 
 // Mock @archon/git for ensureRepoReady integration tests
@@ -971,7 +958,8 @@ describe('GitHubAdapter', () => {
       await deliver(adapter, payload, 'guid-1-redelivery');
 
       expect(handleMessageSpy).not.toHaveBeenCalled();
-      expect(mockGetOrCreateConversation).toHaveBeenCalledTimes(1);
+      expect(octokit.reposGet).toHaveBeenCalledTimes(1);
+      expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
       expect(mockLogger.info).toHaveBeenCalledWith(
         expect.objectContaining({ deliveryId: 'guid-1-redelivery' }),
         'github.duplicate_delivery_dropped'

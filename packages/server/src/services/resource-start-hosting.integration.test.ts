@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
+import { getConversationById } from '@archon/core/db/conversations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
 import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
@@ -246,6 +247,8 @@ afterEach(async () => {
 describe('server resource-start host', () => {
   test('a webhook receipt is prepared, admitted and started through the engine port', async () => {
     const { deliver, engine } = await fixture();
+    await writeFile(join(root, 'home', 'config.yaml'), 'defaultAssistant: pi\n');
+    await writeFile(join(root, 'project', '.archon', 'config.yaml'), 'assistant: codex\n');
     expect((await deliver('first', 'queue')).status).toBe(200);
 
     // Nothing but the route's post-commit hook drains this host.
@@ -255,6 +258,12 @@ describe('server resource-start host', () => {
     const runId = binding.disposition?.requestId;
     expect(submitted.options?.preCreatedRun?.id).toBe(runId);
     expect(submitted.options?.preCreatedRun?.status).toBe('pending');
+    const run = submitted.options?.preCreatedRun;
+    if (!run) throw new Error('Missing prepared run');
+    expect(await getConversationById(run.conversation_id)).toMatchObject({
+      codebase_id: run.codebase_id,
+      ai_assistant_type: 'codex',
+    });
     expect(submitted.workflow.name).toBe('hosted');
     // Provenance is data on the run, not prose in the user message.
     expect(submitted.userMessage).toBe('');

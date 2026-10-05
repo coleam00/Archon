@@ -1071,7 +1071,7 @@ remote_agent_codebases
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
 ├── default_branch (VARCHAR, nullable) -- optional explicit base branch; NULL resolves the remote default at use
-├── ai_assistant_type (VARCHAR) -- registered provider identifier (e.g. 'claude', 'codex')
+├── ai_assistant_type (VARCHAR, nullable) -- optional explicit provider choice; NULL follows project configuration for new conversations
 ├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folder projects are non-git, run in place)
 └── commands (JSONB) -- {command_name: {path, description}}
 
