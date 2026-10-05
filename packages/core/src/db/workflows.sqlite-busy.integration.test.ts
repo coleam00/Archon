@@ -10,15 +10,22 @@ import { Database } from 'bun:sqlite';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
+import { removeTempTree } from '@archon/paths/test-utils';
+
+// failWorkflowRun reports terminal telemetry; keep this test off the network.
+process.env.ARCHON_TELEMETRY_DISABLED = '1';
 
 const { SqliteAdapter, sqliteDialect } = await import('./adapters/sqlite');
-const trackTempRoot = trackTempRoots();
-const dbPath = join(trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-sqlite-busy-'))), 'a.db');
+// One database for the file: trackTempRoots would delete it after the first test.
+const root = await mkdtemp(join(tmpdir(), 'archon-sqlite-busy-'));
+const dbPath = join(root, 'a.db');
 const db = new SqliteAdapter(dbPath);
 // The adapter's own 5 s busy_timeout would make this test slow, not different.
 await db.query('PRAGMA busy_timeout = 20');
-afterAll(() => db.close());
+afterAll(async () => {
+  await db.close();
+  await removeTempTree(root);
+});
 
 mock.module('./connection', () => ({
   pool: db,
@@ -27,9 +34,42 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { clearWorkflowWaitContext } = await import('./workflows');
+const { clearWorkflowWaitContext, failWorkflowRun, getWorkflowRun } = await import('./workflows');
 
-describe('clearWorkflowWaitContext — real SQLite under a held write lock', () => {
+await db.query(
+  `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+   VALUES ('conv-1', 'web', 'conv-1-platform')`
+);
+
+async function seedRunningRun(id: string, metadata: Record<string, unknown> = {}): Promise<void> {
+  await db.query(
+    `INSERT INTO remote_agent_workflow_runs
+       (id, workflow_name, conversation_id, user_message, status, metadata)
+     VALUES ($1, 'wf', 'conv-1', 'msg', 'running', $2)`,
+    [id, JSON.stringify(metadata)]
+  );
+}
+
+/** Hold the write lock on a second connection; several 20 ms busy timeouts elapse before it lets go. */
+function holdWriteLock(): Promise<void> {
+  const holder = new Database(dbPath);
+  holder.run('BEGIN IMMEDIATE');
+  return Bun.sleep(150).then(() => {
+    holder.run('COMMIT');
+    holder.close();
+  });
+}
+
+async function countEvents(runId: string, eventType: string): Promise<number> {
+  const result = await db.query<{ cnt: number }>(
+    `SELECT COUNT(*) AS cnt FROM remote_agent_workflow_events
+     WHERE workflow_run_id = $1 AND event_type = $2`,
+    [runId, eventType]
+  );
+  return Number(result.rows[0]?.cnt);
+}
+
+describe('run-state writes — real SQLite under a held write lock', () => {
   test('waits for the lock and persists the completion once', async () => {
     const wait = {
       owner: 'node' as const,
@@ -41,34 +81,27 @@ describe('clearWorkflowWaitContext — real SQLite under a held write lock', () 
       waitingSince: '2026-10-05T10:00:00.000Z',
       resumeAt: '2099-10-06T10:00:00.000Z',
     };
-    await db.query(
-      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
-       VALUES ('conv-1', 'web', 'conv-1-platform')`
-    );
-    await db.query(
-      `INSERT INTO remote_agent_workflow_runs
-         (id, workflow_name, conversation_id, user_message, status, metadata)
-       VALUES ('busy-run', 'wf', 'conv-1', 'msg', 'running', $1)`,
-      [JSON.stringify({ wait })]
-    );
+    await seedRunningRun('busy-wait-run', { wait });
+    const released = holdWriteLock();
 
-    const holder = new Database(dbPath);
-    holder.run('BEGIN IMMEDIATE');
-    // Several 20 ms busy timeouts elapse before the holder lets go.
-    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
-
-    const result = await clearWorkflowWaitContext('busy-run', wait, {
+    const result = await clearWorkflowWaitContext('busy-wait-run', wait, {
       stepName: 'await-checks',
       result: { status: 'satisfied', waited_ms: 1, event: wait.event },
     });
     await released;
-    holder.close();
 
     expect(result).toMatchObject({ cleared: true });
-    const completed = await db.query<{ cnt: number }>(
-      `SELECT COUNT(*) AS cnt FROM remote_agent_workflow_events
-       WHERE workflow_run_id = 'busy-run' AND event_type = 'node_completed'`
-    );
-    expect(Number(completed.rows[0]?.cnt)).toBe(1);
+    expect(await countEvents('busy-wait-run', 'node_completed')).toBe(1);
+  });
+
+  test('a terminal failure write waits for the lock instead of leaving the run running', async () => {
+    await seedRunningRun('busy-fail-run');
+    const released = holdWriteLock();
+
+    await failWorkflowRun('busy-fail-run', 'node write failed');
+    await released;
+
+    expect((await getWorkflowRun('busy-fail-run'))?.status).toBe('failed');
+    expect(await countEvents('busy-fail-run', 'workflow_failed')).toBe(1);
   });
 });
