@@ -1,3 +1,4 @@
+import type { ProjectBaseBranchInspection } from '@archon/core';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
@@ -46,10 +47,19 @@ const mockListByCodebase = mock(async (_id: string) => [] as unknown[]);
 const mockRemoveWorktree = mock(async () => {});
 const mockUpdateStatus = mock(async (_id: string, _status: string) => {});
 
+const mockInspectBaseBranch = mock(
+  async (): Promise<ProjectBaseBranchInspection> => ({
+    kind: 'repo',
+    defaultBranch: 'dev',
+    reason: null,
+  })
+);
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),
+  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  inspectProjectBaseBranch: mockInspectBaseBranch,
   cloneRepository: mockCloneRepository,
   registerRepository: mockRegisterRepository,
   registerFolder: mockRegisterFolder,
@@ -79,6 +89,7 @@ mock.module('@archon/core', () => ({
 }));
 
 mock.module('@archon/paths', () => ({
+  canonicalizeProjectPath: async (path: string) => path,
   createLogger: () => ({
     fatal: mock(() => undefined),
     error: mock(() => undefined),
@@ -415,7 +426,9 @@ describe('POST /api/codebases', () => {
 
     const body = (await response.json()) as { id: string };
     expect(body.id).toBe('codebase-uuid-1');
-    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/user/repo');
+    expect(mockCloneRepository).toHaveBeenCalledWith('https://github.com/user/repo', {
+      baseBranch: undefined,
+    });
   });
 
   test('registers existing URL codebase with 200', async () => {
@@ -452,7 +465,9 @@ describe('POST /api/codebases', () => {
       body: JSON.stringify({ path: '/home/user/my-repo' }),
     });
     expect(response.status).toBe(201);
-    expect(mockRegisterRepository).toHaveBeenCalledWith('/home/user/my-repo');
+    expect(mockRegisterRepository).toHaveBeenCalledWith('/home/user/my-repo', {
+      baseBranch: undefined,
+    });
     expect(mockRegisterFolder).not.toHaveBeenCalled();
   });
 
@@ -478,7 +493,9 @@ describe('POST /api/codebases', () => {
     });
 
     expect(response.status).toBe(201);
-    expect(mockRegisterFolder).toHaveBeenCalledWith('/tmp/platform');
+    expect(mockRegisterFolder).toHaveBeenCalledWith('/tmp/platform', undefined, {
+      baseBranch: undefined,
+    });
     expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 
@@ -507,7 +524,9 @@ describe('POST /api/codebases', () => {
     });
 
     expect(response.status).toBe(201);
-    expect(mockRegisterFolder).toHaveBeenCalledWith(missingPath);
+    expect(mockRegisterFolder).toHaveBeenCalledWith(missingPath, undefined, {
+      baseBranch: undefined,
+    });
     expect(mockRegisterRepository).not.toHaveBeenCalled();
   });
 
@@ -708,4 +727,64 @@ describe('DELETE /api/codebases/:id', () => {
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Failed to delete codebase');
   });
+});
+
+test('base branch prefill is read-only and returns the detected remote name', async () => {
+  mockCloneRepository.mockClear();
+  mockRegisterRepository.mockClear();
+  mockRegisterFolder.mockClear();
+  const response = await makeApp().request('/api/codebases/base-branch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://github.com/user/repo' }),
+  });
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ kind: 'repo', defaultBranch: 'dev', reason: null });
+  expect(mockCloneRepository).not.toHaveBeenCalled();
+  expect(mockRegisterRepository).not.toHaveBeenCalled();
+  expect(mockRegisterFolder).not.toHaveBeenCalled();
+});
+
+test('registration forwards an explicit branch choice', async () => {
+  mockCloneRepository.mockResolvedValue({ codebaseId: 'clone-uuid-1', alreadyExisted: false });
+  mockGetCodebase.mockImplementationOnce(async () => MOCK_CODEBASE);
+  const response = await makeApp().request('/api/codebases', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: 'https://github.com/user/repo', base_branch: 'release' }),
+  });
+  expect(response.status).toBe(201);
+  expect(mockCloneRepository).toHaveBeenLastCalledWith('https://github.com/user/repo', {
+    baseBranch: 'release',
+  });
+});
+
+test('prefill preserves unknown default and folder results', async () => {
+  for (const result of [
+    { kind: 'repo', defaultBranch: null, reason: 'unknown_head' },
+    { kind: 'folder' },
+  ] satisfies ProjectBaseBranchInspection[]) {
+    mockInspectBaseBranch.mockResolvedValueOnce(result);
+    const response = await makeApp().request('/api/codebases/base-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '/repo' }),
+    });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(result);
+  }
+});
+
+test('registration reports typed branch and folder errors as bad requests', async () => {
+  const { ProjectRegistrationError } = await import('@archon/core');
+  mockCloneRepository.mockRejectedValueOnce(
+    new ProjectRegistrationError('Folder projects have no base branch; remove --base-branch.')
+  );
+  const response = await makeApp().request('/api/codebases', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url: '/folder', base_branch: 'release' }),
+  });
+  expect(response.status).toBe(400);
+  expect(await response.text()).toContain('Folder projects have no base branch');
 });
