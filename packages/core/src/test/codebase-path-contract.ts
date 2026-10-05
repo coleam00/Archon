@@ -1,12 +1,16 @@
 import { expect } from 'bun:test';
 import { resolve } from 'node:path';
 import { toBranchName } from '@archon/git';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import { quoteCommandArg } from '../utils/command-args';
 import { setPlatformPolicies } from '../platforms/registry';
 import type { IDatabase } from '../db/adapters/types';
 
 export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
   setPlatformPolicies([]);
+  // Registration loads configuration, so the contract registers providers as a host does.
+  registerBuiltinProviders();
+  registerCommunityProviders();
   const codebases = await import('../db/codebases');
   const environments = await import('../db/isolation-environments');
   const absolutePath = resolve('project-path-contract');

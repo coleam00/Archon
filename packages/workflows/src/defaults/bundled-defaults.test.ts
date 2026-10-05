@@ -452,7 +452,11 @@ describe('bundled-defaults', () => {
     });
 
     it('synthesis requires the review-lens membership declared by the graph', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-review'],
+        'archon-review.yaml',
+        providerRegistry
+      );
       if (!parsed.workflow) throw new Error('archon-review did not parse');
       const lenses = parsed.workflow.nodes
         .filter(node => 'output_type' in node && node.output_type === 'review-lens')
