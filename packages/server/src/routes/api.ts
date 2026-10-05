@@ -375,6 +375,7 @@ import {
   updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import { validateAliasName } from './alias-name';
 import {
   TIER_NAMES,
   isTierName,
@@ -2176,17 +2177,6 @@ export function registerApiRoutes(
           `Valid: ${validEfforts.join(', ')}`
         );
       }
-    }
-    return null;
-  }
-
-  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
-  function validateAliasName(name: string): string | null {
-    if ((TIER_NAMES as readonly string[]).includes(name)) {
-      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
-    }
-    if (!name.startsWith('@')) {
-      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
     }
     return null;
   }
