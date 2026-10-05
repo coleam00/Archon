@@ -4,13 +4,15 @@
  * Default isolation provider using git worktrees.
  */
 
-import { createHash } from 'crypto';
-import { access, rm, stat } from 'fs/promises';
+import { createHash, randomUUID } from 'crypto';
+import { access, readFile, writeFile, rm, stat } from 'fs/promises';
 import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
+  getGitCheckoutIdentity,
+  inspectWorktreeForRelease,
   fetchWithRefLockRetry,
   findWorktreeByBranch,
   getCanonicalRepoPath,
@@ -84,7 +86,7 @@ interface GitCommandAnchors {
 }
 
 type WorktreeCreationResult =
-  | { kind: 'created'; warnings: string[]; cutFromCommit?: string }
+  | { kind: 'created'; warnings: string[]; cutFromCommit?: string; creationId?: string }
   | { kind: 'adopted'; environment: WorktreeEnvironment };
 
 function getForkReviewBranch(prNumber: string): BranchName {
@@ -238,6 +240,7 @@ export class WorktreeProvider implements IIsolationProvider {
         ? { adopted: true, adoptedFrom: 'branch', request }
         : {
             adopted: false,
+            creationId: creation.creationId,
             request,
             ...(creation.cutFromCommit !== undefined
               ? { cutFromCommit: creation.cutFromCommit }
@@ -272,6 +275,39 @@ export class WorktreeProvider implements IIsolationProvider {
    */
   async destroy(envId: string, options?: WorktreeDestroyOptions): Promise<DestroyResult> {
     const worktreePath = envId;
+    if (options?.guardedRemoval) {
+      if (
+        !options.canonicalRepoPath ||
+        options.force ||
+        options.removeLocked ||
+        options.branchName ||
+        options.deleteRemoteBranch
+      ) {
+        throw new Error(
+          'Guarded worktree release requires the canonical repository and unforced checkout-only removal'
+        );
+      }
+      await verifyWorktreeOwnership(toWorktreePath(worktreePath), options.canonicalRepoPath);
+      const identity = await getGitCheckoutIdentity(worktreePath);
+      const marker = await readFile(join(identity.gitDir, 'archon-creation-id'), 'utf8');
+      if (marker !== options.guardedRemoval.creationId)
+        throw new Error('Worktree creation identity changed');
+      const { head } = await inspectWorktreeForRelease(toWorktreePath(worktreePath));
+      if (head !== options.guardedRemoval.head)
+        throw new Error('Worktree HEAD changed; retry abandonment');
+      await execFileAsync(
+        'git',
+        ['-C', options.canonicalRepoPath, 'worktree', 'remove', '--', worktreePath],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
+      return {
+        worktreeRemoved: true,
+        directoryClean: !(await this.directoryExists(worktreePath)),
+        branchDeleted: null,
+        remoteBranchDeleted: null,
+        warnings: [],
+      };
+    }
     const result: DestroyResult = {
       worktreeRemoved: false,
       branchDeleted: null,
@@ -912,14 +948,23 @@ export class WorktreeProvider implements IIsolationProvider {
     // and still holds. Without both, a half-set-up worktree survives with no
     // isolation-environment row tracking it, and the next run on the same branch
     // adopts it as ready (#3448).
-    const warnings = await this.rollBackOnFailure(repoPath, worktreePath, () =>
-      this.finishWorktreeSetup(repoPath, worktreePath, worktreeConfig)
-    );
+    const existingBranch =
+      request.workflowType === 'task' && request.taskBranch?.kind === 'existing';
+    const creationId = existingBranch ? undefined : randomUUID();
+    const warnings = await this.rollBackOnFailure(repoPath, worktreePath, async () => {
+      const warnings = await this.finishWorktreeSetup(repoPath, worktreePath, worktreeConfig);
+      if (creationId) {
+        const identity = await getGitCheckoutIdentity(worktreePath);
+        await writeFile(join(identity.gitDir, 'archon-creation-id'), creationId, { flag: 'wx' });
+      }
+      return warnings;
+    });
 
     const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
 
     return {
       kind: 'created',
+      creationId,
       warnings: lockWarning ? [...warnings, lockWarning] : warnings,
       ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
     };

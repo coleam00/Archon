@@ -1084,6 +1084,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   if (adoptionLane?.kind === 'reuse-worktree') {
     // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
     // instead of cutting a fresh one (same shape as the background dispatch in
@@ -1136,7 +1137,10 @@ async function dispatchOrchestratorWorkflowOwned(
         userId
       );
       cwd = result.cwd;
-      if (result.status === 'new') cutFromCommit = result.cutFromCommit;
+      if (result.status === 'new') {
+        cutFromCommit = result.cutFromCommit;
+        ownedWorktree = result.ownedWorktree;
+      }
     } catch (error) {
       if (error instanceof IsolationBlockedError) {
         getLog().warn(
@@ -1467,6 +1471,7 @@ async function dispatchOrchestratorWorkflowOwned(
           capturedSourceOwner: owner,
           inputs: resolvedInputs,
           ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+          ownedWorktree,
           ...(options?.adoptRunId
             ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
             : options?.supersedesRunId

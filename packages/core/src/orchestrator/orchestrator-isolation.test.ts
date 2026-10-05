@@ -868,7 +868,11 @@ describe('dispatchBackgroundWorkflow', () => {
   test('hands the executor the cut-from commit of a branch this dispatch created', async () => {
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        { type: 'created', cutFromCommit: 'c'.repeat(40) },
+        {
+          type: 'created',
+          cutFromCommit: 'c'.repeat(40),
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        },
         makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
       )
     );
@@ -877,6 +881,10 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
 
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.cutFromCommit).toBe('c'.repeat(40));
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.ownedWorktree).toEqual({
+      envId: 'env-1',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
   });
 
   test('a reused worktree carries no cut-from commit', async () => {
@@ -891,6 +899,7 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
 
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]).not.toHaveProperty('cutFromCommit');
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.ownedWorktree).toBeUndefined();
   });
 
   test('missing-worktree adoption materializes the exact branch for a background run', async () => {

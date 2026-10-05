@@ -1166,3 +1166,18 @@ type AssertNodeOutputCoversNodeState = NodeOutput['state'] extends NodeState
   : never;
 const nodeOutputStateCoverage: AssertNodeOutputCoversNodeState = true;
 void nodeOutputStateCoverage; // suppress unused-variable lint warning
+
+export const ownedWorktreeSchema = z
+  .object({
+    envId: z.string().min(1),
+    creationId: z.string().uuid(),
+  })
+  .strict();
+export type OwnedWorktree = z.infer<typeof ownedWorktreeSchema>;
+
+export function readOwnedWorktree(
+  metadata: Record<string, unknown> | undefined
+): OwnedWorktree | undefined {
+  const result = ownedWorktreeSchema.safeParse(metadata?.owned_worktree);
+  return result.success ? result.data : undefined;
+}

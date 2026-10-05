@@ -66,7 +66,7 @@ function makeMockProvider() {
       branchName: git.toBranchName('new-branch'),
       status: 'active',
       createdAt: new Date(),
-      metadata: { adopted: false },
+      metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
     }),
     destroy: async () => ({
       worktreeRemoved: true,
@@ -359,7 +359,7 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active',
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
           };
         },
       },
@@ -738,7 +738,7 @@ describe('IsolationResolver', () => {
           branchName: git.toBranchName('new-branch'),
           status: 'active',
           createdAt: new Date(),
-          metadata: { adopted: false },
+          metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
           warnings: ['Config file could not be loaded — copyFiles not applied.'],
         }),
       },
@@ -789,7 +789,7 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active' as const,
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
           };
         },
       },
@@ -824,7 +824,7 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active' as const,
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
           };
         },
       },
@@ -862,7 +862,7 @@ describe('IsolationResolver', () => {
             branchName: git.toBranchName('new-branch'),
             status: 'active' as const,
             createdAt: new Date(),
-            metadata: { adopted: false },
+            metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
           };
         },
       },
@@ -1254,7 +1254,7 @@ describe('IsolationResolver', () => {
           branchName: git.toBranchName('new-branch'),
           status: 'active',
           createdAt: new Date(),
-          metadata: { adopted: false },
+          metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
         })
       );
       const resolver = createResolver({

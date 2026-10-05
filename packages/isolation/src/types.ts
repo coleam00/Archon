@@ -132,6 +132,7 @@ export interface AdoptedWorktreeMetadata {
 
 export interface CreatedWorktreeMetadata {
   adopted: false;
+  creationId?: string;
   request?: IsolationRequest;
   /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
   cutFromCommit?: string;
@@ -168,6 +169,7 @@ export interface DestroyOptions {
 }
 
 export interface WorktreeDestroyOptions extends DestroyOptions {
+  guardedRemoval?: { creationId: string; head: string };
   branchName?: BranchName;
   /**
    * Remove the worktree even while it is locked. Implies `force`: `git worktree
@@ -394,6 +396,7 @@ export type ResolutionMethod =
   | { type: 'branch_adoption'; branch: string }
   | {
       type: 'created';
+      creationId?: string;
       autoCleanedCount?: number;
       /** The commit the new branch was cut from, when this resolution created one. */
       cutFromCommit?: string;

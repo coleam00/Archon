@@ -87,6 +87,7 @@ mock.module('node:fs/promises', () => ({
   readFile: mockReadFile,
   rm: mockRm,
   stat: mockStat,
+  writeFile: mock(async () => {}),
 }));
 
 import { WorktreeProvider } from './worktree';
@@ -103,6 +104,7 @@ describe('WorktreeProvider', () => {
   let findWorktreeByBranchSpy: Mock<typeof git.findWorktreeByBranch>;
   let getCurrentBranchStrictSpy: Mock<typeof git.getCurrentBranchStrict>;
   let getCanonicalRepoPathSpy: Mock<typeof git.getCanonicalRepoPath>;
+  let getGitCheckoutIdentitySpy: Mock<typeof git.getGitCheckoutIdentity>;
   let verifyWorktreeOwnershipSpy: Mock<typeof git.verifyWorktreeOwnership>;
   let unlockWorktreeSpy: Mock<typeof git.unlockWorktree>;
   let readWorktreeLockSpy: Mock<typeof git.readWorktreeLock>;
@@ -120,6 +122,11 @@ describe('WorktreeProvider', () => {
     getCurrentBranchStrictSpy = spyOn(git, 'getCurrentBranchStrict');
     getCanonicalRepoPathSpy = spyOn(git, 'getCanonicalRepoPath');
     verifyWorktreeOwnershipSpy = spyOn(git, 'verifyWorktreeOwnership');
+    getGitCheckoutIdentitySpy = spyOn(git, 'getGitCheckoutIdentity').mockResolvedValue({
+      gitDir: '/git/worktrees/test',
+      commonGitDir: '/git',
+      linkedWorktree: true,
+    });
     unlockWorktreeSpy = spyOn(git, 'unlockWorktree');
     readWorktreeLockSpy = spyOn(git, 'readWorktreeLock');
     getDefaultBranchSpy = spyOn(git, 'getDefaultBranch');
@@ -177,6 +184,7 @@ describe('WorktreeProvider', () => {
     getCurrentBranchStrictSpy.mockRestore();
     getCanonicalRepoPathSpy.mockRestore();
     verifyWorktreeOwnershipSpy.mockRestore();
+    getGitCheckoutIdentitySpy.mockRestore();
     unlockWorktreeSpy.mockRestore();
     readWorktreeLockSpy.mockRestore();
     getDefaultBranchSpy.mockRestore();

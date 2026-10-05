@@ -141,6 +141,7 @@ const {
   requestDetachedRunStop: mockRequestDetachedRunStop,
   isRunOwnedByThisProcess,
   isRunOwnerAnswering,
+  reclaimRunWorktree: async () => [],
   reclaimContainerEnv: mockReclaimContainerEnv,
 });
 
@@ -1739,7 +1740,7 @@ describe('abandonWorkflow', () => {
     expect(cascadeFailures).toBeGreaterThan(0);
     // The walk was bounded (never looped forever) — findChildRuns was called a
     // finite number of times despite the infinite chain.
-    expect(mockFindChildRuns.mock.calls.length).toBeLessThanOrEqual(501);
+    expect(mockFindChildRuns.mock.calls.length).toBeLessThanOrEqual(1001);
     expect(mockFindChildRuns.mock.calls.length).toBeGreaterThan(1);
   });
 
@@ -1782,10 +1783,8 @@ describe('abandonWorkflow', () => {
   test('does not cascade when the parent cancel loses the race', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'paused' }));
     mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
-    const result = await abandonWorkflow('run-1');
-    // findChildRuns is never consulted (no cascade) when the CAS was lost.
-    expect(result.cancelled).toBe(false);
-    expect(mockFindChildRuns).not.toHaveBeenCalled();
+    await expect(abandonWorkflow('run-1')).rejects.toThrow('changed before abandonment');
+    expect(mockCancelWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
   // M2 — abandoning a CONTAINER run reclaims its container + volume in the SHARED op
@@ -1817,7 +1816,7 @@ describe('abandonWorkflow', () => {
       })
     );
     mockCancelWorkflowRun.mockImplementationOnce(() => Promise.resolve({ cancelled: false }));
-    await abandonWorkflow('run-1');
+    await expect(abandonWorkflow('run-1')).rejects.toThrow('changed before abandonment');
     expect(mockReclaimContainerEnv).not.toHaveBeenCalled();
   });
 
@@ -1992,6 +1991,7 @@ describe('supplied stores', () => {
         requestDetachedRunStop: mockRequestDetachedRunStop,
         isRunOwnedByThisProcess,
         isRunOwnerAnswering,
+        reclaimRunWorktree: async () => [],
         reclaimContainerEnv: mockReclaimContainerEnv,
       });
     const first = makeOperations(firstRun);
@@ -2039,6 +2039,7 @@ describe('supplied stores', () => {
       requestDetachedRunStop: async () => ({ pid: 42, stop, release: () => {} }),
       isRunOwnedByThisProcess: () => false,
       isRunOwnerAnswering: async () => false,
+      reclaimRunWorktree: async () => [],
       reclaimContainerEnv: cleanup,
     });
     const result = await operations.cancelWorkflow(run.id);
@@ -2428,6 +2429,7 @@ describe('abandonResumableRunsForConversation', () => {
       requestDetachedRunStop: mockRequestDetachedRunStop,
       isRunOwnedByThisProcess,
       isRunOwnerAnswering,
+      reclaimRunWorktree: async () => [],
       reclaimContainerEnv: reclaim,
     });
     mockCancelResumableRunsForConversation.mockResolvedValueOnce([
@@ -2543,5 +2545,149 @@ describe('resetWorkflowNodeSessions', () => {
     await expect(resetWorkflowNodeSessions({ workflow_name: 'feature-dev' })).rejects.toThrow(
       'Failed to reset workflow node sessions: connection refused'
     );
+  });
+});
+
+describe('abandon owned worktrees', () => {
+  const reclaim = mock<WorkflowOperationsDeps['reclaimRunWorktree']>(async () => []);
+  const operations = createWorkflowOperations({
+    store,
+    hostStore: { isolation: isolationStore },
+    requestDetachedRunStop: mockRequestDetachedRunStop,
+    isRunOwnedByThisProcess,
+    isRunOwnerAnswering,
+    reclaimContainerEnv: mockReclaimContainerEnv,
+    reclaimRunWorktree: reclaim,
+  });
+  const owned = (id = 'run-1', overrides: Partial<WorkflowRun> = {}): WorkflowRun =>
+    makePausedRun({
+      id,
+      metadata: {
+        owned_worktree: { envId: `env-${id}`, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+        execution_owner: { host: hostname(), pid: 4242, uid: process.getuid?.() },
+      },
+      ...overrides,
+    });
+  beforeEach(() => {
+    reclaim.mockReset();
+    reclaim.mockResolvedValue([]);
+    mockGetWorkflowRun.mockReset();
+    mockGetWorkflowRun.mockResolvedValue(owned());
+    mockFindChildRuns.mockReset();
+    mockFindChildRuns.mockResolvedValue([]);
+    mockCancelWorkflowRun.mockReset();
+    mockCancelWorkflowRun.mockResolvedValue({ cancelled: true });
+    mockRequestDetachedRunStop.mockReset();
+    mockRequestDetachedRunStop.mockRejectedValue(
+      new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
+    );
+  });
+
+  test('preflight refusal stops neither owner nor lifecycle; post-stop refusal reports the stopped owner', async () => {
+    reclaim.mockRejectedValueOnce(new Error('dirty checkout'));
+    await expect(operations.abandonWorkflow('run-1')).rejects.toThrow('dirty checkout');
+    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    reclaim.mockReset();
+    reclaim.mockResolvedValueOnce([]);
+    reclaim.mockRejectedValueOnce(new Error('new edits'));
+    const stop = mock(async () => {});
+    mockRequestDetachedRunStop.mockResolvedValueOnce({ pid: 4242, stop, release: () => {} });
+    await expect(operations.abandonWorkflow('run-1')).rejects.toThrow(
+      'owner was stopped, but the run was not abandoned'
+    );
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('cancels before release and releases children before root, excluding only selected runs during preflight', async () => {
+    const child = owned('child');
+    mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [child] : []));
+    const order: string[] = [];
+    mockCancelWorkflowRun.mockImplementation(async id => {
+      order.push(`cancel ${id}`);
+      return { cancelled: true };
+    });
+    reclaim.mockImplementation(async (run, _, options) => {
+      if (options.phase === 'release') order.push(`release ${run.id}`);
+      else expect(options.excludeRunIds).toEqual(['run-1', 'child']);
+      return [];
+    });
+    await operations.abandonWorkflow('run-1');
+    expect(order).toEqual(['cancel run-1', 'cancel child', 'release child', 'release run-1']);
+  });
+
+  test('CAS loss never releases; late removal failure is a cancelled-run warning', async () => {
+    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
+    await expect(operations.abandonWorkflow('run-1')).rejects.toThrow('changed before abandonment');
+    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
+    reclaim.mockImplementation(async (_, __, options) => {
+      if (options.phase === 'release') throw new Error('git removal failed; retry abandon run-1');
+      return [];
+    });
+    const result = await operations.abandonWorkflow('run-1');
+    expect(result.cancelled).toBe(true);
+    expect(result.cleanupWarnings).toEqual([expect.stringContaining('git removal failed')]);
+  });
+
+  test('cancelled cleanup retry does not repeat cancellation and leaves active descendants untouched', async () => {
+    mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'cancelled' }));
+    mockFindChildRuns.mockImplementation(async id =>
+      id === 'run-1' ? [owned('child', { status: 'running' })] : []
+    );
+    const result = await operations.abandonWorkflow('run-1');
+    expect(result.cancelled).toBe(false);
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+    expect(reclaim.mock.calls.every(call => call[0].id === 'run-1')).toBe(true);
+  });
+
+  test.each(['foreign-host', 'foreign-user', 'missing'])('retains %s owner estate', async kind => {
+    const run = owned();
+    if (kind === 'missing') delete run.metadata.execution_owner;
+    else
+      run.metadata.execution_owner = {
+        host: kind === 'foreign-host' ? 'another-host' : hostname(),
+        pid: 4242,
+        uid: (process.getuid?.() ?? 0) + 1,
+      };
+    mockGetWorkflowRun.mockResolvedValue(run);
+    const result = await operations.abandonWorkflow('run-1');
+    expect(result.cancelled).toBe(true);
+    expect(result.cleanupWarnings?.[0]).toContain('execution owner');
+    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
+  });
+
+  test('an unaccounted inherited child prevents removing its root checkout', async () => {
+    mockFindChildRuns.mockImplementation(async id =>
+      id === 'run-1' ? [makePausedRun({ id: 'child', metadata: {} })] : []
+    );
+    const result = await operations.abandonWorkflow('run-1');
+    expect(result.cleanupWarnings?.join(' ')).toContain(
+      'descendants could not all be accounted for'
+    );
+    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
+  });
+
+  test('unexpected descendant owner errors are warnings after cancellation, and protect the root', async () => {
+    mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [owned('child')] : []));
+    mockRequestDetachedRunStop.mockRejectedValueOnce(
+      new DetachedRunOwnerUnavailableError('run-1', 'ENOENT', 'unreachable')
+    );
+    mockRequestDetachedRunStop.mockRejectedValueOnce(new Error('endpoint inspection failed'));
+    const result = await operations.abandonWorkflow('run-1');
+    expect(result.cancelled).toBe(true);
+    expect(result.cleanupWarnings?.join(' ')).toContain('endpoint inspection failed');
+    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
+  });
+
+  test('ordinary cancel retains worktrees', async () => {
+    mockGetWorkflowRun.mockResolvedValue(owned('run-1', { status: 'running' }));
+    mockRequestDetachedRunStop.mockResolvedValueOnce({
+      pid: 4242,
+      stop: async () => {},
+      release: () => {},
+    });
+    await operations.cancelWorkflow('run-1');
+    expect(reclaim).not.toHaveBeenCalled();
   });
 });

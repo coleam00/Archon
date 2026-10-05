@@ -287,6 +287,9 @@
     ],
     [
       "src/workflows/commit-author.integration.test.ts"
+    ],
+    [
+      "src/services/cleanup-worktree.integration.test.ts"
     ]
   ]
 }

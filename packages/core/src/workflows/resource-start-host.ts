@@ -14,6 +14,7 @@ import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-wr
  * fence, and recovery stay in the database layer; nothing here declares an owner dead.
  */
 import { randomUUID } from 'node:crypto';
+import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath, findRepoRoot } from '@archon/git';
 import { getIsolationProvider } from '@archon/isolation';
@@ -349,7 +350,7 @@ async function worktreeLane(
   identifier: string,
   platformType: string,
   userId: string
-): Promise<{ cwd: string; envId: string; cutFromCommit?: string }> {
+): Promise<{ cwd: string; envId: string; cutFromCommit?: string; ownedWorktree?: OwnedWorktree }> {
   ensureIsolationConfigured();
   const provider = getIsolationProvider();
   // An explicit branch names one reusable checkout, so repeated starts share it.
@@ -381,6 +382,8 @@ async function worktreeLane(
     canonicalRepoPath: toRepoPath(codebase.default_cwd),
     description: `Resource start: ${identifier}`,
   });
+  if (!env.metadata.adopted && !env.metadata.creationId)
+    throw new Error('Fresh worktree creation did not return creation identity');
   const record = await isolationDb.create({
     codebase_id: codebase.id,
     workflow_type: 'task',
@@ -390,11 +393,14 @@ async function worktreeLane(
     branch_name: env.branchName,
     created_by_platform: platformType,
     created_by_user_id: userId,
-    metadata: {},
+    metadata: { worktree_creation_id: env.metadata.adopted ? null : env.metadata.creationId },
   });
   return {
     cwd: env.workingPath,
     envId: record.id,
+    ...(!env.metadata.adopted && env.metadata.creationId
+      ? { ownedWorktree: { envId: record.id, creationId: env.metadata.creationId } }
+      : {}),
     ...(!env.metadata.adopted && env.metadata.cutFromCommit !== undefined
       ? { cutFromCommit: env.metadata.cutFromCommit }
       : {}),
@@ -496,7 +502,12 @@ export async function startAdmittedResourceStart(
             platform.getPlatformType(),
             launch.run.user_id
           )
-        : { cwd: launch.execution.cwd, envId: undefined, cutFromCommit: undefined };
+        : {
+            cwd: launch.execution.cwd,
+            envId: undefined,
+            cutFromCommit: undefined,
+            ownedWorktree: undefined,
+          };
     await conversationDb.updateConversation(run.conversation_id, {
       cwd: execution.cwd,
       codebase_id: codebase.id,
@@ -517,6 +528,7 @@ export async function startAdmittedResourceStart(
         codebaseId: codebase.id,
         userId: launch.run.user_id,
         baseBranch,
+        ownedWorktree: execution.ownedWorktree,
         ...(execution.cutFromCommit !== undefined
           ? { cutFromCommit: execution.cutFromCommit }
           : {}),

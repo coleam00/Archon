@@ -2671,6 +2671,7 @@ async function runWorkflowWithOwnedSource(
   let isolationEnvId: string | undefined;
   // Set only when this invocation created the run's branch (#3305).
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   // Execution context for the run. Repo/worktree and folder-in-place both run on
   // the host; the folder-backend seam sets this and is where `--container` flips
   // it to a container context.
@@ -3140,6 +3141,8 @@ async function runWorkflowWithOwnedSource(
       }
 
       // Track in database
+      if (!isolatedEnv.metadata.adopted && !isolatedEnv.metadata.creationId)
+        throw new Error('Fresh worktree creation did not return creation identity');
       const envRecord = await isolationDb.create({
         codebase_id: codebase.id,
         workflow_type: 'task',
@@ -3148,11 +3151,17 @@ async function runWorkflowWithOwnedSource(
         working_path: isolatedEnv.workingPath,
         branch_name: isolatedEnv.branchName,
         created_by_platform: 'cli',
-        metadata: {},
+        metadata: {
+          worktree_creation_id: isolatedEnv.metadata.adopted
+            ? null
+            : isolatedEnv.metadata.creationId,
+        },
       });
 
       workingCwd = isolatedEnv.workingPath;
       isolationEnvId = envRecord.id;
+      if (!isolatedEnv.metadata.adopted && isolatedEnv.metadata.creationId)
+        ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
       if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
       getLog().info({ path: workingCwd }, 'worktree_created');
     }
@@ -3433,6 +3442,7 @@ async function runWorkflowWithOwnedSource(
         // when IT creates the row, and this row already carries them.
         ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
         ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+        ownedWorktree,
       };
       result = await engine.submit({
         platform: adapter,

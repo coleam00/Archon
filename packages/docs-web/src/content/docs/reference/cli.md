@@ -968,6 +968,24 @@ archon workflow abandon <run-id> --json
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
 
+Abandon also releases a worktree created for this run when its persisted creation
+identity still matches the checkout. Adopted, reused, inherited, and legacy checkouts
+without that proof stay in place, with a reason. Local and remote branches survive;
+the isolation record remains in history marked `destroyed` after verified removal.
+
+Before stopping an owner, release checks refuse tracked edits, staged edits, untracked
+files, ignored files (including copied `.env` files), and unpushed commits. Preserve
+those files and push the commits before retrying. Git fetch refreshes the configured
+`worktree.remote`, or the repository's default remote; an unavailable remote refuses
+release. Another resumable or live run on the checkout also prevents release.
+
+A release failure after cancellation leaves the run cancelled and reports a cleanup
+warning. Retry `workflow abandon <run-id>` on that cancelled run to finish release
+without repeating cancellation. A stopped owner followed by a safety refusal is
+reported explicitly. Foreign-host/user owners and unaccounted-for descendants retain
+their checkouts. Successful abandonment means cancellation was recorded; check the
+cleanup warnings to learn whether all resources were released.
+
 Managed container reclamation is best-effort here too. A failure leaves the run
 `cancelled` and reports a warning on every abandon surface because container resources
 may remain allocated. Inspect the managed containers before retrying cleanup.
@@ -1133,6 +1151,11 @@ is still resumable: a resume reuses the child's recorded worktree and fails if i
 removed.
 
 ### `isolation cleanup [days]`
+
+To explicitly discard a resumable run and release its owned worktree, use
+`archon workflow abandon <run-id>`. Ordinary cleanup keeps resumable runs protected.
+Abandon refuses dirty or unpushed work and never releases an adopted checkout;
+see [`workflow abandon`](#workflow-abandon) for retained-checkout and retry behavior.
 
 Remove stale environments.
 

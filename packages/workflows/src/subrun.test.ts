@@ -2149,7 +2149,10 @@ nodes:
       parent,
       'goal',
       'conv-db',
-      { resolveChildIsolation: resolver }
+      {
+        resolveChildIsolation: resolver,
+        ownedWorktree: { envId: 'env-parent', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+      }
     );
 
     expect(result.success).toBe(true);
@@ -2159,6 +2162,7 @@ nodes:
     expect(child?.status).toBe('completed');
     // The child shares the parent's checkout.
     expect(child?.working_path).toBe(cwd);
+    expect(child?.metadata.owned_worktree).toBeUndefined();
   });
 
   it('threads the resolver into a nested child so a grandchild also isolates (I1)', async () => {
@@ -2217,6 +2221,10 @@ nodes:
         return {
           cwd: dir,
           envId: `env-${String(calls.length)}`,
+          ownedWorktree: {
+            envId: `env-${String(calls.length)}`,
+            creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+          },
           branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-0`,
         };
       },
@@ -2240,6 +2248,14 @@ nodes:
     const grandchild = [...store.runs.values()].find(r => r.workflow_name === 'grandchild-iso');
     expect(child?.status).toBe('completed');
     expect(grandchild?.status).toBe('completed');
+    expect(child?.metadata.owned_worktree).toEqual({
+      envId: 'env-1',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
+    expect(grandchild?.metadata.owned_worktree).toEqual({
+      envId: 'env-2',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
     // Three distinct checkouts: parent (shared), child worktree, grandchild worktree.
     expect(child?.working_path).not.toBe(cwd);
     expect(grandchild?.working_path).not.toBe(cwd);
