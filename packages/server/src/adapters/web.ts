@@ -104,7 +104,7 @@ export class WebAdapter implements IPlatformAdapter {
     if (chunk.type === 'tool_call') {
       const now = Date.now();
       const name = toolCallDisplayName(chunk);
-      const input = chunk.rawInput ?? {};
+      const input = chunk.rawInput === undefined ? {} : chunk.rawInput;
 
       // Buffer tool call for direct chat persistence (message metadata)
       this.persistence.appendToolCall(conversationId, {

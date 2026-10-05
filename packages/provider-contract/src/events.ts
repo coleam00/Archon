@@ -39,8 +39,8 @@ export const toolCallSchema = z.object({
   name: z.string(),
   /** ACP `title` (required there), a human-readable label such as the command a shell tool runs. */
   title: z.string().optional(),
-  /** ACP `rawInput`. Archon narrows it to an object, which is what every SDK sends. */
-  rawInput: z.record(z.string(), z.unknown()).optional(),
+  /** ACP `rawInput`: providers may send any JSON value, including scalar tool arguments. */
+  rawInput: z.unknown().optional(),
 });
 
 /**

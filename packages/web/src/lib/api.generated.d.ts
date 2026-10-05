@@ -4824,9 +4824,7 @@ export interface components {
             toolCallId: string;
             name: string;
             title?: string;
-            rawInput?: {
-              [key: string]: unknown;
-            };
+            rawInput?: unknown;
           }
         | {
             /** @enum {string} */

@@ -766,7 +766,7 @@ You can configure Copilot's behavior in `.archon/config.yaml`:
 assistants:
   copilot:
     model: gpt-5-mini             # 'gpt-5', 'gpt-5-mini', 'claude-sonnet-4.5', 'auto', etc.
-    modelReasoningEffort: medium  # 'minimal'..'ultra' — clamped to the SDK's 'low'..'xhigh'
+    modelReasoningEffort: medium  # 'minimal'..'ultra' — clamped to the SDK's 'low'..'max'
     # configDir: /absolute/path/to/copilot-config
     # enableConfigDiscovery: false  # only enable for trusted repos — bypasses Archon's workflow MCP/skill validation
     # useLoggedInUser: false        # opt into env-token auth (GH_TOKEN / GITHUB_TOKEN); default uses `copilot login`
@@ -780,7 +780,7 @@ Copilot accepts OpenAI models (`gpt-5`, `gpt-5-mini`), Anthropic via BYOK (`clau
 | Feature | Support | Notes |
 |---|---|---|
 | Session resume | ✅ | Returns `sessionId`; reused on resume. No session fork, so `persist_session` does not continue across runs ([Concurrent runs](/guides/authoring-workflows/#concurrent-runs)) |
-| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max`, `ultra`, and `persistent` map to SDK `xhigh`, while `minimal` maps to `low` |
+| Reasoning control | ✅ | `effort:` → Copilot `reasoningEffort`; `max` passes through; `ultra` and `persistent` map to SDK `max`, while `minimal` maps to `low` |
 | System prompt override | ✅ | `systemPrompt:` |
 | Codebase env vars | ✅ | merged into the spawned Copilot CLI environment |
 | Tool restrictions | ✅ | `allowed_tools` → `availableTools`, `denied_tools` → `excludedTools` |

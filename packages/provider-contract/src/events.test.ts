@@ -69,6 +69,19 @@ describe('provider event vocabulary', () => {
     }
   );
 
+  test.each(['patch text', 0, false, null, ['a', 1]].map(value => [value] as const))(
+    'preserves non-object tool input %j',
+    rawInput => {
+      const event: ProviderEvent = {
+        type: 'tool_call',
+        toolCallId: 't1',
+        name: 'apply_patch',
+        rawInput,
+      };
+      expect(providerEventSchema.parse(event)).toEqual(event);
+    }
+  );
+
   test('the chunk union also carries result and settled', () => {
     expect(providerChunkSchema.parse({ type: 'result', sessionId: 's' })).toEqual({
       type: 'result',

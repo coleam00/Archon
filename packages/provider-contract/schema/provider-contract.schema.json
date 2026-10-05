@@ -332,13 +332,7 @@
             "title": {
               "type": "string"
             },
-            "rawInput": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {}
-            }
+            "rawInput": {}
           },
           "required": [
             "type",

@@ -107,6 +107,25 @@ describe('AsyncQueue', () => {
   });
 });
 
+describe('Copilot JSON tool arguments', () => {
+  test.each(['patch text', 0, false, null, ['a', 1]].map(value => [value] as const))(
+    'preserves %j',
+    args => {
+      const chunks = mapCopilotEvent(
+        evt('tool.execution_start', {
+          toolCallId: 't1',
+          toolName: 'apply_patch',
+          arguments: args,
+        }),
+        makeCtx()
+      );
+      expect(chunks).toEqual([
+        { type: 'tool_call', toolCallId: 't1', name: 'apply_patch', rawInput: args },
+      ]);
+    }
+  );
+});
+
 describe('normalizeCopilotUsage', () => {
   test('returns undefined when input is undefined', () => {
     expect(normalizeCopilotUsage(undefined)).toBeUndefined();

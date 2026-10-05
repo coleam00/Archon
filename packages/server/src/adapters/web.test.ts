@@ -87,6 +87,20 @@ describe('WebAdapter.sendStructuredEvent — provider results', () => {
 });
 
 describe('WebAdapter.sendStructuredEvent — tool results', () => {
+  test.each(['patch text', 0, false, null, ['a', 1]].map(input => [input] as const))(
+    'streams non-object tool input %j unchanged',
+    async input => {
+      const { adapter, emitted } = makeAdapter();
+      await adapter.sendStructuredEvent('conv-1', {
+        type: 'tool_call',
+        toolCallId: 'patch',
+        name: 'apply_patch',
+        rawInput: input,
+      });
+      expect(JSON.parse(emitted[0]!)).toMatchObject({ type: 'tool_call', input });
+    }
+  );
+
   test('pairs results by id when two tools with the same name run concurrently', async () => {
     const { adapter, emitted, appendToolResultCalls } = makeAdapter();
 

@@ -9,17 +9,19 @@ interface ToolCallItemProps {
   timestamp: string;
 }
 
-function argsSummary(input: Record<string, unknown>): string {
-  const keys = Object.keys(input);
-  if (keys.length === 0) return '';
-  const parts: string[] = [];
-  for (const k of keys.slice(0, 2)) {
-    const v = input[k];
-    const rendered =
-      typeof v === 'string' ? `"${v.length > 48 ? `${v.slice(0, 48)}…` : v}"` : JSON.stringify(v);
-    parts.push(`${k}=${rendered}`);
+function argsSummary(input: InlineToolCall['input']): string {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return (JSON.stringify(input) ?? '').slice(0, 80);
   }
-  if (keys.length > 2) parts.push(`+${(keys.length - 2).toString()}`);
+  const entries: [string, unknown][] = Object.entries(input);
+  const parts = entries.slice(0, 2).map(([key, value]) => {
+    const rendered =
+      typeof value === 'string'
+        ? `"${value.length > 48 ? `${value.slice(0, 48)}…` : value}"`
+        : JSON.stringify(value);
+    return `${key}=${rendered}`;
+  });
+  if (entries.length > 2) parts.push(`+${(entries.length - 2).toString()}`);
   return parts.join(' ');
 }
 
@@ -34,8 +36,8 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
   const wallClock = formatClock(timestamp);
   const summary = argsSummary(call.input);
-  const hasDetails =
-    Object.keys(call.input).length > 0 || (call.output !== undefined && call.output.length > 0);
+  const hasInput = summary.length > 0;
+  const hasDetails = hasInput || (call.output !== undefined && call.output.length > 0);
 
   return (
     <div
@@ -108,7 +110,7 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
       </div>
       {expanded && hasDetails ? (
         <div className="ml-[72px] mt-2 space-y-1.5">
-          {Object.keys(call.input).length > 0 ? (
+          {hasInput ? (
             <pre className="max-h-[320px] overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
               {JSON.stringify(call.input, null, 2)}
             </pre>
