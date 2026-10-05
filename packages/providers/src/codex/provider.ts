@@ -539,7 +539,7 @@ interface TurnRequest {
 }
 
 /**
- * Reports the parent result, then observes started background work until it drains.
+ * Keeps observing background work after the parent completes.
  * Lost observation is thrown for `sendQuery` to classify; it never settles.
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
@@ -602,6 +602,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const liveTasks = new Set<string>();
   const agentThreads = new Set<string>();
   let parentCompleted = false;
+  let pendingFailure: ResultChunk | undefined;
   const errors: string[] = [];
   let lastAgentMessage = '';
   // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
@@ -703,20 +704,28 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         const { turn, threadId: completedThreadId } = notification.params;
         if (completedThreadId !== threadId || turn.id !== turnId || parentCompleted) break;
         parentCompleted = true;
-        yield* completeTurn(turn.status, turn.error, request, {
+        for (const chunk of completeTurn(turn.status, turn.error, request, {
           threadId,
           usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
           rateLimits,
           lastAgentMessage,
-        });
+        })) {
+          // The executor stops reading on failure results, so live work must drain first.
+          if (chunk.type === 'result' && chunk.failure) pendingFailure = chunk;
+          else yield chunk;
+        }
         break;
       }
 
       default:
         break;
     }
-    if (parentCompleted && liveTasks.size === 0) return;
+    if (parentCompleted && liveTasks.size === 0) {
+      if (pendingFailure) yield pendingFailure;
+      return;
+    }
   }
+  if (pendingFailure) yield pendingFailure;
   throw connection.closedError(await connection.ended, errors);
 }
 

@@ -320,7 +320,7 @@ describe('CodexProvider', () => {
         const chunks: MessageChunk[] = [];
         for await (const chunk of provider.sendQuery('p', '/workspace')) {
           chunks.push(chunk);
-          if (chunk.type === 'result') {
+          if (chunk.type === 'subtask' && chunk.status === 'started') {
             expect(server.processes[0].stdinEnded).toBe(false);
             server.processes[0].send(itemCompleted({ ...bg, status, exitCode: 1 }));
           }
@@ -329,9 +329,30 @@ describe('CodexProvider', () => {
           'started',
           status === 'declined' ? 'stopped' : status,
         ]);
+        expect(chunks.map(c => c.type)).toEqual(['subtask', 'subtask', 'result', 'settled']);
         expect(chunks.at(-1)).toEqual({ type: 'settled' });
       }
     );
+
+    test('drains observed work before a failed result can make the executor stop reading', async () => {
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          turnCompleted('failed', turnError('other', 'parent failed')),
+          itemCompleted(subAgentActivity('completed')),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+        chunks.push(chunk);
+        if (chunk.type === 'result' && chunk.failure) break;
+      }
+      expect(chunks.map(c => c.type)).toEqual(['subtask', 'subtask', 'result']);
+      expect(chunks[1]).toMatchObject({ status: 'completed' });
+      expect(resultOf(chunks).failure?.evidence).toContain('parent failed');
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
 
     test('cancellation after a result leaves observed work live and does not settle', async () => {
       const { provider, server } = providerWith({
