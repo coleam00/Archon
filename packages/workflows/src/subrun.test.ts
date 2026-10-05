@@ -3927,14 +3927,29 @@ nodes:
     );
 
     const store = new InMemoryStore();
-    // Concurrency-tracking provider: the in-flight window during the awaited "AI turn"
-    // reflects how many children run at once.
-    const tracker = { inFlight: 0, max: 0 };
+    // Concurrency-tracking provider: the in-flight count during the awaited "AI turn"
+    // reflects how many children run at once. A turn holds until a second turn joins
+    // it, so the window is observed rather than raced: a slow runner staggers child
+    // start-up past any fixed overlap sleep. The fifth turn has no partner left and
+    // runs alone. An engine that serialized the children leaves the first turn
+    // waiting, and the test fails on its budget.
+    const tracker = { inFlight: 0, max: 0, started: 0 };
+    let releaseWaitingTurn: (() => void) | undefined;
     const slowProvider = {
       ...makeProvider(),
       sendQuery: async function* () {
+        tracker.started++;
         tracker.inFlight++;
         tracker.max = Math.max(tracker.max, tracker.inFlight);
+        if (releaseWaitingTurn) {
+          releaseWaitingTurn();
+          releaseWaitingTurn = undefined;
+        } else if (tracker.started < 5) {
+          await new Promise<void>(resolve => {
+            releaseWaitingTurn = resolve;
+          });
+        }
+        // Stay in flight briefly so an over-limit third child, if admitted, is counted.
         await new Promise(r => setTimeout(r, 15));
         tracker.inFlight--;
         yield { type: 'agent_message_chunk', text: 'ai-output' };
