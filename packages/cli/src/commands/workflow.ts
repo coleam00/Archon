@@ -531,22 +531,22 @@ async function resolveRunConversationId(
         {
           err: error as Error,
           runId: continuationRun.id,
-          conversationId: continuationRun.conversation_id,
+          conversationId: storedConversationId,
         },
         'cli.workflow_continuation_conversation_lookup_failed'
       );
       throw new Error(
-        `Failed to load conversation '${continuationRun.conversation_id}' for workflow run '${continuationRun.id}': ${(error as Error).message}\n` +
+        `Failed to load conversation '${storedConversationId}' for workflow run '${continuationRun.id}': ${(error as Error).message}\n` +
           'The run was not resumed. Fix the conversation lookup problem, then retry.'
       );
     }
     if (!conversation) {
       getLog().error(
-        { runId: continuationRun.id, conversationId: continuationRun.conversation_id },
+        { runId: continuationRun.id, conversationId: storedConversationId },
         'cli.workflow_continuation_conversation_not_found'
       );
       throw new Error(
-        `Conversation '${continuationRun.conversation_id}' for workflow run '${continuationRun.id}' no longer exists.\n` +
+        `Conversation '${storedConversationId}' for workflow run '${continuationRun.id}' no longer exists.\n` +
           'The run was not resumed. Restore the conversation, then retry.'
       );
     }
