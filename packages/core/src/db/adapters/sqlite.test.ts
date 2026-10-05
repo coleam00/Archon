@@ -1228,6 +1228,27 @@ describe('SqliteAdapter busy locks', () => {
     expect(await codebaseCount()).toBe(2);
   });
 
+  test("a waiting statement does not retry into another caller's transaction", async () => {
+    await lockedAdapter();
+    const released = Bun.sleep(100).then(() => holder.run('COMMIT'));
+
+    const statement = insertCodebase(adapter, 'cb-outside');
+    // Let the statement fail busy once and start its backoff sleep.
+    await Bun.sleep(30);
+    // A transaction that stays open past the statement's retry, then rolls back.
+    const transaction = adapter.withTransaction(async query => {
+      await query('SELECT 1');
+      await Bun.sleep(300);
+      throw new Error('abort');
+    });
+
+    await statement;
+    await expect(transaction).rejects.toThrow('abort');
+    await released;
+
+    expect(await codebaseCount()).toBe(1);
+  });
+
   test('a non-busy error still fails on the first attempt', async () => {
     await lockedAdapter();
     holder.run('COMMIT');

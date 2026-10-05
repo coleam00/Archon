@@ -120,7 +120,17 @@ export class SqliteAdapter implements IDatabase {
     // SQLITE_BUSY_SNAPSHOT its read snapshot is stale for good. withTransaction
     // reruns the whole block instead.
     if (this.db.inTransaction) return this.execute<T>(sql, params);
-    return retryWhileBusy('statement', () => this.execute<T>(sql, params));
+    let firstAttempt = true;
+    return retryWhileBusy('statement', () => {
+      if (firstAttempt) {
+        firstAttempt = false;
+        return this.execute<T>(sql, params);
+      }
+      // A retry wakes after a sleep, when another caller's transaction may be open on
+      // this shared connection. Queue behind it, or the write would join that
+      // transaction and vanish if it rolls back.
+      return this.serialize(() => this.execute<T>(sql, params));
+    });
   }
 
   private async execute<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
@@ -199,10 +209,15 @@ export class SqliteAdapter implements IDatabase {
     // A busy failure anywhere in the block, COMMIT included, has already rolled back,
     // so the block reruns from BEGIN against fresh state. Callers' blocks only issue
     // queries and compute a return value, which makes rerunning them safe.
-    const run = (): Promise<T> => retryWhileBusy('transaction', runOnce);
-    // Serialize against any in-flight transaction (see `txTail`). The stored tail
-    // is made non-rejecting so one transaction's failure never blocks the next.
-    const result = this.txTail.then(run, run);
+    return this.serialize(() => retryWhileBusy('transaction', runOnce));
+  }
+
+  /**
+   * Run `work` after every in-flight transaction (see `txTail`). The stored tail is
+   * made non-rejecting so one failure never blocks the next.
+   */
+  private serialize<T>(work: () => Promise<T>): Promise<T> {
+    const result = this.txTail.then(work, work);
     this.txTail = result.then(
       () => undefined,
       () => undefined
