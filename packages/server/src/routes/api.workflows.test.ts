@@ -47,6 +47,12 @@ mock.module('@archon/core', () => ({
   getWorkflowFolderSearchPaths: mock(() => ['.archon/workflows']),
   getCommandFolderSearchPaths: mock(() => ['.archon/commands']),
   getBundledWorkflowsPath: mock(() => '/tmp/.archon-test-nonexistent/workflows'),
+  ProjectRegistrationError: class ProjectRegistrationError extends Error {},
+  inspectProjectBaseBranch: mock(async () => ({
+    kind: 'repo',
+    defaultBranch: 'dev',
+    reason: null,
+  })),
   cloneRepository: mock(async () => {}),
   registerRepository: mock(async () => ({ success: true })),
   removeWorktree: mock(async () => ({ success: true })),

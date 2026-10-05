@@ -108,6 +108,10 @@ export {
   registerRepository,
   registerFolder,
   type RegisterResult,
+  inspectProjectBaseBranch,
+  ProjectRegistrationError,
+  type RegistrationOptions,
+  type ProjectBaseBranchInspection,
 } from './handlers/clone';
 
 // =============================================================================

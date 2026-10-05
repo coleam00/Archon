@@ -383,6 +383,33 @@ Archon refuses the turn instead of passing the missing path to the AI provider. 
 
 The refusal writes nothing and changes no state, so a transient cause (a mount blip, a directory mid-move) costs one refused message and nothing else — the next turn re-evaluates from scratch. Operators can find these events in the logs under `orchestrator.conversation_cwd_missing`, which records the conversation id, the path, and the isolation environment id.
 
+## Project base branch points at an old local branch
+
+Older registrations stored whichever local branch was checked out. Existing stored values
+are preserved because Archon cannot distinguish a past choice from a detected snapshot.
+New registrations store only an explicit choice; `NULL` follows the remote default when needed.
+The engine reads the remote's live HEAD advertisement, so a renamed default is picked up
+without refreshing local `origin/HEAD`. An unreachable remote or unknown HEAD fails resolution
+with configuration guidance rather than guessing a branch.
+
+Until project settings support editing this value, look up the project in your database:
+
+```sql
+SELECT id, name, default_branch FROM remote_agent_codebases;
+```
+
+To make that project follow its remote default, replace the ID below with the selected ID:
+
+```sql
+UPDATE remote_agent_codebases SET default_branch = NULL WHERE id = '<project-id>';
+```
+
+This leaves other projects unchanged. `worktree.baseBranch` in `.archon/config.yaml` still
+outranks the project choice, and `--base` overrides the base for a single dispatch.
+`--base-branch` is for initial CLI registration, not editing an existing project.
+No database migration is needed: older binaries already accept `NULL` as auto-detection,
+although they retain their older cached remote-HEAD behavior.
+
 ## Stored project path is relative
 
 Workflow runs and isolation cleanup reject a registration whose stored `default_cwd`

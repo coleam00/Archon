@@ -78,7 +78,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - AI assistant type per codebase
   - Default working directory
   - `kind` (`'repo'` | `'folder'`, default `'repo'`) discriminates git-repo projects from non-git folder projects (which run in place, no worktree)
-  - Nullable detected default branch, used as branch context for workspace sync when available
+  - Optional explicit base branch; `NULL` resolves the remote default when needed. Existing stored values remain explicit.
 
 - **`remote_agent_conversations`** - Platform conversation tracking
   - Platform type + conversation ID (unique constraint)
