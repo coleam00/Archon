@@ -143,7 +143,9 @@ if (yourPlatformToken) {
 
   // Set up message handler
   adapter.onMessage(async (conversationId, message) => {
-    await handleMessage(adapter, conversationId, message);
+    await handleMessage(adapter, conversationId, message, {
+      actor: { kind: 'unidentified' },
+    });
   });
 
   await adapter.start();
@@ -267,7 +269,9 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
   const { conversationId, message } = this.parseEvent(payload);
 
   // Route to orchestrator
-  await handleMessage(this, conversationId, message);
+  await handleMessage(this, conversationId, message, {
+    actor: { kind: 'unidentified' },
+  });
 }
 ```
 
@@ -1419,7 +1423,7 @@ try {
 ### Context Injection
 
 ```typescript
-// GitHub: Pass issue/PR context as separate parameter
+// GitHub: Supply issue/PR context alongside the resolved actor
 let contextToAppend: string | undefined;
 
 if (eventType === 'issue' && issue) {
@@ -1430,10 +1434,15 @@ Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
 Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
 }
 
-await handleMessage(adapter, conversationId, finalMessage, contextToAppend);
+await handleMessage(adapter, conversationId, finalMessage, {
+  actor: archonUserId
+    ? { kind: 'user', userId: archonUserId }
+    : { kind: 'unidentified' },
+  issueContext: contextToAppend,
+});
 ```
 
-Context is passed as a dedicated `issueContext` parameter to `handleMessage()`, keeping it separate from the user's message. For workflows, context is injected via `$CONTEXT` / `$ISSUE_CONTEXT` variable substitution in `buildPromptWithContext()`.
+The adapter supplies its resolved Archon user ID as `archonUserId`, or `undefined` when identity resolution fails. Context is passed in the `issueContext` field of the required context object to `handleMessage()`, keeping it separate from the user's message. For workflows, context is injected via `$CONTEXT` / `$ISSUE_CONTEXT` variable substitution in `buildPromptWithContext()`.
 
 **Reference:** `packages/adapters/src/forge/github/adapter.ts`, `packages/core/src/orchestrator/orchestrator.ts`
 
