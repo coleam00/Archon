@@ -789,6 +789,31 @@ function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group' 
 const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
+function collectConditionalTriggerRuleWarnings(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  warnings: string[]
+): void {
+  const nodesById = new Map(nodes.map(node => [node.id, node]));
+  for (const node of nodes) {
+    const dependencies = node.depends_on ?? [];
+    if (
+      node.trigger_rule === 'none_failed_min_one_success' &&
+      dependencies.length > 0 &&
+      dependencies.every(id => nodesById.get(id)?.when !== undefined)
+    ) {
+      warnings.push(
+        `Node '${node.id}': 'none_failed_min_one_success' requires at least one successful dependency, ` +
+          "but every dependency has a 'when'. If all are condition-skipped, this node will also be skipped. " +
+          "Use 'all_done' to run after an optional gate, with a downstream 'when' if needed to prevent " +
+          'running after a failure. See /guides/authoring-workflows/#trigger_rule-values.'
+      );
+    }
+    if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
+      collectConditionalTriggerRuleWarnings(node.loop_group.nodes, warnings);
+    }
+  }
+}
+
 /**
  * Validate DAG structure: unique IDs, depends_on references exist, no cycles,
  * every runtime-substituted node-output reference points to a known node in its
@@ -1571,6 +1596,8 @@ export function parseWorkflow(
         error: { filename, error: structureError, errorType: 'validation_error' },
       };
     }
+
+    collectConditionalTriggerRuleWarnings(dagNodes, parseWarnings);
 
     const outputFormatError = validateNodeOutputFormats(dagNodes);
     if (outputFormatError) {

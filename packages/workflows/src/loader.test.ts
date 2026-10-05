@@ -5214,6 +5214,118 @@ nodes:
     });
   });
 
+  describe('all-conditional trigger rule warning (#3783)', () => {
+    it.each([
+      {
+        label: 'one conditional dependency',
+        deps: ['optional'],
+        conditional: ['optional'],
+        rule: 'none_failed_min_one_success',
+        warns: true,
+      },
+      {
+        label: 'all conditional dependencies',
+        deps: ['optional', 'other'],
+        conditional: ['optional', 'other'],
+        rule: 'none_failed_min_one_success',
+        warns: true,
+      },
+      {
+        label: 'one unconditional dependency',
+        deps: ['optional'],
+        conditional: [],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'mixed dependencies',
+        deps: ['optional', 'other'],
+        conditional: ['optional'],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'no dependencies',
+        deps: [],
+        conditional: [],
+        rule: 'none_failed_min_one_success',
+        warns: false,
+      },
+      {
+        label: 'all_done after conditional dependencies',
+        deps: ['optional'],
+        conditional: ['optional'],
+        rule: 'all_done',
+        warns: false,
+      },
+    ])('$label', ({ deps, conditional, rule, warns }) => {
+      const { workflow, warnings } = parseWorkflowYaml(`name: conditional-join
+description: Conditional join warning
+nodes:
+  - id: optional
+    bash: echo optional
+    ${conditional.some(id => id === 'optional') ? 'when: "$INPUTS.run == true"' : ''}
+  - id: other
+    bash: echo other
+    ${conditional.some(id => id === 'other') ? 'when: "$INPUTS.run == true"' : ''}
+  - id: join
+    bash: echo joined
+    depends_on: ${JSON.stringify(deps)}
+    trigger_rule: ${rule}
+inputs:
+  run: {}
+`);
+      expect(workflow.nodes[2]?.trigger_rule).toBe(rule);
+      expect(warnings).toHaveLength(warns ? 1 : 0);
+      if (warns) {
+        expect(warnings[0]).toContain("Node 'join'");
+        expect(warnings[0]).toContain('none_failed_min_one_success');
+        expect(warnings[0]).toContain('all_done');
+        expect(warnings[0]).toContain('/guides/authoring-workflows/#trigger_rule-values');
+      }
+    });
+  });
+
+  it('warns within a loop_group scope', () => {
+    const { warnings } = parseWorkflowYaml(`name: conditional-loop-join
+description: Conditional join inside a loop
+inputs:
+  run: {}
+nodes:
+  - id: group
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 1
+      nodes:
+        - id: optional
+          bash: echo optional
+          when: "$INPUTS.run == true"
+        - id: join
+          depends_on: [optional]
+          trigger_rule: none_failed_min_one_success
+          bash: echo joined
+`);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("Node 'join'");
+  });
+
+  it('bundled workflows warn only on the conditional archon-ship routing join', () => {
+    const warnedNodes: { workflow: string; warning: string }[] = [];
+    for (const [filename, yaml] of Object.entries(bundledDefaults.BUNDLED_WORKFLOWS)) {
+      const result = parseWorkflow(yaml, filename);
+      expect(result.error).toBeNull();
+      if (!result.workflow) continue;
+      for (const warning of result.warnings) {
+        if (warning.includes("every dependency has a 'when'")) {
+          warnedNodes.push({ workflow: result.workflow.name, warning });
+        }
+      }
+    }
+    expect(warnedNodes).toHaveLength(1);
+    expect(warnedNodes[0]?.workflow).toBe('archon-ship');
+    expect(warnedNodes[0]?.warning).toContain("Node 'deliver'");
+  });
+
   describe('parse warnings channel (#3444)', () => {
     it('reports parse warnings to the author without logging them at warn', () => {
       // Discovery parses every workflow on each list or run, so a warn log here
@@ -7656,7 +7768,7 @@ nodes:
       't1-fix-issue',
     ]);
 
-    it('warns only on workflows already known to carry unknown keys', async () => {
+    it('warns only on known authoring issues and intentional conditional joins', async () => {
       // packages/workflows/src/ → repo root
       const corpusDir = join(import.meta.dir, '..', '..', '..', '.archon', 'workflows');
 
@@ -7679,7 +7791,14 @@ nodes:
       for (const file of files) {
         const result = parseWorkflow(await readFile(file, 'utf-8'), basename(file));
         if (!result.workflow || result.warnings.length === 0) continue;
-        if (!KNOWN_BAD.has(result.workflow.name)) unexpected.push(result.workflow.name);
+        if (result.workflow.name === 'e2e-joins') {
+          // This engine test deliberately makes both dependencies conditional.
+          expect(result.warnings).toHaveLength(1);
+          expect(result.warnings[0]).toContain("Node 'join-none-failed'");
+          expect(result.warnings[0]).toContain("every dependency has a 'when'");
+        } else if (!KNOWN_BAD.has(result.workflow.name)) {
+          unexpected.push(result.workflow.name);
+        }
       }
       expect(unexpected).toEqual([]);
     });

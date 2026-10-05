@@ -432,6 +432,39 @@ across dependency chains and includes. The skipped join retains the original fai
 node in its `upstream_failed` cause. Condition skips and optional timeout
 skips (`on_timeout: skip`) remain admissible when another dependency succeeds.
 
+A dependency skipped by its own `when:` provides neither a success nor a failure.
+If **all** dependencies are conditional and all skip, `none_failed_min_one_success`
+cannot satisfy its success requirement and the downstream node skips too. The loader
+warns about this shape, naming the downstream node; both `archon validate workflows`
+and run loading report the warning. A conditional dependency can still succeed, so
+this is a warning about a possible skip, not an invalid workflow.
+
+To run after an optional gate, use `all_done`:
+
+```yaml
+name: optional-gate
+description: Run the next step whether the optional gate ran or skipped
+interactive: true
+nodes:
+  - id: review
+    bash: echo ready
+  - id: gate
+    depends_on: [review]
+    when: "$review.output != 'ready'"
+    approval:
+      message: "Review found issues. Approve to continue."
+  - id: next
+    depends_on: [gate]
+    trigger_rule: all_done
+    bash: echo continue
+```
+
+`all_done` also permits running after a failed dependency. If the downstream action
+must not run after a failure, add a `when:` based on a structured decision from a
+successful node. Do not read the failed producer's output in that condition: it
+fails the downstream node rather than evaluating the failed output. For a more
+complex decision, compute it in a script node and gate on its structured output.
+
 `all_success`, `one_success`, and `all_done` keep their existing behavior.
 `if_skipped` supplies a value for a skipped output binding; it does not make a
 blocked node eligible to run or permit binding a failed output.
