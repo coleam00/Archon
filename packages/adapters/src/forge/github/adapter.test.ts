@@ -467,7 +467,11 @@ describe('GitHubAdapter', () => {
         },
         sender: { login: 'user123' },
       } satisfies WebhookEvent);
-      expect(mockGetOrCreateConversation).toHaveBeenCalledWith('github', 'testuser/testrepo#42');
+      expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+        'github',
+        'testuser/testrepo#42',
+        'codebase-test'
+      );
       expect(handleMessageSpy).toHaveBeenCalledTimes(1);
       expect(handleMessageSpy.mock.calls[0][1]).toBe('testuser/testrepo#42');
       expect(handleMessageSpy.mock.calls[0][2]).toContain('[GitHub Issue Context]');
