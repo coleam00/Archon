@@ -42,6 +42,7 @@ import {
   reRunsOwnNodeOnResume,
   isWorkflowWaitContext,
   pendingWorkflowWaitDeadline,
+  runAttention,
   isScheduledWorkflowResume,
   isWaitNode,
   isIncludeDirective,
@@ -2384,8 +2385,14 @@ export async function executeWorkflow(
         let stateLine: string;
         let actionLines: string;
         if (activeWorkflow.status === 'paused') {
+          const attention = runAttention(activeWorkflow);
           const wait = pendingWorkflowWaitDeadline(activeWorkflow);
-          if (wait) {
+          if (attention?.kind === 'action_required') {
+            stateLine = `paused waiting for an outside action (${duration} since started, run \`${shortId}\`)`;
+            actionLines =
+              `• Complete the outside action: ${attention.message}\n` +
+              `• When it is complete, resume it: \`${formatRunCommand(platform, 'resume', shortId)}\`\n`;
+          } else if (wait) {
             const waitingFor =
               wait.kind === 'event' ? `for event \`${wait.event}\` until` : 'until';
             stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
