@@ -55,6 +55,9 @@
   },
   "testGroups": [
     [
+      "src/workflows/branch-launch-source.test.ts"
+    ],
+    [
       "src/db/conversation-detach.integration.test.ts"
     ],
     [

@@ -21,6 +21,9 @@ const {
   updateWorkflowRun,
 } = await import('@archon/core/db');
 const { persistWorkflowEvent } = await import('@archon/core/db/workflow-events');
+// Opening the database creates the schema, which takes seconds on a loaded CI
+// runner; do it here so the test's timeout covers only the signal path.
+const database = getDatabase();
 
 afterAll(async () => {
   await closeDatabase();
@@ -33,7 +36,6 @@ afterAll(async () => {
 
 describe('GitHub completed-check workflow signal — real SQLite', () => {
   test('signals only the persisted wait that owns the qualified pull request', async () => {
-    const database = getDatabase();
     await database.query(
       `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
        VALUES ('check-signal-conversation', 'web', 'check-signal-conversation')`,

@@ -90,7 +90,9 @@ export class YourProvider implements IAgentProvider {
     //    node. Check it with `runProviderConformance` from
     //    `@archon/provider-contract/conformance`. The suite requires
     //    `capabilities: provider.getCapabilities()`; it checks session ids
-    //    (step 6) only when that declares sessionResume: true.
+    //    (step 6) only when that declares sessionResume: true, and needs a
+    //    `forkTurn` that forks into a new session when it declares
+    //    sessionFork: true.
   }
 
   getType() { return 'your-id'; }

@@ -238,7 +238,9 @@ nodes:
       # `none` converged and `replan` must stop correction. gate-ready below
       # accepts only `none`; a replan outcome leaves the PR draft and fails with
       # the canonical report intact instead of spending another correction.
-      until_bash: test $recheck.output.action != "correct"
+      until_bash: |
+        value=$recheck.output.action
+        test "$value" != "correct"
       max_iterations: 5
       fresh_context: true
       nodes:
@@ -495,15 +497,11 @@ nodes:
   - id: await-checks
     loop_group:
       max_iterations: 13
-      # Completion reads the probe's own certified field. It once shelled out to
-      # `gh` instead, because a resumed wait looked like it could not see the
-      # iteration's outputs — investigated and disproven: the incident was a
-      # quoting error in this predicate, where a second layer of quotes around an
-      # already shell-quoted substitution corrupted the comparison. Write the
-      # reference bare, as below. Red counts as done here; ci-verdict is the node
-      # that classifies a concluded red — never flip-ready first — and
+      # Red counts as done here; ci-verdict classifies a concluded red, and
       # flip-ready's preflight refuses any non-green state regardless.
-      until_bash: test $ci-probe.output.state != "pending"
+      until_bash: |
+        value=$ci-probe.output.state
+        test "$value" != "pending"
       nodes:
         - id: ci-probe
           script: check-ci
@@ -696,7 +694,9 @@ nodes:
   - id: await-fix-checks
     loop_group:
       max_iterations: 13
-      until_bash: test $fix-ci-probe.output.state != "pending"
+      until_bash: |
+        value=$fix-ci-probe.output.state
+        test "$value" != "pending"
       nodes:
         - id: fix-ci-probe
           script: check-ci
@@ -737,7 +737,9 @@ nodes:
     when: "$ci-attention-route.output.attention == true"
     loop_group:
       max_iterations: 13
-      until_bash: test $attention-ci-probe.output.state = "concluded"
+      until_bash: |
+        value=$attention-ci-probe.output.state
+        test "$value" = "concluded"
       nodes:
         - id: attention-ci-probe
           script: check-ci

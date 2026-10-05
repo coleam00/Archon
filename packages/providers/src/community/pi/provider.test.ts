@@ -482,6 +482,32 @@ describe('PiProvider', () => {
     expect(failure?.evidence).toContain('Pi provider requires a model');
   });
 
+  test('preflight freezes the native default for the same model used by sendQuery', async () => {
+    process.env.GEMINI_API_KEY = 'fixture-key';
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      defaultProvider: 'google',
+      defaultModel: 'gemini-2.5-pro',
+    }));
+    const provider = new PiProvider();
+    const model = await provider.resolveCredentialModel({ cwd: '/configuration-root' });
+    expect(model).toBe('google/gemini-2.5-pro');
+    expect(mockSettingsManagerCreate).toHaveBeenCalledWith('/configuration-root');
+    mockSettingsManagerGetGlobalSettings.mockImplementation(() => ({
+      defaultProvider: 'anthropic',
+      defaultModel: 'changed',
+    }));
+    for await (const _chunk of provider.sendQuery('test', '/execution-root', undefined, {
+      model,
+    })) {
+      /* drain */
+    }
+    expect(mockCreateAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: expect.objectContaining({ provider: 'google', id: 'gemini-2.5-pro' }),
+      })
+    );
+  });
+
   test('falls back to the operator Pi default (settings.json) when no model is configured', async () => {
     // With no node/config model, Archon composes the operator's Pi default
     // (defaultProvider/defaultModel) so no vendor model is hardcoded — e.g. a
@@ -2408,6 +2434,20 @@ describe('PiProvider', () => {
           },
         },
       ],
+      forkTurn: {
+        name: 'forked session',
+        source: 'source-id',
+        run: () => {
+          mockSessionList.mockImplementationOnce(async () => [
+            { id: 'source-id', path: '/sessions/source-id.jsonl', cwd: '/tmp' },
+          ]);
+          resetScript(scriptedAgentEnd());
+          return new PiProvider().sendQuery('hi', '/tmp', 'source-id', {
+            model: 'google/gemini-2.5-pro',
+            forkSession: true,
+          });
+        },
+      },
       toolTurn: {
         name: 'interrupted tool turn',
         run: () => {
