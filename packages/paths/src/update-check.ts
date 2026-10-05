@@ -1,15 +1,5 @@
 import { join } from 'path';
-import { randomUUID } from 'node:crypto';
-import { hostname } from 'node:os';
-import {
-  readFileSync,
-  writeFileSync,
-  mkdirSync,
-  openSync,
-  closeSync,
-  unlinkSync,
-  readdirSync,
-} from 'fs';
+import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { getArchonHome } from './archon-paths';
 import { createLogger } from './logger';
 
@@ -76,52 +66,12 @@ function readCache(): UpdateCheckCache | null {
   }
 }
 
-function writeCache(cache: UpdateCheckCache): boolean {
+function writeCache(cache: UpdateCheckCache): void {
   try {
+    mkdirSync(getArchonHome(), { recursive: true });
     writeFileSync(getCachePath(), JSON.stringify(cache), 'utf-8');
-    return true;
   } catch (err) {
     log.debug({ err }, 'update_check.cache_write_failed');
-    return false;
-  }
-}
-
-// Unique claim files let contenders remove dead owners without unlinking a replacement lock.
-function withCacheLock<T>(claim: () => T): T | null {
-  const lockDir = `${getCachePath()}.locks`;
-  const ownerHost = encodeURIComponent(hostname());
-  const ownerFile = `${ownerHost}!${process.pid}!${randomUUID()}`;
-  const lockPath = join(lockDir, ownerFile);
-  try {
-    mkdirSync(lockDir, { recursive: true });
-    closeSync(openSync(lockPath, 'wx'));
-    for (const entry of readdirSync(lockDir)) {
-      if (entry === ownerFile) continue;
-      const [host, pidText] = entry.split('!');
-      const pid = Number(pidText);
-      if (host !== ownerHost || !Number.isInteger(pid) || pid <= 0) return null;
-      try {
-        process.kill(pid, 0);
-        return null;
-      } catch (err) {
-        if (!(err instanceof Error && 'code' in err && err.code === 'ESRCH')) return null;
-      }
-      try {
-        unlinkSync(join(lockDir, entry));
-      } catch (err) {
-        if (!(err instanceof Error && 'code' in err && err.code === 'ENOENT')) throw err;
-      }
-    }
-    return claim();
-  } catch (err) {
-    log.debug({ err }, 'update_check.cache_lock_unavailable');
-    return null;
-  } finally {
-    try {
-      unlinkSync(lockPath);
-    } catch (err) {
-      log.debug({ err }, 'update_check.cache_lock_release_failed');
-    }
   }
 }
 
@@ -189,14 +139,13 @@ export async function checkForUpdate(currentVersion: string): Promise<UpdateChec
       const json: unknown = await res.json();
       const { version, url } = parseLatestRelease(json);
 
-      withCacheLock(() =>
-        writeCache({
-          latestVersion: version,
-          releaseUrl: url,
-          checkedAt: Date.now(),
-          lastNoticeShownAt: readCache()?.lastNoticeShownAt,
-        })
-      );
+      writeCache({
+        latestVersion: version,
+        releaseUrl: url,
+        checkedAt: Date.now(),
+        // Re-read: a notice may have been shown while this fetch was in flight.
+        lastNoticeShownAt: readCache()?.lastNoticeShownAt,
+      });
 
       return {
         updateAvailable: isNewerVersion(currentVersion, version),
@@ -228,23 +177,24 @@ export function getCachedUpdateCheck(currentVersion: string): UpdateCheckResult 
   };
 }
 
-/** Claim a fresh cached notice without waiting for the network. */
+/**
+ * Return a fresh cached notice at most once per 24 hours, without waiting for the network.
+ * Read-then-write is not atomic: concurrent processes may rarely both print the notice.
+ */
 export function takeCachedUpdateNotice(currentVersion: string): UpdateCheckResult | null {
-  return withCacheLock(() => {
-    const cached = readCache();
-    if (!cached || Date.now() - cached.checkedAt > STALENESS_MS) return null;
-    if (!isNewerVersion(currentVersion, cached.latestVersion)) return null;
-    if (
-      cached.lastNoticeShownAt !== undefined &&
-      Date.now() - cached.lastNoticeShownAt < NOTICE_INTERVAL_MS
-    )
-      return null;
-    if (!writeCache({ ...cached, lastNoticeShownAt: Date.now() })) return null;
-    return {
-      updateAvailable: true,
-      currentVersion,
-      latestVersion: cached.latestVersion,
-      releaseUrl: cached.releaseUrl,
-    };
-  });
+  const cached = readCache();
+  if (!cached || Date.now() - cached.checkedAt > STALENESS_MS) return null;
+  if (!isNewerVersion(currentVersion, cached.latestVersion)) return null;
+  if (
+    cached.lastNoticeShownAt !== undefined &&
+    Date.now() - cached.lastNoticeShownAt < NOTICE_INTERVAL_MS
+  )
+    return null;
+  writeCache({ ...cached, lastNoticeShownAt: Date.now() });
+  return {
+    updateAvailable: true,
+    currentVersion,
+    latestVersion: cached.latestVersion,
+    releaseUrl: cached.releaseUrl,
+  };
 }

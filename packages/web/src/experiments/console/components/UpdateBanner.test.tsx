@@ -1,117 +1,60 @@
-import { expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { afterEach, describe, expect, test } from 'bun:test';
+import type { ReactElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { UpdateBanner } from './UpdateBanner';
+import { set, invalidate } from '../store/cache';
+import { K } from '../store/keys';
 
-test(
-  'browser click dismisses, persists across remounts, and permits a newer release',
-  async () => {
-    const browser = [
-      Bun.which('google-chrome'),
-      Bun.which('chromium'),
-      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
-      join(process.env.PROGRAMFILES ?? 'C:/Program Files', 'Google/Chrome/Application/chrome.exe'),
-    ].find(path => path !== null && Bun.file(path).size > 0);
-    if (!browser) throw new Error('Chrome or Chromium is required for the banner interaction test');
-    const profile = mkdtempSync(join(tmpdir(), 'archon-update-banner-'));
-    const build = await Bun.build({
-      entrypoints: [join(import.meta.dir, 'UpdateBanner.browser.tsx')],
-      target: 'browser',
-      define: { 'process.env.NODE_ENV': JSON.stringify('production'), 'import.meta.env': '{}' },
-    });
-    expect(build.success).toBe(true);
-    const script = await build.outputs[0].text();
-    let complete!: (result: string) => void;
-    const result = new Promise<string>(resolve => {
-      complete = resolve;
-    });
-    const requests: string[] = [];
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    const server = Bun.serve({
-      port: 0,
-      hostname: '127.0.0.1',
-      async fetch(request) {
-        const path = new URL(request.url).pathname;
-        requests.push(path);
-        if (path === '/result') {
-          complete(await request.text());
-          return new Response('ok');
-        }
-        if (path === '/test.js') {
-          // Browser startup uses the runner's platform budget, not the fixture's deadline.
-          timeout = setTimeout(() => {
-            complete('browser fixture did not report within 10 seconds of script delivery');
-          }, 10000);
-          return new Response(script, {
-            headers: { 'Content-Type': 'text/javascript' },
-          });
-        }
-        return new Response(
-          `<!doctype html><html><body><script>
-          window.addEventListener('error', event => {
-            void fetch('/result', { method: 'POST', body: event.message });
-          });
-          window.addEventListener('unhandledrejection', event => {
-            void fetch('/result', { method: 'POST', body: String(event.reason) });
-          });
-        </script><script src="/test.js"></script></body></html>`,
-          {
-            headers: { 'Content-Type': 'text/html' },
-          }
-        );
+const originalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+afterEach(() => {
+  invalidate(K.updateCheck);
+  if (originalStorage) Object.defineProperty(globalThis, 'localStorage', originalStorage);
+  else Reflect.deleteProperty(globalThis, 'localStorage');
+});
+
+type BannerElement = ReactElement<{ children: ReactElement<{ onClick?: () => void }>[] }>;
+
+/** Render statically and return the dismiss button's click handler. */
+function renderBanner(): { html: string; dismiss?: () => void } {
+  const rendered: { element?: BannerElement | null } = {};
+  function Probe(): ReactElement | null {
+    rendered.element = UpdateBanner() as BannerElement | null;
+    return rendered.element;
+  }
+  const html = renderToStaticMarkup(<Probe />);
+  const button = rendered.element?.props.children.find(child => child.type === 'button');
+  return { html, dismiss: button?.props.onClick };
+}
+
+describe('UpdateBanner', () => {
+  test('dismissal survives a remount and a newer release reappears', () => {
+    const stored = new Map<string, string>();
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => stored.set(key, value),
       },
     });
-    const child = Bun.spawn(
-      [
-        browser,
-        '--headless',
-        '--no-sandbox',
-        '--disable-gpu',
-        '--disable-background-networking',
-        '--no-first-run',
-        '--no-default-browser-check',
-        `--user-data-dir=${profile}`,
-        server.url.href,
-      ],
-      { stdout: 'ignore', stderr: 'pipe' }
-    );
-    let diagnostics = '';
-    const decoder = new TextDecoder();
-    void child.stderr.pipeTo(
-      new WritableStream<Uint8Array>({
-        write(chunk): void {
-          diagnostics += decoder.decode(chunk);
-        },
-      })
-    );
-    const startupDiagnostics = setTimeout(
-      () => {
-        console.error(
-          `Browser: ${browser}\nURL: ${server.url.href}\nRequests: ${requests.join(', ')}\n${diagnostics}`
-        );
-      },
-      testTimeout(15000) - 1000
-    );
-    try {
-      const outcome = await Promise.race([
-        result,
-        child.exited.then(code => `browser exited early: ${code}`),
-      ]);
-      if (outcome !== 'passed') {
-        throw new Error(
-          `${outcome}\nBrowser: ${browser}\nURL: ${server.url.href}\nRequests: ${requests.join(', ')}\n${diagnostics}`
-        );
-      }
-      expect(outcome).toBe('passed');
-    } finally {
-      clearTimeout(timeout);
-      clearTimeout(startupDiagnostics);
-      child.kill();
-      await child.exited;
-      await server.stop(true);
-      await removeTempTree(profile);
-    }
-  },
-  testTimeout(15000)
-);
+    const update = {
+      updateAvailable: true,
+      currentVersion: '0.11.1',
+      latestVersion: '0.12.0',
+      releaseUrl: 'https://example.com/release',
+    };
+    set(K.updateCheck, update);
+    const { html, dismiss } = renderBanner();
+    expect(html).toContain('0.12.0');
+    expect(html).toContain('https://archon.diy/getting-started/updating/');
+    dismiss?.();
+    expect(renderBanner().html).toBe('');
+    set(K.updateCheck, { ...update, latestVersion: '0.13.0' });
+    expect(renderBanner().html).toContain('0.13.0');
+    set(K.updateCheck, { ...update, latestVersion: '0.14.0', updateAvailable: false });
+    expect(renderBanner().html).toBe('');
+  });
+
+  test('missing update data does not show a banner', () => {
+    expect(renderBanner().html).toBe('');
+  });
+});

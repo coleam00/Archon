@@ -35,11 +35,6 @@ While you work, run the narrow check instead — `bun run type-check`, `bun run 
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
-**Browser tests:** install Google Chrome or Chromium to run the console banner interaction test
-(included in `bun run validate`). It uses a temporary browser profile and a local HTTP server.
-On Linux, `google-chrome` or `chromium` must be on `PATH`; on macOS and Windows, the
-standard Google Chrome installation path is also supported.
-
 **macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Set `ARCHON_TEST_COMPILED_BINARIES=1` to run them on a Mac anyway. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`.
 
 #### What `bun run validate` deliberately leaves out
