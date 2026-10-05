@@ -3649,15 +3649,9 @@ nodes:
     const deps = makeDeps(store);
     const platform = makePlatform();
     const workflow = await discover('refused-parent');
-    const first = await executeWorkflow(
-      deps,
-      platform,
-      'conv-plat',
-      cwd,
-      workflow,
-      'goal',
-      { conversationId: 'conv-db' }
-    );
+    const first = await executeWorkflow(deps, platform, 'conv-plat', cwd, workflow, 'goal', {
+      conversationId: 'conv-db',
+    });
     expect(first.success).toBe(false);
     const parent = [...store.runs.values()].find(r => r.workflow_name === 'refused-parent')!;
     expect(parent.status).toBe('failed');
@@ -3760,7 +3754,16 @@ nodes:
       return { cwd, envId: 'test-child', branchName: 'test-child' };
     });
     const options = { resolveChildIsolation: { resolve } };
-    await executeWorkflow(deps, platform, 'conv-plat', cwd, workflow, 'goal', { conversationId: 'conv-db' }, options);
+    await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      options
+    );
     const parent = [...store.runs.values()].find(r => r.workflow_name === 'partial-parent')!;
     const children = await store.findChildRuns(parent.id);
     expect(children).toHaveLength(1);
@@ -3787,10 +3790,19 @@ nodes:
 
     const resume = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
     expect(resume?.priorCompletedNodes.has('work')).toBe(true);
-    await executeWorkflow(deps, platform, 'conv-plat', cwd, workflow, 'goal', { conversationId: 'conv-db' }, {
-      ...options,
-      ...resume!,
-    });
+    await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      {
+        ...options,
+        ...resume!,
+      }
+    );
     expect(resolve).toHaveBeenCalledTimes(3);
     expect(await store.findChildRuns(parent.id)).toHaveLength(1);
     expect(
