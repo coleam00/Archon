@@ -132,6 +132,7 @@ nodes:
 
   - id: code
     output_type: review-lens
+    model: large
     command: review-code
     context: fresh
     mutates_checkout: false
