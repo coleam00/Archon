@@ -1,6 +1,7 @@
 /**
  * SQLite adapter using bun:sqlite
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Database, SQLiteError, type SQLQueryBindings } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -116,7 +117,23 @@ export class SqliteAdapter implements IDatabase {
     this.initSchema();
   }
 
+  /**
+   * Marks code running inside one of this adapter's transaction blocks. The public
+   * query() and withTransaction() queue behind that open transaction, so calling them
+   * from inside it would wait forever; they throw instead.
+   */
+  private readonly transactionScope = new AsyncLocalStorage<SqliteAdapter>();
+
+  private assertNotInOwnTransaction(): void {
+    if (this.transactionScope.getStore() === this) {
+      throw new Error(
+        "SQLite query() or withTransaction() was called inside withTransaction; use the transaction's query instead"
+      );
+    }
+  }
+
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    this.assertNotInOwnTransaction();
     // bun:sqlite is one connection shared by every caller. Queue each attempt behind
     // open transactions, or the statement would join another caller's transaction
     // and vanish if that transaction rolls back.
@@ -181,6 +198,7 @@ export class SqliteAdapter implements IDatabase {
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
+    this.assertNotInOwnTransaction();
     // The block's own statements run directly on the open transaction, without a
     // per-statement retry: under SQLITE_BUSY_SNAPSHOT the read snapshot is stale for
     // good, so only rerunning the whole block can succeed.
@@ -188,7 +206,7 @@ export class SqliteAdapter implements IDatabase {
     const runOnce = async (): Promise<T> => {
       await execute('BEGIN');
       try {
-        const result = await fn(execute);
+        const result = await this.transactionScope.run(this, () => fn(execute));
         await execute('COMMIT');
         return result;
       } catch (e) {

@@ -1268,6 +1268,23 @@ describe('SqliteAdapter busy locks', () => {
     expect(await codebaseCount()).toBe(1);
   });
 
+  test('the public query inside a transaction block fails instead of waiting on itself', async () => {
+    await lockedAdapter();
+    holder.run('COMMIT');
+
+    await expect(
+      adapter.withTransaction(async () => {
+        await adapter.query('SELECT 1');
+      })
+    ).rejects.toThrow("use the transaction's query instead");
+    await expect(
+      adapter.withTransaction(() => adapter.withTransaction(async () => undefined))
+    ).rejects.toThrow("use the transaction's query instead");
+    // The connection is still usable afterwards.
+    await insertCodebase(adapter, 'cb-after');
+    expect(await codebaseCount()).toBe(1);
+  });
+
   test('a non-busy error still fails on the first attempt', async () => {
     await lockedAdapter();
     holder.run('COMMIT');
