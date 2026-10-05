@@ -187,7 +187,8 @@
       "src/node-record-reader.test.ts"
     ],
     [
-      "src/node-record-serialization.test.ts"
+      "src/node-record-serialization.test.ts",
+      "src/scripts/generate-node-execution-reference.test.ts"
     ],
     [
       "src/checkout-observation.test.ts",

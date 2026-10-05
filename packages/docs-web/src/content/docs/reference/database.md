@@ -104,7 +104,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
   - `conversation_id` cascades on conversation delete: a hard `DELETE` of a conversation would erase its run rows and silently drop the live-run cleanup pin for their isolation environments (#2868). Soft delete is the only supported path — a future hard-delete must resolve live runs first.
 
-- **`remote_agent_workflow_events`** - Step-level workflow event log
+- **`remote_agent_workflow_events`** - Step-level workflow event log; see [node execution records](/reference/node-execution/) for payloads and resume compatibility
   - Records step transitions, artifacts, and errors per workflow run
   - Every provider event a workflow node streams, as `provider_event` rows: the engine envelope (`attemptId`, `seq`, `observedAt`, `event`) in `data`, the node in `step_name`. The same envelope is a `provider_event` line in the run's JSONL log. `GET /api/workflows/runs/{runId}/provider-events` serves them; the run-detail route leaves them out
   - Enables workflow run detail views and debugging

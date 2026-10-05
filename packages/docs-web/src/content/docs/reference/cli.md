@@ -1370,10 +1370,10 @@ existing project's identity and history.
 
 ## Environment
 
-At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads two archon-owned env files with `override: true`. Keys in archon-owned files pass through to AI subprocesses — no allowlist filtering.
+At startup, the CLI removes every key named in the CWD project env files from `process.env`, whatever its value or source, including shell exports and direnv. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`. This prevents project API keys from overriding subscription auth and incurring API billing, and prevents project keys from overriding Archon's environment. It also strips nested Claude Code session markers, then loads Archon-owned env files with `override: true`. Put install credentials such as `GH_TOKEN` in `~/.archon/.env`; those later trusted sources pass through to AI subprocesses. See [target repo env isolation](/reference/security/#target-repo-env-isolation).
 
 On startup, the CLI:
-1. Strips `<cwd>/.env*` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
+1. Strips keys named in `<cwd>/.env`, `.env.local`, `.env.development`, and `.env.production`, plus nested Claude Code session markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
 2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys …` when N > 0 **and** `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug/trace` is set.
 3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Same verbosity gate as step 2.
 4. Auto-enables global Claude auth if no explicit tokens are set.

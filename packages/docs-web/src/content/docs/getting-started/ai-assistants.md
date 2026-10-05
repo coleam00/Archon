@@ -425,6 +425,14 @@ assistants:
 
 Archon logs an info-level `pi.auth_missing` event when no credentials are found and continues — Pi's SDK then connects directly to the local endpoint defined in `models.json`. If the provider does require auth (a less-common cloud backend not in the env-var table) the SDK call fails downstream; the `pi.auth_missing` breadcrumb in the log lets you trace it back to a missing env-var mapping.
 
+### Stored key-command caching (Pi 1.0.2)
+
+In the pinned Pi **1.0.2**, an API key stored as `!command` in `~/.pi/agent/auth.json` uses Pi's process-wide command-result cache, keyed by command text. Fresh Pi runtimes for different Archon nodes share that cache in one server process. If the command returns a short-lived token, the server can keep sending the cached value after it expires. Restart the Archon server to resolve the command again, or use a suitable longer-lived credential.
+
+A separately invoked `archon doctor` runs in a fresh process and can resolve a usable key while the server retains an expired cached value. "Usable" means the key resolved; only a model request proves the vendor accepts it. Launch and execution checks within one process can reuse the stored command result.
+
+This limitation concerns stored `auth.json` key commands, not `models.json` commands. Pi's request-time `models.json` key/header resolution uses uncached commands. For catalogued models (and Anthropic), Archon pins a resolved models-command key for the node; a short-lived token can still expire during a long node. Extension-provider models can retain Pi's per-request resolution. [Pi issue #1835](https://github.com/earendil-works/pi/issues/1835) is closed and describes that `models.json` change, not a fix for the stored-auth cache. This is a version-specific limitation and can go away if Pi changes stored-key resolution.
+
 ### Pi settings (baseline behavior)
 
 Archon reads your Pi settings files as the starting point for every session:
@@ -813,7 +821,7 @@ Everything above configures the **install-wide** assistant credentials (env vars
 
 Runs check the credentials required by their AI nodes before creating isolation and again when execution starts or resumes. An unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
 
-Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime during each native check. Launch and execution checks are separate, so a key command can run or prompt more than once.
+Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime, subject to the [Pi 1.0.2 stored-key cache](#stored-key-command-caching-pi-102). Launch and execution checks are separate: `models.json` commands can run or prompt more than once, while stored `auth.json` commands can reuse a process-cached result.
 
 ### When you need this
 
