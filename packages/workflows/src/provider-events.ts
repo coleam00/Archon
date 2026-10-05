@@ -166,8 +166,9 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           }
           return;
         case 'subtask':
-          if (event.status === 'started') liveSubtasks.add(event.taskId);
-          else if (event.status !== 'running') liveSubtasks.delete(event.taskId);
+          if (event.status === 'started' || event.status === 'running')
+            liveSubtasks.add(event.taskId);
+          else liveSubtasks.delete(event.taskId);
           return;
         case 'hook':
         case 'agent_thought_chunk':

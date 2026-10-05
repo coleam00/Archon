@@ -107,6 +107,7 @@ describe('CodexProvider', () => {
 
   test('getCapabilities returns the Codex capability set', () => {
     expect(new CodexProvider().getCapabilities()).toEqual({
+      backgroundWork: 'unobserved' as const,
       sessionResume: true,
       sessionFork: false,
       mcp: true,

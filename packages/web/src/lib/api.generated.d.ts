@@ -5009,6 +5009,8 @@ export interface components {
       )[];
     };
     ProviderCapabilities: {
+      /** @enum {string} */
+      backgroundWork: 'reported' | 'none' | 'unobserved';
       sessionResume: boolean;
       sessionFork?: boolean;
       mcp: boolean;

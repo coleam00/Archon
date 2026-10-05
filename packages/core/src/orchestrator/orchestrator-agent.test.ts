@@ -331,6 +331,7 @@ mock.module('@archon/workflows/executor', () => ({
  *  leaks into every later test in the file (it is how `effortControl` went
  *  missing for `resolveTitleRequest`). */
 const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
+  backgroundWork: 'unobserved' as const,
   sessionResume: false,
   mcp: false,
   hooks: false,

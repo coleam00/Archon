@@ -1,6 +1,7 @@
 import type { ProviderCapabilities } from '../types';
 
 export const CODEX_CAPABILITIES: ProviderCapabilities = {
+  backgroundWork: 'unobserved',
   sessionResume: true,
   sessionFork: false,
   mcp: true,

@@ -6910,6 +6910,7 @@ nodes:
         credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
           mcp: false,
           hooks: false,
@@ -6936,6 +6937,7 @@ nodes:
           }),
           getType: () => 'no-resume-skip-test',
           getCapabilities: () => ({
+            backgroundWork: 'unobserved' as const,
             sessionResume: false,
             mcp: false,
             hooks: false,
@@ -7003,6 +7005,7 @@ nodes:
         credentials: { kind: 'static', specs: [], vendorFor: () => undefined },
         parseConfig: (raw: ProviderDefaults): ProviderDefaults => raw,
         capabilities: {
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
           mcp: false,
           hooks: false,
@@ -7029,6 +7032,7 @@ nodes:
           }),
           getType: () => 'no-resume-test',
           getCapabilities: () => ({
+            backgroundWork: 'unobserved' as const,
             sessionResume: false,
             mcp: false,
             hooks: false,
