@@ -737,29 +737,40 @@ describe('terminal workflow transitions — real SQLite', () => {
   );
 
   test.each([
-    { label: 'object', raw: '{"kept":true}', expected: { kept: true } },
+    { label: 'object', raw: '{"kept":true}', expected: { kept: true }, warned: false },
     // A stored null is not rewritten, but reads as the empty object WorkflowRun promises.
-    { label: 'JSON null', raw: 'null', expected: {} },
-    { label: 'SQL null', raw: null, expected: {} },
-  ])('preserves $label metadata when reading and terminating', async ({ label, raw, expected }) => {
-    const runId = `terminal-valid-${label}`;
-    await seed(runId, 'running', "datetime('now')");
-    await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
-      raw,
-      runId,
-    ]);
-    const metadataBefore: unknown = (await getWorkflowRun(runId))?.metadata;
-    expect(metadataBefore).toEqual(expected);
-    await cancelWorkflowRun(runId);
-    const metadataAfter: unknown = (await getWorkflowRun(runId))?.metadata;
-    expect(metadataAfter).toEqual(expected);
-    expect((await terminalRecord(runId)).status).toBe('cancelled');
-    const stored = await db.query<{ metadata: string | null }>(
-      'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
-      [runId]
-    );
-    expect(stored.rows[0]?.metadata).toBe(raw);
-  });
+    // JSON that is not an object is unexpected and logged; SQL NULL stored nothing.
+    { label: 'JSON null', raw: 'null', expected: {}, warned: true },
+    { label: 'SQL null', raw: null, expected: {}, warned: false },
+  ])(
+    'preserves $label metadata when reading and terminating',
+    async ({ label, raw, expected, warned }) => {
+      const runId = `terminal-valid-${label}`;
+      workflowWarnings.mockClear();
+      await seed(runId, 'running', "datetime('now')");
+      await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
+        raw,
+        runId,
+      ]);
+      const metadataBefore: unknown = (await getWorkflowRun(runId))?.metadata;
+      expect(metadataBefore).toEqual(expected);
+      await cancelWorkflowRun(runId);
+      const metadataAfter: unknown = (await getWorkflowRun(runId))?.metadata;
+      expect(metadataAfter).toEqual(expected);
+      expect((await terminalRecord(runId)).status).toBe('cancelled');
+      const stored = await db.query<{ metadata: string | null }>(
+        'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+        [runId]
+      );
+      expect(stored.rows[0]?.metadata).toBe(raw);
+      const notObjectWarning = [
+        { workflowRunId: runId, valueType: 'object' },
+        'db.workflow_run_metadata_not_object',
+      ];
+      if (warned) expect(workflowWarnings).toHaveBeenCalledWith(...notObjectWarning);
+      else expect(workflowWarnings.mock.calls).not.toContainEqual(notObjectWarning);
+    }
+  );
 
   test('commits completion and its matching event together', async () => {
     await seed('terminal-complete', 'running', "datetime('now')");

@@ -79,9 +79,17 @@ function readMetadata(row: WorkflowRunRow): Record<string, unknown> {
       return {};
     }
   }
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  // SQL NULL means nothing was stored; stored JSON that is not an object is unexpected.
+  if (row.metadata !== null) {
+    getLog().warn(
+      { workflowRunId: row.id, valueType: Array.isArray(value) ? 'array' : typeof value },
+      'db.workflow_run_metadata_not_object'
+    );
+  }
+  return {};
 }
 
 export function readWorkflowRunOrigin(
