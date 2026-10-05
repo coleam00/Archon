@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'bun:test';
+import { parseYaml } from '@archon/workflows/loader';
 import {
   assertReadsBackAs,
   serializeWorkflowPreservingText,
@@ -263,8 +264,6 @@ describe('serializeWorkflowPreservingText', () => {
   });
 
   describe('a CRLF file with a quoted scalar that spans two lines', () => {
-    // Bun's parser, which the loader uses, keeps the line break of such a scalar in a CRLF
-    // file; the yaml library folds it to a space. The save has to follow the loader.
     const crlf = [
       'name: flow',
       'description: "a first line long enough to be written across lines',
@@ -276,9 +275,12 @@ describe('serializeWorkflowPreservingText', () => {
       '',
     ].join('\r\n');
     const asLoaded = (): { nodes: { command: string }[] } & Record<string, unknown> =>
-      Bun.YAML.parse(crlf) as { nodes: { command: string }[] } & Record<string, unknown>;
+      parseYaml(crlf) as { nodes: { command: string }[] } & Record<string, unknown>;
 
     test('is left byte-for-byte as it was when nothing changed', () => {
+      expect(asLoaded().description).toBe(
+        'a first line long enough to be written across lines and a second line that follows it in the same scalar'
+      );
       expect(serializeWorkflowPreservingText(asLoaded(), crlf)).toBe(crlf);
     });
 
@@ -286,7 +288,7 @@ describe('serializeWorkflowPreservingText', () => {
       const edited = asLoaded();
       edited.nodes[0].command = 'b';
       const text = serializeWorkflowPreservingText(edited, crlf);
-      expect(Bun.YAML.parse(text)).toEqual(edited);
+      expect(parseYaml(text)).toEqual(edited);
       expect(text).toContain('# the only step');
     });
   });

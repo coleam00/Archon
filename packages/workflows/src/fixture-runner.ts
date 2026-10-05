@@ -53,6 +53,7 @@ import {
   type WorkflowSourceRoots,
 } from './workflow-source';
 import { FIXTURE_SUFFIX, FIXTURES_DIR } from './fixture-layout';
+import { parseYaml } from './loader';
 
 /** Compares text the checkout may have converted to CRLF against a fixture's LF expectation. */
 const withLfEndings = (text: string): string => text.replaceAll('\r\n', '\n');
@@ -166,7 +167,7 @@ async function workflowNamesBeside(fixturesDir: string): Promise<string[]> {
   for (const entry of await readdir(parent)) {
     if (!entry.endsWith('.yaml') && !entry.endsWith('.yml')) continue;
     try {
-      const doc = Bun.YAML.parse(await Bun.file(join(parent, entry)).text());
+      const doc = parseYaml(await Bun.file(join(parent, entry)).text());
       if (
         doc !== null &&
         typeof doc === 'object' &&
