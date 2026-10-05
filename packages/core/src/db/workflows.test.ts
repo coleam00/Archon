@@ -92,6 +92,9 @@ describe('workflows database', () => {
   }
 
   describe('createWorkflowRun', () => {
+    beforeEach(() => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
+    });
     test('creates a new workflow run', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([mockWorkflowRun]));
 
@@ -1324,6 +1327,7 @@ describe('workflows database', () => {
       const circularObj: Record<string, unknown> = { someKey: 'value' };
       circularObj.self = circularObj;
 
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([{ ...mockWorkflowRun, metadata: {} }]));
 
       const result = await createWorkflowRun({
@@ -1335,7 +1339,7 @@ describe('workflows database', () => {
 
       // Should succeed with empty metadata fallback
       expect(result.metadata).toEqual({});
-      const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
+      const [, params] = mockQuery.mock.calls[1] as [string, unknown[]];
       expect(params[4]).toBe('{}');
     });
 
@@ -1344,6 +1348,7 @@ describe('workflows database', () => {
         ...mockWorkflowRun,
         metadata: { github_context: 'Issue #99: Fix bug' },
       };
+      mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(createQueryResult([runWithContext]));
 
       const result = await createWorkflowRun({

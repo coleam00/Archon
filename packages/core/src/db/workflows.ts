@@ -1,6 +1,7 @@
 /**
  * Database operations for workflow runs
  */
+import { lockConversationOwnership } from './conversation-ownership';
 import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
@@ -42,6 +43,7 @@ import {
   workflowWaitStepName,
   workflowWaitContextSchema,
   TERMINAL_WORKFLOW_STATUSES,
+  RESUMABLE_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
@@ -378,6 +380,10 @@ export async function insertWorkflowRun(
   }
 
   try {
+    await lockConversationOwnership(query, [
+      data.conversation_id,
+      ...(data.parent_conversation_id ? [data.parent_conversation_id] : []),
+    ]);
     const result = await query<WorkflowRun>(
       data.id === undefined
         ? `INSERT INTO remote_agent_workflow_runs
@@ -416,7 +422,7 @@ export async function insertWorkflowRun(
 
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
   try {
-    return await insertWorkflowRun((sql, params) => pool.query(sql, params), data);
+    return await getDatabase().withTransaction(query => insertWorkflowRun(query, data));
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_create_failed');
@@ -2398,4 +2404,19 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_delete_failed');
     throw new Error(`Failed to delete workflow run: ${err.message}`);
   }
+}
+
+export async function listConversationDetachBlockers(
+  query: TransactionQuery,
+  conversationId: string
+): Promise<readonly Pick<WorkflowRun, 'id' | 'status'>[]> {
+  const result = await query<Pick<WorkflowRun, 'id' | 'status'>>(
+    `SELECT id, status FROM remote_agent_workflow_runs
+     WHERE (conversation_id = $1 OR parent_conversation_id = $1)
+       AND (status NOT IN (${TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')})
+            OR status IN (${RESUMABLE_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')}))
+     ORDER BY id`,
+    [conversationId]
+  );
+  return result.rows;
 }

@@ -11,21 +11,9 @@ export interface ListRunsOptions {
   offset?: number;
 }
 
-export interface RunCounts {
-  all: number;
-  running: number;
-  paused: number;
-  failed: number;
-  completed: number;
-  cancelled: number;
-  pending: number;
-}
-
-interface DashboardRunsResponse {
-  runs: Parameters<typeof toRun>[0][];
-  total: number;
-  counts: Partial<RunCounts>;
-}
+type DashboardRunsResponse = components['schemas']['DashboardRunsResponse'];
+export type RunCounts = DashboardRunsResponse['counts'];
+type RunDetailResponse = components['schemas']['WorkflowRunDetail'];
 
 function normalizeCounts(c: Partial<RunCounts>): RunCounts {
   return {
@@ -60,12 +48,6 @@ export async function listGlobalCounts(): Promise<RunCounts> {
   // Counts without any codebase filter — used by top chrome pill.
   const res = await requestJson<DashboardRunsResponse>('/api/dashboard/runs?limit=1');
   return normalizeCounts(res.counts);
-}
-
-interface RunDetailResponse {
-  run: Parameters<typeof toRun>[0] &
-    Pick<components['schemas']['WorkflowRunDetail']['run'], 'nodes'>;
-  events: Parameters<typeof toRunEvent>[0][];
 }
 
 export async function getRun(
