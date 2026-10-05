@@ -10,20 +10,14 @@
  * - INPUTS_PR_URL: `$flip-ready.output.pr_url`, certified non-empty at the producer.
  */
 
-import { artifactsDir, emit, refuse, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
 const listingFile = process.env.TYPED_ARTIFACTS_FILE;
 const url = trimmed(process.env.INPUTS_PR_URL);
 
-if (url === '') {
-  refuse(
-    `outcome: flip-ready reported no pull request URL.${caveats(artifacts, { failed: true, listingFile })}`
-  );
-} else {
-  emit({
-    pr_url: url,
-    summary: `${url}${caveats(artifacts, { failed: false, listingFile })}`,
-  });
-}
+emit({
+  pr_url: url,
+  summary: `${url}${caveats(artifacts, { listingFile })}`,
+});

@@ -74,7 +74,7 @@ recheck__publish:
   findings_summary: "stub: no open blocking finding"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/7" }
-validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: red, summary: "stub: a check in the project gate failed" }
 validate__classify:
   red_cause: inherited
