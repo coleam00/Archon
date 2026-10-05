@@ -484,8 +484,8 @@ ALTER TABLE remote_agent_user_ai_prefs
 -- Web auth (opt-in): role on the canonical user + Better Auth tables
 -- ============================================================================
 --
--- `role` is the durable identity seam: everyone defaults to 'admin' for now;
--- 'member' is reserved for future per-resource scoping. Visibility stays open.
+-- Keep 'admin' for older writers and existing rows. New writers explicitly
+-- insert 'member'; SQLite cannot change a column default without a table rebuild.
 ALTER TABLE remote_agent_users
   ADD COLUMN IF NOT EXISTS role VARCHAR(16) NOT NULL DEFAULT 'admin';
 

@@ -15,6 +15,7 @@ function run(id: string, over: Partial<Run> = {}): Run {
     origin: 'cli',
     status: 'running',
     outcome: null,
+    terminalRecord: null,
     startedAt: '2026-10-01T10:00:00.000Z',
     finishedAt: null,
     workingPath: null,

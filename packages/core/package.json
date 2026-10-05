@@ -299,6 +299,9 @@
     ],
     [
       "src/db/workflows.origin.postgres.integration.test.ts"
+    ],
+    [
+      "src/db/users.sqlite.integration.test.ts"
     ]
   ]
 }
