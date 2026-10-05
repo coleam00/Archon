@@ -13,7 +13,7 @@ import type {
 import { expandWorkflowIncludes } from './include-expander';
 import { resolveWorkflow } from './graph-plan';
 import type { CapturedSourceOwner } from './executor';
-import { readNodeRecordEvent } from './node-record-reader';
+import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
 import { nodeCostScope } from './node-record-serialization';
 import { NODE_STATE_EVENT_TYPES } from './store';
 import type { DagResumeSnapshot, PersistedNodeOutput } from './store';
@@ -149,6 +149,7 @@ export function inMemoryDagResumeSnapshot(
   workflowRunId: string
 ): DagResumeSnapshot {
   const completedNodeOutputs = new Map<string, PersistedNodeOutput>();
+  const unfinishedInvocations: NonNullable<DagResumeSnapshot['unfinishedInvocations']> = new Map();
   const tokens = { input: 0, output: 0 };
   let costUsd = 0;
   for (const e of events) {
@@ -158,6 +159,28 @@ export function inMemoryDagResumeSnapshot(
       typeof e.step_name !== 'string'
     )
       continue;
+    const record = readNodeRecordEvent({ ...e, data: e.data });
+    if (record?.metadata !== undefined) {
+      const execution = record.metadata;
+      const key = nodeInvocationKey(record.path, execution.invocation.loopPath);
+      if (
+        execution.lifecycle.status === 'started' ||
+        execution.lifecycle.status === 'failed' ||
+        execution.lifecycle.status === 'suspended'
+      ) {
+        unfinishedInvocations.set(key, execution);
+      } else {
+        unfinishedInvocations.delete(key);
+      }
+    } else if (
+      record?.eventType === 'node_skipped_prior_success' ||
+      record?.eventType === 'node_always_run_reset' ||
+      record?.eventType === 'node_prior_cache_invalidated'
+    ) {
+      for (const [key, execution] of unfinishedInvocations) {
+        if (execution.path === record.path) unfinishedInvocations.delete(key);
+      }
+    }
     // Every later node state supersedes reusable success; only a success restores it.
     completedNodeOutputs.delete(e.step_name);
     if (e.event_type !== 'node_completed' && e.event_type !== 'node_skipped_prior_success')
@@ -199,6 +222,7 @@ export function inMemoryDagResumeSnapshot(
   }
   return {
     completedNodeOutputs,
+    unfinishedInvocations,
     fanOutSnapshots: new Map(),
     unresolvedNodeStarts: new Set(),
     tokens,
