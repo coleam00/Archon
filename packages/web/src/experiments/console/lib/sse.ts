@@ -19,6 +19,7 @@ import { useEffect } from 'react';
 import { invalidate } from '../store/cache';
 import { K } from './../store/keys';
 import { SSE_BASE_URL } from './http';
+import { DASHBOARD_SSE_PATH } from './sse-endpoints';
 import { providerEventStore, type ProviderEventRecord } from './provider-events';
 
 interface ParsedEvent {
@@ -51,7 +52,7 @@ function parse(raw: string): ParsedEvent | null {
 export function useDashboardSSE(onRunChanged: (runId: string) => void): void {
   useEffect(() => {
     // Use SSE_BASE_URL so dev bypasses the Vite proxy (which buffers SSE).
-    const es = new EventSource(`${SSE_BASE_URL}/api/stream/__dashboard__`);
+    const es = new EventSource(`${SSE_BASE_URL}${DASHBOARD_SSE_PATH}`);
 
     es.onmessage = (e: MessageEvent<string>): void => {
       const ev = parse(e.data);
