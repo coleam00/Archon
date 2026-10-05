@@ -1,5 +1,4 @@
-import type { DeclaredOutputPaths } from './output-ref';
-import { readNodeRecordEvent } from './node-record-reader';
+import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
@@ -209,16 +208,9 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // getRunAncestry), and the ancestor-aware path lock.
 // ---------------------------------------------------------------------------
 
-interface StoreEvent {
-  workflow_run_id: string;
-  event_type: string;
-  step_name?: string;
-  data?: Record<string, unknown>;
-}
-
 class InMemoryStore implements IWorkflowStore {
   runs = new Map<string, WorkflowRun>();
-  events: StoreEvent[] = [];
+  events: InMemoryStoreEvent[] = [];
   private seq = 0;
 
   private clone(r: WorkflowRun): WorkflowRun {
@@ -501,71 +493,8 @@ class InMemoryStore implements IWorkflowStore {
 
   listProviderEvents: IWorkflowStore['listProviderEvents'] = () => Promise.resolve([]);
 
-  getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
-    const completedNodeOutputs = new Map<
-      string,
-      {
-        output: string;
-        structuredOutput?: unknown;
-        declaredOutputPaths?: DeclaredOutputPaths;
-      }
-    >();
-    const tokens = { input: 0, output: 0 };
-    let costUsd = 0;
-    for (const e of this.events) {
-      if (
-        e.workflow_run_id === workflowRunId &&
-        (e.event_type === 'node_completed' || e.event_type === 'node_skipped_prior_success') &&
-        typeof e.step_name === 'string'
-      ) {
-        // Mirrors the real store (#2637): the logical value rides beside the text, and
-        // (#2453) the field contract the node completed under rides beside both, read
-        // through the real record reader.
-        const declaredOutputPaths = readNodeRecordEvent({ ...e, data: e.data })?.data
-          .declared_output_paths;
-        completedNodeOutputs.set(e.step_name, {
-          output: String(e.data?.node_output ?? ''),
-          ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
-          ...(e.data?.structured_output !== undefined
-            ? { structuredOutput: e.data.structured_output }
-            : {}),
-        });
-        // Mirrors the real store: a derived row (loop_group roll-up) restates usage
-        // other rows already carry, so it contributes output but never usage (#2469).
-        if (e.data?.aggregate === true) continue;
-        const eventTokens = e.data?.tokens;
-        if (
-          e.event_type === 'node_completed' &&
-          typeof eventTokens === 'object' &&
-          eventTokens !== null &&
-          'input' in eventTokens &&
-          'output' in eventTokens &&
-          typeof eventTokens.input === 'number' &&
-          typeof eventTokens.output === 'number' &&
-          Number.isFinite(eventTokens.input) &&
-          Number.isFinite(eventTokens.output)
-        ) {
-          tokens.input += eventTokens.input;
-          tokens.output += eventTokens.output;
-        }
-        const eventCost = e.data?.cost_usd;
-        if (
-          e.event_type === 'node_completed' &&
-          typeof eventCost === 'number' &&
-          Number.isFinite(eventCost)
-        ) {
-          costUsd += eventCost;
-        }
-      }
-    }
-    return Promise.resolve({
-      completedNodeOutputs,
-      fanOutSnapshots: new Map(),
-      unresolvedNodeStarts: new Set(),
-      tokens,
-      costUsd,
-    });
-  };
+  getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId =>
+    Promise.resolve(inMemoryDagResumeSnapshot(this.events, workflowRunId));
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
   getCodebaseEnvVars = (): Promise<Record<string, string>> => Promise.resolve({});
