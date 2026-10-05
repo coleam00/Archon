@@ -14,6 +14,7 @@ impl__implement:
 impl__assert-changed: "3 files changed"
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
   errors: false
@@ -23,7 +24,8 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__coverage: { full: true }
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -52,7 +54,8 @@ fix__implement:
 fix__assert-changed: "1 file changed"
 # gate-green and gate-correction-green are deliberately unstubbed: the real script
 # takes the green route at the first and the passed-red route at the second.
-recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"recheck__mode","invocation":{"loopPath":[]}}}'
+recheck__coverage: { full: false }
 recheck__scope:
   # light mode; delta since cursor
   docs: false

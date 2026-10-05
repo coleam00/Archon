@@ -31,6 +31,7 @@ returns: simplify
 
 nodes:
   - id: simplify
+    output_type: structure-review
     command: simplify
     context: fresh
     mutates_checkout: false

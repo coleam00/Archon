@@ -1,12 +1,3 @@
-# Dry-run fixture: the initial review finds blockers, one correction runs green,
-# its continuation review is ready, and the run flips the PR. `until_bash` is not
-# executed by dry-run, so the simulator honestly assumes completion after this
-# structurally exercised iteration; real multi-iteration convergence is dogfood.
-#
-# This is also the classifier-selects-errors path: `classify` says the diff has
-# failure paths, the operator declared nothing, and resolve-scope is left unstubbed
-# so the real script adopts that judgment. `reached` proves the lens actually ran,
-# beside the full tier's simplify lens.
 impl__implement:
   done: true
   green: true
@@ -17,13 +8,13 @@ gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summar
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
-review__coverage: { full: true }
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
 review__code: "2 blocking findings"
 review__simplify__simplify: { findings: false }
+review__focused: { full_review: true, reason: "stub: integration boundary" }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
 review__tests: "0 findings"
@@ -69,7 +60,7 @@ recheck__publish:
 read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/1" }
 publish-pr-body: {}
 sync-pr-body: { intent: "/fixture/pr-body-intent.json" }
-validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":""}'
 ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
@@ -78,7 +69,7 @@ flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
 outcome: { pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
-  tier: full
+  tier: focused
   errors: true
   docs: false
   reasons:
@@ -89,5 +80,5 @@ file-discoveries: '{"issues":[]}'
 fork: '{"fork":true}'
 fixture:
   expect: completed
-  reached: [review__errors, review__simplify__simplify, ci-note, recheck__synthesize]
+  reached: [review__focused, review__code, review__tests, review__errors, review__simplify__simplify, ci-note, recheck__synthesize, gate-ready, flip-ready]
 exec-code: true

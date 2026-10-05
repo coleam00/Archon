@@ -44,7 +44,8 @@ deliver__impl__implement:
   green: true
   red_cause: ""
   summary: "stub: fix built per the investigation, checks green"
-deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"deliver__review__mode","invocation":{"loopPath":[]}}}'
+deliver__review__coverage: { full: true }
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -66,6 +67,7 @@ deliver__review__publish:
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__gate-ready: '{"ready":"true"}'
+deliver__review-policy: { risks: "fixture-owned-policy" }
 deliver__classify:
   tier: full
   errors: false
