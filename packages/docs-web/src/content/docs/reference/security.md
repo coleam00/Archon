@@ -158,4 +158,4 @@ Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env
 
 **Docker deployments:**
 - `CLAUDE_USE_GLOBAL_AUTH=true` does not work in Docker (no local `claude` CLI). Provide `CLAUDE_CODE_OAUTH_TOKEN` or `CLAUDE_API_KEY` explicitly.
-- Escape `$` as `$$` in Docker Compose `.env` files to prevent variable substitution of bcrypt hashes.
+- For Caddy Basic Auth, follow the [Docker authentication recipe](/deployment/docker/#authentication-optional-basic-auth). Its single-quoted multiline `.env` value preserves literal `$` characters in the hash.
