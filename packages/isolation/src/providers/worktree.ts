@@ -74,6 +74,15 @@ type WorktreeCreationResult =
   | { kind: 'created'; warnings: string[]; cutFromCommit?: string }
   | { kind: 'adopted'; environment: WorktreeEnvironment };
 
+class WorktreeAddError extends Error {
+  constructor(
+    cause: Error,
+    readonly canAdoptConcurrentCheckout: boolean
+  ) {
+    super(cause.message, { cause });
+  }
+}
+
 function getForkReviewBranch(prNumber: string): BranchName {
   return toBranchName(`pr-${prNumber}-review`);
 }
@@ -1409,13 +1418,31 @@ export class WorktreeProvider implements IIsolationProvider {
     setupLockReason: string,
     args: string[]
   ): Promise<void> {
-    await this.rollBackOnFailure(toRepoPath(repoPath), worktreePath, setupLockReason, () =>
-      execFileAsync(
-        'git',
-        ['-C', repoPath, 'worktree', 'add', '--lock', '--reason', setupLockReason, ...args],
-        { timeout: GIT_OPERATION_TIMEOUT_MS }
-      )
-    );
+    await this.rollBackOnFailure(toRepoPath(repoPath), worktreePath, setupLockReason, async () => {
+      try {
+        await execFileAsync(
+          'git',
+          ['-C', repoPath, 'worktree', 'add', '--lock', '--reason', setupLockReason, ...args],
+          { timeout: GIT_OPERATION_TIMEOUT_MS }
+        );
+      } catch (error) {
+        const cause = error instanceof Error ? error : new Error(String(error));
+        let canAdoptConcurrentCheckout = false;
+        try {
+          const registration = await this.readWorktreeRegistration(
+            toRepoPath(repoPath),
+            worktreePath
+          );
+          canAdoptConcurrentCheckout = registration?.lockReason !== setupLockReason;
+        } catch (ownershipError) {
+          getLog().warn(
+            { repoPath, worktreePath, err: ownershipError },
+            'worktree.failed_add_ownership_unknown'
+          );
+        }
+        throw new WorktreeAddError(cause, canAdoptConcurrentCheckout);
+      }
+    });
   }
 
   private async localBranchExists(repoPath: string, branchName: string): Promise<boolean> {
@@ -1545,6 +1572,7 @@ export class WorktreeProvider implements IIsolationProvider {
           reviewBranch,
         ]);
       } catch (error) {
+        if (!(error instanceof WorktreeAddError) || !error.canAdoptConcurrentCheckout) throw error;
         try {
           const adopted = await this.findRegisteredWorktree(request, reviewBranch, true);
           if (adopted) return adopted;

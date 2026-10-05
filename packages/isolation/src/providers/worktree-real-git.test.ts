@@ -440,6 +440,33 @@ describe('WorktreeProvider against real git', () => {
     expect(await lockReasonOf(path)).toMatch(/^archon: worktree setup in progress: .+/);
   });
 
+  test('a fork add that created its checkout cannot succeed through another checkout', async () => {
+    const remotePath = join(root, 'remote.git');
+    await git(root, 'init', '--bare', '-q', remotePath);
+    await git(repoPath, 'remote', 'add', 'origin', remotePath);
+    await git(repoPath, 'push', '-q', 'origin', 'main', 'main:refs/pull/42/head');
+    const attempt: IsolationRequest = {
+      codebaseId: request.codebaseId,
+      codebaseName: request.codebaseName,
+      canonicalRepoPath: request.canonicalRepoPath,
+      workflowType: 'pr',
+      identifier: '42',
+      baseBranch: toBranchName('main'),
+      prBranch: toBranchName('pr-feature'),
+      isForkPR: true,
+    };
+    const otherPath = join(root, 'other-checkout');
+    const marker = join(repoPath, '.git', 'hook-started');
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      `#!/bin/sh\nif test ! -f "${marker}"; then touch "${marker}"; git -C "${repoPath}" worktree add --force -q "${otherPath}" pr-42-review || exit 99; echo original-fork-add-failure >&2; exit 42; fi\n`,
+      { mode: 0o755 }
+    );
+    await expect(provider.create(attempt)).rejects.toThrow('original-fork-add-failure');
+    expect(await registeredWorktrees()).toContain(resolve(otherPath));
+    expect(existsSync(otherPath)).toBe(true);
+  });
+
   test('a dirty fork-PR hook failure keeps the original error through adoption fallback', async () => {
     const remotePath = join(root, 'remote.git');
     await git(root, 'init', '--bare', '-q', remotePath);
