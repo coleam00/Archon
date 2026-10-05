@@ -27,7 +27,8 @@ export function urlRepo(url: string): Repo | undefined {
     } catch {
       return undefined;
     }
-    host = parsed.hostname;
+    // GitHub's SSH endpoint on port 443 serves the same repositories as github.com.
+    host = parsed.hostname === 'ssh.github.com' ? 'github.com' : parsed.hostname;
     path = parsed.pathname;
   } else {
     // scp-like `[user@]host:path`; a Windows drive path (`C:\...`) is not a remote.
@@ -74,7 +75,9 @@ export function remoteFor(repo: Repo): string {
 /** Fetch `branch` from the remote that holds `repo` and return its remote-tracking ref. */
 export function remoteRefFor(repo: Repo, branch: string): string {
   const remote = remoteFor(repo);
-  gitOrThrow('fetch', '--quiet', remote, branch);
+  // An explicit refspec: a single-branch clone or a narrowed fetch setting would
+  // otherwise update only FETCH_HEAD and leave the tracking ref stale or missing.
+  gitOrThrow('fetch', '--quiet', remote, `+refs/heads/${branch}:refs/remotes/${remote}/${branch}`);
   return `${remote}/${branch}`;
 }
 

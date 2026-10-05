@@ -204,14 +204,16 @@ const passed = entries
   .map(entry => entry.check.name);
 const ranPassed = passed.length === 0 ? 'No check passed.' : `Passed: ${passed.join(', ')}.`;
 
-if (failures.length > 0) {
-  const failed = failures.map(entry => `${entry.check.name} ${describe(entry.outcome)}`).join('; ');
-  emit({ status: 'red', summary: `${failed}. ${ranPassed} See validation.md.` });
-} else if (unstarted !== undefined) {
+const failed = failures.map(entry => `${entry.check.name} ${describe(entry.outcome)}`).join('; ');
+// A check that could not start leaves part of the gate unrun, so the result is
+// unfinished even when another group failed: a red verdict would read as complete.
+if (unstarted !== undefined) {
   emit({
     status: 'incomplete',
-    summary: `${unstarted.check.name} ${describe(unstarted.outcome)}. ${ranPassed} Later checks in its group never ran.`,
+    summary: `${unstarted.check.name} ${describe(unstarted.outcome)}. ${ranPassed} Later checks in its group never ran.${failed === '' ? '' : ` Failed: ${failed}.`}`,
   });
+} else if (failures.length > 0) {
+  emit({ status: 'red', summary: `${failed}. ${ranPassed} See validation.md.` });
 } else if (entries.length === 0) {
   emit({
     status: 'green',

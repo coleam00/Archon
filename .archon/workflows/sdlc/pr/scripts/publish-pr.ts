@@ -57,9 +57,8 @@ function publish(): PrRecord {
     );
   }
 
-  const headRevision = pushHead({ repo, head_repo: headRepo, head });
-
-  // The run continues a named pull request: its draft state belongs to its author.
+  // A continued pull request's head is checked before the push, which would
+  // otherwise land on whatever branch prepare declared.
   if (existing !== null) {
     const view = viewPr({ repo, number: existing }, source);
     const observedHead = view.pr.head_repo;
@@ -68,8 +67,12 @@ function publish(): PrRecord {
         `pull request ${String(existing)} has head ${String(view.pr.head_repo?.path)}:${view.pr.head}, not the recorded ${headRepo.path}:${head}`
       );
     }
-    return view.pr;
   }
+
+  const headRevision = pushHead({ repo, head_repo: headRepo, head });
+
+  // The run continues a named pull request: its draft state belongs to its author.
+  if (existing !== null) return viewPr({ repo, number: existing }, source).pr;
 
   const open = findOpenPrByHead(repo, headRepo, head, source);
   if (open) {

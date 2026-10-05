@@ -38,7 +38,7 @@ interface Target {
  * repository (a local bare repository behind `url.insteadOf`), so the push it makes
  * first lands and reads back. The fake forge reports that pushed commit as the head.
  */
-function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun & { head: string } {
+function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun & { head: string; cwd: string } {
   const { target = {}, ...rest } = options;
   const cwd = gitCheckout();
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
@@ -60,7 +60,7 @@ function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun
     },
     artifacts: { 'pr-body.md': 'A body', 'listing.json': EMPTY_LISTING, ...rest.artifacts },
   });
-  return { ...run, head };
+  return { ...run, head, cwd };
 }
 
 describe('publish-pr opens the pull request at most once', () => {
@@ -260,13 +260,15 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(publishPr({ inputs: { INPUTS_PULL_REQUEST: 'null' } }).code).toBe(0);
   });
 
-  it('refuses a named pull request whose head is not the recorded branch', () => {
+  it('refuses a named pull request whose head is not the recorded branch, before pushing', () => {
     const result = publishPr({
       target: { existing: 42 },
       gh: { pr: { headRefName: 'somebody-elses-branch' } },
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('not the recorded');
+    const remote = spawnSync('git', ['ls-remote', '--heads', 'upstream', 'feature'], { cwd: result.cwd, encoding: 'utf8' });
+    expect(remote.stdout.trim()).toBe('');
   });
 
   it('fails loudly when forge is selected but unavailable, never falling back to gh', () => {

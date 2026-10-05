@@ -123,6 +123,17 @@ describe('run-checks', () => {
     expect(result.output?.summary).toContain('Passed: lint.');
   });
 
+  it('keeps a partly unrun gate incomplete even when another group failed', () => {
+    const f = checkout();
+    const result = run(f, [
+      { name: 'api tests', argv: sh('exit 1'), group: 'api' },
+      { name: 'web tests', argv: ['archon-no-such-command-for-this-test'], group: 'web' },
+    ]);
+    expect(result.output?.status).toBe('incomplete');
+    expect(result.output?.summary).toContain('web tests could not start');
+    expect(result.output?.summary).toContain('Failed: api tests failed (exit 1).');
+  });
+
   it("reports a project that defines no checks as green with discover's notes", () => {
     const f = checkout();
     const result = run(f, []);

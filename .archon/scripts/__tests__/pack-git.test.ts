@@ -28,7 +28,7 @@ describe('remote identity', () => {
       'git@github.com:owner/repo.git',
       'ssh://git@ssh.github.com:443/owner/repo.git',
     ]) {
-      expect(urlRepo(url)?.path).toBe('owner/repo');
+      expect(urlRepo(url)).toEqual({ host: 'github.com', path: 'owner/repo' });
     }
     expect(urlRepo('/srv/git/repo.git')).toBeUndefined();
     expect(urlRepo('C:\\repos\\repo')).toBeUndefined();

@@ -6,6 +6,7 @@
  * stays ready. Fixtures stub both, so only a subprocess run can observe this.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
   PR_URL,
@@ -201,6 +202,14 @@ describe('flip-ready once the work is done', () => {
     const result = flip({ cwd: gitCheckout({ conflict: true }) });
     expect(result.code).not.toBe(0);
     expect(readyCalled(result.gh)).toBe(false);
+    expect(result.stderr).toContain('does not merge cleanly into upstream/dev: a.txt');
+  });
+
+  it('fetches the base into its tracking ref even when the clone tracks only another branch', () => {
+    const cwd = gitCheckout({ conflict: true });
+    spawnSync('git', ['config', 'remote.upstream.fetch', '+refs/heads/main:refs/remotes/upstream/main'], { cwd });
+    spawnSync('git', ['update-ref', '-d', 'refs/remotes/upstream/dev'], { cwd });
+    const result = flip({ cwd });
     expect(result.stderr).toContain('does not merge cleanly into upstream/dev: a.txt');
   });
 
