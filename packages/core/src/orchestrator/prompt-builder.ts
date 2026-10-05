@@ -21,14 +21,21 @@ type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
 
 /**
  * Format a single project for the orchestrator prompt.
+ *
+ * Only the scoped project passes a resolved assistant. Resolving an unpinned
+ * project loads its repo config, and an unrelated project's invalid config
+ * must not fail every chat turn, so other projects show only a stored pin.
  */
-export async function formatProjectSection(codebase: Codebase): Promise<string> {
+export function formatProjectSection(
+  codebase: Codebase,
+  assistant: string | null = codebase.ai_assistant_type
+): string {
   let section = `### ${codebase.name}\n`;
   if (codebase.repository_url) {
     section += `- Repository: ${codebase.repository_url}\n`;
   }
   section += `- Directory: ${codebase.default_cwd}\n`;
-  section += `- AI Provider: ${await resolveProjectAssistant(codebase)}\n`;
+  if (assistant) section += `- AI Provider: ${assistant}\n`;
   return section;
 }
 
@@ -309,10 +316,10 @@ IMPORTANT: Always clone into ${workspaces}/{owner}/{repo}/source unless the user
  * Build the full orchestrator system prompt.
  * Includes all registered projects, available workflows, and routing instructions.
  */
-export async function buildOrchestratorPrompt(
+export function buildOrchestratorPrompt(
   codebases: readonly Codebase[],
   workflows: readonly PromptWorkflow[]
-): Promise<string> {
+): string {
   let prompt = `# Archon Orchestrator
 
 You are Archon, an intelligent coding assistant that manages multiple projects.
@@ -328,7 +335,7 @@ You can answer questions directly or invoke workflows for structured development
       'No projects registered yet. Ask the user to add a project or clone a repository.\n\n';
   } else {
     for (const codebase of codebases) {
-      prompt += await formatProjectSection(codebase);
+      prompt += formatProjectSection(codebase);
       prompt += '\n';
     }
   }
@@ -363,13 +370,13 @@ This conversation is scoped to **${scopedCodebase.name}**. Use this project for 
 
 ## Active Project
 
-${await formatProjectSection(scopedCodebase)}
+${formatProjectSection(scopedCodebase, await resolveProjectAssistant(scopedCodebase))}
 `;
 
   if (otherCodebases.length > 0) {
     prompt += '## Other Registered Projects\n\n';
     for (const codebase of otherCodebases) {
-      prompt += await formatProjectSection(codebase);
+      prompt += formatProjectSection(codebase);
       prompt += '\n';
     }
   }

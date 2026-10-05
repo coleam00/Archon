@@ -324,7 +324,7 @@ mock.module('./orchestrator', () => ({
 
 // Prompt builder mock
 const mockBuildOrchestratorPrompt = mock<typeof PromptBuilder.buildOrchestratorPrompt>(
-  async () => 'You are the orchestrator agent.'
+  () => 'You are the orchestrator agent.'
 );
 const mockBuildProjectScopedPrompt = mock<typeof PromptBuilder.buildProjectScopedPrompt>(
   async () => 'You are scoped to project X.'

@@ -55,7 +55,6 @@ test('registration leaves the provider unpinned and new conversations follow con
   expect(codebase.ai_assistant_type).toBeNull();
   const first = await getOrCreateConversation('web', 'first', codebase.id);
   expect(first.ai_assistant_type).toBe('pi');
-  expect(await formatProjectSection(codebase)).toContain('- AI Provider: pi');
   expect(await buildOrchestratorSystemAppend(first, [codebase], [])).toContain('- AI Provider: pi');
 
   await updateGlobalConfig({ defaultAssistant: 'codex' });
@@ -78,7 +77,7 @@ test('an upgrade preserves stored project choices and they still win over config
     (await getOrCreateConversation('web', 'old-conversation', 'old-project')).ai_assistant_type
   ).toBe('codex');
   if (!codebase) throw new Error('Upgrade lost the project');
-  expect(await formatProjectSection(codebase)).toContain('- AI Provider: codex');
+  expect(formatProjectSection(codebase)).toContain('- AI Provider: codex');
 });
 
 test('repository registration stays unpinned as the global default changes', async () => {
@@ -96,4 +95,25 @@ test('repository registration stays unpinned as the global default changes', asy
   expect(
     (await getOrCreateConversation('cli', 'repo-second', registration.codebaseId)).ai_assistant_type
   ).toBe('codex');
+});
+
+test('an unrelated project with an invalid config does not break the chat prompt', async () => {
+  const active = await getCodebase('old-project');
+  if (!active) throw new Error('Upgrade lost the project');
+  const brokenDir = join(root, 'broken-project');
+  await mkdir(join(brokenDir, '.archon'), { recursive: true });
+  await writeFile(join(brokenDir, '.archon', 'config.yaml'), 'assistants: not-a-map\n');
+  const broken = { ...active, id: 'broken', name: 'broken', default_cwd: brokenDir };
+  const unpinned = { ...broken, ai_assistant_type: null };
+  const scoped = await getOrCreateConversation('web', 'scoped-chat', active.id);
+
+  const prompt = await buildOrchestratorSystemAppend(scoped, [active, unpinned], []);
+  expect(prompt).toContain('### broken\n');
+  expect(prompt.match(/- AI Provider: /g)).toHaveLength(1);
+  const pinned = await buildOrchestratorSystemAppend(scoped, [active, broken], []);
+  expect(pinned.match(/- AI Provider: codex/g)).toHaveLength(2);
+  const unscoped = await getOrCreateConversation('web', 'unscoped-chat');
+  expect(await buildOrchestratorSystemAppend(unscoped, [active, unpinned], [])).toContain(
+    '### broken\n'
+  );
 });
