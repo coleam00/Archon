@@ -45,7 +45,7 @@ If you touched what they cover, run them yourself.
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
 | `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
-| `postgres-parity` | a live PostgreSQL | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.metadata-merge.postgres.integration.test.ts`, and `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts` |
+| `postgres-parity` | a live PostgreSQL | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, and `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
 
@@ -59,6 +59,14 @@ so another PR-gating command cannot appear without a deliberate decision to leav
 **SDLC workflows**: We do not accept pull requests that change
 `.archon/workflows/sdlc/`. Open an issue instead and describe the problem or
 change you want the maintainers to consider.
+
+### Publishing the container image
+
+The `Publish` workflow checks provenance and SBOM attestations on the pushed image
+digest. Keep `provenance: mode=max` and `sbom: true` enabled.
+Build arguments are published in the attestation; secrets must use `secrets:`, whose values are excluded.
+See [Verifying image attestations](packages/docs-web/src/content/docs/deployment/docker.md#verifying-image-attestations)
+for the consumer inspection commands.
 
 ### Commit messages
 

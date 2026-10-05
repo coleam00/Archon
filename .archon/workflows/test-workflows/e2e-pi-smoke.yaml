@@ -26,7 +26,7 @@ nodes:
   # 2. Assert non-empty output — fails CI if Pi returned nothing
   - id: assert
     bash: |
-      output="$simple.output"
+      output=$simple.output
       if [ -z "$output" ]; then
         echo "FAIL: simple node returned empty output"
         exit 1

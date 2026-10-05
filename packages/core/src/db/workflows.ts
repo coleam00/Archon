@@ -1,7 +1,16 @@
 /**
  * Database operations for workflow runs
  */
-import type { ResourceStartDisposition } from '@archon/workflows/schemas/resource-start';
+import {
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  type GateResolutionEvent,
+} from '@archon/workflows/store';
+export {
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+  type GateResolutionEvent,
+} from '@archon/workflows/store';
 import type { RunExitReason, RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
 import type { CheckoutObservation } from '@archon/workflows/schemas/checkout-observation';
 
@@ -44,7 +53,6 @@ import { createLogger } from '@archon/paths';
 import type {
   FanOutCancelReason,
   WorkflowCancellationEventDetails,
-  WorkflowEventType,
   WorkflowResumeCursor,
   WorkflowWaitCompletion,
   WorkflowWaitPause,
@@ -211,21 +219,6 @@ function replaceWaitMetadata(paramIndex: number): string {
 }
 
 /**
- * An audit event written atomically with a gate resolution (#2146). The winning
- * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
- * failed event write rolls the resolution back — a resolved gate can never be
- * left with no audit trail, which the fast-path guard would then wrongly block
- * from retrying. `workflow_run_id` is supplied by the CAS function.
- */
-export type GateResolutionEvent =
-  | Omit<NodeStateEventInput, 'workflow_run_id'>
-  | {
-      event_type: Exclude<WorkflowEventType, NodeStateEventInput['event_type']>;
-      step_name: string;
-      data: Record<string, unknown>;
-    };
-
-/**
  * Atomically resolve a paused approval gate (compare-and-swap) and record its
  * audit events in one transaction.
  *
@@ -348,37 +341,6 @@ export async function resolveAndCancelApprovalGate(
   }
   if (outcome.resolved) await reportRunTerminal(id);
   return outcome;
-}
-
-/**
- * Thrown by resumeWorkflowRun when the target run is no longer in a resumable
- * state (already running/terminal, or concurrently resumed). Callers translate
- * this into a user-facing "already being resumed" message instead of leaking
- * the raw internal error string.
- */
-export class WorkflowNotResumableError extends Error {
-  constructor(
-    public readonly runId: string,
-    public readonly currentStatus: string
-  ) {
-    super(
-      `Workflow run is not resumable (id: ${runId}, status: ${currentStatus}). ` +
-        'It may have already been resumed, completed, or cancelled.'
-    );
-    this.name = 'WorkflowNotResumableError';
-  }
-}
-
-export class WorkflowResourceBusyError extends Error {
-  constructor(
-    public readonly runId: string,
-    public readonly blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker']
-  ) {
-    super(
-      `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`
-    );
-    this.name = 'WorkflowResourceBusyError';
-  }
 }
 
 export async function insertWorkflowRun(
@@ -568,7 +530,7 @@ export async function findWorkflowRunsByIdPrefix(
   if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
   try {
     const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
+      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND CAST(id AS TEXT) LIKE $2 LIMIT 2',
       [codebaseId, `${idPrefix}%`]
     );
     return result.rows.map(normalizeWorkflowRun);

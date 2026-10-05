@@ -17,6 +17,7 @@ import type { ProviderCapabilities } from '../../types';
  * against the schema, re-asks up to 3× on a miss/invalid, then FAILS the node.
  */
 export const PI_CAPABILITIES: ProviderCapabilities = {
+  backgroundWork: 'none',
   sessionResume: true,
   sessionFork: true,
   mcp: false,

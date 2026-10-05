@@ -16,7 +16,7 @@ This is the recommended GitHub auth mode for teams sharing one Archon instance. 
 - Webhooks centralise — one URL per App covers every installation.
 - A team's repos can span multiple GitHub orgs (or a mix of orgs and personal accounts) — Archon routes per-(owner, repo) to the right installation transparently.
 
-Solo installs that only need the PAT model can ignore this page; see [GitHub](./github.md) for the legacy setup.
+Solo installs that only need the PAT model can ignore this page; see [GitHub](/adapters/github/) for the legacy setup.
 
 ## When to use App mode vs. PAT mode
 
@@ -121,7 +121,7 @@ Archon refuses to start if both modes are configured. Remove `GITHUB_TOKEN` from
 
 ## Step 8 (optional): Enable per-user GitHub identity
 
-By default every comment, commit, and push goes through the **bot** (`<slug>[bot]`). On a multi-user install you can let each teammate connect their own GitHub identity so those actions attribute to the human instead.
+By default GitHub API requests and pushes authenticate as the **bot** (`<slug>[bot]`), while commit authorship uses the checkout's ambient git identity. On a multi-user install teammates can connect their own GitHub identity for authentication and commit authorship.
 
 Enable the feature by adding two env vars on top of App mode:
 
@@ -143,6 +143,7 @@ Teammates connect once via any surface:
 
 Once enabled:
 
+- Run commits use the initiating connected user's GitHub login as author name and `<numeric_id>+<login>@users.noreply.github.com` as author email. The committer remains the ambient git identity. This applies to new and adopted worktrees, in-place runs, and folder projects without changing repository git config. Unconnected users and runs without an initiating user keep ambient authorship.
 - Workflows declaring `requires: [github]` **hard-block** unconnected users before any worktree/clone/AI cost.
 - An unconnected user's workflow `gh`/`git` has its GitHub token **scrubbed** by default (rather than silently using the shared org/bot token). Opt back into the shared token with `ARCHON_ALLOW_ORG_GITHUB_TOKEN_FALLBACK=true`.
 - Rotating `TOKEN_ENCRYPTION_KEY` invalidates all stored user tokens — everyone must reconnect.
@@ -205,7 +206,7 @@ The `!override` tag (compose-spec) replaces the base file's `ports` list instead
 
 **2. In `Caddyfile` — drop `/internal/*` requests.**
 
-Insert this `handle` block before the fallthrough `handle { }` block:
+The maintained `Caddyfile.example` includes this denial. Keep it in your deployed `Caddyfile`; if you use an older or custom configuration, insert it before the fallthrough `handle { }` block:
 
 ```txt
 handle /internal/* {

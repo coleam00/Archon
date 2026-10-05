@@ -5,10 +5,11 @@
  * Full integration tests would require mocking the database and commands.
  */
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
+import { generateConversationId } from './utils/conversation-id';
 import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -1000,13 +1001,6 @@ describe('CLI argument parsing', () => {
 });
 
 describe('Conversation ID generation', () => {
-  // Test the generateConversationId pattern
-  const generateConversationId = (): string => {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8);
-    return `cli-${String(timestamp)}-${random}`;
-  };
-
   it('should generate ID with cli- prefix', () => {
     const id = generateConversationId();
     expect(id.startsWith('cli-')).toBe(true);
@@ -1028,19 +1022,22 @@ describe('Conversation ID generation', () => {
     const id = generateConversationId();
     const parts = id.split('-');
 
-    // Random part should be alphanumeric, 6 chars
-    expect(parts[2]).toMatch(/^[a-z0-9]+$/);
-    expect(parts[2].length).toBeGreaterThanOrEqual(1);
-    expect(parts[2].length).toBeLessThanOrEqual(6);
+    expect(parts[2]).toMatch(/^[a-f0-9]{32}$/);
   });
 
-  it('should generate unique IDs', () => {
-    const ids = new Set<string>();
-    for (let i = 0; i < 100; i++) {
-      ids.add(generateConversationId());
+  it('should generate 100 unique IDs in the same millisecond even with repeated Math.random values', () => {
+    const clock = spyOn(Date, 'now').mockReturnValue(123);
+    const random = spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const ids = new Set<string>();
+      for (let i = 0; i < 100; i++) {
+        ids.add(generateConversationId());
+      }
+      expect(ids.size).toBe(100);
+    } finally {
+      clock.mockRestore();
+      random.mockRestore();
     }
-    // All 100 IDs should be unique
-    expect(ids.size).toBe(100);
   });
 });
 
@@ -1667,5 +1664,70 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
     }
   } finally {
     await removeTempTree(root);
+  }
+});
+
+describe('compiled CLI update notices', () => {
+  const cases = [
+    { args: ['workflow', 'run'], notice: true, status: 1 },
+    { args: ['workflow', 'resume'], notice: true, status: 1 },
+    { args: ['version'], notice: false, status: 0 },
+    { args: ['workflow', 'run', '--quiet'], notice: false, status: 1 },
+    { args: ['workflow', 'run', '--json'], notice: false, status: 1 },
+    { args: ['workflow', 'run'], notice: false, status: 1, stale: true },
+    { args: ['workflow', 'run'], notice: false, status: 1, stale: true, pending: true },
+    { args: ['workflow', 'run'], notice: false, status: 1, source: true },
+    {
+      args: ['workflow', 'run', '--internal-detached-run-config', 'invalid'],
+      notice: true,
+      status: 1,
+    },
+  ];
+  for (const entry of cases) {
+    it(`${entry.args.join(' ')} ${entry.pending ? 'with a pending network request' : entry.source ? 'in a source build' : entry.stale ? 'offline with stale cache' : 'with fresh cache'}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'archon-cli-update-'));
+      const preload = join(root, 'preload.ts');
+      writeFileSync(
+        join(root, 'update-check.json'),
+        JSON.stringify({
+          latestVersion: '99.0.0',
+          releaseUrl: 'https://example.com/release',
+          checkedAt: entry.stale ? 0 : Date.now(),
+        })
+      );
+      writeFileSync(
+        preload,
+        `import { mock } from 'bun:test';
+mock.module(${JSON.stringify(join(repoRoot, 'packages/paths/src/bundled-build.ts'))}, () => ({
+  BUNDLED_IS_BINARY: ${!entry.source}, BUNDLED_VERSION: '0.11.1', BUNDLED_GIT_COMMIT: 'test', BUNDLED_WEB_DIST_SHA256: '',
+}));
+globalThis.fetch = () => ${entry.pending ? 'new Promise(() => {})' : "Promise.reject(new Error('Network unavailable'))"};
+`
+      );
+      try {
+        const result = spawnSync(
+          process.execPath,
+          ['--preload', preload, CLI_ENTRY, ...entry.args, '--cwd', join(root, 'missing')],
+          {
+            cwd: repoRoot,
+            encoding: 'utf8',
+            timeout: 5000,
+            env: { ...process.env, ARCHON_HOME: root, ARCHON_TELEMETRY_DISABLED: '1' },
+          }
+        );
+        expect({ status: result.status, stderr: result.stderr }).toMatchObject({
+          status: entry.status,
+        });
+        expect(result.stderr.includes('Update available:')).toBe(entry.notice);
+        if (entry.notice) {
+          expect(result.stdout).toBe('');
+          expect(result.stderr).toContain('brew upgrade archon');
+          expect(result.stderr).toContain('https://archon.diy/getting-started/updating/');
+        }
+        if (entry.args.includes('--json')) expect(JSON.parse(result.stdout).ok).toBe(false);
+      } finally {
+        await removeTempTree(root);
+      }
+    });
   }
 });

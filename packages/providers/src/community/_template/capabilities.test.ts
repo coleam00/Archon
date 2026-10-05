@@ -9,8 +9,10 @@ const DOC_PATH = join(
 );
 
 describe('community provider capabilities template', () => {
-  test('declares every capability as unsupported to start', () => {
-    for (const [axis, supported] of Object.entries(YOUR_CAPABILITIES)) {
+  test('starts with unsupported features and unobserved background work', () => {
+    const { backgroundWork, ...features } = YOUR_CAPABILITIES;
+    expect(backgroundWork).toBe('unobserved');
+    for (const [axis, supported] of Object.entries(features)) {
       expect({ axis, supported }).toEqual({ axis, supported: false });
     }
   });

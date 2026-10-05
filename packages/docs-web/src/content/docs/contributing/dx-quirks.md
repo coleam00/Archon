@@ -70,8 +70,8 @@ Always use `bun run test`, which runs each package's own grouped suite for isola
 `bun run test <path>` runs that path.
 
 ```bash
-bun run test packages/paths/src/effort.test.ts   # from the repo root
-cd packages/paths && bun run test src/effort.test.ts
+bun run test packages/paths/src/skills.test.ts   # from the repo root
+cd packages/paths && bun run test src/skills.test.ts
 ```
 
 From the repo root, an argument naming a path under `packages/<name>/`, `scripts/` or

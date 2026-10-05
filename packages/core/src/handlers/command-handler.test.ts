@@ -14,7 +14,12 @@ import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import type { Codebase, Conversation, Session, WorkflowRequest } from '../types';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '../schemas/workflow-run';
-import type { IsolationEnvironmentRow } from '@archon/isolation';
+import {
+  MissingProjectDirectoryError,
+  type IsolationEnvironmentRow,
+  type IsolationRequest,
+  type IsolatedEnvironment,
+} from '@archon/isolation';
 import { join } from 'path';
 import * as fsPromises from 'fs/promises';
 import * as gitUtils from '@archon/git';
@@ -355,15 +360,15 @@ mock.module('../db/isolation-environments', () => ({
 }));
 
 // Mock isolation provider
-const mockIsolationCreate = mock(() =>
+const mockIsolationCreate = mock<(request: IsolationRequest) => Promise<IsolatedEnvironment>>(() =>
   Promise.resolve({
     id: '/workspace/my-repo/worktrees/task-feat-auth',
     provider: 'worktree',
     workingPath: '/workspace/my-repo/worktrees/task-feat-auth',
-    branchName: 'task-feat-auth',
+    branchName: gitUtils.toBranchName('task-feat-auth'),
     status: 'active',
     createdAt: new Date(),
-    metadata: {},
+    metadata: { adopted: false },
   })
 );
 const mockIsolationDestroy = mock(() => Promise.resolve());
@@ -422,7 +427,9 @@ mock.module('../services/run-owner-stop', () => ({
   DetachedRunOwnerUnavailableError: RealDetachedRunOwnerUnavailableError,
 }));
 
+const mockReclaimContainerEnv = mock(async () => {});
 mock.module('../services/cleanup-service', () => ({
+  reclaimContainerEnv: mockReclaimContainerEnv,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
   getWorktreeStatusBreakdown: mock(() =>
@@ -997,6 +1004,22 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('Abandoned 2 resumable run(s).');
       });
 
+      test('reset reports failed container cleanup after cancelling its runs', async () => {
+        mockGetActiveSession.mockResolvedValue(null);
+        mockCancelResumableRunsForConversation.mockResolvedValueOnce([
+          makeWorkflowRun({
+            id: 'run-a',
+            status: 'paused',
+            metadata: { isolation: 'container', isolation_env_id: 'env-a' },
+          }),
+        ]);
+        mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
+        const result = await handleCommand(baseConversation, '/reset');
+        expect(result.message).toContain('Abandoned 1 resumable run(s).');
+        expect(result.message).toContain('Could not reclaim container environment env-a');
+        expect(result.message).toContain('resources may remain allocated');
+      });
+
       test('still reports the abandoned count when clearing the binding fails', async () => {
         // The two effects live in separate try blocks precisely so a failure in
         // the second cannot swallow what the first already did.
@@ -1409,6 +1432,29 @@ describe('CommandHandler', () => {
 
           expect(result.success).toBe(false);
           expect(result.message).toContain('classified:');
+        });
+
+        test('names the registered project when its directory is missing', async () => {
+          mockIsolationCreate.mockImplementationOnce(async request => {
+            throw new MissingProjectDirectoryError(
+              request.canonicalRepoPath,
+              request.codebaseName ?? request.codebaseId
+            );
+          });
+
+          const result = await handleCommand(
+            conversationWithCodebase,
+            '/worktree create feat-auth'
+          );
+
+          expect(result.success).toBe(false);
+          expect(result.message).toContain("Project 'my-repo'");
+          expect(result.message).toContain('/workspace/my-repo');
+          expect(result.message).toContain('Restore');
+          expect(result.message).toContain('re-register');
+          expect(result.message).not.toContain('codebase-123');
+          expect(mockIsolationEnvDbCreate).not.toHaveBeenCalled();
+          expect(mockUpdateConversation).not.toHaveBeenCalled();
         });
 
         test('should reject if already using a worktree (shows working path, not UUID)', async () => {

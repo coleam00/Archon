@@ -27,7 +27,7 @@ import {
   type ProviderFailureClass,
 } from '@archon/provider-contract';
 import { failureClassOfThrown, failureResult } from '../shared/failure';
-import { clampEffort } from '@archon/paths/effort';
+import { clampEffort } from '@archon/provider-contract';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinary } from './binary-resolver';
@@ -481,6 +481,11 @@ interface TurnRequest {
   apiKey: string | undefined;
   cwd: string;
   resumeSessionId: string | undefined;
+  /**
+   * Continue `resumeSessionId` in a new thread with its history, leaving it unchanged, so
+   * concurrent runs that continue one thread never write into it together.
+   */
+  forkSession: boolean;
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
   /**
@@ -525,9 +530,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     threadParams = { ...threadParams, config: scope.config };
     declared = scope.declared;
   }
-  // A resumed thread needs the same config: Codex does not store it with the thread.
+  // A resumed or forked thread needs the same config: Codex does not store it with the
+  // thread, and a fork without it loads the user's MCP servers and plugins again.
   const threadResponse = request.resumeSessionId
-    ? await connection.request('thread/resume', {
+    ? await connection.request(request.forkSession ? 'thread/fork' : 'thread/resume', {
         threadId: request.resumeSessionId,
         cwd: request.cwd,
         ...threadParams,
@@ -539,7 +545,11 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   request.onThread(threadId);
   if (declared) await checkThreadMcpScope(connection, threadId, declared);
   getLog().debug(
-    { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
+    {
+      sessionIdPreview: sessionPreview(threadId),
+      resumed: !!request.resumeSessionId,
+      forked: !!request.resumeSessionId && request.forkSession,
+    },
     'codex.thread_ready'
   );
 
@@ -709,7 +719,7 @@ function* completeTurn(
   }
   result.sessionId = state.threadId;
   if (state.usage) result.tokens = state.usage;
-  // Reaching a turn means `thread/resume` succeeded.
+  // Reaching a turn means `thread/resume` or `thread/fork` succeeded.
   if (request.resumeSessionId) result.resumed = true;
   yield result;
 }
@@ -960,7 +970,8 @@ export class CodexProvider implements IAgentProvider {
           ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
         ],
         env,
-        this.spawner
+        this.spawner,
+        requestOptions?.protectedEnvKeys
       );
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
@@ -970,6 +981,7 @@ export class CodexProvider implements IAgentProvider {
         apiKey,
         cwd,
         resumeSessionId,
+        forkSession: requestOptions?.forkSession === true,
         threadParams: {
           sandbox: titleRequest ? 'read-only' : 'danger-full-access',
           approvalPolicy: 'never',
@@ -993,7 +1005,7 @@ export class CodexProvider implements IAgentProvider {
           turnId = id;
         },
       });
-      // A Codex turn has no background work: its result ends it.
+      // Codex does not expose a complete background-work lifecycle here.
       for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
         if (chunk.type === 'result') {
           // An interrupted turn completes before its process ends; a cancel is not a result.
@@ -1027,7 +1039,7 @@ export class CodexProvider implements IAgentProvider {
       abortSignal?.removeEventListener('abort', onAbort);
       await connection?.shutdown(this.shutdownGraceMs);
     }
-    // A Codex turn has no background work: once its result is in, nothing more runs.
+    // Background work is unobserved; this marks the end of the observed turn.
     yield { type: 'settled' };
   }
 

@@ -157,6 +157,7 @@ function makeEnvironment(overrides: Partial<ActiveEnvironment> = {}): ActiveEnvi
     branch_name: 'feature-branch',
     working_path: '/test/worktree',
     codebase_id: 'cb-123',
+    codebase_name: 'test-project',
     codebase_default_cwd: '/test/repo',
     workflow_id: 'wf-123',
     workflow_type: 'task',
@@ -795,6 +796,17 @@ describe('isolationCleanupCommand', () => {
   afterEach(() => {
     consoleLogSpy.mockRestore();
     consoleErrorSpy.mockRestore();
+  });
+
+  it('rejects before reconciliation or destruction when the initial list rejects a legacy path', async () => {
+    const { InvalidCodebaseDefaultCwdError } = await import('@archon/core/db/codebases');
+    mockListEnvironments.mockRejectedValueOnce(
+      new InvalidCodebaseDefaultCwdError('legacy', 'projects/repo')
+    );
+    await expect(isolationCleanupCommand()).rejects.toThrow('/register-project "legacy"');
+    expect(mockDestroyWorktree).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(consoleLogSpy.mock.calls.flat().join(' ')).not.toContain('Status: Cleaned');
   });
 
   it('destroys a stale environment with no live owning run', async () => {

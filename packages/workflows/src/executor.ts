@@ -1,3 +1,11 @@
+import {
+  prepareRunAiConfiguration,
+  assertRunCredentials,
+  type RunCredentialRequirement,
+  assertCredentialStatus,
+  StoredCredentialDeliveryError,
+  type PreparedRunAiConfiguration,
+} from './run-preflight';
 /**
  * Workflow Executor - runs DAG-based workflows
  */
@@ -86,7 +94,7 @@ import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
 import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
-import type { ExecutionContext } from '@archon/providers/types';
+import type { ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
 // Re-exported so callers driving the capture-first sequence need only this module.
@@ -106,31 +114,13 @@ export type {
 import { safeSendMessage, runWithAdoptedRunDir, type SendMessageContext } from './executor-shared';
 import { resolveGithubTokenOverrides } from './utils/github-token-policy';
 import {
-  buildAiProfile,
-  applyResolvedRunModelOverrides,
-  createRunModelBindingsMetadata,
   hasRunModelOverrides,
-  readRunModelBindingsMetadata,
-  resolveRunModelOverrides,
   RUN_MODEL_BINDINGS_METADATA_KEY,
   runOverrideAppliesToRef,
 } from './model-validation';
-import {
-  applyWorkflowRunConfigLayer,
-  readWorkflowRunConfigMetadata,
-  WORKFLOW_RUN_CONFIG_METADATA_KEY,
-} from './run-config';
-import type { WorkflowRunConfigInput, WorkflowRunConfigMetadata } from './schemas/run-config';
-import type {
-  ResolvedAiProfile,
-  ResolvedRunModelOverrides,
-  RunModelBindingsMetadata,
-  RunModelOverrides,
-} from './model-validation';
-import { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-resolution';
-
-/** The per-user prefs layer as returned by `WorkflowDeps.getUserAiPrefs`. */
-type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
+import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from './run-config';
+import type { WorkflowRunConfigInput } from './schemas/run-config';
+import type { ResolvedRunModelOverrides } from './model-validation';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -247,7 +237,7 @@ async function resolveBotGitHubEnvForWorkflow(
 }
 
 /**
- * Resolve per-user GitHub token overrides for a run. When per-user mode is on
+ * Resolve per-user GitHub credentials and commit author for a run. When per-user mode is on
  * and the run has an originating user, this routes `gh`/`git push` through the
  * user's personal token — or scrubs the org/bot token when they haven't
  * connected (see {@link resolveGithubTokenOverrides}). Returns {} (no opinion)
@@ -267,7 +257,15 @@ async function resolveUserGithubEnvForWorkflow(
       getLog().warn({ err: err as Error, userId }, 'workflow.user_github_token_resolve_failed');
     }
   }
-  return resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+  const env = resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+  if (userId && deps.getUserGithubAuthor) {
+    const author = await deps.getUserGithubAuthor(userId);
+    if (author) {
+      env.GIT_AUTHOR_NAME = author.name;
+      env.GIT_AUTHOR_EMAIL = author.email;
+    }
+  }
+  return env;
 }
 
 /**
@@ -287,40 +285,46 @@ async function clearManagedProviderCredentialFiles(artifactsDir: string): Promis
  * run's artifacts directory. Returns the env bag to merge LAST into
  * `config.envVars` so a connected user's keys win over file/db/bot-github
  * env, plus exact credential values for failure-path redaction. Returns empty
- * bags when per-user provider keys are disabled, no userId is present, or the
- * deps adapter is absent.
- *
- * Contract: NEVER THROWS. Adapter failures are logged and yield empty bags so the
- * workflow continues with whatever env inheritance was already in place. File
- * write failures also drop the resolved env, but retain the credential values:
- * an earlier file may already contain them and still needs failure-path redaction.
+ * bags when per-user provider keys are disabled, no userId is present, the
+ * deps adapter is absent, or no vendor is required. Delivery and file-write
+ * failures stop execution rather than falling back to ambient credentials.
  */
 async function resolveUserProviderEnvForWorkflow(
   deps: WorkflowDeps,
   userId: string | undefined,
-  artifactsDir: string
+  artifactsDir: string,
+  requirements: readonly RunCredentialRequirement[],
+  connectedVendors: ReadonlySet<string>
 ): Promise<{ env: Record<string, string>; protectedValues: string[] }> {
   const perUserEnabled = deps.isPerUserProviderKeysEnabled?.() ?? false;
   if (!perUserEnabled || !userId || !deps.getUserProviderEnv) {
     return { env: {}, protectedValues: [] };
   }
+  const vendors = [...new Set(requirements.flatMap(r => (r.vendor ? [r.vendor] : [])))];
+  if (vendors.length === 0) return { env: {}, protectedValues: [] };
   let resolved: Awaited<ReturnType<NonNullable<WorkflowDeps['getUserProviderEnv']>>>;
   try {
-    resolved = await deps.getUserProviderEnv(userId, artifactsDir);
-  } catch (err) {
-    getLog().warn({ err: err as Error, userId }, 'workflow.user_provider_env_resolve_failed');
-    return { env: {}, protectedValues: [] };
+    resolved = await deps.getUserProviderEnv(userId, artifactsDir, vendors, [...connectedVendors]);
+  } catch (error) {
+    if (error instanceof StoredCredentialDeliveryError) {
+      const requirement = requirements.find(r => r.vendor === error.vendor);
+      if (requirement) assertCredentialStatus(requirement, error.status);
+    }
+    throw new Error('Could not safely deliver required provider credentials');
   }
 
   const { env, files, protectedValues } = resolved;
+  const written: string[] = [];
   try {
     for (const f of files) {
       await mkdir(dirname(f.path), { recursive: true });
+      written.push(f.path);
       await writeFile(f.path, f.contents, { encoding: 'utf8', mode: 0o600 });
     }
-  } catch (err) {
-    getLog().warn({ err: err as Error, userId }, 'workflow.user_provider_files_write_failed');
-    return { env: {}, protectedValues };
+  } catch {
+    for (const path of written.reverse()) await rm(path, { force: true });
+    await clearManagedProviderCredentialFiles(artifactsDir);
+    throw new Error('Could not safely write provider credential files');
   }
 
   const envKeys = Object.keys(env);
@@ -573,6 +577,7 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  preparedAiConfiguration?: PreparedRunAiConfiguration;
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
   /**
@@ -687,9 +692,7 @@ export type ExecuteWorkflowOptions = ResumePayload & {
   /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
   continuationMode?: ContinuationMode;
   /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */
-  modelOverrideLayer?:
-    | { kind: 'raw'; overrides: RunModelOverrides }
-    | { kind: 'resolved'; overrides: ResolvedRunModelOverrides };
+  modelOverrideLayer?: import('./run-preflight').RunAiConfigurationOptions['modelOverrideLayer'];
   /** Validated sparse config supplied by a fresh CLI/HTTP workflow invocation. */
   runConfig?: WorkflowRunConfigInput;
   /**
@@ -1328,6 +1331,25 @@ async function runChildWorkflow(
       return failOutcome((err as Error).message);
     }
 
+    let childPrepared: PreparedRunAiConfiguration;
+    try {
+      childPrepared = await prepareRunAiConfiguration(
+        deps,
+        childWorkflow,
+        resumeChild?.run.working_path ?? cwd,
+        {
+          codebaseId,
+          userId,
+          ...(resumeChild ? { continuationRun: resumeChild.run } : {}),
+          modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
+          ...(runConfig ? { runConfig } : {}),
+        }
+      );
+      await assertRunCredentials(deps, childPrepared);
+    } catch (error) {
+      return failOutcome((error as Error).message, resumeChild?.run.id);
+    }
+
     // 3. Resolve the child's execution cwd (slice 2, PR-A). `isolation: 'worktree'`
     //    runs the child in its own git worktree obtained from the injected resolver.
     //    A resume whose child run row still exists reuses that row's recorded path
@@ -1539,6 +1561,7 @@ async function runChildWorkflow(
         conversationDbId,
         {
           ...childOpts,
+          ...(resumeChild ? {} : { preparedAiConfiguration: childPrepared }),
           capturedSourceOwner: owner,
           modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
         }
@@ -1837,8 +1860,6 @@ export async function executeWorkflow(
   const executionUserId = preCreatedRun ? (preCreatedRun.user_id ?? undefined) : userId;
   const modelOverrides =
     modelOverrideLayer?.kind === 'raw' ? modelOverrideLayer.overrides : undefined;
-  const callerResolvedModelOverrides =
-    modelOverrideLayer?.kind === 'resolved' ? modelOverrideLayer.overrides : undefined;
   const isContinuation =
     preCreatedRun !== undefined &&
     (priorCompletedNodes !== undefined || preCreatedRun.status !== 'pending');
@@ -1897,44 +1918,37 @@ export async function executeWorkflow(
     return { success: false, workflowRunId: preCreatedRun.id, error: msg };
   }
 
-  let runConfigMetadata: WorkflowRunConfigMetadata | undefined;
-  let effectiveRunConfig: WorkflowRunConfigInput | undefined;
+  let prepared: PreparedRunAiConfiguration;
   try {
-    if (isContinuation) {
-      runConfigMetadata = readWorkflowRunConfigMetadata(preCreatedRun.metadata);
-      if (runConfigMetadata) {
-        if (!deps.unsealRunConfig) {
-          throw new Error('This Archon build cannot restore persisted workflow run config.');
-        }
-        effectiveRunConfig = {
-          layer: deps.unsealRunConfig(runConfigMetadata),
-          source: runConfigMetadata.source,
-        };
-      }
-    } else {
-      effectiveRunConfig = callerRunConfig;
-      if (effectiveRunConfig) {
-        if (!deps.sealRunConfig) {
-          throw new Error('This Archon build cannot persist workflow run config.');
-        }
-        runConfigMetadata = deps.sealRunConfig(effectiveRunConfig.layer, effectiveRunConfig.source);
-      }
-    }
+    prepared =
+      opts.preparedAiConfiguration ??
+      (await prepareRunAiConfiguration(deps, workflow, cwd, {
+        codebaseId,
+        userId: executionUserId,
+        runConfig: callerRunConfig,
+        modelOverrideLayer,
+        ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
+      }));
   } catch (error) {
-    if (preCreatedRun) {
+    if (error instanceof TerminalStatusWriteError) throw error;
+    if (preCreatedRun)
       await requireTerminalStatusWrite(
         deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message),
-        { workflowRunId: preCreatedRun.id, site: 'workflow.run_config_fail_db_record_failed' }
+        { workflowRunId: preCreatedRun.id, site: 'workflow.configuration_fail_db_record_failed' }
       );
-    }
     throw error;
   }
-
-  // Load shared config once, then add this invocation's sparse layer at the
-  // executor boundary. DB values remain below the run layer; protected
-  // Archon-managed credentials are added later and keep their authority.
-  const fileConfig = await deps.loadConfig(cwd);
-  const dbEnvVars = codebaseId ? await deps.store.getCodebaseEnvVars(codebaseId) : {};
+  const {
+    config,
+    dbEnvVars,
+    baseAiProfile,
+    aiProfile,
+    resolvedModelOverrides,
+    modelBindingsMetadata,
+    scope,
+    effectiveRunConfig,
+    runConfigMetadata,
+  } = prepared;
   // Resolve a fresh bot GitHub token once at workflow start when:
   //   (a) the codebase URL is a github.com repo, and
   //   (b) deps.resolveBotGitHubToken is registered (App mode).
@@ -1945,16 +1959,6 @@ export async function executeWorkflow(
   // typical <1h workflow.
   const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
   const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
-  const config = applyWorkflowRunConfigLayer(
-    {
-      ...fileConfig,
-      // Order before the run layer: file < db. Per-codebase env vars are
-      // operator-set; an explicit run config is the operator's final runtime
-      // choice. Bot/user credentials remain protected and are merged after it.
-      envVars: { ...fileConfig.envVars, ...dbEnvVars },
-    },
-    effectiveRunConfig?.layer
-  );
   config.envVars = {
     ...config.envVars,
     // The injected bot token is system-set; the per-user override
@@ -2039,86 +2043,6 @@ export async function executeWorkflow(
 
   const docsDir = config.docsPath ?? 'docs/';
 
-  // Per-user AI prefs (Phase 3): the originating user's tiers/aliases/default-
-  // assistant override install config (highest precedence). The dep contract is
-  // non-throwing, but a third-party deps impl might throw anyway — guard so a
-  // prefs failure can never abort a run; `{}` keeps config-only behavior.
-  let userAiPrefs: UserAiPrefsLayer = {};
-  if (executionUserId && deps.getUserAiPrefs) {
-    try {
-      userAiPrefs = await deps.getUserAiPrefs(executionUserId);
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, userId: executionUserId },
-        'workflow.user_ai_prefs_resolve_failed'
-      );
-    }
-  }
-  if (userAiPrefs.tiers || userAiPrefs.aliases || userAiPrefs.defaultProvider) {
-    getLog().debug(
-      {
-        userId: executionUserId,
-        tierKeys: Object.keys(userAiPrefs.tiers ?? {}),
-        aliasKeys: Object.keys(userAiPrefs.aliases ?? {}),
-        defaultProvider: userAiPrefs.defaultProvider,
-      },
-      'workflow.user_ai_prefs_applied'
-    );
-  }
-  let baseAiProfile: ResolvedAiProfile;
-  try {
-    baseAiProfile = buildAiProfile(
-      effectiveRunConfig?.layer.assistant ?? userAiPrefs.defaultProvider ?? fileConfig.assistant,
-      {
-        repoTiers: fileConfig.tiers,
-        repoAliases: fileConfig.aliases,
-        userTiers: userAiPrefs.tiers,
-        userAliases: userAiPrefs.aliases,
-        runTiers: effectiveRunConfig?.layer.tiers,
-        runAliases: effectiveRunConfig?.layer.aliases,
-      }
-    );
-  } catch (error) {
-    // Structurally invalid STORED prefs (corrupt DB row) must not kill the run
-    // before its record exists — degrade to config-only. A broken config layer
-    // still fails fast: the rebuild below rethrows the same error.
-    getLog().error(
-      { err: error as Error, userId: executionUserId },
-      'workflow.user_ai_prefs_profile_invalid'
-    );
-    baseAiProfile = buildAiProfile(effectiveRunConfig?.layer.assistant ?? fileConfig.assistant, {
-      repoTiers: fileConfig.tiers,
-      repoAliases: fileConfig.aliases,
-      runTiers: effectiveRunConfig?.layer.tiers,
-      runAliases: effectiveRunConfig?.layer.aliases,
-    });
-  }
-
-  let persistedModelBindings: RunModelBindingsMetadata | undefined;
-  let resolvedModelOverrides: ResolvedRunModelOverrides;
-  try {
-    persistedModelBindings = isContinuation
-      ? readRunModelBindingsMetadata(preCreatedRun.metadata)
-      : undefined;
-    resolvedModelOverrides =
-      persistedModelBindings?.overrides ??
-      callerResolvedModelOverrides ??
-      resolveRunModelOverrides(baseAiProfile, modelOverrides);
-  } catch (error) {
-    // HTTP/background dispatch pre-creates a pending row before this shared semantic
-    // gate runs. An invalid explicit binding must not leave that row holding the path
-    // lock indefinitely just because validation happens before the executor's main
-    // lifecycle catch.
-    if (preCreatedRun) {
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message),
-        { workflowRunId: preCreatedRun.id, site: 'workflow.model_overrides_fail_db_record_failed' }
-      );
-    }
-    throw error;
-  }
-  const aiProfile = applyResolvedRunModelOverrides(baseAiProfile, resolvedModelOverrides);
-  const modelBindingsMetadata = createRunModelBindingsMetadata(resolvedModelOverrides, aiProfile);
   if (hasRunModelOverrides(resolvedModelOverrides)) {
     getLog().info(
       {
@@ -2141,12 +2065,6 @@ export async function executeWorkflow(
   // or model: composition collapses them onto its own nodes and removes the layer (#1764),
   // so this normally resolves to `config.assistant`. It still has to behave correctly for
   // a programmatic caller that hands over an unexpanded definition.
-  const scope = resolveWorkflowModelScope(
-    workflow,
-    config.assistant,
-    assistantModelDefaults(config),
-    aiProfile
-  );
   const resolvedProvider = scope.provider;
   const resolvedModel = scope.model;
   const workflowPreset = scope.preset;
@@ -2954,57 +2872,6 @@ export async function executeWorkflow(
     getLog().debug({ workflowRunId: workflowRun.id }, 'workflow.source_unprepared_live');
   }
 
-  // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
-  // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
-  // under it. Clear files from an earlier invocation first: a disconnected
-  // credential or failed refresh must not leave stale secrets readable on resume.
-  // Merged LAST into config.envVars so the originating user's keys
-  // win over file/db/bot-github env — preserves the GitHub merge order and
-  // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
-  // returns empty bags when the feature is disabled or no userId is present).
-  try {
-    await clearManagedProviderCredentialFiles(artifactsDir);
-  } catch (error) {
-    const err = error as Error;
-    const message = `Could not safely prepare provider credentials: ${err.message}`;
-    getLog().error(
-      { err, workflowRunId: workflowRun.id },
-      'workflow.user_provider_files_cleanup_failed'
-    );
-    await sendCriticalMessage(
-      platform,
-      conversationId,
-      'Workflow blocked: Unable to safely prepare provider credentials. Please retry.'
-    );
-    await requireTerminalStatusWrite(deps.store.failWorkflowRun(workflowRun.id, message), {
-      workflowRunId: workflowRun.id,
-      site: 'workflow.user_provider_files_cleanup_fail_db_record_failed',
-    });
-    return { success: false, workflowRunId: workflowRun.id, error: message };
-  }
-
-  const { env: userProviderEnv, protectedValues } = await resolveUserProviderEnvForWorkflow(
-    deps,
-    executionUserId,
-    artifactsDir
-  );
-  config.envVars = { ...config.envVars, ...userProviderEnv };
-  for (const key of Object.keys(userProviderEnv)) {
-    protectedEnvKeys.add(key);
-  }
-  if (protectedEnvKeys.size > 0) {
-    config.protectedEnvKeys = [...protectedEnvKeys];
-  }
-  const effectiveDbCredentialValues = Object.entries(dbEnvVars).flatMap(([key, value]) =>
-    config.envVars?.[key] === value ? [value] : []
-  );
-  const protectedCredentialValues = [
-    ...new Set([...effectiveDbCredentialValues, ...protectedValues]),
-  ];
-  if (protectedCredentialValues.length > 0) {
-    config.protectedCredentialValues = protectedCredentialValues;
-  }
-
   // Wrap execution in try-catch to ensure workflow is marked as failed on any error.
   //
   // Hold a Windows keep-awake request for the executing window (see
@@ -3019,6 +2886,40 @@ export async function executeWorkflow(
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
   try {
+    // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
+    // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
+    // under it. Clear files from an earlier invocation first: a disconnected
+    // credential or failed refresh must not leave stale secrets readable on resume.
+    // Merged LAST into config.envVars so the originating user's keys
+    // win over file/db/bot-github env — preserves the GitHub merge order and
+    // keeps the no-key path byte-for-byte unchanged (resolveUserProviderEnvForWorkflow
+    // returns empty bags when the feature is disabled or no userId is present).
+    await clearManagedProviderCredentialFiles(artifactsDir);
+    await assertRunCredentials(deps, prepared);
+    const { env: userProviderEnv, protectedValues } = await resolveUserProviderEnvForWorkflow(
+      deps,
+      executionUserId,
+      artifactsDir,
+      prepared.requirements,
+      prepared.connectedVendors
+    );
+    config.envVars = { ...config.envVars, ...userProviderEnv };
+    for (const key of Object.keys(userProviderEnv)) {
+      protectedEnvKeys.add(key);
+    }
+    if (protectedEnvKeys.size > 0) {
+      config.protectedEnvKeys = [...protectedEnvKeys];
+    }
+    const effectiveDbCredentialValues = Object.entries(dbEnvVars).flatMap(([key, value]) =>
+      config.envVars?.[key] === value ? [value] : []
+    );
+    const protectedCredentialValues = [
+      ...new Set([...effectiveDbCredentialValues, ...protectedValues]),
+    ];
+    if (protectedCredentialValues.length > 0) {
+      config.protectedCredentialValues = protectedCredentialValues;
+    }
+
     // Capture the loaded graph on both fresh execution and resume before any node runs.
     const graph = runGraphSchema.parse({
       node_ids: workflow.nodes.map(node => node.id),

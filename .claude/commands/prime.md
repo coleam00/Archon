@@ -21,8 +21,8 @@ Show workspace scripts:
 
 ### 2. Read Core Documentation
 
-Read `CLAUDE.md` in full — it contains the authoritative architecture reference, engineering
-principles, import patterns, and development guidelines for this project.
+Read `AGENTS.md` in full for project rules and development guidelines. Follow its links to
+`.archon/direction.md`, `.archon/engineering.md`, and the docs for focused project context.
 
 ### 3. Identify Key Entry Points
 

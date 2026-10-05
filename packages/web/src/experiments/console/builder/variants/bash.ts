@@ -21,6 +21,7 @@ export function bashFromDag(variantSpecific: Partial<WireDagNode>): BashNodeData
   return {
     bash: variantSpecific.bash,
     ...ifDefined('timeout', variantSpecific.timeout),
+    ...ifDefined('on_timeout', variantSpecific.on_timeout),
   };
 }
 
@@ -29,5 +30,6 @@ export function bashToDag(data: BashNodeData): Partial<WireDagNode> {
   return {
     bash: data.bash,
     ...ifDefined('timeout', data.timeout),
+    ...ifDefined('on_timeout', data.on_timeout),
   };
 }

@@ -39,7 +39,7 @@ import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { readFile } from 'fs/promises';
 import { basename, isAbsolute, join as joinPath, resolve as resolvePath } from 'path';
 import { execFileAsync, resolveBashPath } from '@archon/git';
-import { isEffortRung } from '@archon/paths/effort';
+import { isEffortRung } from '@archon/provider-contract';
 import {
   collectCredentialValues,
   redactCredentialValues,
@@ -70,9 +70,9 @@ import type {
   ResolvedModel,
   MessageChunk,
   ExecutionContext,
-  OverlayChangeSummary,
-} from '@archon/providers/types';
-import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/providers/types';
+} from '@archon/provider-contract';
+import type { OverlayChangeSummary } from './container-context';
+import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/provider-contract';
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
@@ -80,10 +80,9 @@ import {
   getProviderCapabilities,
   getRegisteredProviders,
   isRegisteredProvider,
-  findStrictSchemaIssues,
-  type StrictSchemaIssue,
-  validateStructuredOutput,
 } from '@archon/providers';
+import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
+import { validateStructuredOutput } from './structured-output';
 import type {
   DagNode,
   IncludeDirective,
@@ -222,9 +221,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import {
-  isLiteralSpec,
   isTierName,
-  resolveModelSpec,
   resolvePresetEffort,
   type ModelAliasPreset,
   type PresetEffortRejection,
@@ -1656,11 +1653,8 @@ async function resolveNodeProviderAndModel(
   // The one reasoning depth this node will run at, before any preset fallback.
   const declaredEffort = resolution.declaredEffort;
 
-  // Runtime backstop for container dispatch: the run-start pre-scan
-  // (collectContainerIncompatibleProviders) hand-mirrors this same provider
-  // resolution, so it could drift. Re-check the RESOLVED provider here, at the
-  // actual dispatch point, so a container turn can never reach a provider that
-  // can't honor it — no silent host downgrade (defense in depth).
+  // Keep the container capability check at dispatch as well as preflight: every
+  // actual turn must honour the requested execution context.
   if (execContext.kind === 'container' && !caps.containerExec) {
     throw new Error(
       `Provider '${provider}' cannot run inside a container yet (containerExec ` +
@@ -1668,8 +1662,7 @@ async function resolveNodeProviderAndModel(
     );
   }
 
-  // Dispatch backstop for the run-start pre-scan (collectScopedCapabilityMismatches),
-  // which resolves providers on its own path and could drift from this one.
+  // Re-check scoped capabilities at the actual dispatch boundary.
   const unscoped = unsupportedScopedCapabilities(node, caps);
   if (unscoped.length > 0) {
     throw new Error(
@@ -2327,6 +2320,30 @@ async function executeNodeInternal(
         batchMessages.length = 0;
       },
     });
+    const shouldStopStream = async (): Promise<boolean> => {
+      const tickNow = Date.now();
+      if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
+        lastNodeCancelCheck.set(nodeKey, tickNow);
+        try {
+          const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+          if (!shouldContinueStreamingForStatus(streamStatus)) {
+            getLog().info(
+              { workflowRunId: workflowRun.id, nodeId: node.id, status: streamStatus ?? 'deleted' },
+              'dag.stop_detected_during_streaming'
+            );
+            nodeAbortController.abort();
+            return true;
+          }
+        } catch (cancelCheckErr) {
+          getLog().warn(
+            { err: cancelCheckErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
+            'dag.status_check_failed'
+          );
+        }
+      }
+
+      return false;
+    };
     for await (const msg of withIdleTimeout(
       aiClient.sendQuery(attemptPrompt, cwd, pass.resumeSessionId, nodeOptionsWithAbort),
       effectiveIdleTimeout,
@@ -2352,37 +2369,17 @@ async function executeNodeInternal(
         const type = msg.type;
         lastWatchdogReset = { type, at: resetAt };
         watchdogResets.observe(type, resetAt);
-      }
+      },
+      // Only a provider that declares `reported` vouches that silent work is alive;
+      // any other provider's silence is a hung turn and must still time out.
+      () =>
+        aiClient.getCapabilities().backgroundWork === 'reported' &&
+        providerEvents.liveSubtaskIds().length > 0,
+      shouldStopStream
     )) {
       const tickNow = Date.now();
 
-      // Cancel/pause check — read-only, no write contention in WAL mode (every 10s).
-      //
-      // `paused` is tolerated here: an approval node can transition the run to
-      // paused while this concurrent node is mid-stream (same topological layer).
-      // The streaming node should be allowed to finish its own output — the
-      // paused gate owns workflow progression, not individual node lifecycles.
-      // Only truly terminal / unknown states (null, cancelled, failed, completed)
-      // abort the in-flight stream.
-      if (tickNow - (lastNodeCancelCheck.get(nodeKey) ?? 0) > CANCEL_CHECK_INTERVAL_MS) {
-        lastNodeCancelCheck.set(nodeKey, tickNow);
-        try {
-          const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-          if (!shouldContinueStreamingForStatus(streamStatus)) {
-            getLog().info(
-              { workflowRunId: workflowRun.id, nodeId: node.id, status: streamStatus ?? 'deleted' },
-              'dag.stop_detected_during_streaming'
-            );
-            nodeAbortController.abort();
-            break;
-          }
-        } catch (cancelCheckErr) {
-          getLog().warn(
-            { err: cancelCheckErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
-            'dag.status_check_failed'
-          );
-        }
-      }
+      if (await shouldStopStream()) break;
 
       // Activity heartbeat — write, throttled to every 60s (only for stale/zombie detection)
       if (tickNow - (lastNodeActivityUpdate.get(nodeKey) ?? 0) > ACTIVITY_HEARTBEAT_INTERVAL_MS) {
@@ -2399,15 +2396,17 @@ async function executeNodeInternal(
 
       if (msg.type === 'result') {
         if (pass.threadsSession) {
-          if (msg.sessionId) newSessionId = msg.sessionId;
+          newSessionId = msg.sessionId;
           if (msg.resumed !== undefined) nodeResumed = msg.resumed;
         }
         if (msg.tokens !== undefined) {
-          nodeTokens = sumTokenUsage([msg.tokens], { nodeId: node.id });
+          nodeTokens = sumTokenUsage([...(nodeTokens ? [nodeTokens] : []), msg.tokens], {
+            nodeId: node.id,
+          });
         }
         if (msg.cost !== undefined) {
           if (Number.isFinite(msg.cost)) {
-            nodeCostUsd = msg.cost;
+            nodeCostUsd = (nodeCostUsd ?? 0) + msg.cost;
           } else {
             getLog().warn(
               { nodeId: node.id, costUsd: msg.cost },
@@ -2423,7 +2422,11 @@ async function executeNodeInternal(
         // model would be persisted as the final attempt's answer. Fabricated attribution
         // is the exact defect #2314 exists to prevent; absence must stay absence.
         nodeResolvedModel = msg.resolvedModel;
-        if (msg.structuredOutput !== undefined) structuredOutput = msg.structuredOutput;
+        if (msg.text !== undefined) {
+          nodeOutputText = msg.text;
+          batchMessages.splice(0, batchMessages.length, msg.text);
+        }
+        structuredOutput = msg.structuredOutput;
         if (msg.failure !== undefined) {
           throw providerReportedFailure(
             `Node '${node.id}'`,
@@ -2459,14 +2462,11 @@ async function executeNodeInternal(
           );
           throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
         }
-        // A result is not the end of the node: work the turn started may still run,
-        // and a later result can follow (its fields overwrite the captures above —
-        // correct, since SDK cost/usage are session-cumulative). The node finishes on
-        // `settled` below. The wait is bounded by the idle timeout; every event
-        // (subtask progress, a hidden task's `state_update`) resets it.
       } else if (msg.type === 'settled') {
-        streamSettled = true;
-        break; // The provider says the turn is over and nothing more runs for it.
+        streamSettled =
+          aiClient.getCapabilities().backgroundWork !== 'reported' ||
+          providerEvents.liveSubtaskIds().length === 0;
+        break;
       } else {
         await providerEvents.handle(msg);
       }
@@ -5653,12 +5653,6 @@ async function executeLoopNode(
       // message); undefined when the stream ends for any other reason.
       let streamStopStatus: string | undefined;
 
-      // One provider-event handler per attempt (see provider-events.ts): it owns the
-      // attempt's tool and subtask state. A result is not the end of an iteration, so a
-      // single iteration can observe MULTIPLE result chunks. SDK cost/usage are
-      // session-cumulative, so the per-result `+=` accumulation used before would
-      // double-count: capture last-seen values (overwrite semantics) and fold them into
-      // the loop totals once, after the stream ends.
       const createIterationProviderEvents = (): ProviderEventHandler =>
         createProviderEventHandler({
           store: deps.store,
@@ -5685,7 +5679,7 @@ async function executeLoopNode(
       let iterationCost: number | undefined;
       let iterationTokens: TokenUsage | undefined;
       let iterationNumTurns: number | undefined;
-      // Fold the last-seen per-attempt values into the loop totals exactly once per
+      // Fold the summed per-attempt usage into the loop totals exactly once per
       // ATTEMPT — called on both the normal exit and the catch path (an SDK-error
       // result still carries the attempt's cost, which the totals reported on the
       // failure return must include, matching the old += behavior). Reaskedattempts
@@ -5788,6 +5782,36 @@ async function executeLoopNode(
           );
           const effectiveIdleTimeout = node.idle_timeout ?? STEP_IDLE_TIMEOUT_MS;
 
+          const shouldStopStream = async (): Promise<boolean> => {
+            const tickNow = Date.now();
+            if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
+              lastStreamStatusCheckAt = tickNow;
+              try {
+                const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
+                if (!shouldContinueStreamingForStatus(streamStatus)) {
+                  streamStopStatus = streamStatus ?? 'deleted';
+                  getLog().info(
+                    {
+                      workflowRunId: workflowRun.id,
+                      nodeId: node.id,
+                      iteration: i,
+                      status: streamStopStatus,
+                    },
+                    'loop_node.stop_detected_during_streaming'
+                  );
+                  iterationAbortController.abort();
+                  return true;
+                }
+              } catch (statusErr) {
+                getLog().warn(
+                  { err: statusErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
+                  'loop_node.status_check_failed'
+                );
+              }
+            }
+
+            return false;
+          };
           for await (const msg of withIdleTimeout(
             generator,
             effectiveIdleTimeout,
@@ -5814,41 +5838,14 @@ async function executeLoopNode(
               const type = msg.type;
               lastWatchdogReset = { type, at: resetAt };
               watchdogResets.observe(type, resetAt);
-            }
+            },
+            // Same rule as the agent node: only `reported` work suspends the watchdog.
+            () =>
+              aiClient.getCapabilities().backgroundWork === 'reported' &&
+              providerEvents.liveSubtaskIds().length > 0,
+            shouldStopStream
           )) {
-            // Mid-stream cancel/pause check (every CANCEL_CHECK_INTERVAL_MS) —
-            // lifted from the AI-node stream loop in executeNodeInternal. Same
-            // posture: `paused` is tolerated (a sibling approval node may pause
-            // the run while this loop streams); only terminal/unknown states
-            // abort the in-flight iteration. Without this, a cancelled run kept
-            // streaming until the iteration finished on its own — and the
-            // post-stream `cancelled` exemption below was unreachable.
-            const tickNow = Date.now();
-            if (tickNow - lastStreamStatusCheckAt > CANCEL_CHECK_INTERVAL_MS) {
-              lastStreamStatusCheckAt = tickNow;
-              try {
-                const streamStatus = await deps.store.getWorkflowRunStatus(workflowRun.id);
-                if (!shouldContinueStreamingForStatus(streamStatus)) {
-                  streamStopStatus = streamStatus ?? 'deleted';
-                  getLog().info(
-                    {
-                      workflowRunId: workflowRun.id,
-                      nodeId: node.id,
-                      iteration: i,
-                      status: streamStopStatus,
-                    },
-                    'loop_node.stop_detected_during_streaming'
-                  );
-                  iterationAbortController.abort();
-                  break;
-                }
-              } catch (statusErr) {
-                getLog().warn(
-                  { err: statusErr as Error, workflowRunId: workflowRun.id, nodeId: node.id },
-                  'loop_node.status_check_failed'
-                );
-              }
-            }
+            if (await shouldStopStream()) break;
 
             if (msg.type === 'result') {
               // A reask's throwaway session is not the thread (structuredOutputPass):
@@ -5856,29 +5853,25 @@ async function executeLoopNode(
               // `fresh_context: false` contract ("each iteration resumes the prior
               // conversation"). The repaired answer still reaches the next iteration
               // through $LOOP_PREV_OUTPUT, which is prompt text rather than session state.
-              if (msg.sessionId) {
-                if (pass.threadsSession) {
-                  currentSessionId = msg.sessionId;
-                  iterationSessionId = msg.sessionId;
-                } else if (currentSessionId !== msg.sessionId) {
-                  getLog().debug(
-                    {
-                      nodeId: node.id,
-                      iteration: i,
-                      attempt: reaskAttempt,
-                      ...(currentSessionId !== undefined
-                        ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
-                        : {}),
-                    },
-                    'loop_node.reask_session_not_threaded'
-                  );
-                }
+              if (pass.threadsSession) {
+                currentSessionId = msg.sessionId;
+                iterationSessionId = msg.sessionId;
+              } else if (msg.sessionId && currentSessionId !== msg.sessionId) {
+                getLog().debug(
+                  {
+                    nodeId: node.id,
+                    iteration: i,
+                    attempt: reaskAttempt,
+                    ...(currentSessionId !== undefined
+                      ? { keptSessionIdPreview: sessionPreview(currentSessionId) }
+                      : {}),
+                  },
+                  'loop_node.reask_session_not_threaded'
+                );
               }
-              // Overwrite, don't accumulate — a later result in the same iteration
-              // (background-task wait, #2083) carries session-cumulative values.
               if (msg.cost !== undefined) {
                 if (Number.isFinite(msg.cost)) {
-                  iterationCost = msg.cost;
+                  iterationCost = (iterationCost ?? 0) + msg.cost;
                 } else {
                   getLog().warn(
                     { nodeId: node.id, iteration: i, costUsd: msg.cost },
@@ -5887,10 +5880,13 @@ async function executeLoopNode(
                 }
               }
               if (msg.tokens !== undefined) {
-                iterationTokens = sumTokenUsage([msg.tokens], {
-                  nodeId: node.id,
-                  iteration: i,
-                });
+                iterationTokens = sumTokenUsage(
+                  [...(iterationTokens ? [iterationTokens] : []), msg.tokens],
+                  {
+                    nodeId: node.id,
+                    iteration: i,
+                  }
+                );
               }
               if (msg.stopReason !== undefined) loopFinalStopReason = msg.stopReason;
               if (msg.numTurns !== undefined) {
@@ -5900,9 +5896,11 @@ async function executeLoopNode(
               // iteration or result chunk that reports no resolved model must clear the
               // previous one rather than leave it to be recorded as this node's answer.
               loopResolvedModel = msg.resolvedModel;
-              if (msg.structuredOutput !== undefined) {
-                attemptStructured = msg.structuredOutput;
+              if (msg.text !== undefined) {
+                fullOutput = msg.text;
+                cleanOutput = stripCompletionTags(msg.text, loop.until);
               }
+              attemptStructured = msg.structuredOutput;
               if (msg.failure !== undefined) {
                 throw providerReportedFailure(
                   `Loop '${node.id}' iteration ${String(i)}`,
@@ -5941,8 +5939,10 @@ async function executeLoopNode(
               // A result is not the end of the iteration; `settled` is. See the
               // AI-node stream loop for the full rationale.
             } else if (msg.type === 'settled') {
-              iterationSettled = true;
-              break; // The provider says the turn is over and nothing more runs for it.
+              iterationSettled =
+                aiClient.getCapabilities().backgroundWork !== 'reported' ||
+                providerEvents.liveSubtaskIds().length === 0;
+              break;
             } else {
               await providerEvents.handle(msg);
             }
@@ -6938,6 +6938,16 @@ async function executeWaitNode(
   };
 }
 
+function gateReworkNode(node: GateNode, prompt: string): AgentNode {
+  return {
+    id: `${node.id}:on_reject`,
+    kind: 'agent',
+    source: { kind: 'inline', prompt },
+    ...(node.depends_on ? { depends_on: node.depends_on } : {}),
+    ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
+  };
+}
+
 /**
  * Execute an approval node — pauses workflow for human review.
  * On rejection resume (when on_reject is configured): runs the on_reject prompt via AI,
@@ -7053,13 +7063,10 @@ async function executeApprovalNode(
     // execution view during an on_reject cycle. This is cosmetic-only — the approval gate
     // still re-presents correctly and the human gate contract is preserved. A follow-up can
     // filter synthetic `:on_reject` IDs from the UI's nodeMap if needed.
-    const syntheticNode: AgentNode = {
-      id: `${node.id}:on_reject`,
-      kind: 'agent',
-      source: { kind: 'inline', prompt: substituteNodeOutputRefs(substitutedPrompt, nodeOutputs) },
-      ...(node.depends_on ? { depends_on: node.depends_on } : {}),
-      ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
-    };
+    const syntheticNode = gateReworkNode(
+      node,
+      substituteNodeOutputRefs(substitutedPrompt, nodeOutputs)
+    );
 
     const {
       provider,
@@ -10437,39 +10444,32 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 }
 
 /**
- * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
- * of `resolveNodeProviderAndModel` — just enough for the container capability
- * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
- */
-function resolveNodeProviderForPreflight(
-  node: DagNode,
-  workflowProvider: string,
-  aiProfile?: ResolvedAiProfile
-): string {
-  let provider: string = node.provider ?? workflowProvider;
-  if (node.model && aiProfile) {
-    const spec = resolveModelSpec(aiProfile, node.model);
-    if (!isLiteralSpec(spec)) provider = spec.provider;
-  }
-  return provider;
-}
-
-/**
  * Walk every node (including loop_group bodies) that can invoke a provider.
  * bash/script/cancel nodes are skipped (deterministic, no provider). An approval
  * node counts only when it has an `on_reject` reprompt (the one AI turn it can
  * spawn). For each visited node the resolved provider is passed to `visit`.
  * Unknown providers are passed through — the caller decides how to handle them.
  */
-function visitProviderInvokingNodes(
+export function visitProviderInvokingNodes(
   nodes: readonly (DagNode | IncludeDirective)[],
   workflowProvider: string,
   aiProfile: ResolvedAiProfile | undefined,
   visit: (node: DagNode, provider: string) => void
 ): void {
   const resolve = (node: DagNode): string =>
-    resolveNodeProviderForPreflight(node, workflowProvider, aiProfile);
+    resolveNodeModel(
+      node,
+      {
+        provider: workflowProvider,
+        providerOrigin: 'workflow',
+        model: undefined,
+        preset: undefined,
+        tier: undefined,
+        effort: undefined,
+      },
+      {},
+      aiProfile
+    ).provider;
   for (const node of nodes) {
     if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
       continue;
@@ -10480,8 +10480,9 @@ function visitProviderInvokingNodes(
       continue;
     }
     if (isGateNode(node)) {
-      if (node.decisions.some(d => d.rework !== undefined)) {
-        visit(node, resolve(node));
+      const rework = node.decisions.find(d => d.rework !== undefined)?.rework;
+      if (rework) {
+        visit(node, resolve(gateReworkNode(node, rework.prompt)));
       }
       continue;
     }

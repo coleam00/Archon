@@ -29,13 +29,13 @@ import {
   isOutputFormatEnforced,
   isWaitNode,
 } from '../schemas';
+import { findStrictSchemaIssues } from '@archon/provider-contract';
 import {
-  findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
   registerBuiltinProviders,
-  validateStructuredOutput,
 } from '@archon/providers';
+import { validateStructuredOutput } from '../structured-output';
 
 registerBuiltinProviders();
 
@@ -807,6 +807,8 @@ describe('bundled-defaults', () => {
       const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
       if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
+      expect(publish.timeout).toBe(30000);
+      expect(publish.retry).toEqual({ max_attempts: 2, delay_ms: 20000 });
       expect(publish.output_type).toBe('pull-request');
       expect(publish.output_format).toMatchObject({
         properties: {
@@ -883,11 +885,9 @@ describe('bundled-defaults', () => {
         const group = parsed.workflow.nodes.find(node => node.id === groupId);
         if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
         expect(group.loop_group.max_iterations).toBe(13);
-        // Completion reads the probe's own certified field. It shelled out to `gh`
-        // while a resumed wait was believed unable to see the iteration's outputs;
-        // that was a quoting error in this predicate, not an engine limit, so the
-        // reference is bare and the probe owns the answer.
-        expect(group.loop_group.until_bash).toBe(`test $${probeId}.output.state != "pending"`);
+        expect(group.loop_group.until_bash?.trim()).toBe(
+          `value=$${probeId}.output.state\ntest "$value" != "pending"`
+        );
 
         const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
         const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);

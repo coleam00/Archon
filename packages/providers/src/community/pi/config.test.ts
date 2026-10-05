@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import { InvalidProviderRunConfigError } from '../../errors';
+import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 import { parsePiConfig, parsePiConfigStrict, resolvePiExtensionSettings } from './config';
 
 describe('parsePiConfig', () => {
