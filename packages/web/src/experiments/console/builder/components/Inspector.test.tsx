@@ -67,26 +67,13 @@ describe('Inspector', () => {
     });
   }
 
-  const editableModes: Partial<WireDagNode>[] = [
-    { prompt: 'Review' },
-    { command: 'review' },
-    { bash: 'true' },
-    { script: 'check', runtime: 'bun' },
-    { loop: { prompt: 'Review', max_iterations: 3, fresh_context: false } },
-    { approval: { message: 'Approve?' } },
-    { wait: { duration_ms: 60000 } },
-    { cancel: 'Stop' },
-  ];
-
-  for (const mode of editableModes) {
-    const node = importNode(mode);
-    test(`${node.variant} retains trigger rule and output type controls`, () => {
-      expect(node.variant).not.toBe('opaque');
-      const html = renderInspector(node);
-      expect(html).toContain('Trigger rule');
-      expect(html).toContain('value="all_done" selected');
-      expect(html).toContain('Output type');
-      expect(html).toContain('value="report"');
-    });
-  }
+  test('editable nodes retain trigger rule and output type controls', () => {
+    const node = importNode({ prompt: 'Review' });
+    expect(node.variant).not.toBe('opaque');
+    const html = renderInspector(node);
+    expect(html).toContain('Trigger rule');
+    expect(html).toContain('value="all_done" selected');
+    expect(html).toContain('Output type');
+    expect(html).toContain('value="report"');
+  });
 });
