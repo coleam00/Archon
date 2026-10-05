@@ -5,7 +5,7 @@
  */
 
 import { createHash, randomUUID } from 'crypto';
-import { access, readFile, writeFile, rm, stat } from 'fs/promises';
+import { access, chmod, readdir, readFile, writeFile, rm, stat } from 'fs/promises';
 import { isAbsolute, join, normalize as normalizePath, resolve } from 'path';
 
 import { createLogger } from '@archon/paths';
@@ -34,8 +34,12 @@ import {
 } from '@archon/git';
 import type { WorktreeBaseOverride } from '@archon/git';
 import { isInsideArchonWorkspaces, isPathInside } from '@archon/paths';
-import type { BranchName, RepoPath, WorktreeInfo } from '@archon/git';
-import { MissingProjectDirectoryError, recordCleanupFailure } from '../errors';
+import type { BranchName, RepoPath, WorktreeInfo, WorktreePath } from '@archon/git';
+import {
+  MissingProjectDirectoryError,
+  WorktreeLeftoverError,
+  recordCleanupFailure,
+} from '../errors';
 import { copyWorktreeFiles } from '../worktree-copy';
 import type {
   DestroyResult,
@@ -77,6 +81,14 @@ const RELEASE_LOCK_REASON = 'archon: worktree release in progress';
 
 /** File in a created worktree's Git directory holding its creation ID. */
 const CREATION_MARKER = 'archon-creation-id';
+
+/** Give the owner write access to every directory below `path`, without following symlinks. */
+async function makeTreeWritable(path: string): Promise<void> {
+  await chmod(path, 0o700);
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    if (entry.isDirectory()) await makeTreeWritable(join(path, entry.name));
+  }
+}
 
 /**
  * Resolve the anchors from which Git worktree commands should run.
@@ -317,11 +329,15 @@ export class WorktreeProvider implements IIsolationProvider {
       }
       // Abandon discards the checkout: force removes uncommitted work and
       // initialized submodules, and the second force passes our own lock.
-      await execFileAsync(
-        'git',
-        ['-C', options.canonicalRepoPath, 'worktree', 'remove', '--force', '--force', '--', path],
-        { timeout: GIT_OPERATION_TIMEOUT_MS }
-      );
+      try {
+        await execFileAsync(
+          'git',
+          ['-C', options.canonicalRepoPath, 'worktree', 'remove', '--force', '--force', '--', path],
+          { timeout: GIT_OPERATION_TIMEOUT_MS }
+        );
+      } catch (error) {
+        await this.finishFailedRelease(options.canonicalRepoPath, path, error);
+      }
       return {
         worktreeRemoved: true,
         directoryClean: !(await this.directoryExists(worktreePath)),
@@ -1746,6 +1762,36 @@ export class WorktreeProvider implements IIsolationProvider {
    * Returns true if directory exists, false if it doesn't exist (ENOENT).
    * Throws for other errors (permission denied, I/O errors, etc.)
    */
+  /**
+   * Recover from a guarded `worktree remove` that failed.
+   *
+   * Still registered: drop the release lock so a retry can take it again, and
+   * rethrow. Unregistered: Git dropped its admin entry before failing to delete
+   * every file (a read-only subdirectory does this). No retry can prove that
+   * directory ours again, but it was proven ours under our lock just before the
+   * removal, and Git refuses to add a worktree over a non-empty directory, so
+   * finish deleting it here.
+   */
+  private async finishFailedRelease(
+    repoPath: RepoPath,
+    path: WorktreePath,
+    removeError: unknown
+  ): Promise<void> {
+    const registered = (await listWorktrees(repoPath)).some(
+      worktree => resolve(worktree.path) === resolve(path)
+    );
+    if (registered) {
+      await unlockWorktree(repoPath, path);
+      throw removeError;
+    }
+    try {
+      await makeTreeWritable(path);
+      await rm(path, { recursive: true, force: true });
+    } catch (error) {
+      throw new WorktreeLeftoverError(path, removeError, (error as Error).message);
+    }
+  }
+
   private async directoryExists(path: string): Promise<boolean> {
     try {
       await access(path);

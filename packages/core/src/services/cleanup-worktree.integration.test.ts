@@ -4,8 +4,8 @@
  * invocation (see package.json) because it mock.module's the DB connection.
  */
 import * as gitModule from '@archon/git';
-import { beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { mkdtemp, mkdir, realpath, writeFile, readFile, rm } from 'node:fs/promises';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { chmod, mkdtemp, mkdir, realpath, writeFile, readFile, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -142,7 +142,48 @@ beforeEach(async () => {
   store = isolationDb.createIsolationStore();
 });
 
+// A test may leave a read-only directory behind; make it removable for cleanup.
+afterEach(async () => {
+  await Bun.spawn(['chmod', '-R', 'u+w', root]).exited;
+});
+
 describe('owned worktree release', () => {
+  test('a removal Git abandons halfway is finished, not left unretryable', async () => {
+    const locked = join(env.working_path, 'locked');
+    await mkdir(locked);
+    await writeFile(join(locked, 'file'), 'cannot unlink');
+    await chmod(locked, 0o555);
+
+    const result = await reclaimRunWorktree(run, store);
+
+    expect(result.released?.path).toBe(env.working_path);
+    expect(existsSync(env.working_path)).toBe(false);
+    expect(await status()).toBe('destroyed');
+    expect(await git(repo, 'rev-parse', '--verify', env.branch_name)).toBeTruthy();
+  });
+
+  test('a removal that fails while still registered can be retried', async () => {
+    const originalExec = gitModule.execFileAsync;
+    const failing = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (file === 'git' && args.includes('worktree') && args.includes('remove'))
+          throw new Error('simulated remove failure');
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      await expect(reclaimRunWorktree(run, store)).rejects.toThrow('simulated remove failure');
+    } finally {
+      failing.mockRestore();
+    }
+    expect(await status()).toBe('active');
+    expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
+
+    await reclaimRunWorktree(run, store);
+    expect(existsSync(env.working_path)).toBe(false);
+    expect(await status()).toBe('destroyed');
+  });
+
   test('discards uncommitted work, hidden index flags, and unpushed commits; keeps the branch', async () => {
     const wt = env.working_path;
     await writeFile(join(wt, 'file'), 'unstaged');

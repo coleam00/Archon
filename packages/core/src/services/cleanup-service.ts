@@ -5,7 +5,11 @@
 import { lstat } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { readOwnedWorktree, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import { readWorktreeCreationId, type IIsolationStore } from '@archon/isolation';
+import {
+  readWorktreeCreationId,
+  WorktreeLeftoverError,
+  type IIsolationStore,
+} from '@archon/isolation';
 import { retainedPlatformIds, retainsWorkspace } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
@@ -1122,8 +1126,13 @@ export async function reclaimRunWorktree(
     return await reclaimOwnedWorktree(run, store);
   } catch (err) {
     const proof = readOwnedWorktree(run.metadata);
+    // A leftover Git no longer tracks cannot be finished by a retry; its message says so.
+    const next =
+      err instanceof WorktreeLeftoverError
+        ? ''
+        : `. Fix the cause and retry workflow abandon ${run.id}.`;
     throw new Error(
-      `Could not release worktree for run ${run.id}, environment ${proof?.envId ?? '(unaccounted)'}, checkout ${run.working_path ?? '(missing)'}: ${(err as Error).message}. Fix the cause and retry workflow abandon ${run.id}.`,
+      `Could not release worktree for run ${run.id}, environment ${proof?.envId ?? '(unaccounted)'}, checkout ${run.working_path ?? '(missing)'}: ${(err as Error).message}${next}`,
       { cause: err }
     );
   }

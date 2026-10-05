@@ -996,7 +996,7 @@ export function createWorkflowOperations({
       if (proof && released.has(proof.envId)) continue;
       if (row.id === run.id && (result.cascadeFailures || unsafeDescendant)) {
         warnings.push(
-          `Retained checkout for run ${run.id}: descendants could not all be accounted for; inspect them before retrying abandonment.`
+          `Retained checkout for run ${run.id}: descendants could not all be accounted for. Abandoning this run again only retries worktree removal and does not cancel descendants; abandon or stop each remaining descendant first.`
         );
         continue;
       }

@@ -65,6 +65,7 @@ export type { IIsolationStore } from './store';
 export {
   IsolationBlockedError,
   MissingProjectDirectoryError,
+  WorktreeLeftoverError,
   classifyIsolationError,
 } from './errors';
 
