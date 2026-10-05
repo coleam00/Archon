@@ -29,9 +29,19 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
+const runGithubCredentials = process.env.WORKFLOW_ID
+  ? (await import('@archon/workflows/utils/github-token-policy')).GITHUB_TOKEN_KEYS.map(
+      key => [key, process.env[key]] as const
+    )
+  : [];
 let forgeTrustedEnv: NodeJS.ProcessEnv = {};
 loadArchonEnv(process.cwd(), {
   afterUserLoad: () => {
+    // User defaults cannot replace the run's identity or restore a scrubbed token.
+    for (const [key, value] of runGithubCredentials) {
+      if (value === undefined) Reflect.deleteProperty(process.env, key);
+      else process.env[key] = value;
+    }
     // Forge plugin processes run with the environment as the user scope left it, so
     // the repository's `.archon/.env` can supply a credential (passed separately) but
     // cannot change the environment an executable plugin runs in.

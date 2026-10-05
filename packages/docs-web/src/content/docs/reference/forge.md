@@ -80,6 +80,8 @@ A read-back never claims to have *prevented* a wrong write; it only reports what
 
 The GitHub plugin uses `GH_TOKEN` or `GITHUB_TOKEN`. The dispatcher passes the selected value to the child as `ARCHON_FORGE_TOKEN`. Tokens never belong in command arguments, JSON requests or remote URLs.
 
+Inside a workflow (`WORKFLOW_ID` is set), CLI startup preserves the delivered `GH_TOKEN`, `GITHUB_TOKEN` and `COPILOT_GITHUB_TOKEN` state across user-scope `~/.archon/.env` loading, including empty or absent credentials. Outside a workflow, that file still supplies credentials. Repository-scope `.archon/.env` credential overrides continue to apply.
+
 Checks identify the evaluated revision and each check-run or commit-status unit. GitHub enumeration includes current check runs and the latest status for each context. The plugin preserves distinct runs with the same name. It does not use GitHub's aggregate status as evidence that checks exist.
 
 The summary states are `none`, `pending`, `green`, `red`, `gated` and `unknown`. `none` means zero enumerated units. The summary precedence is red, gated, unknown, pending, then green. `gated` names an explicit action-required conclusion; missing checks are not evidence of an approval gate. Unrecognized vendor states remain unknown with their native value retained.
