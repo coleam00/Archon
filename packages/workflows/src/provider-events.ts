@@ -9,8 +9,8 @@
  * reads an event's type only to decide side effects (what the user sees, the subtask
  * tracker); it never rebuilds the event.
  */
-import type { ProviderEvent } from '@archon/providers/types';
-import { toolCallDisplayName } from '@archon/provider-contract';
+import type { ProviderEvent } from '@archon/provider-contract';
+import { subtaskTerminalStatusSchema, toolCallDisplayName } from '@archon/provider-contract';
 import { createLogger } from '@archon/paths';
 
 import type { IWorkflowPlatform, WorkflowMessageMetadata } from './deps';
@@ -20,6 +20,8 @@ import { logProviderEvent } from './logger';
 import type { ProviderEventEnvelope } from './schemas/provider-event';
 import type { IWorkflowStore } from './store';
 import { formatToolCall } from './utils/tool-formatter';
+
+const terminalSubtaskStatuses: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -166,8 +168,8 @@ export function createProviderEventHandler(deps: ProviderEventHandlerDeps): Prov
           }
           return;
         case 'subtask':
-          if (event.status === 'started') liveSubtasks.add(event.taskId);
-          else if (event.status !== 'running') liveSubtasks.delete(event.taskId);
+          if (terminalSubtaskStatuses.has(event.status)) liveSubtasks.delete(event.taskId);
+          else liveSubtasks.add(event.taskId);
           return;
         case 'hook':
         case 'agent_thought_chunk':

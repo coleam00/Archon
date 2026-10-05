@@ -34,6 +34,10 @@ count events as turns, or substitute the requested model for an unreported model
 Cost reporting is independent of spend-limit support. Older providers may omit
 reporting declarations; absence means unknown, not unsupported.
 
+Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;
+`unobserved` means background work may exist without an observable lifecycle. A process
+backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.
+
 ## Providers
 
 - `claude` — Claude (Anthropic)
@@ -46,8 +50,9 @@ reporting declarations; absence means unknown, not unsupported.
 
 | Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` |
 | --- | --- | --- | --- | --- | --- |
+| Background work observation | reported | unobserved | unobserved | none | unobserved |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ✅ | ❌ | ✅ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |

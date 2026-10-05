@@ -1,7 +1,14 @@
+import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
+import {
+  prepareRunAiConfiguration,
+  assertRunCredentials,
+  type PreparedRunAiConfiguration,
+} from '@archon/workflows/run-preflight';
 /**
  * Workflow command - list and run workflows
  */
 
+import { generateConversationId } from '../utils/conversation-id';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
@@ -75,7 +82,7 @@ import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
 import { toHydratedTimestamp } from '@archon/core/db/timestamps';
-import { createChildWorktreeResolver } from '@archon/core/workflows/child-isolation-resolver';
+import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
 import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
@@ -160,23 +167,16 @@ import {
   isTerminalRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import {
-  approveWorkflow,
-  rejectWorkflow,
-  respondToWorkflow,
-  resumeWorkflow as resumeWorkflowOp,
-  abandonWorkflow,
-  cancelWorkflow,
   CancelRefusedError,
   ChildRunRedirectError,
   workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
-  getWorkflowStatus,
-  resetWorkflowNodeSessions,
   assertApprovable,
   assertRejectable,
   assertRespondable,
 } from '@archon/core/operations/workflow-operations';
+import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -477,15 +477,6 @@ export function resolveContainerBackendConfig(
 export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undefined): boolean {
   if (!metadata) return false;
   return metadata.pending_writeback !== undefined && metadata.writeback_resolved !== true;
-}
-
-/**
- * Generate a unique conversation ID for CLI usage
- */
-function generateConversationId(): string {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 8);
-  return `cli-${String(timestamp)}-${random}`;
 }
 
 /**
@@ -1580,6 +1571,7 @@ async function resolveRunCodebase(
       : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
         (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   } catch (error) {
+    if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;
     lookupError = err;
     getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
@@ -1601,6 +1593,7 @@ async function resolveRunCodebase(
     try {
       codebase = await codebaseDb.getCodebase(options.codebaseId);
     } catch (error) {
+      if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
       const err = error as Error;
       getLog().warn(
         { err, errorType: err.constructor.name, codebaseId: options.codebaseId },
@@ -1620,6 +1613,7 @@ async function resolveRunCodebase(
           getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
         }
       } catch (error) {
+        if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
         const err = error as Error;
         registrationError = err;
         getLog().warn(
@@ -1639,6 +1633,7 @@ async function resolveRunCodebase(
           getLog().info({ name: result.name }, 'cli.folder_project_auto_registered');
         }
       } catch (error) {
+        if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
         const err = error as Error;
         registrationError = err;
         getLog().warn(
@@ -2236,6 +2231,28 @@ async function runWorkflowWithOwnedSource(
   // chat dispatch enforce `requires: [github]` identically.
   await assertCliWorkflowRequirementsMet(workflow);
 
+  const cliUserId = await resolveCliUserRecordId();
+  const prepareCredentialPreflight = async (
+    configCwd: string,
+    codebaseId?: string
+  ): Promise<PreparedRunAiConfiguration> => {
+    if (!workflow) throw new Error('Workflow disappeared before credential preflight');
+    const prepared = await prepareRunAiConfiguration(createWorkflowDeps(), workflow, configCwd, {
+      codebaseId,
+      userId: detachedPreCreatedRun ? (detachedPreCreatedRun.user_id ?? undefined) : cliUserId,
+      ...(isContinuation && continuationRun
+        ? { continuationRun }
+        : {
+            runConfig,
+            ...(modelOverrides
+              ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
+              : {}),
+          }),
+    });
+    await assertRunCredentials(createWorkflowDeps(), prepared);
+    return prepared;
+  };
+
   // --detach: hand the whole run to a detached background child and return now.
   // Done AFTER workflow resolution + flag validation above (so unknown-workflow /
   // bad-flag errors surface synchronously to the caller, not lost in the child)
@@ -2312,6 +2329,9 @@ async function runWorkflowWithOwnedSource(
     // pure resolution with no filesystem or database mutation, so running it as a
     // pre-flight costs nothing and the child still re-resolves it against the live
     // checkout when it starts (its lane binds a worktree this process never touches).
+    let detachedAdoptionLane:
+      | Awaited<ReturnType<typeof resolveWorkflowAdoption>>['lane']
+      | undefined;
     let adoptedRunId: string | undefined;
     let supersededRunId: string | undefined;
     if (options.adoptRunId !== undefined || options.supersedesRunId !== undefined) {
@@ -2322,13 +2342,15 @@ async function runWorkflowWithOwnedSource(
       }
       if (options.adoptRunId !== undefined) {
         adoptedRunId = await resolveRunIdArg(options.adoptRunId, cwd, false, detachCodebase.id);
-        await resolveWorkflowAdoption({
-          adoptedRunId,
-          codebaseId: detachCodebase.id,
-          codebasePath: detachCodebase.default_cwd,
-          codebaseKind: detachCodebase.kind,
-          containerRequested: options.container === true,
-        });
+        detachedAdoptionLane = (
+          await resolveWorkflowAdoption({
+            adoptedRunId,
+            codebaseId: detachCodebase.id,
+            codebasePath: detachCodebase.default_cwd,
+            codebaseKind: detachCodebase.kind,
+            containerRequested: options.container === true,
+          })
+        ).lane;
       } else if (options.supersedesRunId !== undefined) {
         supersededRunId = await resolveRunIdArg(
           options.supersedesRunId,
@@ -2338,6 +2360,32 @@ async function runWorkflowWithOwnedSource(
         );
         await resolveSupersededRun(supersededRunId);
       }
+    }
+
+    if (detachedAdoptionLane?.kind === 'checkout-branch' && detachCodebase) {
+      await withBranchLaunchSource(
+        detachCodebase.default_cwd,
+        detachedAdoptionLane.taskBranch.branch,
+        async snapshot => {
+          if (options.discoveryCwd === undefined) await recaptureForLane(snapshot);
+          await prepareCredentialPreflight(snapshot, detachCodebase.id);
+        }
+      );
+    } else {
+      const existingBranch =
+        wantsIsolation && detachCodebase && options.branchName
+          ? await isolationDb.findActiveByWorkflow(detachCodebase.id, 'task', options.branchName)
+          : undefined;
+      const configCwd =
+        detachedAdoptionLane?.kind === 'reuse-worktree'
+          ? detachedAdoptionLane.workingPath
+          : (continuationRun?.working_path ??
+            (existingBranch && existsSync(existingBranch.working_path)
+              ? existingBranch.working_path
+              : cwd));
+      if (detachedAdoptionLane?.kind === 'reuse-worktree' && options.discoveryCwd === undefined)
+        await recaptureForLane(configCwd);
+      await prepareCredentialPreflight(configCwd, detachCodebase?.id);
     }
 
     // The run id the ack hands back. A continuation already has one; a fresh launch
@@ -2369,7 +2417,7 @@ async function runWorkflowWithOwnedSource(
           `Failed to access database: ${err.message}\nHint: Check that DATABASE_URL is set and the database is running.`
         );
       }
-      const detachedUserId = await resolveCliUserRecordId();
+      const detachedUserId = cliUserId;
       const continuationDeclaration =
         adoptedRunId !== undefined
           ? { mode: 'adopt' as const, runId: adoptedRunId }
@@ -2744,6 +2792,30 @@ async function runWorkflowWithOwnedSource(
     }
   }
 
+  const existingBranchEnv =
+    wantsIsolation && codebase && options.branchName
+      ? await isolationDb.findActiveByWorkflow(codebase.id, 'task', options.branchName)
+      : undefined;
+  const executionConfigCwd =
+    existingBranchEnv && existsSync(existingBranchEnv.working_path)
+      ? existingBranchEnv.working_path
+      : workingCwd;
+  const preparedAiConfiguration =
+    adoptedTaskBranch && codebase
+      ? await withBranchLaunchSource(
+          codebase.default_cwd,
+          adoptedTaskBranch.branch,
+          async snapshot => {
+            if (options.discoveryCwd === undefined) await recaptureForLane(snapshot);
+            return prepareCredentialPreflight(snapshot, codebase.id);
+          }
+        )
+      : await (async (): Promise<PreparedRunAiConfiguration> => {
+          if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined)
+            await recaptureForLane(workingCwd);
+          return prepareCredentialPreflight(executionConfigCwd, codebase?.id);
+        })();
+
   const isFolderCodebase = codebase?.kind === 'folder';
 
   // Container isolation is folder-project-only in v1. A repo-kind project (or a
@@ -2920,9 +2992,7 @@ async function runWorkflowWithOwnedSource(
     const provider = getIsolationProvider();
 
     // Check for existing worktree (only when explicit --branch)
-    const existingEnv = options.branchName
-      ? await isolationDb.findActiveByWorkflow(codebase.id, 'task', options.branchName)
-      : undefined;
+    const existingEnv = existingBranchEnv;
 
     if (existingEnv && (await provider.healthCheck(existingEnv.working_path))) {
       if (options.fromBranch) {
@@ -3049,11 +3119,8 @@ async function runWorkflowWithOwnedSource(
     });
   }
 
-  // The lane's checkout is final here. Preserve an explicitly selected authoring
-  // source; only default discovery follows the adopted execution checkout.
-  if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined) {
-    console.log(`Capturing workflow source from ${workingCwd}.`);
-    await recaptureForLane(workingCwd);
+  if (adoptLaneRunsIsolatedCheckout && options.discoveryCwd === undefined && preparedSource) {
+    preparedSource = { ...preparedSource, origin: workingCwd };
   }
 
   // Update conversation with cwd and isolation info
@@ -3070,13 +3137,6 @@ async function runWorkflowWithOwnedSource(
 
   // Wire adapter for assistant message persistence
   adapter.setConversationDbId(conversationId, conversation.id);
-
-  // Resolve the CLI user once (ARCHON_USER_ID, else $USER/$USERNAME). When set,
-  // upsert via the `cli` platform identity so the same Archon user is reused
-  // across invocations — this is what attributes the workflow run to the human
-  // running the command and what `getUserProviderEnv` keys on for per-user
-  // AI-provider credentials (#1891 Phase 2).
-  const cliUserId = await resolveCliUserRecordId();
 
   // Persist user message for Web UI history.
   try {
@@ -3229,20 +3289,13 @@ async function runWorkflowWithOwnedSource(
             ...(containerOverlayMode ? { overlayMode: containerOverlayMode } : {}),
           }
         : undefined;
-    // Per-child isolation resolver (#2121 slice 2, PR-A): built for git-repo codebases
-    // only — a folder project can't make worktrees, so a `workflow:` node requesting
-    // `isolation: 'worktree'` there fails fast in the engine (no resolver injected).
-    const resolveChildIsolation =
-      codebase && codebase.kind !== 'folder'
-        ? createChildWorktreeResolver({
-            codebaseId: codebase.id,
-            codebaseName: codebase.name,
-            canonicalRepoPath: codebase.default_cwd,
-            baseBranch: codebaseDefaultBranch,
-            createdByPlatform: 'cli',
-            createdByUserId: cliUserId,
-          })
-        : undefined;
+    const resolveChildIsolation = codebase
+      ? createCodebaseChildResolver(codebase, {
+          baseBranch: codebaseDefaultBranch,
+          createdByPlatform: 'cli',
+          createdByUserId: cliUserId,
+        })
+      : undefined;
     const commonOptions = {
       codebaseId: codebase?.id,
       source: workflowSource,
@@ -3315,6 +3368,7 @@ async function runWorkflowWithOwnedSource(
           ? { modelOverrideLayer: { kind: 'raw' as const, overrides: modelOverrides } }
           : {}),
         ...(runConfig ? { runConfig } : {}),
+        preparedAiConfiguration,
         // The frozen source this run executes, captured before the workflow was even
         // selected. A resume ignores it and loads the source recorded on its own row.
         preparedSource,
@@ -4091,6 +4145,8 @@ export async function workflowStatusCommand(
   cwd: string,
   opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
 ): Promise<void> {
+  const { getWorkflowStatus } = createSqlWorkflowOperations();
+
   let codebase = null;
   if (!opts.all) {
     try {
@@ -5486,6 +5542,8 @@ export async function workflowResumeCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { resumeWorkflow: resumeWorkflowOp } = createSqlWorkflowOperations();
+
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
   // then let a detached child re-invoke the blocking resume and own all mutation
   // + execution, so a reaped launching shell can't wedge the run mid-resume.
@@ -5591,13 +5649,16 @@ export async function workflowAbandonCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
+  const { abandonWorkflow } = createSqlWorkflowOperations();
+
   // The container reclaim (M2) and the live-owner stop both live in the shared
   // `abandonWorkflow` op, so EVERY surface does them — the CLI reports the outcome.
   // Keeps `--json` a clean one-line contract (no reclaim text before the payload).
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
+      const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+        await abandonWorkflow(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5615,6 +5676,7 @@ export async function workflowAbandonCommand(
                 recordedUid: owner.recordedOwner?.uid ?? null,
                 lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
               },
+        ...(cleanupWarnings ? { cleanupWarnings } : {}),
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
       });
@@ -5625,10 +5687,12 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
+  const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+    await abandonWorkflow(resolvedId);
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+  for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
 }
 
@@ -5663,6 +5727,8 @@ export async function workflowCancelCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
+  const { cancelWorkflow } = createSqlWorkflowOperations();
+
   const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
     const resolvedId = await resolveRunIdArg(runId, cwd);
     try {
@@ -5691,6 +5757,9 @@ export async function workflowCancelCommand(
         status: 'cancelled',
         processStopped: result.kind === 'stopped',
         workflowName: result.run.workflow_name,
+        ...(result.kind === 'stopped' && result.cleanupWarnings
+          ? { cleanupWarnings: result.cleanupWarnings }
+          : {}),
         ...(result.kind === 'stopped' && result.cascadeFailures > 0
           ? { cascadeFailures: result.cascadeFailures }
           : {}),
@@ -5714,6 +5783,7 @@ export async function workflowCancelCommand(
   console.log(`Cancelled detached workflow run: ${resolvedId}`);
   console.log(`Workflow: ${result.run.workflow_name}`);
   console.log('Host process tree stopped before run state was changed.');
+  for (const warning of result.cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
 }
 
@@ -5736,6 +5806,8 @@ export async function workflowApproveCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { approveWorkflow } = createSqlWorkflowOperations();
+
   // --detach: hand the approve AND its inline auto-resume to a detached child
   // (same argv minus --detach/--json). Handled BEFORE any state change — the
   // parent only validates read-only, so the approval is recorded exactly once,
@@ -5865,6 +5937,8 @@ export async function workflowRejectCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { rejectWorkflow } = createSqlWorkflowOperations();
+
   // --detach: hand the reject AND its inline on_reject rework to a detached child,
   // exactly as approve does. Without it, reject hosts the executor in the calling
   // shell — a reaped shell (harness task, closed terminal) leaves the run wedged
@@ -6006,6 +6080,8 @@ export async function workflowRespondCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { respondToWorkflow } = createSqlWorkflowOperations();
+
   if (decision === 'approve') return workflowApproveCommand(runId, text, json, cwd, detach);
   if (decision === 'reject') return workflowRejectCommand(runId, text, json, cwd, detach);
 
@@ -6129,6 +6205,8 @@ export async function workflowResetSessionsCommand(
   workflowName: string,
   options: { scope?: string; node?: string; yes?: boolean; json?: boolean }
 ): Promise<void> {
+  const { resetWorkflowNodeSessions } = createSqlWorkflowOperations();
+
   if (!options.scope && !options.yes) {
     throw new Error(
       `Refusing to delete every persisted session for workflow '${workflowName}' across all scopes without confirmation.\n` +

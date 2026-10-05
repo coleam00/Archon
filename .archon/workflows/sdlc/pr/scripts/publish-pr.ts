@@ -14,9 +14,10 @@
  * - INPUTS_INTENT: path to the JSON intent the preparing node wrote.
  */
 
-import { readFileSync } from 'node:fs';
-import { createPr, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createPr, findOpenPrByHead, viewPr, type CreatePrIntent } from '../../.shared/pr.ts';
 import {
+  ForgeOperationError,
   forgeSource,
   record,
   sameRepo,
@@ -47,7 +48,8 @@ function required(value: unknown, field: string): string {
 
 function publish(): PrRecord {
   const source = forgeSource();
-  const intent = record(JSON.parse(readFileSync(text(process.env.INPUTS_INTENT), 'utf8')));
+  const intentPath = text(process.env.INPUTS_INTENT);
+  const intent = record(JSON.parse(readFileSync(intentPath, 'utf8')));
   if (!intent) throw new Error('the PR intent must be a JSON object');
   const base = repo(intent.repo, 'repo');
   const headRepo = intent.headRepo === undefined ? base : repo(intent.headRepo, 'headRepo');
@@ -75,19 +77,43 @@ function publish(): PrRecord {
     return existing.pr;
   }
   if (typeof intent.draft !== 'boolean') throw new Error("the PR intent's draft must be a boolean");
-  return createPr(
-    {
-      repo: base,
-      headRepo,
-      head,
-      headRevision: required(intent.headRevision, 'headRevision'),
-      base: required(intent.base, 'base'),
-      title: required(intent.title, 'title'),
-      bodyPath: required(intent.bodyPath, 'bodyPath'),
-      draft: intent.draft,
-    },
-    source
-  );
+  const createIntent: CreatePrIntent = {
+    repo: base,
+    headRepo,
+    head,
+    headRevision: required(intent.headRevision, 'headRevision'),
+    base: required(intent.base, 'base'),
+    title: required(intent.title, 'title'),
+    bodyPath: required(intent.bodyPath, 'bodyPath'),
+    draft: intent.draft,
+  };
+  readFileSync(createIntent.bodyPath, 'utf8');
+  // Killing the script cannot cancel a submitted forge write. Keep this claim
+  // beside the durable intent even after success: a retry may only reconcile it.
+  const claimPath = `${intentPath}.create-started`;
+  try {
+    writeFileSync(claimPath, JSON.stringify({ repo: base, headRepo, head }), {
+      flag: 'wx',
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'EEXIST') {
+      throw new Error(
+        `a previous PR create is unresolved; no open PR was found for ${headRepo.path}:${head}. Reconcile the write recorded at ${claimPath} before creating another PR`
+      );
+    }
+    throw error;
+  }
+  try {
+    return createPr(createIntent, source);
+  } catch (error) {
+    // A forge refusal is definite: no write was sent, so the claim would only
+    // block a retry. Every other failure may have left a pull request behind.
+    if (error instanceof ForgeOperationError && error.mutation?.outcome === 'refused') {
+      unlinkSync(claimPath);
+    }
+    throw error;
+  }
 }
 
 try {

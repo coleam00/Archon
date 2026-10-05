@@ -13,8 +13,8 @@
  * implementation. Two omissions made this "fully mocked" file open a real
  * SQLite database and write a real `config.yaml`; see the notes on the
  * `@archon/core/db/users` and `@archon/core/config/resolve-assistant` mocks.
- * To re-audit, run this file with `ARCHON_HOME` pointed at an empty temp dir
- * and assert nothing appears in it.
+ * The package-cwd test preload checks its own temporary ARCHON_HOME after each
+ * test (src/test/no-archon-home-writes.ts).
  */
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { createHmac } from 'crypto';

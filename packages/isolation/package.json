@@ -14,7 +14,8 @@
   "dependencies": {
     "@archon/git": "workspace:*",
     "@archon/paths": "workspace:*",
-    "@archon/providers": "workspace:*"
+    "@archon/provider-contract": "workspace:*",
+    "@archon/workflows": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

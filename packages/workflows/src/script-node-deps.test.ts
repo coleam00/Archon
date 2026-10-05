@@ -59,6 +59,24 @@ import type { IWorkflowStore } from './store';
 
 function createMockStore(): IWorkflowStore {
   return {
+    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
+      throw new Error('Unexpected resolveApprovalGate');
+    }),
+    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
+      throw new Error('Unexpected resolveAndCancelApprovalGate');
+    }),
+    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
+      () => {
+        throw new Error('Unexpected cancelResumableRunsForConversation');
+      }
+    ),
+    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
+      throw new Error('Unexpected deleteWorkflowNodeSessions');
+    }),
+    findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
+    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
+      throw new Error('Unexpected listWorkflowRuns');
+    }),
     createWorkflowRun: mock(() =>
       Promise.resolve({
         id: 'mock-run-id',
@@ -171,6 +189,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
   checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
   getType: () => 'claude',
   getCapabilities: () => ({
+    backgroundWork: 'unobserved' as const,
     sessionResume: true,
     mcp: true,
     hooks: true,

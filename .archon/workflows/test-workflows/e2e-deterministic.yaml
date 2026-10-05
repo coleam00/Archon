@@ -21,7 +21,9 @@ nodes:
 
   # Layer 1 — test $nodeId.output substitution from bash
   - id: bash-read-output
-    bash: "echo upstream-status: $bash-echo.output"
+    bash: |
+      value=$bash-echo.output
+      echo "upstream-status: $value"
     depends_on: [bash-echo]
 
   # Layer 1 — conditional branches (only one should run)
@@ -37,7 +39,10 @@ nodes:
 
   # Layer 2 — trigger_rule merge (one_success: branch-false will be skipped)
   - id: merge-node
-    bash: "echo merge-ok: true=$branch-true.output false=$branch-false.output"
+    bash: |
+      true_value=$branch-true.output
+      false_value=$branch-false.output
+      echo "merge-ok: true=$true_value false=$false_value"
     depends_on: [branch-true, branch-false]
     trigger_rule: one_success
 

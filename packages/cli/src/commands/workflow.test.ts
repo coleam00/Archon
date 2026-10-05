@@ -1,3 +1,34 @@
+mock.module('@archon/core/services/provider-admission', () => ({
+  getAgentProvider: () => ({
+    checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+  }),
+}));
+
+const realRunConfig = await import('@archon/core/config/run-config');
+const realSealRunConfig = realRunConfig.sealWorkflowRunConfig;
+mock.module('@archon/core/config/run-config', () => ({
+  sealWorkflowRunConfig: (...args: Parameters<typeof realSealRunConfig>) => {
+    const previous = process.env.TOKEN_ENCRYPTION_KEY;
+    try {
+      process.env.TOKEN_ENCRYPTION_KEY ??= 'ab'.repeat(32);
+      return realSealRunConfig(...args);
+    } finally {
+      if (previous === undefined) delete process.env.TOKEN_ENCRYPTION_KEY;
+      else process.env.TOKEN_ENCRYPTION_KEY = previous;
+    }
+  },
+}));
+mock.module('@archon/core/credentials/config', () => ({
+  isPerUserProviderKeysEnabled: () => false,
+}));
+mock.module('@archon/core/db/env-vars', () => ({ getCodebaseEnvVars: async () => ({}) }));
+mock.module('@archon/core/workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
 /**
  * Tests for workflow commands
  */
@@ -95,6 +126,17 @@ beforeAll(async () => {
     await import('@archon/providers');
   registerBuiltinProviders();
   registerCommunityProviders();
+});
+
+beforeEach(async () => {
+  const core = await import('@archon/core');
+  (core.loadConfig as ReturnType<typeof mock>).mockResolvedValue({
+    defaults: {},
+    assistant: 'claude',
+    assistants: { claude: {} },
+    aliases: { '@planner': { provider: 'claude', model: 'sonnet' } },
+    commands: {},
+  });
 });
 
 const mockLogger = {
@@ -282,11 +324,14 @@ mock.module('@archon/core', () => ({
       alreadyExisted: false,
     })
   ),
-  loadConfig: mock(() => Promise.resolve({ defaults: {} })),
+  loadConfig: mock(() =>
+    Promise.resolve({ defaults: {}, assistant: 'claude', assistants: { claude: {} }, commands: {} })
+  ),
   generateAndSetTitle: mock(() => Promise.resolve()),
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
   createWorkflowStore: mock(() => ({
+    getCodebaseEnvVars: async () => ({}),
     createWorkflowEvent: mockCreateWorkflowEvent,
     persistWorkflowEvent: mockPersistWorkflowEvent,
   })),
@@ -704,7 +749,7 @@ async function finishStartupWindow(
 ): Promise<void> {
   for (
     let attempt = 0;
-    attempt < 20 && spawnSpy.mock.calls.length < expectedSpawnCount;
+    attempt < 200 && spawnSpy.mock.calls.length < expectedSpawnCount;
     attempt++
   ) {
     await Promise.resolve();
@@ -713,6 +758,42 @@ async function finishStartupWindow(
   jest.advanceTimersByTime(500);
   await commandPromise;
 }
+
+const { createWorkflowOperations } = await import('@archon/core/operations/workflow-operations');
+const operationWorkflowDb = await import('@archon/core/db/workflows');
+const operationSessionDb = await import('@archon/core/db/workflow-node-sessions');
+const operationIsolationDb = await import('@archon/core/db/isolation-environments');
+mock.module('@archon/core/workflows/sql-host', () => ({
+  createSqlWorkflowOperations: () =>
+    createWorkflowOperations({
+      store: {
+        getWorkflowRun: (...args) => operationWorkflowDb.getWorkflowRun(...args),
+        findChildRuns: (...args) => operationWorkflowDb.findChildRuns(...args),
+        getRunAncestry: (...args) => operationWorkflowDb.getRunAncestry(...args),
+        cancelWorkflowRun: (...args) => operationWorkflowDb.cancelWorkflowRun(...args),
+        resolveApprovalGate: (...args) => operationWorkflowDb.resolveApprovalGate(...args),
+        resolveAndCancelApprovalGate: (...args) =>
+          operationWorkflowDb.resolveAndCancelApprovalGate(...args),
+        cancelResumableRunsForConversation: (...args) =>
+          operationWorkflowDb.cancelResumableRunsForConversation(...args),
+        deleteWorkflowNodeSessions: (...args) =>
+          operationSessionDb.deleteWorkflowNodeSessions(...args),
+        findWorkflowRunsByIdPrefix: (...args) =>
+          operationWorkflowDb.findWorkflowRunsByIdPrefix(...args),
+        listWorkflowRuns: (...args) => operationWorkflowDb.listDashboardRuns(...args),
+      },
+      hostStore: {
+        isolation: {
+          ...operationIsolationDb.createIsolationStore(),
+          getById: (...args) => operationIsolationDb.getById(...args),
+        },
+      },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess: () => false,
+      isRunOwnerAnswering: mockIsRunOwnerAnswering,
+      reclaimContainerEnv: mockReclaimContainerEnv,
+    }),
+}));
 
 describe('workflowListCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -3180,7 +3261,7 @@ describe('workflowRunCommand', () => {
       id: 'conv-123',
       ai_assistant_type: 'claude',
     });
-    (core.loadConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (core.loadConfig as ReturnType<typeof mock>).mockResolvedValue({
       assistant: 'claude',
       assistants: { codex: { model: 'gpt-5.4' } },
       defaults: {},
@@ -7457,7 +7538,7 @@ describe('workflowRunsCommand', () => {
 
     await workflowRunsCommand('/test/path');
 
-    const output = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+    const output = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
     expect(output).toContain('completed');
     expect(output).toContain('authored outcome: failed');
     expect(output).toContain('active node(s): parallel-a, parallel-b');
@@ -7949,7 +8030,7 @@ describe('workflowRunCommand — detach', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
     const paths = await import('@archon/paths');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValue({
       workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
       errors: [],
     });
@@ -8446,7 +8527,7 @@ describe('workflowRunCommand — detach', () => {
 
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 200 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -8485,7 +8566,7 @@ describe('workflowRunCommand — detach', () => {
 
     try {
       const commandPromise = workflowRunCommand('/test/path', 'assist', 'hello', { detach: true });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 200 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -8529,7 +8610,7 @@ describe('workflowRunCommand — detach', () => {
         json: true,
         conversationId,
       });
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 200 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -9211,7 +9292,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
 
     try {
       const commandPromise = workflowApproveCommand('run-123', undefined, true, undefined, true);
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 200 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -9484,7 +9565,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
     let spawnCmd: string[] = [];
     try {
       const commandPromise = workflowResumeCommand('run-123', undefined, undefined, true);
-      for (let attempt = 0; attempt < 20 && spawnSpy.mock.calls.length === 0; attempt++) {
+      for (let attempt = 0; attempt < 200 && spawnSpy.mock.calls.length === 0; attempt++) {
         await Promise.resolve();
       }
       expect(spawnSpy).toHaveBeenCalledTimes(1);
@@ -10305,6 +10386,34 @@ describe('workflowAbandonCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('Abandoned workflow run: run-1');
   });
 
+  for (const json of [false, true]) {
+    it(`reports container reclaim failure in ${json ? 'JSON' : 'text'} output`, async () => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-1',
+        workflow_name: 'implement',
+        status: 'paused',
+        metadata: { isolation: 'container', isolation_env_id: 'env-a' },
+      });
+      (workflowDb.cancelWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        cancelled: true,
+      });
+      mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
+      const stdout = spyOnJsonStdout();
+      try {
+        await workflowAbandonCommand('run-1', json);
+        const output = json
+          ? stdout.mock.calls.map((call: unknown[]) => String(call[0])).join('')
+          : consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(output).toContain('Could not reclaim container environment env-a');
+        expect(output).toContain('resources may remain allocated');
+        if (json) expect(JSON.parse(output).cleanupWarnings).toHaveLength(1);
+      } finally {
+        stdout.mockRestore();
+      }
+    });
+  }
+
   it('stops a live owner before recording cancelled and says so', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const order: string[] = [];
@@ -10526,7 +10635,10 @@ describe('workflowCancelCommand', () => {
       'reclaim-container',
     ]);
     expect(mockReclaimContainerEnv).toHaveBeenCalledTimes(2);
-    expect(mockReclaimContainerEnv).toHaveBeenCalledWith('container-env-1');
+    expect(mockReclaimContainerEnv).toHaveBeenCalledWith(
+      'container-env-1',
+      expect.objectContaining({ getById: expect.any(Function) })
+    );
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
       ok: true,
       processStopped: true,
@@ -14137,6 +14249,34 @@ describe('run codebase resolution', () => {
     ).toMatchObject({ codebaseId: 'cb-folder' });
   });
 
+  it('preserves a legacy path error during registration without falling back', async () => {
+    const error = new codebases.InvalidCodebaseDefaultCwdError('legacy', 'projects/repo');
+    (core.registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+    await expect(
+      workflowRunCommand(childRoot, 'probe', 'go', { noWorktree: true })
+    ).rejects.toThrow(error.message);
+    expect(executor.executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  for (const options of [{ noWorktree: true }, { detach: true }, { codebaseId: 'legacy' }]) {
+    it(`treats an invalid stored path as terminal with ${JSON.stringify(options)}`, async () => {
+      const error = new codebases.InvalidCodebaseDefaultCwdError('legacy', 'projects/repo');
+      if ('codebaseId' in options) {
+        (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(null);
+        (codebases.getCodebase as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+      } else {
+        (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockRejectedValueOnce(
+          error
+        );
+      }
+      await expect(workflowRunCommand(childRoot, 'probe', 'go', options)).rejects.toThrow(
+        error.message
+      );
+      expect(core.registerRepository).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+    });
+  }
+
   it('surfaces checkout identity errors without parent fallback or registration', async () => {
     (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('checkout identity unavailable')
@@ -14146,5 +14286,79 @@ describe('run codebase resolution', () => {
     );
     expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
     expect(core.registerRepository).not.toHaveBeenCalled();
+  });
+});
+
+describe('workflow run credential launch refusal', () => {
+  it.each(
+    [false, true].flatMap(detach => [
+      { detach, adopt: false },
+      { detach, adopt: true },
+    ])
+  )('blocks before isolation, title generation and spawning (%j)', async ({ detach, adopt }) => {
+    const adapter = await import('@archon/core/workflows/store-adapter');
+    const original = adapter.createWorkflowDeps;
+    const createDeps = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original(),
+      isPerUserProviderKeysEnabled: () => true,
+      getUserProviderCredentialStatus: async (_userId, vendor) =>
+        adopt && vendor === 'anthropic'
+          ? { state: 'usable', source: 'archon' }
+          : {
+              state: 'unusable',
+              source: 'archon',
+              evidence: 'stored credential unreadable',
+            },
+    }));
+    const isolation = await import('@archon/isolation');
+    const core = await import('@archon/core');
+    const codebases = await import('@archon/core/db/codebases');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    mockDiscoverWorkflowsWithConfig.mockImplementation(async path => ({
+      workflows: [
+        makeTestWorkflowWithSource({
+          name: 'credential-run',
+          provider: adopt && path === '/adopted/snapshot' ? 'codex' : 'claude',
+        }),
+      ],
+      errors: [],
+    }));
+    const adoptedRunId = '11111111-1111-1111-1111-111111111111';
+    if (adopt) {
+      const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
+      (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
+        adoptedRun: { id: adoptedRunId, status: 'completed', working_path: '/old' },
+        lane: { kind: 'checkout-branch', taskBranch: { kind: 'existing', branch: 'feature/dead' } },
+      });
+    }
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue({
+      id: 'cb',
+      name: 'test/repo',
+      default_cwd: '/test/path',
+      kind: 'repo',
+    });
+    (core.generateAndSetTitle as ReturnType<typeof mock>).mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+    (isolation.getIsolationProvider as ReturnType<typeof mock>).mockClear();
+    mockResolveFolderBackend.mockClear();
+    const spawn = spyOn(Bun, 'spawn');
+    try {
+      await expect(
+        workflowRunCommand('/test/path', 'credential-run', 'go', {
+          detach,
+          ...(adopt ? { adoptRunId: adoptedRunId } : {}),
+        })
+      ).rejects.toThrow(
+        `Credential preflight failed for provider '${adopt ? 'codex' : 'claude'}' (vendor '${adopt ? 'openai' : 'anthropic'}'): credential cannot be used: stored credential unreadable`
+      );
+      expect(isolation.getIsolationProvider).not.toHaveBeenCalled();
+      expect(mockResolveFolderBackend).not.toHaveBeenCalled();
+      expect(core.generateAndSetTitle).not.toHaveBeenCalled();
+      expect(executeWorkflow).not.toHaveBeenCalled();
+      expect(spawn).not.toHaveBeenCalled();
+    } finally {
+      spawn.mockRestore();
+      createDeps.mockRestore();
+    }
   });
 });

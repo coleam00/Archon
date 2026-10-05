@@ -109,14 +109,14 @@ archon setup --spawn              # open in a new terminal window
 
 ### `doctor`
 
-Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, Codex binary resolution (env → config → vendor → autodetect, reporting which source resolved), gh CLI auth, the configured assistant's native login, OpenCode runtime SDK presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials connected in Archon, and adapter token pings (Slack/Telegram, best-effort).
+Verify your Archon setup. Runs a checklist of common failure points: Claude binary spawn, Codex binary resolution (env → config → vendor → autodetect, reporting which source resolved), gh CLI auth, the configured assistant's native login, OpenCode runtime SDK and executable presence, database reachability, workspace writability, bundled defaults, folder-project detection (contained repos, when run from one), telemetry state, AI credentials connected in Archon, and adapter token pings (Slack/Telegram, best-effort).
 
 ```bash
 archon doctor
-archon doctor --full   # also probe the OpenCode runtime SDK even when it isn't the configured assistant
+archon doctor --full   # also probe the OpenCode runtime dependencies even when it isn't the configured assistant
 ```
 
-The Codex check skips (never fails) when Codex isn't the configured assistant anywhere and no OpenAI credential is connected, so Claude-only users aren't nagged about a binary they'll never use. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check only probes that the embedded runtime SDK module resolves — it never boots the runtime (which spawns a child process and binds a port) — and skips unless OpenCode is the configured assistant or `--full` is passed. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
+The Codex check skips (never fails) when Codex isn't the configured assistant anywhere and no OpenAI credential is connected, so Claude-only users aren't nagged about a binary they'll never use. The AI credentials check uses each connected credential the way a run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, or the vendor rejected the refresh), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it. The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon. When Archon config names no model (Pi then uses its own default), doctor cannot tell which vendor the run uses, so a missing native login is a warning, not a failure, if you have connected a credential the assistant can use. Pi resolves its configured key during the check, so a key command runs during `archon doctor`; a command that prompts can prompt again at run start. The check builds the runtime a run builds, which runs every provider's `!command` key stored in Pi's `auth.json`, not only the configured provider's. For a model in Pi's catalog, a run resolves a `models.json` key command once when a node starts and uses that key for the whole node, so a short-lived token can expire before a long node ends; a model from an extension provider runs its key command on each request. Pi OAuth checks may refresh through Pi's runtime. Codex reads its native account through app-server and asks it to refresh the sign-in, so a revoked login fails the check (a run does not make this call); an API key is usable once resolved. When Codex is configured for a model provider that needs no OpenAI login, the check is skipped. Claude, Copilot, and OpenCode cannot check their native login without starting a model session, so the check is skipped and reports "not checked". The OpenCode check probes that the embedded runtime SDK module resolves and the `opencode` executable is available on the inherited `PATH` — it never boots the runtime (which spawns a child process and binds a port) — and skips unless OpenCode is the configured assistant or `--full` is passed. The provider support check warns when the default assistant is a [deprecated provider](/getting-started/ai-assistants/#deprecated-providers).
 
 Exit code 0 if all checks pass or are skipped; 1 if any critical check fails. Adapter pings degrade to `skip` on network errors — a flaky connection does not flip the result red.
 
@@ -145,7 +145,7 @@ A workflow pack installs complete at one commit. The command fetches the tag, or
 
 ### `auth github`
 
-Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
+Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits name you as author while keeping the ambient Git identity as committer. PR comments and pushes use your connected identity.
 
 ```bash
 archon auth github
@@ -763,6 +763,8 @@ exit code would make a legitimately cancelled run look like a broken command.
 Owner loss is also exit `0`: the wait obtained a typed answer, but Archon did not
 invent a terminal status or change the run. Its JSON result is `owner_lost` with the
 persisted non-terminal `observedStatus` and no `attention` or terminal `status` field.
+A slow or incomplete owner handshake is not evidence of loss; the wait retries until
+it can attach, observe attention, or reach an explicit timeout.
 After verifying that the run's work has stopped, release its persisted state with
 `archon workflow abandon <run-id>`.
 
@@ -919,6 +921,18 @@ After termination is confirmed, `cancel` records cancellation through the same r
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
 descendant and can report the same cascade failures or blocked parent described below.
 
+For a detached container run, cancel must also confirm container teardown after stopping
+the owner and before recording cancellation. If that teardown fails, cancel fails and
+leaves the run's state unchanged, even though the owner process has stopped. With
+`--json`, this returns `ok: false` and an error, without `cleanupWarnings`.
+
+Once cancellation is recorded, further managed container reclamation is best-effort. If it fails,
+the run stays `cancelled`, but container resources may remain allocated. Every cancel
+surface reports a warning identifying the run and environment; inspect the managed
+containers before retrying cleanup. Successful `--json` responses include an optional
+`cleanupWarnings` array of warning strings when reclamation fails; the field is omitted
+when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
+
 ### `workflow abandon`
 
 Discard a workflow run by marking it `cancelled`. `cancelled` releases the run's
@@ -947,6 +961,13 @@ archon workflow abandon <run-id> --json
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
+
+Managed container reclamation is best-effort here too. A failure leaves the run
+`cancelled` and reports a warning on every abandon surface because container resources
+may remain allocated. Inspect the managed containers before retrying cleanup.
+Successful `--json` responses include an optional `cleanupWarnings` array of warning
+strings when reclamation fails; the field is omitted when there are no cleanup
+warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
@@ -1318,6 +1339,12 @@ Running from a subdirectory (e.g., `/repo/packages/cli`) automatically resolves 
 When using `--branch`, workflows run inside the worktree directory.
 
 > **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, so it picks up uncommitted changes immediately. This is different from the server (Telegram/Slack/GitHub), which reads from the workspace clone at `~/.archon/workspaces/` -- that clone only syncs from the remote before worktree creation, so changes must be pushed to take effect there.
+
+Legacy registrations with a relative stored project path fail with a project-named
+error. Repair them in Archon chat with
+`/register-project "project-name" /absolute/path/to/project`; changing the CLI's
+working directory does not repair the stored path. Re-registration preserves the
+existing project's identity and history.
 
 ## Environment
 

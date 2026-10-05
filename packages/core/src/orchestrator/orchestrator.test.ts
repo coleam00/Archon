@@ -1,3 +1,10 @@
+mock.module('../workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { mkdtemp, realpath } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -110,6 +117,12 @@ const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
+  listCodebaseRegistrations: async () =>
+    (await mockListCodebases()).map(row => ({
+      id: row.id,
+      name: row.name,
+      stored_default_cwd: row.default_cwd,
+    })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
 }));
@@ -194,6 +207,7 @@ const mockGetAgentProvider = mock<typeof Providers.getAgentProvider>(() => {
   throw new Error('Agent provider mock is not configured');
 });
 const providerCapabilities: ProviderCapabilities = {
+  backgroundWork: 'unobserved' as const,
   sessionResume: true,
   mcp: true,
   hooks: true,
@@ -218,6 +232,10 @@ const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilitie
 );
 
 mock.module('@archon/providers', () => ({
+  getRegistration: () => ({
+    parseConfig: (raw: Record<string, unknown>) => raw,
+    credentials: { vendorFor: () => 'anthropic' },
+  }),
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
   // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
@@ -244,9 +262,17 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: {},
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
+    store: { getCodebaseEnvVars: async () => ({}) },
+    sealRunConfig: (_layer: unknown, source: unknown) => ({
+      version: 1,
+      ciphertext: 'sealed',
+      source,
+      keys: [],
+    }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    }),
+    loadConfig: async () => ({ assistant: 'claude', assistants: { claude: {} }, commands: {} }),
   })),
 }));
 
@@ -271,7 +297,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // orchestrator.ts imports createChildWorktreeResolver, which imports
+  // orchestrator.ts imports createCodebaseChildResolver, which imports
   // loadRepoConfig by name. This factory replaces the module process-wide, so
   // omitting it fails that import at module-eval even though no test calls it.
   loadRepoConfig: mock(() => Promise.resolve(null)),
@@ -1935,9 +1961,12 @@ describe('orchestrator-agent handleMessage', () => {
           `/update-project ${mockCodebase.name} ${suppliedPath}`
         );
 
-        expect(mockUpdateCodebase).toHaveBeenCalledWith(mockCodebase.id, {
-          default_cwd: canonicalPath,
-        });
+        expect(mockUpdateCodebase).toHaveBeenCalledWith(
+          expect.objectContaining({ id: mockCodebase.id, name: mockCodebase.name }),
+          {
+            default_cwd: canonicalPath,
+          }
+        );
       } finally {
         await removeTempTree(suppliedPath);
         await removeTempTree(canonicalPath);

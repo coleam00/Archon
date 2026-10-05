@@ -90,6 +90,7 @@ import {
   getLogLevel,
   createLogger,
   checkForUpdate,
+  takeCachedUpdateNotice,
   BUNDLED_IS_BINARY,
   BUNDLED_VERSION,
   shutdownTelemetry,
@@ -211,13 +212,16 @@ async function closeDb(): Promise<void> {
   }
 }
 
-async function printUpdateNotice(quiet: boolean | undefined): Promise<void> {
-  if (quiet || !BUNDLED_IS_BINARY) return;
+function printUpdateNotice(): void {
   try {
-    const result = await checkForUpdate(BUNDLED_VERSION);
-    if (result?.updateAvailable) {
+    const result = takeCachedUpdateNotice(BUNDLED_VERSION);
+    if (result) {
       process.stderr.write(
-        `Update available: v${result.currentVersion} → v${result.latestVersion} — ${result.releaseUrl}\n`
+        `Update available: v${result.currentVersion} → v${result.latestVersion}\n` +
+          'Homebrew: brew upgrade archon\n' +
+          'Quick installer: re-run https://archon.diy/install (PowerShell: https://archon.diy/install.ps1)\n' +
+          `Release notes: ${result.releaseUrl}\n` +
+          'Updating Archon: https://archon.diy/getting-started/updating/\n'
       );
     }
   } catch (err) {
@@ -369,6 +373,14 @@ async function main(): Promise<number> {
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
   let detachedRunConfig: WorkflowRunConfigInput | undefined;
 
+  const showUpdateNotice =
+    BUNDLED_IS_BINARY &&
+    !values.quiet &&
+    !jsonFlag &&
+    command === 'workflow' &&
+    (subcommand === 'run' || subcommand === 'resume');
+  if (showUpdateNotice) void checkForUpdate(BUNDLED_VERSION);
+
   try {
     const detachedRunConfigPayload = values['internal-detached-run-config'];
     if (
@@ -485,14 +497,18 @@ async function main(): Promise<number> {
         // "database unavailable" instead of the misleading "not a git repository".
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
         let gateLookupError: Error | null = null;
+        let codebaseDb: typeof import('@archon/core/db/codebases') | undefined;
         try {
-          const codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
+          codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
             database: true,
           });
           folderCodebase =
             (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
             (await codebaseDb.findCodebaseByPathPrefix(realCwd));
         } catch (dbError) {
+          if (codebaseDb && dbError instanceof codebaseDb.InvalidCodebaseDefaultCwdError) {
+            return await fail(jsonFlag, dbError.message);
+          }
           gateLookupError = dbError as Error;
           getLog().warn(
             { err: gateLookupError, cwd: realCwd },
@@ -1373,7 +1389,6 @@ async function main(): Promise<number> {
         return 1;
       }
     }
-    await printUpdateNotice(values.quiet as boolean | undefined);
     return 0;
   } catch (error) {
     const err = error as Error;
@@ -1390,6 +1405,7 @@ async function main(): Promise<number> {
     }
     return exitCode;
   } finally {
+    if (showUpdateNotice) printUpdateNotice();
     // Flush queued telemetry events before the CLI process exits.
     // Short-lived CLI commands lose buffered events if shutdown() is skipped.
     await shutdownTelemetry();

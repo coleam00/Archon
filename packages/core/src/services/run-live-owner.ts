@@ -42,6 +42,11 @@ export interface RunLiveOwnerWatch {
   unsubscribe(): void;
 }
 
+export type RunLiveOwnerWatchResult =
+  | { kind: 'attached'; handle: RunLiveOwnerWatch }
+  | { kind: 'unreachable' }
+  | { kind: 'unproven' };
+
 export interface RunLiveOwnerStopLease {
   readonly pid: number;
   /** Commit the lease before the caller starts terminating the process tree. */
@@ -409,13 +414,13 @@ export async function withRunLiveOwner<T>(
 }
 
 /**
- * Attach to a live owner. `null` means the exact endpoint could not complete the
- * watch handshake. Once this resolves with a handle, disconnects are observable.
+ * Attach to a live owner. Only a missing or refused endpoint proves it unreachable;
+ * an incomplete handshake leaves ownership unproven. Attached disconnects are observable.
  */
 export function watchRunLiveOwner(
   runId: string,
   onEvent: (event: RunLiveOwnerWatchEvent) => void
-): Promise<RunLiveOwnerWatch | null> {
+): Promise<RunLiveOwnerWatchResult> {
   const path = runLiveOwnerPath(runId);
   return new Promise(resolve => {
     const socket = new Socket();
@@ -426,11 +431,11 @@ export function watchRunLiveOwner(
     let terminalFrame = false;
     let disconnectReported = false;
 
-    const unavailable = (): void => {
+    const unavailable = (kind: 'unreachable' | 'unproven' = 'unproven'): void => {
       if (settled) return;
       settled = true;
       socket.destroy();
-      resolve(null);
+      resolve({ kind });
     };
     const disconnected = (): void => {
       if (attached && !unsubscribed && !terminalFrame && !disconnectReported) {
@@ -440,8 +445,16 @@ export function watchRunLiveOwner(
     };
 
     socket.setEncoding('utf8');
-    socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS, unavailable);
-    socket.once('error', disconnected);
+    socket.setTimeout(RUN_LIVE_OWNER_IPC_TIMEOUT_MS, () => {
+      unavailable();
+    });
+    socket.once('error', error => {
+      if (attached) disconnected();
+      else {
+        const code = isNodeError(error) ? error.code : undefined;
+        unavailable(code !== undefined && NO_LISTENER_CODES.has(code) ? 'unreachable' : 'unproven');
+      }
+    });
     socket.once('end', disconnected);
     socket.once('close', disconnected);
     socket.once('connect', () => socket.write(WATCH_REQUEST));
@@ -464,10 +477,13 @@ export function watchRunLiveOwner(
           settled = true;
           socket.setTimeout(0);
           resolve({
-            unsubscribe: (): void => {
-              if (unsubscribed) return;
-              unsubscribed = true;
-              socket.destroy();
+            kind: 'attached',
+            handle: {
+              unsubscribe: (): void => {
+                if (unsubscribed) return;
+                unsubscribed = true;
+                socket.destroy();
+              },
             },
           });
         } else if (frame === OWNER_ATTENTION) {

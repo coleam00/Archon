@@ -24,14 +24,12 @@ import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
-  compileOutputSchema,
   findInstalledSkillNames,
-  findStrictSchemaIssues,
-  getProviderCapabilities,
-  isRegisteredProvider,
-  isObjectSchemaNode,
   skillSearchRoots,
-} from '@archon/providers';
+} from '@archon/paths/skills';
+import { compileOutputSchema } from './structured-output';
+import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -50,7 +48,7 @@ import {
   isWorkflowNode,
 } from './schemas';
 import { parseWorkflow, workflowNodeOutputFormatError } from './loader';
-import { LOOP_PREV_OUTPUT_REF_SOURCE, OUTPUT_REF_SOURCE } from './output-ref';
+import { PRIOR_OUTPUT_PATH_SOURCE, CURRENT_OUTPUT_PATH_SOURCE } from './output-ref';
 import { resolveWorkflowName } from './router';
 import { visitNodeTemplateSlots } from './template-walker';
 import type { WorkflowDefinition, DagNode, IncludeDirective, WorkflowSource } from './schemas';
@@ -69,6 +67,7 @@ import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './mode
 /** A single validation issue with actionable hint */
 export interface ValidationIssue {
   level: 'error' | 'warning';
+  code?: 'shell_output_ref';
   nodeId?: string;
   field: string;
   message: string;
@@ -937,74 +936,31 @@ export async function validateWorkflowResources(
       }
     }
 
-    // In bash node bodies (and loop `until_bash`, which substitutes the same way),
-    // $node.output values are injected PRE-QUOTED by Archon: small values are
-    // single-quoted inline ('the value'), large outputs (>32 KB) spill to a temp
-    // file as $(cat '/path'). Wrapping the substitution in quotes breaks the
-    // SMALL case — var="$n.output" becomes var="'value'", embedding the literal
-    // single-quote chars as data. (For the large $(cat ...) case double-quoting is
-    // actually fine, but the author can't predict the size at write time, so the
-    // rule is unconditional: never wrap a substitution in quotes.) Numeric/boolean FIELD values are
-    // injected raw, so wrapping is harmless for those — which is why the bug
-    // is intermittent and easy to miss.
-    //   wrong="$n.output.field" → wrong="'ok'" (quote characters become part of the value)
-    //   right=$n.output.field   → right='ok' → bash assigns: ok
-    //
-    // The template walker owns which fields are shell source and where the refs in
-    // them are: `surface: 'shell'` is the same tag dag-executor.ts reads to decide a
-    // slot gets the pre-quoted substitution, so a future shell slot inherits this lint
-    // instead of silently escaping it (#2996). Nothing here re-discovers either fact.
-    //
-    // Given a ref position, the only question left is whether bash sees it inside a
-    // string, and that is decided on the ref's OWN line: replay the quote state from
-    // the line start up to the ref. Two rules, each load-bearing against a real body:
-    //
-    //   Line-local — a quote that is still open at end of line does not reach the
-    //   lines below. `gh pr create --body "$(cat <<'EOF'` leaves a `"` open for the
-    //   rest of the heredoc, and the refs inside it are correctly unquoted.
-    //
-    //   Operand boundary — the opening quote must sit at line start, after `=`, or
-    //   after whitespace. Without it a mid-word apostrophe opens a phantom string
-    //   (`echo don't; x=$a.output`), and so does the *closing* quote of an earlier
-    //   string (`echo "hi"; x=$a.output`). Both are correct code.
-    //
-    // The boundary rule costs one true positive: a quoted ref reached from a
-    // non-operand position, as in `x=prefix"$n.output"` or `<<<"$n.output"`.
-    const opensAtOperandBoundary = (character: string | undefined): boolean =>
-      character === undefined || character === '=' || /\s/.test(character);
-    const isQuotedAt = (body: string, refIndex: number): boolean => {
-      let quote: string | undefined;
-      let openedAtBoundary = false;
-      for (let index = body.lastIndexOf('\n', refIndex - 1) + 1; index < refIndex; index += 1) {
-        const character = body[index];
-        if (quote === undefined) {
-          if (character === '"' || character === "'") {
-            quote = character;
-            openedAtBoundary = opensAtOperandBoundary(body[index - 1]);
-          }
-        } else if (character === quote) {
-          quote = undefined;
-        }
-      }
-      return quote !== undefined && openedAtBoundary;
-    };
     visitNodeTemplateSlots(
       node,
       slot => {
         if (slot.surface !== 'shell') return;
-        // Built per slot: a `g`-flagged instance carries mutable lastIndex.
-        const refFinder = new RegExp(`${LOOP_PREV_OUTPUT_REF_SOURCE}|${OUTPUT_REF_SOURCE}`, 'g');
-        const quoted = Array.from(slot.value.matchAll(refFinder)).some(match =>
-          isQuotedAt(slot.value, match.index)
-        );
+        const { quoted, bare } = shellOutputRefWarnings(slot.value);
+        if (bare) {
+          issues.push({
+            level: 'warning',
+            code: 'shell_output_ref',
+            nodeId: node.id,
+            field: slot.path,
+            message:
+              'A bare $nodeId.output / $LOOP_PREV.nodeId.output substitution can word-split and expand globs when a large output spills to a file',
+            hint: 'Assign, then quote the variable: `var=$node.output.field; printf "%s" "$var"` (or `var=$LOOP_PREV.node.output.field`). The reference must be the whole assignment value.',
+          });
+        }
         if (!quoted) return;
         issues.push({
           level: 'warning',
+          code: 'shell_output_ref',
           nodeId: node.id,
           field: slot.path,
           message:
             '`"$nodeId.output"` / `\'$nodeId.output\'` / `"$LOOP_PREV.nodeId.output"` / `\'$LOOP_PREV.nodeId.output\'` — wrapping a substitution that is already shell-quoted by Archon produces the wrong value',
-          hint: 'Use `var=$node.output.field` or `var=$LOOP_PREV.node.output.field` (unquoted) — the substitution is injected already quoted. (Numeric/boolean fields are injected raw, so wrapping is harmless for those, but the rule is uniform.)',
+          hint: 'Assign, then quote the variable: `var=$node.output.field; printf "%s" "$var"` or `var=$LOOP_PREV.node.output.field; printf "%s" "$var"`. Numeric/boolean fields are injected raw, but the rule is uniform.',
         });
       },
       // Body nodes of a loop_group are already in `allNodes`; recursing would double-report.
@@ -1013,6 +969,97 @@ export async function validateWorkflowResources(
   }
 
   return issues;
+}
+
+// Shell slots share the executor's size-dependent substitution contract. This is a
+// line-local lint, not a shell parser: preserve operand-boundary quote tracking and
+// leave heredoc contents alone, including refs inside a quoted $(cat <<EOF) wrapper.
+// `#` starts a comment only at a word start, and `<<` inside `((...))` is a shift.
+function shellOutputRefWarnings(body: string): { quoted: boolean; bare: boolean } {
+  let quoted = false;
+  let bare = false;
+  const heredocs: { delimiter: string; stripTabs: boolean }[] = [];
+  const refFinder = new RegExp(`${PRIOR_OUTPUT_PATH_SOURCE}|${CURRENT_OUTPUT_PATH_SOURCE}`, 'g');
+  for (const line of body.split('\n')) {
+    const heredoc = heredocs[0];
+    if (heredoc !== undefined) {
+      if ((heredoc.stripTabs ? line.replace(/^\t+/, '') : line) === heredoc.delimiter)
+        heredocs.shift();
+      continue;
+    }
+    const refs = new Map(Array.from(line.matchAll(refFinder), match => [match.index, match[0]]));
+    let quote: string | undefined;
+    let openedAtBoundary = false;
+    let wordStart = 0;
+    const words: string[] = [];
+    let escaped = false;
+    let commandSubstitutions = 0;
+    let arithmetic = 0;
+    for (let index = 0; index < line.length; index += 1) {
+      const character = line[index];
+      const previous = line[index - 1];
+      const operandBoundary = previous === undefined || previous === '=' || /\s/.test(previous);
+      const wordBoundary = previous === undefined || /[\s;&|(]/.test(previous);
+      if (!escaped && quote === undefined && character === '#' && wordBoundary) break;
+      if (!escaped && (quote === undefined || !openedAtBoundary)) {
+        if (/[;&|()]/.test(character)) {
+          words.length = 0;
+          wordStart = index + 1;
+        } else if (/\s/.test(character)) {
+          if (wordStart < index) words.push(line.slice(wordStart, index));
+          wordStart = index + 1;
+        }
+      }
+      if (!escaped && quote !== "'") {
+        if (character === '$' && line[index + 1] === '(') commandSubstitutions += 1;
+        else if (character === ')' && commandSubstitutions > 0) commandSubstitutions -= 1;
+        if (character === '(' && line[index + 1] === '(' && previous !== '(') arithmetic += 1;
+        else if (character === ')' && line[index + 1] === ')' && previous !== ')' && arithmetic > 0)
+          arithmetic -= 1;
+      }
+      if (
+        !escaped &&
+        character === '<' &&
+        line[index + 1] === '<' &&
+        line[index - 1] !== '<' &&
+        arithmetic === 0 &&
+        (quote === undefined || (quote === '"' && commandSubstitutions > 0))
+      ) {
+        const opener = /^<<(-?)[ \t]*(?:'([^']+)'|"([^"\n]+)"|\\?([a-zA-Z_][a-zA-Z0-9_]*))/.exec(
+          line.slice(index)
+        );
+        if (opener !== null) {
+          heredocs.push({
+            delimiter: opener[2] ?? opener[3] ?? opener[4],
+            stripTabs: opener[1] === '-',
+          });
+        }
+      }
+      const ref = refs.get(index);
+      if (ref !== undefined) {
+        if (quote !== undefined && openedAtBoundary) quoted = true;
+        else {
+          const precedingAssignments =
+            words[0] === 'export' || words[0] === 'local' ? words.slice(1) : words;
+          const assignment =
+            /^[a-zA-Z_][a-zA-Z0-9_]*=$/.test(line.slice(wordStart, index)) &&
+            precedingAssignments.every(word => /^[a-zA-Z_][a-zA-Z0-9_]*=/.test(word));
+          const next = line[index + ref.length];
+          if (!assignment || (next !== undefined && !/[\s;&|)<>]/.test(next))) bare = true;
+        }
+      }
+      if (!escaped && quote === undefined) {
+        if (character === '"' || character === "'") {
+          quote = character;
+          openedAtBoundary = operandBoundary;
+        }
+      } else if (!escaped && character === quote) {
+        quote = undefined;
+      }
+      escaped = !escaped && character === '\\' && quote !== "'";
+    }
+  }
+  return { quoted, bare };
 }
 
 // =============================================================================

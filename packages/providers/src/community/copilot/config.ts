@@ -1,6 +1,6 @@
 import type { SessionConfig } from '@github/copilot-sdk';
 import type { CopilotProviderDefaults } from '../../types';
-import { clampEffort, isEffortRung, type AssertNever } from '@archon/paths/effort';
+import { clampEffort, isEffortRung, type AssertNever } from '@archon/provider-contract';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
