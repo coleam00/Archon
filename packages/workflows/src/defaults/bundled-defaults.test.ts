@@ -434,6 +434,27 @@ describe('bundled-defaults', () => {
       expect(flipReady?.trigger_rule).toBe('none_failed_min_one_success');
     });
 
+    it('synthesis requires the review-lens membership declared by the graph', () => {
+      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
+      if (!parsed.workflow) throw new Error('archon-review did not parse');
+      const lenses = parsed.workflow.nodes
+        .filter(node => 'output_type' in node && node.output_type === 'review-lens')
+        .map(node => node.id)
+        .sort();
+      const synthesize = BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-synthesize'];
+      const membership = synthesize.match(
+        /Require completed artifacts for every enabled specialist: `review-lens` for (.+?), and `structure-review` for simplify\./
+      );
+      if (!membership) throw new Error('synthesis has no specialist completion inventory');
+      expect(membership[1].split(/, | and /).sort()).toEqual(lenses);
+    });
+
+    it('the errors lens probes the complete independent-work blast radius', () => {
+      expect(BUNDLED_COMMANDS['__archon_pack__bundled:sdlc:review::review-errors']).toContain(
+        "- **Blast radius** — does a failure owned by one item (another project, one case, one iteration) abort work that does not depend on it? 'Identifiable' does not clear it."
+      );
+    });
+
     it('archon-review exposes the three-way action contract behind a successful preflight', () => {
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-review'], 'archon-review.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
