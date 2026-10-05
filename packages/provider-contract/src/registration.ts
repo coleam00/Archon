@@ -50,7 +50,11 @@ export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
 export const credentialSpecSchema = z.object({
   vendor: z.string().min(1),
   displayName: z.string().min(1),
-  kinds: z.tuple([z.enum(CREDENTIAL_KINDS)]).rest(z.enum(CREDENTIAL_KINDS)),
+  // Zod needs the explicit length check to emit minItems for a tuple with rest.
+  kinds: z
+    .tuple([z.enum(CREDENTIAL_KINDS)])
+    .rest(z.enum(CREDENTIAL_KINDS))
+    .check(z.minLength(1)),
 });
 export type CredentialSpec = z.infer<typeof credentialSpecSchema>;
 

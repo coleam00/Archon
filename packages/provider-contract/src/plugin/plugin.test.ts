@@ -299,6 +299,57 @@ test('an uncancelled stream ending before settled fails instead of inventing com
   );
 });
 
+test('a provider rejection after settled still fails the remote turn', async () => {
+  const provider = fixtureProvider({
+    async *sendQuery() {
+      yield { type: 'result', text: 'done' };
+      yield { type: 'settled' };
+      throw new Error('cleanup failed');
+    },
+  });
+  await expect(collect(provider.sendQuery('turn', '/'))).rejects.toThrow('cleanup failed');
+  await withProvider(provider, async client => {
+    await expect(collect(client.sendQuery('turn', '/'))).rejects.toThrow('cleanup failed');
+  });
+});
+
+test('closing a connection aborts a suspended provider and resolves serving', async () => {
+  let signal: AbortSignal | undefined;
+  const pair = streamPair();
+  const serving = serveProvider(
+    {
+      descriptor,
+      create: () =>
+        fixtureProvider({
+          async *sendQuery(_prompt, _cwd, _resume, options) {
+            signal = options?.abortSignal;
+            if (!signal) throw new Error('Missing abort signal');
+            const aborted = new Promise<void>(resolve => {
+              signal?.addEventListener('abort', () => resolve(), { once: true });
+            });
+            yield { type: 'state_update', state: 'running' };
+            await aborted;
+          },
+        }),
+    },
+    pair.provider
+  );
+  const client = await connectProvider(pair.host);
+  const stream = client.sendQuery('turn', '/');
+  try {
+    expect((await stream.next()).value).toEqual({ type: 'state_update', state: 'running' });
+    expect(signal?.aborted).toBe(false);
+    await client.close();
+    await serving;
+    expect(signal?.aborted).toBe(true);
+    await expect(stream.next()).rejects.toThrow('connection closed');
+  } finally {
+    await client.close();
+    await stream.return(undefined);
+    await serving;
+  }
+});
+
 test('returning early cancels the provider, drains in-flight chunks and leaves the connection usable', async () => {
   let cancelled = (): void => {};
   const cancelledAtProvider = new Promise<void>(resolve => {

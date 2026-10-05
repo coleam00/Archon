@@ -1,6 +1,7 @@
 import type { IAgentProvider, SendQueryOptions } from '../agent-provider';
 import { credentialStatusSchema, type CredentialStatus } from '../credential-status';
 import type { ProviderChunk } from '../events';
+import type { ProviderSettled } from '../settled';
 import { ProviderPluginProtocolError, ProviderRpc, type ProviderPluginIO } from './rpc';
 import {
   chunkNotificationSchema,
@@ -25,7 +26,7 @@ export interface ConnectedProvider extends IAgentProvider {
 
 interface Turn {
   controller: ReadableStreamDefaultController<ProviderChunk>;
-  settled: boolean;
+  settled: ProviderSettled | undefined;
   ended: boolean;
   cancelled: boolean;
 }
@@ -44,10 +45,14 @@ export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedPr
     const turn = turns.get(sessionId);
     if (!turn) throw rpc.error('chunk names an unknown session');
     if (turn.settled) throw rpc.error('chunk arrived after settled');
-    if (chunk.type === 'settled') turn.settled = true;
+    // A provider can reject while unwinding after settled. Do not expose completion
+    // until session/prompt acknowledges that the provider's iterator succeeded.
+    if (chunk.type === 'settled') {
+      turn.settled = chunk;
+      return;
+    }
     if (turn.ended) return;
     turn.controller.enqueue(chunk);
-    if (turn.settled) finish(turn);
   });
   let descriptor: ProviderPluginDescriptor;
   try {
@@ -141,7 +146,7 @@ export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedPr
         start(controller): void {
           turn = {
             controller,
-            settled: false,
+            settled: undefined,
             ended: false,
             cancelled: false,
           };
@@ -166,6 +171,7 @@ export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedPr
           rpc.parse(promptResponseSchema, raw);
           if (!turn.settled && !turn.cancelled)
             throw rpc.error('provider stream ended before settled');
+          if (turn.settled && !turn.ended) turn.controller.enqueue(turn.settled);
           finish(turn);
         })
         .catch(error => {

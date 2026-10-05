@@ -795,7 +795,8 @@
               "subscription",
               "ambient"
             ]
-          }
+          },
+          "minItems": 1
         }
       },
       "required": [
@@ -830,7 +831,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/__shared#/$defs/schema0"
+              "$ref": "#/$defs/schema0"
             }
           },
           "required": [
@@ -852,7 +853,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/__shared#/$defs/schema1"
+              "$ref": "#/$defs/schema1"
             }
           },
           "required": [
@@ -881,7 +882,7 @@
               ]
             },
             "result": {
-              "$ref": "#/$defs/__shared#/$defs/schema2"
+              "$ref": "#/$defs/schema2"
             }
           },
           "required": [
@@ -929,7 +930,7 @@
                   "type": "string"
                 },
                 "data": {
-                  "$ref": "#/$defs/__shared#/$defs/schema3"
+                  "$ref": "#/$defs/schema3"
                 }
               },
               "required": [
@@ -1125,7 +1126,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/__shared#/$defs/schema4"
+            "$ref": "#/$defs/schema4"
           }
         },
         "ownsUnprefixedModelRefs": {
@@ -1208,7 +1209,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/__shared#/$defs/schema5"
+                "$ref": "#/$defs/schema5"
               }
             }
           },
@@ -1243,7 +1244,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/__shared#/$defs/schema5"
+            "$ref": "#/$defs/schema5"
           }
         },
         "assistantConfig": {
@@ -1252,7 +1253,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/__shared#/$defs/schema5"
+            "$ref": "#/$defs/schema5"
           }
         },
         "execContext": {
@@ -1536,7 +1537,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/__shared#/$defs/schema5"
+            "$ref": "#/$defs/schema5"
           }
         }
       }
@@ -1667,7 +1668,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/__shared#/$defs/schema5"
+            "$ref": "#/$defs/schema5"
           }
         },
         "cwd": {
@@ -1687,195 +1688,191 @@
         }
       }
     },
-    "__shared": {
-      "$defs": {
-        "schema0": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/__shared#/$defs/schema0"
-              }
-            },
-            {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "$ref": "#/$defs/__shared#/$defs/schema0"
-              }
-            }
-          ]
+    "schema0": {
+      "anyOf": [
+        {
+          "type": "string"
         },
-        "schema1": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/__shared#/$defs/schema1"
-              }
-            },
-            {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "$ref": "#/$defs/__shared#/$defs/schema1"
-              }
-            }
-          ]
+        {
+          "type": "number"
         },
-        "schema2": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/__shared#/$defs/schema2"
-              }
-            },
-            {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "$ref": "#/$defs/__shared#/$defs/schema2"
-              }
-            }
-          ]
+        {
+          "type": "boolean"
         },
-        "schema3": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/__shared#/$defs/schema3"
-              }
-            },
-            {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "$ref": "#/$defs/__shared#/$defs/schema3"
-              }
-            }
-          ]
+        {
+          "type": "null"
         },
-        "schema4": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/__shared#/$defs/schema4"
-              }
-            },
-            {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "$ref": "#/$defs/__shared#/$defs/schema4"
-              }
-            }
-          ]
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema0"
+          }
         },
-        "schema5": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/__shared#/$defs/schema5"
-              }
-            },
-            {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {
-                "$ref": "#/$defs/__shared#/$defs/schema5"
-              }
-            }
-          ]
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema0"
+          }
         }
-      }
+      ]
+    },
+    "schema1": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema1"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema1"
+          }
+        }
+      ]
+    },
+    "schema2": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema2"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema2"
+          }
+        }
+      ]
+    },
+    "schema3": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema3"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema3"
+          }
+        }
+      ]
+    },
+    "schema4": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema4"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema4"
+          }
+        }
+      ]
+    },
+    "schema5": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema5"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema5"
+          }
+        }
+      ]
     }
   }
 }
