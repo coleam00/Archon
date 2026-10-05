@@ -2,9 +2,7 @@
  * Tests for `archon doctor` check functions.
  *
  * Uses spyOn for `@archon/git.execFileAsync` and `globalThis.fetch`.
- * `BUNDLED_IS_BINARY` is a static const re-export and cannot be spied at
- * runtime — `checkClaudeBinary` accepts it as an injectable parameter for
- * testability. Avoids `mock.module()` because it is process-global and
+ * Avoids `mock.module()` because it is process-global and
  * irreversible in Bun, which would pollute other test files in this package.
  */
 import { describe, it, expect, mock, spyOn, afterEach, beforeEach } from 'bun:test';
@@ -55,27 +53,61 @@ spyOn(paths, 'createLogger').mockImplementation(module =>
 );
 
 describe('checkClaudeBinary', () => {
+  let savedPin: string | undefined;
   let execSpy: ReturnType<typeof spyOn<typeof git, 'execFileAsync'>>;
 
   beforeEach(() => {
+    savedPin = process.env.CLAUDE_BIN_PATH;
+    delete process.env.CLAUDE_BIN_PATH;
     execSpy = spyOn(git, 'execFileAsync');
   });
 
   afterEach(() => {
     execSpy.mockRestore();
+    if (savedPin === undefined) delete process.env.CLAUDE_BIN_PATH;
+    else process.env.CLAUDE_BIN_PATH = savedPin;
   });
 
   const noDeps = async (): Promise<ClaudeBinaryDeps> => ({});
 
-  it('returns skip when not in binary mode', async () => {
-    const result = await checkClaudeBinary(false);
+  it('returns skip when the resolver delegates to the SDK', async () => {
+    const result = await checkClaudeBinary(noDeps);
     expect(result.status).toBe('skip');
     expect(result.label).toBe('Claude binary');
+    expect(result.message).toBe('dev mode (SDK resolves via node_modules)');
+    expect(execSpy).not.toHaveBeenCalled();
+  });
+
+  it('checks a config pin in dev mode through the runtime resolver', async () => {
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    const result = await checkClaudeBinary(async () => ({ configBinaryPath: process.execPath }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toBe(`${process.execPath} (via config, spawns OK)`);
+    expect(execSpy).toHaveBeenCalledWith(process.execPath, ['--version'], { timeout: 5000 });
+  });
+
+  it('checks an env pin before an invalid config pin in dev mode', async () => {
+    process.env.CLAUDE_BIN_PATH = process.execPath;
+    execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
+    const result = await checkClaudeBinary(async () => ({
+      configBinaryPath: '/missing/config/claude',
+    }));
+    expect(result.status).toBe('pass');
+    expect(result.message).toBe(`${process.execPath} (via env, spawns OK)`);
+    expect(execSpy).toHaveBeenCalledWith(process.execPath, ['--version'], { timeout: 5000 });
+  });
+
+  it('reports an invalid config pin in dev mode rather than skipping', async () => {
+    const result = await checkClaudeBinary(async () => ({
+      configBinaryPath: '/missing/config/claude',
+    }));
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('assistants.claude.claudeBinaryPath');
     expect(execSpy).not.toHaveBeenCalled();
   });
 
   it('returns fail in binary mode when the whole resolution chain is empty', async () => {
-    const result = await checkClaudeBinary(true, noDeps, async () => {
+    const result = await checkClaudeBinary(noDeps, async () => {
       throw new Error('Claude Code not found. Archon requires the Claude Code executable');
     });
     expect(result.status).toBe('fail');
@@ -87,7 +119,7 @@ describe('checkClaudeBinary', () => {
 
   it('returns pass in binary mode when binary spawns successfully', async () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
+    const result = await checkClaudeBinary(noDeps, async () => ({
       path: '/opt/claude',
       source: 'env',
     }));
@@ -98,7 +130,7 @@ describe('checkClaudeBinary', () => {
 
   it('returns fail in binary mode when spawn throws', async () => {
     execSpy.mockRejectedValue(new Error('ENOENT'));
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
+    const result = await checkClaudeBinary(noDeps, async () => ({
       path: '/opt/claude',
       source: 'env',
     }));
@@ -114,7 +146,6 @@ describe('checkClaudeBinary', () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
     let sawConfigPath: string | undefined;
     const result = await checkClaudeBinary(
-      true,
       async () => ({ configBinaryPath: '/Users/me/bin/claude' }),
       async configPath => {
         sawConfigPath = configPath;
@@ -133,7 +164,7 @@ describe('checkClaudeBinary', () => {
 
   it('reports the autodetect tier when the native installer path resolves', async () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
-    const result = await checkClaudeBinary(true, noDeps, async () => ({
+    const result = await checkClaudeBinary(noDeps, async () => ({
       path: '/home/me/.local/bin/claude',
       source: 'autodetect',
     }));
@@ -144,7 +175,6 @@ describe('checkClaudeBinary', () => {
   it('degrades to env/autodetect when config loading throws', async () => {
     execSpy.mockResolvedValue({ stdout: '1.0.0', stderr: '' });
     const result = await checkClaudeBinary(
-      true,
       async () => {
         throw new Error('malformed config.yaml');
       },
@@ -157,9 +187,7 @@ describe('checkClaudeBinary', () => {
     expect(result.status).toBe('pass');
   });
 
-  // The tests above inject BOTH seams, so they only prove parameter plumbing
-  // inside checkClaudeBinary. The two below exercise the real
-  // defaultLoadClaudeBinaryDeps, which is where #2263 actually lived: reading
+  // The real defaultLoadClaudeBinaryDeps is where #2263 actually lived: reading
   // the wrong config key type-checks and would otherwise ship green.
   // The stub config deliberately carries a DIFFERENT value under
   // assistants.codex.codexBinaryPath so a key mix-up fails loudly rather than
@@ -181,7 +209,6 @@ describe('checkClaudeBinary', () => {
     let sawConfigPath: string | undefined;
 
     const result = await checkClaudeBinary(
-      true,
       // The real loader, not a fake — this is the link the bug broke.
       () => defaultLoadClaudeBinaryDeps(stubConfig),
       async configPath => {
