@@ -12,6 +12,7 @@ import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
   getGitCheckoutIdentity,
+  isWorktreeRegistered,
   fetchWithRefLockRetry,
   findWorktreeByBranch,
   getCanonicalRepoPath,
@@ -1758,30 +1759,31 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Check if a directory exists.
-   * Returns true if directory exists, false if it doesn't exist (ENOENT).
-   * Throws for other errors (permission denied, I/O errors, etc.)
-   */
-  /**
    * Recover from a guarded `worktree remove` that failed.
    *
    * Still registered: drop the release lock so a retry can take it again, and
-   * rethrow. Unregistered: Git dropped its admin entry before failing to delete
-   * every file (a read-only subdirectory does this). No retry can prove that
-   * directory ours again, but it was proven ours under our lock just before the
-   * removal, and Git refuses to add a worktree over a non-empty directory, so
-   * finish deleting it here.
+   * rethrow the removal error. Unregistered: Git dropped its admin entry before
+   * failing to delete every file (a read-only subdirectory does this). No retry
+   * can prove that directory ours again, but it was proven ours under our lock
+   * just before the removal, and Git refuses to add a worktree over a non-empty
+   * directory, so finish deleting it here.
    */
   private async finishFailedRelease(
     repoPath: RepoPath,
     path: WorktreePath,
     removeError: unknown
   ): Promise<void> {
-    const registered = (await listWorktrees(repoPath)).some(
-      worktree => resolve(worktree.path) === resolve(path)
-    );
-    if (registered) {
-      await unlockWorktree(repoPath, path);
+    if (await isWorktreeRegistered(repoPath, path)) {
+      try {
+        await unlockWorktree(repoPath, path);
+      } catch (unlockError) {
+        getLog().error(
+          { err: unlockError, worktreePath: path },
+          'isolation.release_lock_drop_failed'
+        );
+        if (removeError instanceof Error)
+          removeError.message += `; the release lock on ${path} could not be removed: ${(unlockError as Error).message}`;
+      }
       throw removeError;
     }
     try {
@@ -1792,6 +1794,11 @@ export class WorktreeProvider implements IIsolationProvider {
     }
   }
 
+  /**
+   * Check if a directory exists.
+   * Returns true if directory exists, false if it doesn't exist (ENOENT).
+   * Throws for other errors (permission denied, I/O errors, etc.)
+   */
   private async directoryExists(path: string): Promise<boolean> {
     try {
       await access(path);

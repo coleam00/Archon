@@ -5,7 +5,16 @@
  */
 import * as gitModule from '@archon/git';
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { chmod, mkdtemp, mkdir, realpath, writeFile, readFile, rm } from 'node:fs/promises';
+import {
+  chmod,
+  symlink,
+  mkdtemp,
+  mkdir,
+  realpath,
+  writeFile,
+  readFile,
+  rm,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -144,8 +153,36 @@ beforeEach(async () => {
 
 // A test may leave a read-only directory behind; make it removable for cleanup.
 afterEach(async () => {
-  await Bun.spawn(['chmod', '-R', 'u+w', root]).exited;
+  if (existsSync(root)) await Bun.spawn(['chmod', '-R', 'u+w', root]).exited;
 });
+
+/**
+ * Recreate the run's worktree under a symlinked base. Git lists it by its
+ * symlink-resolved path while Archon records the path it asked for.
+ */
+async function useSymlinkedBase(): Promise<void> {
+  await mkdir(join(root, 'real-base'));
+  await symlink(join(root, 'real-base'), join(repo, '.wt-link'));
+  const config = async () => ({
+    baseBranch: toBranchName('main'),
+    remote: 'upstream',
+    path: '.wt-link',
+  });
+  configureIsolation(config);
+  const created = await new WorktreeProvider(config).create({ ...request(), identifier: 'linked' });
+  if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+  expect(created.workingPath).toContain('.wt-link');
+  env = await isolationDb.create({
+    codebase_id: codebaseId,
+    workflow_type: 'task',
+    workflow_id: 'linked',
+    working_path: created.workingPath,
+    branch_name: created.branchName,
+    metadata: { worktree_creation_id: created.metadata.creationId },
+  });
+  run.working_path = created.workingPath;
+  run.metadata = { owned_worktree: { envId: env.id, creationId: created.metadata.creationId } };
+}
 
 describe('owned worktree release', () => {
   test('a removal Git abandons halfway is finished, not left unretryable', async () => {
@@ -160,6 +197,34 @@ describe('owned worktree release', () => {
     expect(existsSync(env.working_path)).toBe(false);
     expect(await status()).toBe('destroyed');
     expect(await git(repo, 'rev-parse', '--verify', env.branch_name)).toBeTruthy();
+  });
+
+  test('under a symlinked base, a failed removal Git still tracks keeps the checkout', async () => {
+    await useSymlinkedBase();
+    const originalExec = gitModule.execFileAsync;
+    const failing = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (file === 'git' && args.includes('worktree') && args.includes('remove'))
+          throw new Error('simulated remove failure');
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      await expect(reclaimRunWorktree(run, store)).rejects.toThrow('simulated remove failure');
+    } finally {
+      failing.mockRestore();
+    }
+    expect(existsSync(join(env.working_path, 'file'))).toBe(true);
+    expect(await status()).toBe('active');
+    expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
+  });
+
+  test('under a symlinked base, a vanished but registered checkout is retained', async () => {
+    await useSymlinkedBase();
+    await git(env.working_path, 'checkout', '--detach', '-q');
+    await rm(env.working_path, { recursive: true });
+    await expect(reclaimRunWorktree(run, store)).rejects.toThrow('still registered');
+    expect(await status()).toBe('active');
   });
 
   test('a removal that fails while still registered can be retried', async () => {

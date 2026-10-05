@@ -1,5 +1,5 @@
-import { readFile, access } from 'fs/promises';
-import { isAbsolute, join, relative, resolve } from 'path';
+import { readFile, access, realpath } from 'fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'path';
 import {
   createLogger,
   getArchonWorkspacesPath,
@@ -551,5 +551,42 @@ export async function verifyWorktreeOwnership(
       `Worktree at ${worktreePath} belongs to a different clone (${worktreeIdentity.commonGitDir}). ` +
         'Remove it from that clone or use a different codebase registration.'
     );
+  }
+}
+
+/**
+ * Whether Git still lists `worktreePath` as a worktree of `repoPath`.
+ *
+ * Unlike listWorktrees, this counts detached worktrees and lets a failed
+ * `git worktree list` throw: a caller deletes files on a `false`. Git prints
+ * symlink-resolved paths, so both sides are compared resolved; a path that no
+ * longer exists resolves through its nearest existing ancestor.
+ */
+export async function isWorktreeRegistered(
+  repoPath: RepoPath,
+  worktreePath: string
+): Promise<boolean> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
+    { timeout: 10000 }
+  );
+  const target = await resolveThroughExistingAncestor(worktreePath);
+  for (const record of stdout.split('\0')) {
+    if (!record.startsWith('worktree ')) continue;
+    const listed = await resolveThroughExistingAncestor(record.slice('worktree '.length));
+    if (listed === target) return true;
+  }
+  return false;
+}
+
+async function resolveThroughExistingAncestor(path: string): Promise<string> {
+  const absolute = resolve(path);
+  try {
+    return await realpath(absolute);
+  } catch (error) {
+    const parent = dirname(absolute);
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || parent === absolute) throw error;
+    return join(await resolveThroughExistingAncestor(parent), basename(absolute));
   }
 }

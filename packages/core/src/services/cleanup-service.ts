@@ -3,7 +3,6 @@
  * Handles removal triggered by events, schedule, or commands
  */
 import { lstat } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { readOwnedWorktree, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   readWorktreeCreationId,
@@ -21,7 +20,7 @@ import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isol
 import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
 import {
   hasUncommittedChanges,
-  execFileAsync,
+  isWorktreeRegistered,
   worktreeExists,
   getDefaultBranch,
   isBranchMerged,
@@ -1065,23 +1064,7 @@ async function reclaimOwnedWorktree(
     }
   };
   if (!(await pathExists())) {
-    const { stdout } = await execFileAsync('git', [
-      '-C',
-      repo,
-      'worktree',
-      'list',
-      '--porcelain',
-      '-z',
-    ]);
-    if (
-      stdout
-        .split('\0')
-        .some(
-          record =>
-            record.startsWith('worktree ') &&
-            resolve(record.slice('worktree '.length)) === resolve(path)
-        )
-    )
+    if (await isWorktreeRegistered(repo, path))
       return refuse('checkout is absent but still registered with Git');
     if (env.status !== 'destroyed') await store.updateStatus(env.id, 'destroyed');
     return { warnings: [] };
