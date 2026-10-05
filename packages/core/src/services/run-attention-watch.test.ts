@@ -1,6 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { RunLiveOwnerWatchResult } from './run-live-owner';
+import type { RunLiveOwnerWatchEvent, RunLiveOwnerWatchResult } from './run-live-owner';
 import type { DbNotificationListener } from '../db/adapters/types';
 
 // ---------------------------------------------------------------------------
@@ -40,15 +40,12 @@ mock.module('@archon/paths', () => ({
 }));
 
 let reachableOwners: Set<string> | null = null;
-const ownerEvents = new Map<
-  string,
-  (event: 'attention' | 'control_handoff' | 'disconnected') => void
->();
+const ownerEvents = new Map<string, (event: RunLiveOwnerWatchEvent) => void>();
 const ownerUnsubscribes: ReturnType<typeof mock>[] = [];
 const mockWatchRunLiveOwner = mock(
   (
     runId: string,
-    onEvent: (event: 'attention' | 'control_handoff' | 'disconnected') => void
+    onEvent: (event: RunLiveOwnerWatchEvent) => void
   ): Promise<RunLiveOwnerWatchResult> => {
     if (reachableOwners !== null && !reachableOwners.has(runId))
       return Promise.resolve({ kind: 'unreachable' });

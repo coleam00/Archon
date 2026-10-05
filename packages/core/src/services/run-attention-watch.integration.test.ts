@@ -103,6 +103,41 @@ describe('attention wait with a real owner endpoint', () => {
     testTimeout(15_000)
   );
 
+  test(
+    'retries pre-handshake disconnects until the explicit deadline',
+    async () => {
+      const run = runningRun();
+      const path = runLiveOwnerPath(run.id);
+      const sockets = new Set<Socket>();
+      let requests = 0;
+      const server = createServer(socket => {
+        sockets.add(socket);
+        socket.on('error', () => undefined);
+        socket.once('close', () => sockets.delete(socket));
+        socket.once('data', () => {
+          requests += 1;
+          socket.end();
+        });
+      });
+      await listen(server, path);
+      try {
+        expect(await waitForRunAttention(run.id, { pollIntervalMs: 5, deadlineMs: 250 })).toEqual({
+          kind: 'deadline',
+          runId: run.id,
+          observedStatus: 'running',
+        });
+        expect(requests).toBeGreaterThanOrEqual(2);
+        expect(run.status).toBe('running');
+      } finally {
+        for (const socket of sockets) socket.destroy();
+        await close(server);
+        rows.delete(run.id);
+        if (process.platform !== 'win32') rmSync(path, { force: true });
+      }
+    },
+    testTimeout(6_000)
+  );
+
   test.each(['missing', 'refused'] as const)('reports owner_lost for a %s endpoint', async kind => {
     if (kind === 'refused' && process.platform === 'win32') return;
     const run = runningRun();
