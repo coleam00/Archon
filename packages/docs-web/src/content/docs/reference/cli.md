@@ -38,6 +38,18 @@ Run AI-powered workflows from your terminal.
 
 Use `archon forge resolve --data <json>` for an explicit remote, `archon forge checks --data <json>` for a qualified PR, and `workitem.view`, `pr.view`, `pr.create`, `pr.edit-body`, `pr.ready` or `comment.upsert` for the rest. Reads return structured observations; writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request carrying authored text with `--data-file <path>` so it stays out of argv. See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack still uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to read and write through the plugin instead.
 
+## Users and roles
+
+`archon user` manages persisted roles as the local operator. It requires no git repository and uses the install's configured database (`DATABASE_URL` for PostgreSQL, otherwise `ARCHON_HOME/archon.db`).
+
+```bash
+archon user list                    # Full ids, roles, display names and platform identities
+archon user role <id> admin         # Designate an admin using a full Archon user id
+archon user role <id> member        # Demote a user
+```
+
+Roles must be `admin` or `member`; unknown ids and invalid roles fail with a non-zero exit code. New users are members, while upgrades preserve existing roles. There is no last-admin restriction because the CLI is the operator. Role-based run-action enforcement ships separately; see [Users and roles](/reference/security/#users-and-roles) for the upgrade policy and Docker commands.
+
 ## Quick Start
 
 ```bash
@@ -564,6 +576,10 @@ archon workflow get <run-id> --json
 archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
 ```
+
+For a paused gate, human-readable output lists its declared decision IDs and optional
+labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
+for each choice. JSON exposes these choices in `metadata.approval.decisions`.
 
 `workflow status`, `workflow runs`, and `workflow get` report two independent facts:
 
@@ -1354,10 +1370,10 @@ existing project's identity and history.
 
 ## Environment
 
-At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads two archon-owned env files with `override: true`. Keys in archon-owned files pass through to AI subprocesses — no allowlist filtering.
+At startup, the CLI removes every key named in the CWD project env files from `process.env`, whatever its value or source, including shell exports and direnv. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`. This prevents project API keys from overriding subscription auth and incurring API billing, and prevents project keys from overriding Archon's environment. It also strips nested Claude Code session markers, then loads Archon-owned env files with `override: true`. Put install credentials such as `GH_TOKEN` in `~/.archon/.env`; those later trusted sources pass through to AI subprocesses. See [target repo env isolation](/reference/security/#target-repo-env-isolation).
 
 On startup, the CLI:
-1. Strips `<cwd>/.env*` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
+1. Strips keys named in `<cwd>/.env`, `.env.local`, `.env.development`, and `.env.production`, plus nested Claude Code session markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
 2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys …` when N > 0 **and** `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug/trace` is set.
 3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Same verbosity gate as step 2.
 4. Auto-enables global Claude auth if no explicit tokens are set.

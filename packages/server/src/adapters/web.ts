@@ -19,6 +19,7 @@ function getLog(): ReturnType<typeof createLogger> {
 
 export class WebAdapter implements IPlatformAdapter {
   readonly capabilities = {
+    canDetachProject: true as const,
     messagePersistence: 'adapter',
     defaultWorkflowDispatch: 'background',
   } as const;
@@ -39,18 +40,19 @@ export class WebAdapter implements IPlatformAdapter {
   ) {}
 
   /**
-   * Register an SSE stream for a conversation.
-   * Closes any existing stream (browser refresh / new tab replaces old).
+   * Dashboard connections coexist; a conversation reconnect replaces its old stream.
    */
   registerStream(conversationId: string, stream: SSEWriter): void {
     this.transport.registerStream(conversationId, stream);
   }
 
   removeStream(conversationId: string, expectedStream?: SSEWriter): void {
-    this.transport.removeStream(conversationId, expectedStream);
-    // Clean up stale tool tracking state on SSE disconnect to prevent
-    // spurious tool_result events on the next message to this conversation.
-    this.runningTools.delete(conversationId);
+    // Clean up stale tool tracking state once the last writer is gone to prevent
+    // spurious tool_result events on the next message to this conversation. A
+    // stale writer leaving while another is live must not wipe live tool state.
+    if (this.transport.removeStream(conversationId, expectedStream)) {
+      this.runningTools.delete(conversationId);
+    }
   }
 
   /**
@@ -104,7 +106,7 @@ export class WebAdapter implements IPlatformAdapter {
     if (chunk.type === 'tool_call') {
       const now = Date.now();
       const name = toolCallDisplayName(chunk);
-      const input = chunk.rawInput ?? {};
+      const input = chunk.rawInput === undefined ? {} : chunk.rawInput;
 
       // Buffer tool call for direct chat persistence (message metadata)
       this.persistence.appendToolCall(conversationId, {

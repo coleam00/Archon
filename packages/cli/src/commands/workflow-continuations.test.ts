@@ -7,6 +7,7 @@ import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { NativeScheduleConfig } from '../triggers/native-schedule';
 function makeTestWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv' },
     id: 'run',
     workflow_name: 'test',
     conversation_id: 'conv',

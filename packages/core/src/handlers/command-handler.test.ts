@@ -8,6 +8,7 @@
  * Instead, we use spyOn for internal modules, which allows spying on specific functions
  * without replacing the entire module in the global cache.
  */
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
@@ -88,6 +89,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
 
 function makeWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-123' },
     id: 'run-123',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-123',
@@ -586,6 +588,13 @@ describe('CommandHandler', () => {
   });
 
   describe('parseCommand', () => {
+    test('parses the exact multiword detach name as one argument', () => {
+      expect(parseCommand('/detach-project "My App"')).toEqual({
+        command: 'detach-project',
+        args: ['My App'],
+      });
+    });
+
     test('should extract command and args from /clone command', () => {
       const result = parseCommand('/clone https://github.com/user/repo');
       expect(result.command).toBe('clone');
@@ -977,7 +986,7 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         // cwd + isolation env go; codebase_id is deliberately absent from the
-        // payload — detaching the project is /setproject none's job.
+        // payload — detaching the project is /detach-project's job.
         expect(mockUpdateConversation).toHaveBeenCalledWith(baseConversation.id, {
           cwd: null,
           isolation_env_id: null,
@@ -1740,7 +1749,7 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('and 5 more');
       });
 
-      test('should pass loadConfig as second argument to discoverWorkflowsWithConfig', async () => {
+      test('passes config loading and the host registry to discovery', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [makeTestWorkflowWithSource({ name: 'test-wf', description: 'Test' })],
           errors: [],
@@ -1748,8 +1757,11 @@ describe('CommandHandler', () => {
 
         await handleCommand(conversationWithCodebase, '/workflow list');
 
-        // Verify loadConfig function is passed as the second argument
-        expect(spyDiscoverWorkflows).toHaveBeenCalledWith(expect.any(String), expect.any(Function));
+        expect(spyDiscoverWorkflows).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.any(Function),
+          providerRegistry
+        );
       });
 
       // #2213 — chat is the surface most non-CLI authors use; a silently
@@ -2102,6 +2114,7 @@ describe('CommandHandler', () => {
         mockListDashboardRuns.mockResolvedValueOnce({
           runs: [
             makeDashboardRun({
+              origin: { conversationId: 'conv-1' },
               id: 'run-abc123',
               workflow_name: 'implement',
               conversation_id: 'conv-1',
@@ -2225,6 +2238,7 @@ describe('CommandHandler', () => {
         mockListDashboardRuns.mockResolvedValueOnce({
           runs: [
             makeDashboardRun({
+              origin: { conversationId: 'conv-1' },
               id: 'run-xyz',
               workflow_name: 'assist',
               conversation_id: 'conv-1',
@@ -2247,6 +2261,7 @@ describe('CommandHandler', () => {
     describe('/workflow resume', () => {
       test('should return workflow dispatch data for failed run resume', async () => {
         const run = makeWorkflowRun({
+          origin: { conversationId: 'conv-1' },
           id: 'run-123',
           workflow_name: 'implement',
           conversation_id: 'conv-1',
@@ -2271,6 +2286,7 @@ describe('CommandHandler', () => {
 
       test('should accept already-failed run without status change', async () => {
         const run = makeWorkflowRun({
+          origin: { conversationId: 'conv-1' },
           id: 'run-456',
           workflow_name: 'plan',
           conversation_id: 'conv-1',
@@ -2293,6 +2309,7 @@ describe('CommandHandler', () => {
 
       test('defers workflow source preparation to the host', async () => {
         const run = makeWorkflowRun({
+          origin: { conversationId: 'conv-1' },
           id: 'run-missing-workflow',
           workflow_name: 'missing-workflow',
           conversation_id: 'conv-1',
@@ -2315,6 +2332,7 @@ describe('CommandHandler', () => {
 
       test('does not inspect live load errors before acknowledging resume', async () => {
         const run = makeWorkflowRun({
+          origin: { conversationId: 'conv-1' },
           id: 'run-bad-workflow',
           workflow_name: 'bad-workflow',
           conversation_id: 'conv-1',
@@ -2344,6 +2362,7 @@ describe('CommandHandler', () => {
       test('should reject resume of non-resumable run', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-1' },
             id: 'run-789',
             workflow_name: 'assist',
             conversation_id: 'conv-1',
@@ -2389,6 +2408,7 @@ describe('CommandHandler', () => {
     describe('/workflow abandon', () => {
       test('should abandon a running run', async () => {
         const run = makeWorkflowRun({
+          origin: { conversationId: 'conv-1' },
           id: 'run-123',
           workflow_name: 'implement',
           conversation_id: 'conv-1',
@@ -2417,6 +2437,7 @@ describe('CommandHandler', () => {
       test('should reject abandon of already-terminal run', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-1' },
             id: 'run-done',
             workflow_name: 'assist',
             conversation_id: 'conv-1',
@@ -2445,6 +2466,7 @@ describe('CommandHandler', () => {
       test('shows the recorded owner facts when no owner answers (#2325)', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-1' },
             id: 'run-123',
             workflow_name: 'implement',
             conversation_id: 'conv-1',
@@ -2464,6 +2486,7 @@ describe('CommandHandler', () => {
       test('fails with the reason and leaves the run when a live owner cannot be stopped', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-1' },
             id: 'run-live',
             workflow_name: 'implement',
             conversation_id: 'conv-1',
@@ -2500,6 +2523,7 @@ describe('CommandHandler', () => {
       test('should handle DB error on abandon gracefully', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-1' },
             id: 'run-err',
             workflow_name: 'implement',
             conversation_id: 'conv-1',
@@ -2915,6 +2939,7 @@ describe('CommandHandler', () => {
       test('routes to interactive_loop branch and stores loop_user_input', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-123',
             workflow_name: 'my-loop-wf',
             conversation_id: 'conv-approve',
@@ -2964,13 +2989,15 @@ describe('CommandHandler', () => {
               step_name: 'refine',
               data: { decision: 'approved', comment: 'Add error handling', iteration: 2 },
             },
-          ]
+          ],
+          undefined
         );
       });
 
       test('creates approval_received event (not node_completed) for interactive_loop', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-456',
             workflow_name: 'loop-wf',
             conversation_id: 'conv-approve',
@@ -3005,6 +3032,7 @@ describe('CommandHandler', () => {
       test('bare approve (no comment) passes undefined through — finalize-eligible (#2074)', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-bare',
             workflow_name: 'loop-wf',
             conversation_id: 'conv-approve',
@@ -3037,13 +3065,15 @@ describe('CommandHandler', () => {
             loop_user_input: 'Approved',
           }),
           // Audit events ride the CAS transaction (#2146); metadata is the focus here.
-          expect.any(Array)
+          expect.any(Array),
+          undefined
         );
       });
 
       test('returns error when run is not paused', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-789',
             workflow_name: 'loop-wf',
             conversation_id: 'conv-approve',
@@ -3081,6 +3111,7 @@ describe('CommandHandler', () => {
     describe('/workflow approve|reject — run continuation', () => {
       function pausedRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
         return makeWorkflowRun({
+          origin: { conversationId: 'conv-approve' },
           id: 'run-gate',
           workflow_name: 'gated-wf',
           conversation_id: 'conv-approve',
@@ -3286,6 +3317,7 @@ describe('CommandHandler', () => {
       test('bare gate with captureResponse but no decisionsAuthored keeps plain-text output (R2 fix — #2707)', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-cap',
             workflow_name: 'capture-wf',
             conversation_id: 'conv-approve',
@@ -3318,6 +3350,7 @@ describe('CommandHandler', () => {
       test('bare gate with no captureResponse set — empty output, unaffected by #2707', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-nocap',
             workflow_name: 'nocapture-wf',
             conversation_id: 'conv-approve',
@@ -3349,6 +3382,7 @@ describe('CommandHandler', () => {
       test('new-mode gate (decisionsAuthored) produces structured output (#2707)', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-new-mode',
             workflow_name: 'new-mode-wf',
             conversation_id: 'conv-approve',
@@ -3384,6 +3418,7 @@ describe('CommandHandler', () => {
       test('/workflow respond resolves a declared non-default decision (#2707 step 2)', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-respond',
             workflow_name: 'respond-wf',
             conversation_id: 'conv-approve',
@@ -3419,6 +3454,7 @@ describe('CommandHandler', () => {
       test('/workflow respond approve delegates to the exact approve resolution', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-respond-approve',
             workflow_name: 'respond-wf',
             conversation_id: 'conv-approve',
@@ -3453,6 +3489,7 @@ describe('CommandHandler', () => {
       test('/workflow respond rejects a decision the gate does not declare', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-respond-invalid',
             workflow_name: 'respond-wf',
             conversation_id: 'conv-approve',
@@ -3486,6 +3523,7 @@ describe('CommandHandler', () => {
       test('legacy on_reject-configured gate keeps plain text output, unaffected by #2707', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-legacy-cap',
             workflow_name: 'legacy-capture-wf',
             conversation_id: 'conv-approve',
@@ -3523,6 +3561,7 @@ describe('CommandHandler', () => {
       test('records rejection and increments count when on_reject configured', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-reject-1',
             workflow_name: 'review-wf',
             conversation_id: 'conv-approve',
@@ -3573,13 +3612,15 @@ describe('CommandHandler', () => {
               step_name: 'review',
               data: { decision: 'rejected', reason: 'needs work' },
             },
-          ]
+          ],
+          undefined
         );
       });
 
       test('cancels when max attempts reached', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-reject-max',
             workflow_name: 'review-wf',
             conversation_id: 'conv-approve',
@@ -3618,7 +3659,8 @@ describe('CommandHandler', () => {
               data: { decision: 'rejected', reason: 'bad' },
             },
           ],
-          { step_name: 'review', reason: 'approval_rejected' }
+          { step_name: 'review', reason: 'approval_rejected' },
+          undefined
         );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
@@ -3626,6 +3668,7 @@ describe('CommandHandler', () => {
       test('cancels immediately without on_reject', async () => {
         mockGetWorkflowRun.mockResolvedValueOnce(
           makeWorkflowRun({
+            origin: { conversationId: 'conv-approve' },
             id: 'run-reject-plain',
             workflow_name: 'plain-wf',
             conversation_id: 'conv-approve',
@@ -3660,7 +3703,8 @@ describe('CommandHandler', () => {
               data: { decision: 'rejected', reason: 'reason' },
             },
           ],
-          { step_name: 'gate', reason: 'approval_rejected' }
+          { step_name: 'gate', reason: 'approval_rejected' },
+          undefined
         );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });

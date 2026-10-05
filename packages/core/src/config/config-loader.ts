@@ -45,8 +45,6 @@ import {
   getRegisteredProviders,
   getRegistration,
   InvalidProviderRunConfigError,
-  registerBuiltinProviders,
-  registerCommunityProviders,
 } from '@archon/providers';
 import { buildAiProfile, TIER_NAMES } from '@archon/workflows/model-validation';
 import type { RawAliasEntry, TierName } from '@archon/workflows/model-validation';
@@ -68,23 +66,7 @@ export type TiersPatch = Partial<Record<TierName, RawAliasEntry | null>>;
  */
 export type AliasesPatch = Record<string, RawAliasEntry | null>;
 
-/**
- * Populate the provider registry. Idempotent, and called from every config
- * entrypoint because each one validates `assistants.*` against the registry —
- * a loader reached directly (not through `loadConfig`) would otherwise see an
- * empty registry and skip every provider.
- */
-function ensureProvidersRegistered(): void {
-  registerBuiltinProviders();
-  registerCommunityProviders();
-}
-
-/**
- * Pure read of registered provider IDs. Registration is guaranteed by
- * `ensureProvidersRegistered()` at each config entrypoint, so this helper must
- * NOT trigger side-effecting registration itself — that hid the ordering
- * coupling and surprised readers.
- */
+/** The host registers providers before loading configuration. */
 function getRegisteredProviderNames(): string[] {
   return getRegisteredProviders().map(p => p.id);
 }
@@ -433,7 +415,6 @@ export async function loadGlobalConfig(forceReload = false): Promise<GlobalConfi
     return cachedGlobalConfig;
   }
 
-  ensureProvidersRegistered();
   const configPath = getArchonConfigPath();
   const parsed = await readGlobalConfigOrDegrade(configPath);
   validateAssistantDefaults(parsed, configPath);
@@ -504,7 +485,6 @@ async function readRepoConfigOrDegrade(configPath: string): Promise<RepoConfig> 
  * other failure degrades to defaults.
  */
 export async function loadRepoConfig(repoPath: string): Promise<RepoConfig> {
-  ensureProvidersRegistered();
   const configPath = join(repoPath, '.archon', 'config.yaml');
   const parsed = await readRepoConfigOrDegrade(configPath);
   validateAssistantDefaults(parsed, configPath);
@@ -777,8 +757,6 @@ function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedConfig {
  * @returns Merged configuration with all overrides applied
  */
 export async function loadConfig(repoPath?: string): Promise<MergedConfig> {
-  ensureProvidersRegistered();
-
   // 1. Start with defaults
   let config = getDefaults();
 
@@ -887,7 +865,6 @@ export async function updateGlobalConfig(
   const configPath = getArchonConfigPath();
 
   try {
-    ensureProvidersRegistered();
     const current = await readGlobalConfigForUpdate(configPath);
 
     // Deep-merge: only overwrite defined keys

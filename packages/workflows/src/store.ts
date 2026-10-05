@@ -1,3 +1,4 @@
+import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
@@ -302,18 +303,28 @@ export interface IWorkflowRunNodeSessionStore {
   }): Promise<void>;
 }
 
+/** Only a zero-row pause CAS produces this error; storage failures must propagate. */
+export class WorkflowRunPauseConflictError extends Error {
+  constructor(runId: string) {
+    super(`Workflow run not found or not in running state (id: ${runId})`);
+    this.name = 'WorkflowRunPauseConflictError';
+  }
+}
+
 export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionStore {
   /** Resolve an open paused gate and commit its audit events atomically; a CAS loser writes nothing. */
   resolveApprovalGate(
     id: string,
     metadata: Record<string, unknown>,
-    events: GateResolutionEvent[]
+    events: GateResolutionEvent[],
+    expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
   /** Resolve, cancel and commit gate plus terminal events atomically; reports telemetry after a winning commit. */
   resolveAndCancelApprovalGate(
     id: string,
     events: GateResolutionEvent[],
-    cancellation: WorkflowCancellationEventDetails
+    cancellation: WorkflowCancellationEventDetails,
+    expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
   /** Atomically cancel conversation-scoped resumable runs and their descendants; return only winning rows. */
   cancelResumableRunsForConversation(conversationId: string): Promise<WorkflowRun[]>;
@@ -334,14 +345,11 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     id?: string;
     workflow_name: string;
-    conversation_id: string;
+    origin?: import('./schemas/workflow-run').WorkflowRunOrigin;
     codebase_id?: string;
     user_message: string;
     metadata?: Record<string, unknown>;
     working_path?: string;
-    parent_conversation_id?: string;
-    /** Archon user UUID; populated via ExecuteWorkflowOptions.userId. */
-    user_id?: string;
     /**
      * Run-tree parent (#2121 Phase 2). Set for a `workflow:` sub-run so its row
      * links back to the spawning parent run; omitted for top-level runs.
@@ -450,12 +458,14 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
    * container write-back gate's `pending_writeback` marker) so there is never a
-   * paused-without-marker window.
+   * paused-without-marker window. The optional suspension is committed with the
+   * pause so a decision cannot be followed by a stale node_suspended row.
    */
   pauseWorkflowRun(
     id: string,
     approvalContext: ApprovalContext,
-    extraMetadata?: Record<string, unknown>
+    extraMetadata?: Record<string, unknown>,
+    suspension?: NodeStateEventInput
   ): Promise<void>;
   /** Pause a running run and record its engine-owned wait start atomically. */
   pauseWorkflowRunForWait(
@@ -483,25 +493,12 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowWaitContext,
     completion: WorkflowWaitCompletion
   ): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }>;
-  /**
-   * Rewrite the approval context of an ALREADY-paused, still-open gate — unlike
-   * `pauseWorkflowRun`, which requires the run to currently be `'running'` and so
-   * cannot be used once a pause has already landed. CAS-guarded on the gate still
-   * being unresolved: a human who resolves the gate first wins the race, and this
-   * returns `resolved: false` instead of clobbering their resolution.
-   *
-   * Built for #2707 step 3's pause escalation: a `loop_group` body gate pauses
-   * generically (via `pauseWorkflowRun`, `nodeId` = the gate's own bare id), and
-   * this then rewrites `nodeId` to the enclosing loop_group's id (so the
-   * top-level DAG's resume walk finds it) and adds `bodyGateId` (the gate's
-   * original id, otherwise lost). Pass the COMPLETE rewritten `ApprovalContext`,
-   * not a partial one — the write merges into stored metadata, and an omitted
-   * field can survive from the prior context on one dialect and not the other.
-   */
-  rewriteApprovalContext(
+  /** Fail only this still-unresolved gate when its required prompt cannot be delivered. */
+  failPausedApproval(
     id: string,
-    approvalContext: ApprovalContext
-  ): Promise<{ resolved: boolean }>;
+    approvalContext: ApprovalContext,
+    error: string
+  ): Promise<{ failed: boolean }>;
 
   /**
    * Atomically CLAIM the container write-back apply before the live root is mutated

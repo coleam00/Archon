@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import {
   prepareRunAiConfiguration,
@@ -402,6 +403,7 @@ async function dispatchBackgroundWorkflowOwned(
         const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
           preflightCwd,
           loadConfig,
+          providerRegistry,
           preparedSource.roots
         );
         const reResolved = resolveWorkflowName(
@@ -603,7 +605,11 @@ async function dispatchBackgroundWorkflowOwned(
       // The id its already-written source capture is filed under.
       id: preparedSource.runId,
       workflow_name: workflow.name,
-      conversation_id: workerConv.id,
+      origin: {
+        conversationId: workerConv.id,
+        parentConversationId: ctx.conversationDbId,
+        userId: ctx.userId,
+      },
       codebase_id: ctx.codebaseId,
       user_message: ctx.originalMessage,
       working_path: workerCwd,
@@ -624,8 +630,6 @@ async function dispatchBackgroundWorkflowOwned(
             }
           : {}),
       },
-      parent_conversation_id: ctx.conversationDbId,
-      user_id: ctx.userId,
       ...(ctx.adoptRunId || ctx.supersedesRunId
         ? { adopted_from_run_id: ctx.adoptRunId ?? ctx.supersedesRunId }
         : {}),
@@ -660,14 +664,16 @@ async function dispatchBackgroundWorkflowOwned(
           cwd: workerCwd,
           workflow,
           userMessage: ctx.originalMessage,
-          conversationDbId: workerConv.id,
+          origin: {
+            conversationId: workerConv.id,
+            parentConversationId: ctx.conversationDbId,
+            userId: ctx.userId,
+          },
           options: {
             codebaseId: ctx.codebaseId,
             issueContext: ctx.issueContext,
             isolationContext,
-            parentConversationId: ctx.conversationDbId,
             preCreatedRun,
-            userId: ctx.userId,
             source: ctx.source,
             parseWarnings: ctx.parseWarnings,
             baseBranch: codebaseBaseBranch,

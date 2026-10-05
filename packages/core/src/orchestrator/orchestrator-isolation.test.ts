@@ -1,3 +1,8 @@
+import {
+  providerRegistry,
+  registerBuiltinProviders,
+  registerCommunityProviders,
+} from '@archon/providers';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
     _repo: string,
@@ -116,7 +121,11 @@ mock.module('../handlers/command-handler', () => ({
   })),
 }));
 
+registerBuiltinProviders();
+registerCommunityProviders();
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
   isRegisteredProvider: () => true,
   getRegistration: () => ({
     parseConfig: (raw: Record<string, unknown>) => raw,
@@ -132,6 +141,7 @@ mock.module('@archon/providers', () => ({
 const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
   runLiveOwnerCalls.push('create');
   return Promise.resolve({
+    origin: { conversationId: 'worker-conv-1', parentConversationId: 'parent-conv' },
     id: 'run-1',
     workflow_name: 'bg-workflow',
     conversation_id: 'worker-conv-1',
@@ -155,6 +165,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() => Promise.resolve());
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
+    providers: providerRegistry,
     store: {
       createWorkflowRun: mockCreateWorkflowRun,
       failWorkflowRun: mockFailWorkflowRun,

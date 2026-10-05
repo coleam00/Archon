@@ -2,6 +2,7 @@
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+import { providerRegistry } from '@archon/providers';
 
 import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';
@@ -9,6 +10,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
+import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
@@ -148,7 +150,7 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
     const absolutePath = join(dir, filename);
     try {
       const content = await readFile(absolutePath, 'utf-8');
-      const parsed = parseWorkflow(content, filename);
+      const parsed = parseWorkflow(content, filename, providerRegistry);
       if (parsed.workflow !== null && !acceptedNames.has(parsed.workflow.name)) continue;
       return { absolutePath, filename, packaged: false, parsed, content };
     } catch (error) {
@@ -234,7 +236,7 @@ async function findPackagedWorkflowAt(
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
       }
-      const parsed = parseWorkflow(content, yamlFilename);
+      const parsed = parseWorkflow(content, yamlFilename, providerRegistry);
       const yamlStem = yamlFilename.replace(/\.ya?ml$/, '');
       const isMalformedTarget =
         parsed.workflow === null && (yamlStem === name || workflowFolder === name);
@@ -274,7 +276,7 @@ function findBundledWorkflow(
   const direct = BUNDLED_WORKFLOWS[name];
   if (direct !== undefined) {
     const filename = `${name}.yaml`;
-    const parsed = parseWorkflow(direct, filename);
+    const parsed = parseWorkflow(direct, filename, providerRegistry);
     if (parsed.error !== null || parsed.workflow?.name === name) {
       return { filename, parsed, content: direct };
     }
@@ -288,7 +290,7 @@ function findBundledWorkflow(
   for (const [filenameStem, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     if (filenameStem === name) continue;
     const filename = `${filenameStem}.yaml`;
-    const parsed = parseWorkflow(content, filename);
+    const parsed = parseWorkflow(content, filename, providerRegistry);
     if (parsed.workflow?.name !== name) continue;
     if (match !== null) throw new Error(`Multiple bundled workflows declare the name '${name}'`);
     match = { filename, parsed, content };
@@ -2167,7 +2169,7 @@ export function registerApiRoutes(
         .join(', ')}`;
     }
     if (entry.effort !== undefined) {
-      const validEfforts = validEffortsForProvider(entry.provider);
+      const validEfforts = validEffortsForProvider(providerRegistry, entry.provider);
       if (validEfforts === null) {
         return `Provider '${entry.provider}' does not support effort (${label}).`;
       }
@@ -3051,20 +3053,20 @@ export function registerApiRoutes(
     return c.json(result);
   });
 
-  // GET /api/stream/__dashboard__ — multiplexed dashboard SSE (all workflow events)
+  // GET /api/stream/__dashboard__ — dashboard SSE (workflow lifecycle events)
   // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
-  app.get('/api/stream/__dashboard__', async c => {
+  app.get(`/api/stream/${DASHBOARD_STREAM}`, async c => {
     return streamSSE(c, async stream => {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
 
-      webAdapter.registerStream('__dashboard__', stream);
-      getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_opened');
+      webAdapter.registerStream(DASHBOARD_STREAM, stream);
+      getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_opened');
 
       stream.onAbort(() => {
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_disconnected');
-        webAdapter.removeStream('__dashboard__', stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_disconnected');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
       });
 
       try {
@@ -3082,8 +3084,8 @@ export function registerApiRoutes(
           getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
         }
       } finally {
-        webAdapter.removeStream('__dashboard__', stream);
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_closed');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_closed');
       }
     });
   });
@@ -3389,7 +3391,11 @@ export function registerApiRoutes(
       // pass null to discovery so it returns bundled + home-scoped workflows.
       // This avoids a misleading empty state on first run, before any project
       // is registered, when bundled defaults are present
-      const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+      const result = await discoverWorkflowsWithConfig(
+        workingDir ?? null,
+        loadConfig,
+        providerRegistry
+      );
 
       // Resolve repo-owner-curated recommended list (per-project only).
       // Filter to names present in the discovered set; preserve declared order.
@@ -4162,23 +4168,7 @@ export function registerApiRoutes(
       if (respondBlocker) {
         return c.json(respondBlocker, 400);
       }
-      const rawBody = await c.req.text();
-      let body: { decision?: string; text?: string } = {};
-      if (rawBody.trim().length > 0) {
-        try {
-          body = JSON.parse(rawBody) as { decision?: string; text?: string };
-        } catch (parseError) {
-          getLog().warn({ err: parseError, runId }, 'api.respond_body_parse_failed');
-          return apiError(
-            c,
-            400,
-            'Request body is not valid JSON — send {"decision": "...", "text": "..."}'
-          );
-        }
-      }
-      if (!body.decision) {
-        return apiError(c, 400, 'Request body must include a non-empty "decision"');
-      }
+      const body = getValidatedBody(c, respondWorkflowRunBodySchema);
       const decision = body.decision;
 
       // Pre-validate a non-default decision so an undeclared id is a 400 naming the
@@ -4200,7 +4190,7 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text);
+      const result = await respondToWorkflow(runId, decision, text, body.expectedGate);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({
@@ -4443,7 +4433,7 @@ export function registerApiRoutes(
     }
 
     try {
-      const result = parseWorkflow(yamlContent, 'validate-input.yaml');
+      const result = parseWorkflow(yamlContent, 'validate-input.yaml', providerRegistry);
 
       if (result.error) {
         return c.json({ valid: false, errors: [result.error.error] });
@@ -4480,7 +4470,11 @@ export function registerApiRoutes(
       // CLI and chat use for a qualified name. Any other name, including a legacy file
       // whose name contains `:`, continues to the file lookups below.
       if (name.includes(':')) {
-        const { workflows } = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+        const { workflows } = await discoverWorkflowsWithConfig(
+          workingDir ?? null,
+          loadConfig,
+          providerRegistry
+        );
         const hit = resolveWorkflowName(
           name,
           workflows.filter(entry => entry.source === 'installed').map(entry => entry.workflow)
@@ -4648,7 +4642,7 @@ export function registerApiRoutes(
         return apiError(c, 400, 'Failed to serialize workflow definition');
       }
 
-      const parsed = parseWorkflow(yamlContent, `${name}.yaml`);
+      const parsed = parseWorkflow(yamlContent, `${name}.yaml`, providerRegistry);
       if (parsed.error) {
         return apiError(c, 400, 'Workflow definition is invalid', parsed.error.error);
       }
@@ -5250,7 +5244,7 @@ export function registerApiRoutes(
     const lockActiveSet = new Set(stats.activeConversationIds);
     const backgroundConversationIds = runningWorkflowRows
       .map(r => r.conversation_id)
-      .filter(id => !lockActiveSet.has(id));
+      .filter((id): id is string => id !== null && !lockActiveSet.has(id));
     const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 

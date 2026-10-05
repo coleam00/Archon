@@ -6,6 +6,7 @@ import { toBranchName } from '@archon/git';
 import { HeadlessPlatform } from './headless-platform';
 
 const run: WorkflowRun = {
+  origin: { conversationId: 'conv' },
   id: 'run',
   workflow_name: 'deliver',
   conversation_id: 'conv',
@@ -81,7 +82,7 @@ for (const choice of [null, '', ' release ']) {
     };
     await resumeWorkflowContinuation(engine, run.id, async () => ({
       kind: 'ready',
-      platform: new HeadlessPlatform('conv'),
+      platform: new HeadlessPlatform(),
       conversationId: 'conv',
     }));
     expect(captured?.options?.baseBranch).toBe(choice?.trim() || undefined);

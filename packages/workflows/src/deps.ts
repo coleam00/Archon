@@ -1,4 +1,3 @@
-import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * Workflow dependency injection types.
  *
@@ -7,6 +6,7 @@ import type { CredentialStatus } from '@archon/provider-contract';
  *
  * Provider types are imported directly from @archon/provider-contract.
  */
+import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
 import type { IWorkflowStore } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type {
@@ -165,6 +165,7 @@ export type AgentProviderFactory = (provider: string) => IAgentProvider;
 // ---------------------------------------------------------------------------
 
 export interface WorkflowDeps {
+  providers: ProviderRegistry;
   store: IWorkflowStore;
   getAgentProvider: AgentProviderFactory;
   loadConfig: (cwd: string) => Promise<WorkflowConfig>;

@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 mock.module('@archon/core/services/provider-admission', () => ({
   getAgentProvider: () => ({
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
@@ -578,16 +579,21 @@ mock.module('@archon/core/db/messages', () => ({
  * The row a `--detach` parent writes before forking (#2872). Only `id` is read by the
  * launch path; the child hands the whole row to `executeWorkflow` as `preCreatedRun`.
  */
-const mockCreateWorkflowRun = mock((data: { workflow_name: string; conversation_id: string }) =>
-  Promise.resolve({
-    id: 'run-detached-created',
-    workflow_name: data.workflow_name,
-    conversation_id: data.conversation_id,
-    status: 'pending',
-    working_path: null,
-    started_at: new Date(),
-    metadata: {},
-  })
+const mockCreateWorkflowRun = mock(
+  (data: {
+    workflow_name: string;
+    origin?: import('@archon/workflows/schemas/workflow-run').WorkflowRunOrigin;
+  }) =>
+    Promise.resolve({
+      origin: data.origin ?? null,
+      id: 'run-detached-created',
+      workflow_name: data.workflow_name,
+      conversation_id: data.origin?.conversationId ?? null,
+      status: 'pending',
+      working_path: null,
+      started_at: new Date(),
+      metadata: {},
+    })
 );
 
 const EMPTY_STATUS_COUNTS = {
@@ -1262,7 +1268,11 @@ describe('workflowListCommand', () => {
 
     // After the globalSearchPath refactor, discovery reads ~/.archon/workflows/
     // on every call with no option — every caller inherits home-scope for free.
-    expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith('/test/path', expect.any(Function));
+    expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith(
+      '/test/path',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should throw error when discoverWorkflows fails', async () => {
@@ -2747,6 +2757,7 @@ describe('workflowRunCommand', () => {
     expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/path',
       expect.any(Function),
+      providerRegistry,
       expect.objectContaining({ project: '/test/capture/project' })
     );
     expect(consoleSpy).toHaveBeenCalledWith(
@@ -6270,6 +6281,58 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(0);
   });
 
+  it('prints declared decisions and exact respond commands for a paused gate', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-choices',
+      checkout_baseline: null,
+      workflow_name: 'review',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          type: 'approval',
+          message: 'Choose',
+          decisions: [
+            { id: 'approve', label: 'Ship it' },
+            { id: 'revise', label: 'Try again' },
+            { id: 'cancel' },
+          ],
+        },
+      },
+    });
+    await workflowGetCommand('run-choices');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    Try again (revise): archon workflow respond run-choices revise [text]'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    cancel: archon workflow respond run-choices cancel [text]'
+    );
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('respond run-choices reject');
+  });
+
+  it('lists the default vocabulary for a legacy paused gate', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-legacy',
+      checkout_baseline: null,
+      workflow_name: 'review',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: { approval: { nodeId: 'review', message: 'Choose' } },
+    });
+    await workflowGetCommand('run-legacy');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    approve: archon workflow respond run-legacy approve [text]'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    reject: archon workflow respond run-legacy reject [text]'
+    );
+  });
+
   it('prints aggregate completion-condition state for a paused interactive_loop run (#2074 E)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -6512,6 +6575,7 @@ describe('workflowLogsCommand', () => {
   let previousHome: string | undefined;
 
   const run = (status: 'pending' | 'running' | 'paused' | 'completed' | 'failed') => ({
+    origin: { conversationId: 'conv-1' },
     id: '11111111-2222-3333-4444-555555555555',
     workflow_name: 'transcript-test',
     conversation_id: 'conv-1',
@@ -6782,6 +6846,12 @@ describe('workflowLogsCommand', () => {
         name: 'Bash',
         rawInput: { command: 'git status' },
       }),
+      event('plan', 'a1', {
+        type: 'tool_call',
+        toolCallId: 'c2',
+        name: 'flag',
+        rawInput: false,
+      }),
       // The other node reuses the call id; its outcome must not take plan's tool name.
       event('lint', 'a2', {
         type: 'tool_call',
@@ -6869,6 +6939,7 @@ describe('workflowLogsCommand', () => {
         '',
         '  Then planning.',
         '  tool: Bash git status',
+        '  tool: flag false',
         '[lint]',
         '  tool: /bin/zsh -lc "bun run lint"',
         '[plan]',
@@ -7137,6 +7208,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       { id: FULL_ID },
     ]);
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: FULL_ID,
       workflow_name: 'implement',
       status: 'paused',
@@ -7164,6 +7236,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       { id: FULL_ID },
     ]);
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: FULL_ID,
       workflow_name: 'implement',
       status: 'paused',
@@ -7823,6 +7896,7 @@ describe('write command --json output', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const discovery = await import('@archon/workflows/workflow-discovery');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: 'run-ap',
       workflow_name: 'implement',
       status: 'paused',
@@ -7853,6 +7927,7 @@ describe('write command --json output', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const discovery = await import('@archon/workflows/workflow-discovery');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: 'run-rj',
       workflow_name: 'implement',
       status: 'paused',
@@ -8736,6 +8811,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
   let consoleSpy: ReturnType<typeof spyOn>;
 
   const preCreatedRow = {
+    origin: { conversationId: 'conv-1' },
     id: 'run-precreated',
     workflow_name: 'plan',
     conversation_id: 'conv-1',
@@ -9109,6 +9185,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
   // the PARENT's cwd (it re-resolves by run-id), because a container run's
   // working_path is unreachable on the host and would ENOENT the spawn.
   const pausedRun = {
+    origin: { conversationId: 'conv-123' },
     id: 'run-123',
     status: 'paused',
     workflow_name: 'assist',
@@ -9930,7 +10007,11 @@ describe('workflowResumeCommand', () => {
       expect.objectContaining({ codebaseId: 'cb-bad' }),
       'cli.workflow_resume_codebase_lookup_failed'
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('fails loudly when codebase row is missing during resume', async () => {
@@ -9954,7 +10035,11 @@ describe('workflowResumeCommand', () => {
     await expect(workflowResumeCommand('run-missing-codebase')).rejects.toThrow(
       "references codebase 'cb-missing', but that codebase no longer exists"
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should discover workflows from codebase.default_cwd, not working_path', async () => {
@@ -9994,7 +10079,8 @@ describe('workflowResumeCommand', () => {
     // path directly — #1663's guarantee, unchanged.
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -10022,7 +10108,11 @@ describe('workflowResumeCommand', () => {
     }
 
     // No codebase → falls back to working_path (preserves existing behavior)
-    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/tmp/old-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('resolves a resumed worktree through its Git-proven source checkout (#2127)', async () => {
@@ -10197,7 +10287,11 @@ describe('workflowApproveCommand', () => {
     await expect(workflowApproveCommand('run-approve-missing-codebase')).rejects.toThrow(
       "Approved but failed to resume workflow 'implement': Workflow run 'run-approve-missing-codebase' references codebase 'cb-missing', but that codebase no longer exists"
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('fails with recorded-approval recovery when getCodebase throws during approve auto-resume', async () => {
@@ -10240,7 +10334,11 @@ describe('workflowApproveCommand', () => {
       expect.objectContaining({ runId: 'run-approve-codebase-error' }),
       'cli.workflow_approve_resume_failed'
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should pass original platform conversation ID through to workflowRunCommand', async () => {
@@ -10250,6 +10348,7 @@ describe('workflowApproveCommand', () => {
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'db-uuid-original' },
       id: 'run-approve-conv',
       workflow_name: 'implement',
       status: 'paused',
@@ -10339,7 +10438,8 @@ describe('workflowApproveCommand', () => {
 
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 });
@@ -10925,7 +11025,8 @@ describe('workflowRejectCommand', () => {
           data: { decision: 'rejected', reason: 'not good' },
         },
       ],
-      { step_name: 'gate', reason: 'approval_rejected' }
+      { step_name: 'gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
@@ -10991,7 +11092,8 @@ describe('workflowRejectCommand', () => {
           step_name: 'gate',
           data: { decision: 'rejected', reason: 'Rejected' },
         },
-      ]
+      ],
+      undefined
     );
   });
 
@@ -11031,7 +11133,8 @@ describe('workflowRejectCommand', () => {
           step_name: 'gate',
           data: expect.objectContaining({ structured_output: structuredOutput }),
         }),
-      ])
+      ]),
+      undefined
     );
     const parsed = JSON.parse(firstJsonPayload(jsonStdoutSpy)) as Record<string, unknown>;
     expect(parsed).toMatchObject({ ok: true, runId: 'run-new-mode-json', action: 'reject' });
@@ -11090,7 +11193,8 @@ describe('workflowRejectCommand', () => {
           step_name: 'gate',
           data: { decision: 'rejected', reason: 'needs work' },
         },
-      ]
+      ],
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected workflow'));
   });
@@ -11101,6 +11205,7 @@ describe('workflowRejectCommand', () => {
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
 
     const runData = {
+      origin: { conversationId: 'db-uuid-reject' },
       id: 'run-reject-conv',
       workflow_name: 'my-wf',
       status: 'paused',
@@ -11193,7 +11298,8 @@ describe('workflowRejectCommand', () => {
           data: { decision: 'rejected', reason: 'still bad' },
         },
       ],
-      { step_name: 'gate', reason: 'approval_rejected' }
+      { step_name: 'gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });
@@ -11273,7 +11379,8 @@ describe('workflowRejectCommand', () => {
     // path directly — #1663's guarantee, unchanged.
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11322,7 +11429,8 @@ describe('workflowRejectCommand', () => {
     );
     expect(discoverSpy).not.toHaveBeenCalledWith(
       '/tmp/worktree-without-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11372,7 +11480,8 @@ describe('workflowRejectCommand', () => {
     );
     expect(discoverSpy).not.toHaveBeenCalledWith(
       '/tmp/worktree-without-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11412,7 +11521,11 @@ describe('workflowRejectCommand', () => {
     }
 
     // No codebase → falls back to working_path (preserves existing behavior)
-    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/tmp/old-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 });
 
@@ -11468,7 +11581,8 @@ describe('workflowRespondCommand', () => {
             structured_output: { decision: 'approve', text: 'looks good' },
           }),
         }),
-      ])
+      ]),
+      undefined
     );
   });
 
@@ -11508,7 +11622,8 @@ describe('workflowRespondCommand', () => {
             structured_output: { decision: 'revise', text: 'needs more detail' },
           }),
         }),
-      ])
+      ]),
+      undefined
     );
   });
 
@@ -12863,7 +12978,8 @@ describe('workflowTestCommand', () => {
     expect(gitModule.findRepoRoot).toHaveBeenCalledWith('/test/repository/tools');
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/repository',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/test/repository', targetCwd: '/test/repository/tools' })
@@ -13517,11 +13633,15 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     );
     mockCreateWorkflowRun.mockReset();
     mockCreateWorkflowRun.mockImplementation(
-      (data: { workflow_name: string; conversation_id: string }) =>
+      (data: {
+        workflow_name: string;
+        origin?: import('@archon/workflows/schemas/workflow-run').WorkflowRunOrigin;
+      }) =>
         Promise.resolve({
+          origin: data.origin ?? null,
           id: 'run-detached-created',
           workflow_name: data.workflow_name,
-          conversation_id: data.conversation_id,
+          conversation_id: data.origin?.conversationId ?? null,
           status: 'pending',
           working_path: null,
           started_at: new Date(),

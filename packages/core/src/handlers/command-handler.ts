@@ -2,6 +2,7 @@
  * Command handler for slash commands
  * Handles deterministic operations without AI
  */
+import { providerRegistry } from '@archon/providers';
 import type { WorkflowOperations } from '../operations/workflow-operations';
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';
@@ -716,7 +717,7 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let errors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         workflowEntries = result.workflows;
         errors = result.errors;
       } catch (error) {
@@ -769,7 +770,7 @@ async function handleWorkflowCommand(
     case 'reload': {
       try {
         const { workflows: reloadedWorkflows, errors: reloadErrors } =
-          await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+          await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         let msg = `Discovered ${String(reloadedWorkflows.length)} workflow(s).`;
         if (reloadErrors.length > 0) {
           msg += `\n\n**${String(reloadErrors.length)} failed to load:**\n`;
@@ -1120,7 +1121,7 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let loadErrors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         workflowEntries = result.workflows;
         loadErrors = result.errors;
       } catch (error) {
@@ -1259,6 +1260,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/update-project <name> <new-path>\` — Update a project's path
 - \`/remove-project <name>\` — Remove a registered project
 - \`/setproject <name>\` — Bind this conversation to a registered project
+- \`/detach-project "<current-project-name>"\` — Make this conversation neutral after resolving its runs and attached environment; keep the project registered
 
 **Session**
 - \`/status\` — Show current session and project info
@@ -1401,7 +1403,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // `codebase_id` is deliberately PRESERVED. The resulting row —
       // {codebase_id: <kept>, cwd: null, isolation_env_id: null} — is byte-for-
       // byte what /setproject already writes, so this is a well-trodden state,
-      // not a novel one. Detaching the project is /setproject none's job.
+      // not a novel one. Detaching the project is /detach-project's job.
       let hadActiveSession = false;
       let sessionError: string | null = null;
       try {
