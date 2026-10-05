@@ -351,7 +351,7 @@ export function classifyClaudeApiError(
       return failure;
     }
     case 'overloaded':
-      return failureOf('rate_limited', evidence);
+      return failureOf('overloaded', evidence);
     case 'server_error':
       return failureOf('transient', evidence);
     case 'invalid_request':

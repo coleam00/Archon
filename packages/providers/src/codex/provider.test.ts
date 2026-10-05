@@ -1128,6 +1128,18 @@ describe('CodexProvider', () => {
             run: turn(failed('rateLimitExceeded', 'slow down')),
           },
           {
+            name: 'capacity',
+            expected: 'overloaded',
+            evidence: 'opaque failure',
+            run: turn(failed('serverOverloaded', 'opaque failure')),
+          },
+          {
+            name: 'internal error with capacity prose',
+            expected: 'transient',
+            evidence: 'at capacity',
+            run: turn(failed('internalServerError', 'Selected model is at capacity')),
+          },
+          {
             name: 'session budget',
             expected: 'budget_exceeded',
             evidence: 'budget',

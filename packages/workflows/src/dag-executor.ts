@@ -208,6 +208,7 @@ import {
   currentAdoptedRunDir,
   getRetryDelayMs,
   RATE_LIMIT_MAX_RETRIES,
+  OVERLOAD_MAX_RETRIES,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -998,6 +999,8 @@ async function runNodeRetryLoop(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent'>,
+  stepName: string,
   retryConfig: { maxRetries: number; delayMs: number; onError: 'transient' | 'all' },
   run: () => Promise<NodeExecutionResult>,
   initialOutput: NodeExecutionResult
@@ -1025,9 +1028,11 @@ async function runNodeRetryLoop(
 
     const retryClass = retryableFailureClass(output, retryConfig.onError);
     if (retryClass === 'rate_limited') sawRateLimit = true;
-    const effectiveMaxRetries = sawRateLimit
-      ? Math.max(retryConfig.maxRetries, RATE_LIMIT_MAX_RETRIES)
-      : retryConfig.maxRetries;
+    const effectiveMaxRetries = Math.max(
+      retryConfig.maxRetries,
+      sawRateLimit ? RATE_LIMIT_MAX_RETRIES : 0,
+      retryClass === 'overloaded' ? OVERLOAD_MAX_RETRIES : 0
+    );
     if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
 
     const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
@@ -1036,13 +1041,19 @@ async function runNodeRetryLoop(
         nodeId: node.id,
         attempt: attempt + 1,
         maxRetries: effectiveMaxRetries,
+        retryClass,
         delayMs,
         error: output.error,
       },
       'dag_node_transient_retry'
     );
 
-    const errorKind = retryClass === 'unknown' ? 'error' : 'transient error';
+    const errorKind =
+      retryClass === 'overloaded'
+        ? 'provider capacity error'
+        : retryClass === 'unknown'
+          ? 'error'
+          : 'transient error';
     await safeSendMessage(
       platform,
       conversationId,
@@ -1050,6 +1061,18 @@ async function runNodeRetryLoop(
       { workflowId: workflowRun.id, nodeName: node.id }
     );
 
+    await store.createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_retry_scheduled',
+      step_name: stepName,
+      data: {
+        nodeId: node.id,
+        retry_class: retryClass,
+        retry_attempt: attempt + 1,
+        max_retries: effectiveMaxRetries,
+        delay_ms: delayMs,
+      },
+    });
     await new Promise(resolve => setTimeout(resolve, delayMs));
     attempt++;
   }
@@ -1072,6 +1095,8 @@ async function runDeterministicNodeWithRetry(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent'>,
+  stepName: string,
   run: () => Promise<NodeExecutionResult>
 ): Promise<NodeExecutionResult> {
   const retryConfig = getExplicitNodeRetryConfig(node);
@@ -1079,11 +1104,21 @@ async function runDeterministicNodeWithRetry(
   if (!retryConfig) {
     return run();
   }
-  return runNodeRetryLoop(node, platform, conversationId, workflowRun, retryConfig, run, {
-    state: 'failed',
-    output: '',
-    error: 'Node did not execute',
-  });
+  return runNodeRetryLoop(
+    node,
+    platform,
+    conversationId,
+    workflowRun,
+    store,
+    stepName,
+    retryConfig,
+    run,
+    {
+      state: 'failed',
+      output: '',
+      error: 'Node did not execute',
+    }
+  );
 }
 
 /**
@@ -5609,11 +5644,18 @@ async function executeLoopNode(
     ): Promise<boolean> => {
       const retryClass = retryClassOf(failure.failureKind);
       if (retryClass === 'rate_limited') iterSawRateLimit = true;
-      if (retryClass !== 'transient' && retryClass !== 'rate_limited') return false;
+      if (
+        retryClass !== 'transient' &&
+        retryClass !== 'rate_limited' &&
+        retryClass !== 'overloaded'
+      )
+        return false;
       const message = failure.error;
-      const maxRetries = iterSawRateLimit
-        ? Math.max(DEFAULT_NODE_MAX_RETRIES, RATE_LIMIT_MAX_RETRIES)
-        : DEFAULT_NODE_MAX_RETRIES;
+      const maxRetries = Math.max(
+        DEFAULT_NODE_MAX_RETRIES,
+        iterSawRateLimit ? RATE_LIMIT_MAX_RETRIES : 0,
+        retryClass === 'overloaded' ? OVERLOAD_MAX_RETRIES : 0
+      );
       if (attempt >= maxRetries) return false;
       const delayMs = getRetryDelayMs(retryClass, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
       getLog().warn(
@@ -5622,6 +5664,7 @@ async function executeLoopNode(
           iteration: i,
           attempt: attempt + 1,
           maxRetries,
+          retryClass,
           delayMs,
           error: message,
         },
@@ -5630,9 +5673,22 @@ async function executeLoopNode(
       await safeSendMessage(
         platform,
         conversationId,
-        `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with a transient error (attempt ${String(attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
+        `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with ${retryClass === 'overloaded' ? 'a provider capacity error' : 'a transient error'} (attempt ${String(attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
         msgContext
       );
+      await deps.store.createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_retry_scheduled',
+        step_name: stepName,
+        data: {
+          nodeId: node.id,
+          iteration: i,
+          retry_class: retryClass,
+          retry_attempt: attempt + 1,
+          max_retries: maxRetries,
+          delay_ms: delayMs,
+        },
+      });
       await new Promise(resolve => setTimeout(resolve, delayMs));
       return true;
     };
@@ -9735,6 +9791,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.platform,
                     ctx.conversationId,
                     ctx.workflowRun,
+                    ctx.deps.store,
+                    ctx.stepNamePrefix + node.id,
                     () =>
                       executeBashNode(
                         ctx,
@@ -9774,6 +9832,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.platform,
                   ctx.conversationId,
                   ctx.workflowRun,
+                  ctx.deps.store,
+                  ctx.stepNamePrefix + node.id,
                   () =>
                     executeScriptNode(
                       ctx,
@@ -10177,6 +10237,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.platform,
               ctx.conversationId,
               ctx.workflowRun,
+              ctx.deps.store,
+              ctx.stepNamePrefix + node.id,
               getEffectiveNodeRetryConfig(node),
               async () => {
                 // Fresh per attempt: an attempt after a transient failure observes

@@ -131,6 +131,7 @@ export const WORKFLOW_EVENT_TYPES = [
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
   ...NODE_STATE_EVENT_TYPES,
+  'node_retry_scheduled',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',

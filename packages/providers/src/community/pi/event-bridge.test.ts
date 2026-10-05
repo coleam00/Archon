@@ -247,6 +247,7 @@ describe('buildResultChunk', () => {
   // and the words are kept as evidence.
   test.each([
     ['429 Too Many Requests: rate limit exceeded'],
+    ['Selected model is at capacity'],
     ['401 Unauthorized: invalid x-api-key'],
     ["400 invalid_request_error: You're out of extra usage"],
   ])('an errored turn "%s" reports an unknown failure with the vendor text', errorMessage => {

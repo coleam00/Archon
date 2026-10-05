@@ -901,6 +901,24 @@ describe('formatSubprocessFailure', () => {
 });
 
 describe('getRetryDelayMs', () => {
+  it('capacity backoff grows to a capped center with jitter', () => {
+    const random = Math.random;
+    try {
+      Math.random = () => 0.5;
+      expect([0, 1, 2, 3, 4].map(i => getRetryDelayMs('overloaded', i, 1))).toEqual([
+        45000, 90000, 180000, 300000, 300000,
+      ]);
+      Math.random = () => 0;
+      expect(getRetryDelayMs('overloaded', 0, 1)).toBe(22500);
+      expect(getRetryDelayMs('overloaded', 9, 1)).toBe(150000);
+      Math.random = () => 1;
+      expect(getRetryDelayMs('overloaded', 0, 1)).toBe(67500);
+      expect(getRetryDelayMs('overloaded', 9, 1)).toBe(450000);
+    } finally {
+      Math.random = random;
+    }
+  });
+
   it('backs off flat + jitter on rate limits, exponential otherwise — #2706', () => {
     for (let i = 0; i < 20; i++) {
       const delay = getRetryDelayMs('rate_limited', i, 3000);
@@ -923,13 +941,14 @@ describe('typed provider failures decide retry — #3520', () => {
       'fatal',
       'fatal',
       'rate_limited',
+      'overloaded',
       'transient',
       'unknown',
     ]);
   });
 
   it('a provider kind is its own retry class; a record without a kind is unknown', () => {
-    for (const kind of ['fatal', 'transient', 'rate_limited', 'unknown'] as const) {
+    for (const kind of ['fatal', 'transient', 'rate_limited', 'overloaded', 'unknown'] as const) {
       expect(retryClassOf(kind)).toBe(kind);
     }
     expect(retryClassOf(undefined)).toBe('unknown');
@@ -944,6 +963,7 @@ describe('typed provider failures decide retry — #3520', () => {
       transient: 'transient',
       unknown: 'unknown',
       rate_limited: 'rate_limited',
+      overloaded: 'overloaded',
       timeout: 'transient',
       exec_failed: 'unknown',
       output_contract: 'unknown',
