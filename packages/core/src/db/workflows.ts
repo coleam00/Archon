@@ -2083,10 +2083,6 @@ function buildDashboardWhereClauses(
   return whereClauses;
 }
 
-/**
- * Returns a SQL fragment to extract and cast an integer from a JSON data column.
- * Handles SQLite (`json_extract`) and PostgreSQL (`->>`/`::INTEGER`) dialects.
- */
 /** The dashboard list query's row: a raw run row plus its joined and counted columns. */
 type DashboardRunRow = WorkflowRunRow &
   Pick<
@@ -2103,6 +2099,10 @@ function toCount(value: number | string | null): number | null {
   return value === null ? null : Number(value);
 }
 
+/**
+ * Returns a SQL fragment to extract and cast an integer from a JSON data column.
+ * Handles SQLite (`json_extract`) and PostgreSQL (`->>`/`::INTEGER`) dialects.
+ */
 function jsonIntExtract(col: string, key: string): string {
   return getDatabaseType() === 'postgresql'
     ? `(${col}->>'${key}')::INTEGER`
