@@ -54,9 +54,9 @@ test('snapshot is an owned credential-free JSON record accepted by every provide
       snapshot.assistants[provider.id]
     );
   }
-  current.assistants.claude.settingSources?.push('project');
+  current.assistants.claude.model = 'changed';
   profile.aliases['@custom']!.model = 'changed';
-  expect(snapshot.assistants.claude?.settingSources).toEqual(['user']);
+  expect(snapshot.assistants.claude).toEqual({ model: 'sonnet' });
   expect(snapshot.baseAiProfile.aliases['@custom']?.model).toBe('opus');
 });
 
@@ -81,7 +81,7 @@ test('absence is legacy; malformed and unsupported snapshots fail without disclo
   }
 });
 
-test('saved omissions remain omissions; only provider-owned process values are refreshed', () => {
+test('saved AI omissions remain omissions while native and process settings refresh', () => {
   const snapshot = createRunAiConfigurationSnapshot(
     { ...config(), assistants: { claude: {}, codex: {}, pi: {} } },
     buildAiProfile('claude'),
@@ -89,6 +89,6 @@ test('saved omissions remain omissions; only provider-owned process values are r
   );
   const current = config();
   restoreRunAiConfigurationDefaults(current, snapshot);
-  expect(current.assistants.claude).toEqual({});
+  expect(current.assistants.claude).toEqual({ settingSources: ['user'] });
   expect(current.assistants.pi).toEqual({ env: { API_KEY: 'secret' }, maxConcurrent: 3 });
 });

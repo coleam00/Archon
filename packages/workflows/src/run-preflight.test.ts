@@ -292,7 +292,7 @@ function savedRun(metadata: Record<string, unknown>): WorkflowRun {
   };
 }
 
-test('continuation retains launch AI values while environment stays live', async () => {
+test('continuation retains launch AI values while native settings and environment stay live', async () => {
   const { deps } = fixture();
   const workflow = makeTestResolvedWorkflow({
     name: 'ai',
@@ -301,8 +301,23 @@ test('continuation retains launch AI values while environment stays live', async
   deps.loadConfig.mockResolvedValue({
     ...config,
     assistants: {
-      claude: { model: 'sonnet', settingSources: ['user'] },
-      codex: {},
+      claude: { model: 'sonnet', settingSources: ['user'], claudeBinaryPath: '/launch/claude' },
+      codex: {
+        model: 'gpt-launch',
+        modelReasoningEffort: 'high',
+        webSearchMode: 'disabled',
+        additionalDirectories: ['/launch/context'],
+        codexBinaryPath: '/launch/codex',
+      },
+      copilot: {
+        model: 'gpt-launch',
+        modelReasoningEffort: 'high',
+        copilotCliPath: '/launch/copilot',
+        configDir: '/launch/home',
+        enableConfigDiscovery: false,
+        useLoggedInUser: false,
+        logLevel: 'error',
+      },
       pi: { model: 'openai/native', env: { TOKEN: 'launch-secret' } },
     },
     tiers: { small: { provider: 'claude', model: 'haiku' } },
@@ -315,7 +330,26 @@ test('continuation retains launch AI values while environment stays live', async
   deps.loadConfig.mockResolvedValue({
     ...config,
     assistant: 'codex',
-    assistants: { claude: {}, codex: { model: 'gpt' }, pi: { env: { TOKEN: 'live-secret' } } },
+    assistants: {
+      claude: { model: 'opus', settingSources: ['project'], claudeBinaryPath: '/live/claude' },
+      codex: {
+        model: 'gpt-live',
+        modelReasoningEffort: 'low',
+        webSearchMode: 'live',
+        additionalDirectories: ['/live/context'],
+        codexBinaryPath: '/live/codex',
+      },
+      copilot: {
+        model: 'gpt-live',
+        modelReasoningEffort: 'low',
+        copilotCliPath: '/live/copilot',
+        configDir: '/live/home',
+        enableConfigDiscovery: true,
+        useLoggedInUser: true,
+        logLevel: 'debug',
+      },
+      pi: { env: { TOKEN: 'live-secret' } },
+    },
     aliases: { '@custom': { provider: 'codex', model: 'gpt' } },
     envVars: { TOKEN: 'live-secret' },
   });
@@ -324,7 +358,37 @@ test('continuation retains launch AI values while environment stays live', async
   });
   expect(resumed.aiProfile).toEqual(launch.aiProfile);
   expect(resumed.scope).toEqual(launch.scope);
-  expect(resumed.config.assistants.claude).toEqual(launch.config.assistants.claude);
+  expect(resumed.config.assistant).toBe('claude');
+  expect(resumed.config.assistants.claude).toEqual({
+    model: 'sonnet',
+    settingSources: ['project'],
+    claudeBinaryPath: '/live/claude',
+  });
+  expect(resumed.config.assistants.codex).toEqual({
+    model: 'gpt-launch',
+    modelReasoningEffort: 'high',
+    webSearchMode: 'live',
+    additionalDirectories: ['/live/context'],
+    codexBinaryPath: '/live/codex',
+  });
+  expect(resumed.config.assistants.copilot).toEqual({
+    model: 'gpt-launch',
+    modelReasoningEffort: 'high',
+    copilotCliPath: '/live/copilot',
+    configDir: '/live/home',
+    enableConfigDiscovery: true,
+    useLoggedInUser: true,
+    logLevel: 'debug',
+  });
+  expect(launch.aiConfigurationSnapshot.assistants.claude).toEqual({ model: 'sonnet' });
+  expect(launch.aiConfigurationSnapshot.assistants.codex).toEqual({
+    model: 'gpt-launch',
+    modelReasoningEffort: 'high',
+  });
+  expect(launch.aiConfigurationSnapshot.assistants.copilot).toEqual({
+    model: 'gpt-launch',
+    modelReasoningEffort: 'high',
+  });
   expect(resumed.config.assistants.pi?.model).toBe('openai/native');
   expect(resumed.config.assistants.pi?.env).toEqual({ TOKEN: 'live-secret' });
   expect(resumed.config.envVars?.TOKEN).toBe('live-secret');

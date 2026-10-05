@@ -309,7 +309,7 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 
 New runs record the resolved assistant, provider defaults, tiers, aliases, and model bindings at launch preparation. Resume and continuation reuse them even after config or user AI preferences change. New child runs inherit the parent's recorded AI base; existing children keep their own record. Detached launches persist this record before spawning the child. Adoption inherits the prior run's recorded AI policy, while supersession prepares fresh policy. Adoption of a recorded run rejects new `--model` bindings and AI fields in `--config`; non-AI fields remain allowed. Older runs without this record keep today's current-config resolution.
 
-Credentials are checked freshly and are excluded from the AI record. Provider-native settings and guidance, process-owned Pi environment and concurrency settings, and non-AI runtime settings remain live. Workflow source selection still controls the graph and scripts separately from this AI policy.
+Credentials are checked freshly and are excluded from the AI record. Provider-native settings and guidance remain live, including Claude setting sources, provider binary paths, Codex search and additional directories, and Copilot config directory, discovery, login selection, and logging. Process-owned Pi environment and concurrency settings and non-AI runtime settings also remain live. Workflow source selection still controls the graph and scripts separately from this AI policy.
 
 A run config is an ordinary YAML file selected explicitly for one invocation. It is useful for reusable choices such as `config.minimax.yaml`, but it is not a registered profile and does not change `.archon/config.yaml`.
 

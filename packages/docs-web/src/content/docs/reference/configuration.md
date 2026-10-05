@@ -57,7 +57,7 @@ New runs record their resolved Archon AI configuration at launch preparation: as
 
 Adoption inherits the recorded AI configuration while the selected workflow still owns its graph and scripts. New model bindings or AI-bearing run config are rejected for this adoption. Supersession prepares fresh AI configuration. Older runs without a recorded configuration keep resolving from current configuration and their existing sparse run overrides.
 
-Credentials are checked and delivered freshly. Credential material, provider-native settings and guidance, and process-owned Pi environment and concurrency settings are not frozen in the AI record. Non-AI runtime settings continue to load through the normal configuration path.
+Credentials are checked and delivered freshly. The AI record excludes credential material and provider-native settings and guidance: Claude setting sources, provider binary paths, Codex search and additional directories, and Copilot config directory, discovery, login selection, and logging remain live. Process-owned Pi environment and concurrency settings are also excluded. Non-AI runtime settings continue to load through the normal configuration path.
 
 The last three layers exist only where their setting has a run-time consumer. Archon-managed GitHub and provider credentials remain protected and are injected after user-authored run environment values.
 

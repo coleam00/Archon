@@ -399,7 +399,10 @@ describe('executeWorkflow', () => {
         const dag = mockExecuteDagWorkflow.mock.calls[0]?.[0];
         expect(dag?.workflowProvider).toBe('codex');
         expect(dag?.workflowModel).toBe('gpt-5.6-sol');
-        expect(dag?.config.assistants.codex).toEqual(launch.config.assistants.codex);
+        expect(dag?.config.assistants.codex).toEqual({
+          model: 'gpt-5.6-sol',
+          webSearchMode: 'live',
+        });
         const stamps = updateRun.mock.calls.flatMap(([, update]) =>
           update.metadata ? [update.metadata] : []
         );

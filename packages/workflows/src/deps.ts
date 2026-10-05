@@ -5,10 +5,11 @@ import type { CredentialStatus } from '@archon/provider-contract';
  * Defines narrow interfaces for what the workflow engine needs from external systems.
  * Callers in @archon/core satisfy these structurally — no adapter wrappers needed.
  *
- * Provider types are imported directly from @archon/provider-contract.
+ * Provider runtime contracts come from @archon/provider-contract; provider defaults
+ * come from their owning definitions in @archon/providers.
  */
 import type { IWorkflowStore } from './store';
-import type { ModelReasoningEffort, WebSearchMode } from './schemas';
+import type { ClaudeProviderDefaults, CodexProviderDefaults } from '@archon/providers/types';
 import type {
   IAgentProvider,
   MessageChunk,
@@ -141,16 +142,8 @@ export interface WorkflowConfig {
   // Claude settingSources, Codex reasoningEffort, etc. without casts.
   // Community providers use the generic [string] index signature.
   assistants: ProviderDefaultsMap & {
-    claude: {
-      model?: string;
-      settingSources?: ('project' | 'user')[];
-    };
-    codex: {
-      model?: string;
-      modelReasoningEffort?: ModelReasoningEffort;
-      webSearchMode?: WebSearchMode;
-      additionalDirectories?: string[];
-    };
+    claude: ClaudeProviderDefaults;
+    codex: CodexProviderDefaults;
   };
 }
 

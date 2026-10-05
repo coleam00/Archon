@@ -7,7 +7,8 @@ export type ProviderDefaults = Record<string, unknown>;
 /**
  * `install` validates global/repository defaults; `run` validates a per-run layer.
  * `snapshot` projects JSON-compatible run defaults without credentials or
- * process-owned settings. Providers own which settings have run-lifetime meaning.
+ * provider-native and process-owned settings. Providers own which settings have
+ * run-lifetime meaning.
  */
 export type ProviderConfigScope = 'install' | 'run' | 'snapshot';
 
