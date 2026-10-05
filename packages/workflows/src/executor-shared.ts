@@ -45,6 +45,18 @@ const OVERLOAD_MAX_DELAY_MS = 300_000;
 /** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
 export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
 
+export function effectiveRetryMaxRetries(
+  configuredMaxRetries: number,
+  retryClass: RetryClass | undefined,
+  sawRateLimit: boolean
+): number {
+  return Math.max(
+    configuredMaxRetries,
+    sawRateLimit ? RATE_LIMIT_MAX_RETRIES : 0,
+    retryClass === 'overloaded' ? OVERLOAD_MAX_RETRIES : 0
+  );
+}
+
 /**
  * Delay before retry attempt N for a failed attempt of this retry class.
  *

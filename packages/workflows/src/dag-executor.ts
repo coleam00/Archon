@@ -207,8 +207,7 @@ import {
   type RetryClass,
   currentAdoptedRunDir,
   getRetryDelayMs,
-  RATE_LIMIT_MAX_RETRIES,
-  OVERLOAD_MAX_RETRIES,
+  effectiveRetryMaxRetries,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -1028,10 +1027,10 @@ async function runNodeRetryLoop(
 
     const retryClass = retryableFailureClass(output, retryConfig.onError);
     if (retryClass === 'rate_limited') sawRateLimit = true;
-    const effectiveMaxRetries = Math.max(
+    const effectiveMaxRetries = effectiveRetryMaxRetries(
       retryConfig.maxRetries,
-      sawRateLimit ? RATE_LIMIT_MAX_RETRIES : 0,
-      retryClass === 'overloaded' ? OVERLOAD_MAX_RETRIES : 0
+      retryClass,
+      sawRateLimit
     );
     if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
 
@@ -5651,10 +5650,10 @@ async function executeLoopNode(
       )
         return false;
       const message = failure.error;
-      const maxRetries = Math.max(
+      const maxRetries = effectiveRetryMaxRetries(
         DEFAULT_NODE_MAX_RETRIES,
-        iterSawRateLimit ? RATE_LIMIT_MAX_RETRIES : 0,
-        retryClass === 'overloaded' ? OVERLOAD_MAX_RETRIES : 0
+        retryClass,
+        iterSawRateLimit
       );
       if (attempt >= maxRetries) return false;
       const delayMs = getRetryDelayMs(retryClass, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
