@@ -14,7 +14,7 @@ $INPUTS.final
 
 ## Match
 
-For each discovery, search the repository's open issues for the same defect — the same broken behavior or missing guard at the same place — using a few searches on its distinctive terms (the file, the function, the symptom). A different wording of the same defect is a match; a different defect in the same file is not. Judge by the claim and the evidence, not the title. When a search fails, move on: declare no match for that discovery.
+For each discovery, search the repository's open issues for the same defect — the same broken behavior or missing guard at the same place — using a few searches on its distinctive terms (the file, the function, the symptom) through the tracker's own search, never a web search (on GitHub, `gh issue list --repo <owner/repo> --state open --search '<terms>'`). A different wording of the same defect is a match; a different defect in the same file is not. Judge by the claim and the evidence, not the title. When a search fails, move on: declare no match for that discovery.
 
 ## Declare
 
