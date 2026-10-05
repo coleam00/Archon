@@ -33,6 +33,7 @@ export {
   verifyWorktreeOwnership,
   isWorktreeRegistered,
   isSameWorktreePath,
+  toNativeWorktreePath,
 } from './worktree';
 export type {
   WorktreeLayout,

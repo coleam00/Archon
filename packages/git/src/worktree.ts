@@ -197,7 +197,7 @@ export async function listWorktrees(repoPath: RepoPath): Promise<WorktreeInfo[]>
 
     for (const line of stdout.split('\n')) {
       if (line.startsWith('worktree ')) {
-        currentPath = line.substring(9);
+        currentPath = toNativeWorktreePath(line.substring(9));
       } else if (line.startsWith('branch ')) {
         const branch = line.substring(7).replace('refs/heads/', '');
         if (currentPath) {
@@ -553,6 +553,21 @@ export async function verifyWorktreeOwnership(
         'Remove it from that clone or use a different codebase registration.'
     );
   }
+}
+
+/**
+ * Convert a path from `git worktree list` to the form Node builds for the same
+ * checkout, which is what Archon uses as a worktree environment's id.
+ *
+ * Git for Windows prints forward slashes, keeping the drive letter it was given;
+ * Archon gives it Node's paths, so normalizing the separators reproduces them.
+ * Elsewhere git's absolute path already is Node's form and is returned unchanged.
+ */
+export function toNativeWorktreePath(
+  gitPath: string,
+  paths: nodePath.PlatformPath = nodePath
+): string {
+  return paths.sep === '\\' ? paths.normalize(gitPath) : gitPath;
 }
 
 /**
