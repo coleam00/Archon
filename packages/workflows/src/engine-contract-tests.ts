@@ -14,19 +14,11 @@ import type {
   WorkflowResumeInput,
 } from './engine-port';
 import type { DagResumeSnapshot, IWorkflowStore } from './store';
+import { WorkflowNotResumableError } from './store';
+export { WorkflowNotResumableError } from './store';
 import type { ResolvedWorkflow, WorkflowDefinition, WorkflowRun } from './schemas';
 
 const trackTempRoot = trackTempRoots();
-
-export class WorkflowNotResumableError extends Error {
-  constructor(
-    public readonly runId: string,
-    public readonly currentStatus: string
-  ) {
-    super(`Workflow run is not resumable (id: ${runId}, status: ${currentStatus}).`);
-    this.name = 'WorkflowNotResumableError';
-  }
-}
 
 function deferred<T>(): {
   promise: Promise<T>;

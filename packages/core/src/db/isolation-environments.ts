@@ -15,6 +15,7 @@ import type {
 } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
+import { assertAbsoluteDefaultCwd } from './codebase-path';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -53,6 +54,20 @@ function normalizeEnvironmentRow<T extends IsolationEnvironmentRow>(row: T): T {
   }
   if (typeof row.created_at === 'string') row.created_at = toHydratedTimestamp(row.created_at);
   return row;
+}
+
+type EnvironmentWithCodebasePath = IsolationEnvironmentRow & {
+  codebase_default_cwd: string;
+  codebase_name: string;
+};
+
+type EnvironmentWithCodebase = EnvironmentWithCodebasePath & {
+  codebase_repository_url: string | null;
+};
+
+function normalizeEnvironmentWithCodebase<T extends EnvironmentWithCodebasePath>(row: T): T {
+  assertAbsoluteDefaultCwd(row.codebase_default_cwd, row.codebase_name);
+  return normalizeEnvironmentRow(row);
 }
 
 /**
@@ -308,7 +323,7 @@ export async function getLiveRunOwningEnv(
  */
 export async function findStaleEnvironments(
   staleDays = 14
-): Promise<readonly (IsolationEnvironmentRow & { codebase_default_cwd: string })[]> {
+): Promise<readonly EnvironmentWithCodebasePath[]> {
   const dialect = getDialect();
   // Both conditions use the same staleDays value but need separate placeholders
   const staleActivityThreshold = dialect.nowMinusDays(1);
@@ -319,8 +334,8 @@ export async function findStaleEnvironments(
     ? `AND e.created_by_platform NOT IN (${retainedIds.map((_, index) => `$${index + 3}`).join(', ')})`
     : '';
 
-  const result = await pool.query<IsolationEnvironmentRow & { codebase_default_cwd: string }>(
-    `SELECT e.*, c.default_cwd as codebase_default_cwd
+  const result = await pool.query<EnvironmentWithCodebasePath>(
+    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.name as codebase_name
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
      WHERE e.status = 'active'
@@ -334,7 +349,7 @@ export async function findStaleEnvironments(
        AND e.created_at < ${staleCreationThreshold}`,
     [staleDays, staleDays, ...retainedIds]
   );
-  return result.rows.map(normalizeEnvironmentRow);
+  return result.rows.map(normalizeEnvironmentWithCodebase);
 }
 
 /**
@@ -344,9 +359,9 @@ export async function findStaleEnvironments(
  */
 export async function findActiveByBranchName(
   branchName: string
-): Promise<(IsolationEnvironmentRow & { codebase_default_cwd: string }) | null> {
-  const result = await pool.query<IsolationEnvironmentRow & { codebase_default_cwd: string }>(
-    `SELECT e.*, c.default_cwd as codebase_default_cwd
+): Promise<EnvironmentWithCodebasePath | null> {
+  const result = await pool.query<EnvironmentWithCodebasePath>(
+    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.name as codebase_name
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
      WHERE e.branch_name = $1 AND e.status = 'active'
@@ -355,31 +370,21 @@ export async function findActiveByBranchName(
     [branchName]
   );
   const row = result.rows[0];
-  return row ? normalizeEnvironmentRow(row) : null;
+  return row ? normalizeEnvironmentWithCodebase(row) : null;
 }
 
 /**
  * List all active environments with their codebase info (for cleanup)
  */
-export async function listAllActiveWithCodebase(): Promise<
-  readonly (IsolationEnvironmentRow & {
-    codebase_default_cwd: string;
-    codebase_repository_url: string | null;
-  })[]
-> {
-  const result = await pool.query<
-    IsolationEnvironmentRow & {
-      codebase_default_cwd: string;
-      codebase_repository_url: string | null;
-    }
-  >(
-    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.repository_url as codebase_repository_url
+export async function listAllActiveWithCodebase(): Promise<readonly EnvironmentWithCodebase[]> {
+  const result = await pool.query<EnvironmentWithCodebase>(
+    `SELECT e.*, c.default_cwd as codebase_default_cwd, c.name as codebase_name, c.repository_url as codebase_repository_url
      FROM remote_agent_isolation_environments e
      JOIN remote_agent_codebases c ON e.codebase_id = c.id
      WHERE e.status = 'active'
      ORDER BY e.created_at DESC`
   );
-  return result.rows.map(normalizeEnvironmentRow);
+  return result.rows.map(normalizeEnvironmentWithCodebase);
 }
 
 /**

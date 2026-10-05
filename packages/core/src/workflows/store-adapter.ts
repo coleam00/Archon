@@ -81,6 +81,12 @@ function collectOAuthCredentialValues(
 
 export function createWorkflowStore(): IWorkflowStore {
   return {
+    resolveApprovalGate: workflowDb.resolveApprovalGate,
+    resolveAndCancelApprovalGate: workflowDb.resolveAndCancelApprovalGate,
+    cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,
+    deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
+    listWorkflowRuns: workflowDb.listDashboardRuns,
+    findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
     recordWorkflowRunCheckoutBaseline: workflowDb.recordWorkflowRunCheckoutBaseline,

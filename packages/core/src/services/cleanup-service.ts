@@ -2,6 +2,7 @@
  * Cleanup service for isolation environments
  * Handles removal triggered by events, schedule, or commands
  */
+import type { IIsolationStore } from '@archon/isolation';
 import { retainedPlatformIds, retainsWorkspace } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
@@ -119,9 +120,9 @@ export interface ContainerCleanupReport {
  * (the caller surfaces it), a no-op if the row/container is already gone. The
  * placeholder config is unused by `destroy` (see CLEANUP_PLACEHOLDER_CONTAINER_CONFIG).
  */
-export async function reclaimContainerEnv(envId: string): Promise<void> {
+export async function reclaimContainerEnv(envId: string, store: IIsolationStore): Promise<void> {
   const backend = new ContainerBackend({
-    store: isolationEnvDb.createIsolationStore(),
+    store,
     config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
   });
   await backend.destroy(envId);
