@@ -1572,6 +1572,7 @@ async function resolveRunCodebase(
       : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
         (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   } catch (error) {
+    if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;
     lookupError = err;
     getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
@@ -1593,6 +1594,7 @@ async function resolveRunCodebase(
     try {
       codebase = await codebaseDb.getCodebase(options.codebaseId);
     } catch (error) {
+      if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
       const err = error as Error;
       getLog().warn(
         { err, errorType: err.constructor.name, codebaseId: options.codebaseId },
@@ -1612,6 +1614,7 @@ async function resolveRunCodebase(
           getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
         }
       } catch (error) {
+        if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
         const err = error as Error;
         registrationError = err;
         getLog().warn(
@@ -1631,6 +1634,7 @@ async function resolveRunCodebase(
           getLog().info({ name: result.name }, 'cli.folder_project_auto_registered');
         }
       } catch (error) {
+        if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
         const err = error as Error;
         registrationError = err;
         getLog().warn(

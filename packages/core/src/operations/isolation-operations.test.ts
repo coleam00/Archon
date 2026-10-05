@@ -81,6 +81,7 @@ function makeActiveEnv(overrides: Partial<ActiveEnv> = {}): ActiveEnv {
     created_by_user_id: null,
     metadata: {},
     codebase_repository_url: 'https://github.com/owner/repo',
+    codebase_name: 'test-project',
     codebase_default_cwd: '/repo',
     ...overrides,
   };

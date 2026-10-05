@@ -1,7 +1,8 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { join, sep } from 'path';
+import { join, sep, resolve } from 'node:path';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
+import { quoteCommandArg } from '../utils/command-args';
 
 const mockQuery = createMockQuery();
 
@@ -26,6 +27,9 @@ import {
   updateCodebase,
   deleteCodebase,
   CodebaseNotFoundError,
+  InvalidCodebaseDefaultCwdError,
+  listCodebases,
+  listCodebaseRegistrations,
 } from './codebases';
 
 describe('codebases', () => {
@@ -45,6 +49,60 @@ describe('codebases', () => {
     created_at: new Date(),
     updated_at: new Date(),
   };
+
+  describe('absolute stored paths', () => {
+    for (const path of ['projects/repo', '', './repo', '~/repo']) {
+      test(`rejects writes of ${JSON.stringify(path)} before querying`, async () => {
+        await expect(createCodebase({ name: 'project', default_cwd: path })).rejects.toBeInstanceOf(
+          InvalidCodebaseDefaultCwdError
+        );
+        await expect(updateCodebase('id', { default_cwd: path })).rejects.toBeInstanceOf(
+          InvalidCodebaseDefaultCwdError
+        );
+        expect(mockQuery).not.toHaveBeenCalled();
+      });
+    }
+
+    const readers = [
+      () => getCodebase('id'),
+      () => findCodebaseByName('project'),
+      () => findCodebaseByRepoUrl('url'),
+      () => findCodebaseByDefaultCwd('projects/repo'),
+      () => listCodebases(),
+      () => findCodebaseByPathPrefix(resolve('projects/repo')),
+    ];
+    for (const [index, read] of readers.entries()) {
+      test(`reader ${index} rejects legacy values without guessing`, async () => {
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([
+            { ...mockCodebase, name: 'Client "Ops"', default_cwd: 'projects/repo' },
+          ])
+        );
+        await expect(read()).rejects.toThrow(
+          '/register-project ' + quoteCommandArg('Client "Ops"') + ' <absolute-path>'
+        );
+      });
+    }
+
+    test('absolute spelling is preserved on write and read', async () => {
+      const path = resolve('project') + sep + '..' + sep + 'project' + sep;
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
+      expect((await createCodebase({ name: 'project', default_cwd: path })).default_cwd).toBe(path);
+      expect(mockQuery.mock.calls[0]?.[1]).toContain(path);
+    });
+
+    test('administrative metadata remains readable with an invalid stored path', async () => {
+      const row = { id: 'id', name: 'project', stored_default_cwd: 'projects/repo' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([row]));
+      expect(await listCodebaseRegistrations()).toEqual([row]);
+      expect(mockQuery.mock.calls[0]?.[0]).toContain('default_cwd AS stored_default_cwd');
+    });
+
+    test('empty lists remain usable', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      expect(await listCodebases()).toEqual([]);
+    });
+  });
 
   describe('createCodebase', () => {
     test('creates codebase with all fields', async () => {
