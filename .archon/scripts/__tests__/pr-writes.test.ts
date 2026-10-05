@@ -47,6 +47,39 @@ function publishPr(options: ScriptOptions & { intent?: object } = {}): ScriptRun
 }
 
 describe('publish-pr opens the pull request at most once', () => {
+  it.each(['gh', 'forge'] as const)(
+    'refuses another create through %s while the earlier write is unresolved',
+    source => {
+      const result = publishPr({
+        source,
+        artifacts: { 'pr-intent.json.create-started': JSON.stringify({ repo: PR.repo }) },
+        gh: { noOpenPr: true },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
+      });
+      expect(result.code).not.toBe(0);
+      expect(result.stdout).toBe('');
+      expect(result.stderr).toContain('a previous PR create is unresolved');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    }
+  );
+
+  it.each(['gh', 'forge'] as const)(
+    'reconciles a previously started create through %s when its PR is visible',
+    source => {
+      const result = publishPr({
+        source,
+        artifacts: { 'pr-intent.json.create-started': JSON.stringify({ repo: PR.repo }) },
+        gh: { pr: { headRefName: 'feature' } },
+        forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord() }) },
+      });
+      expect(result.code).toBe(0);
+      expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
+    }
+  );
+
   it('creates and verifies through gh when the head has no open pull request', () => {
     const result = publishPr({ gh: { noOpenPr: true, pr: { headRefName: 'feature' } } });
     expect(result.code).toBe(0);

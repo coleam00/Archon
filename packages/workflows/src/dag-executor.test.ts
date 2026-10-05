@@ -4731,9 +4731,14 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     testTimeout(10_000)
   );
 
-  it(
-    'publish retries a hung forge create and reuses the PR without repeating the push or create',
-    async () => {
+  it.each([
+    ['forge', false],
+    ['gh', false],
+    ['forge', true],
+    ['gh', true],
+  ] as const)(
+    'publish reconciles a hung %s create (delayed visibility: %s) without repeating the push or create',
+    async (source, delayed) => {
       const pack = join(import.meta.dir, '../../../.archon/workflows/sdlc/pr');
       const parsed = parseWorkflow(
         await Bun.file(join(pack, 'archon-pr.yaml')).text(),
@@ -4746,6 +4751,10 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       const created = join(testDir, 'created');
       const pushed = join(testDir, 'pushed');
       const client = join(testDir, 'forge-client.ts');
+      const preload = join(testDir, 'gh-preload.ts');
+      const release = join(testDir, 'release');
+      const finished = join(testDir, 'finished');
+      const clientPid = join(testDir, 'client-pid');
       const intentPath = join(testDir, 'intent.json');
       const repo = { host: 'github.com', path: 'example/repo' };
       const pr = {
@@ -4775,46 +4784,100 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         })
       );
       await writeFile(join(testDir, 'body.md'), 'A body');
+      const ghPr = {
+        number: 42,
+        url: pr.url,
+        title: 'A title',
+        body: 'A body',
+        isDraft: true,
+        state: 'OPEN',
+        baseRefName: 'dev',
+        headRefName: 'feature',
+        headRefOid: 'deadbeef',
+        headRepository: { name: 'repo' },
+        headRepositoryOwner: { login: 'example' },
+        maintainerCanModify: null,
+      };
+      await writeFile(
+        preload,
+        `const original = Bun.spawnSync.bind(Bun);
+        Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) =>
+          argv[0] === 'gh'
+            ? original([process.execPath, ${JSON.stringify(client)}, ...argv.slice(1)], settings)
+            : original(argv, settings)
+        });`
+      );
       await writeFile(
         client,
         `
         import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
-        const op = Bun.argv[3];
+        const op = ${JSON.stringify(source)} === 'forge'
+          ? Bun.argv[3] : Bun.argv[3] === 'create' ? 'pr.create' : 'pr.view';
         appendFileSync(${JSON.stringify(calls)}, JSON.stringify(op) + '\\n');
+        const respond = value => console.log(JSON.stringify({ operationId: 'fake', ok: true, result: { op, value } }));
         if (op === 'pr.create') {
+          writeFileSync(${JSON.stringify(clientPid)}, String(process.pid));
+          if (!${String(delayed)}) writeFileSync(${JSON.stringify(created)}, 'created');
+          while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(10);
           writeFileSync(${JSON.stringify(created)}, 'created');
-          await new Promise(() => setInterval(() => {}, 1000));
+          writeFileSync(${JSON.stringify(finished)}, 'finished');
+          if (${JSON.stringify(source)} === 'forge') respond({ pr: ${JSON.stringify(pr)} });
+          else console.log(${JSON.stringify(pr.url)});
         } else if (op === 'pr.view') {
-          const value = existsSync(${JSON.stringify(created)}) ? { pr: ${JSON.stringify(pr)} } : null;
-          console.log(JSON.stringify({ operationId: 'fake', ok: true, result: { op, value } }));
+          const exists = existsSync(${JSON.stringify(created)});
+          if (${JSON.stringify(source)} === 'forge') respond(exists ? { pr: ${JSON.stringify(pr)} } : null);
+          else console.log(JSON.stringify(exists ? [${JSON.stringify(ghPr)}] : []));
         } else {
           process.exit(1);
         }
       `
       );
-      const { mockDeps } = await runNodes([
-        {
-          id: 'pr',
-          kind: 'exec',
-          runtime: 'bun',
-          script: `require('fs').appendFileSync(${JSON.stringify(pushed)}, 'push\\n');
+      const publishNode: ExecNode = {
+        ...publish,
+        timeout: 1000,
+        retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
+        script: `process.env.ARCHON_SDLC_FORGE = ${JSON.stringify(source)};
+          process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify([process.execPath, client]))};
+          ${source === 'gh' ? `await import(${JSON.stringify(preload)});` : ''}
+          await import(${JSON.stringify(join(pack, 'scripts/publish-pr.ts'))});`,
+      };
+      let mockDeps: WorkflowDeps;
+      try {
+        ({ mockDeps } = await runNodes([
+          {
+            id: 'pr',
+            kind: 'exec',
+            runtime: 'bun',
+            script: `require('fs').appendFileSync(${JSON.stringify(pushed)}, 'push\\n');
             console.log(JSON.stringify({ intent: ${JSON.stringify(intentPath)} }));`,
-          output_format: {
-            type: 'object',
-            properties: { intent: { type: 'string' } },
-            required: ['intent'],
+            output_format: {
+              type: 'object',
+              properties: { intent: { type: 'string' } },
+              required: ['intent'],
+            },
           },
-        },
-        {
-          ...publish,
-          // Shorten the authored timing for the real subprocess regression.
-          timeout: 1000,
-          retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
-          script: `process.env.ARCHON_SDLC_FORGE = 'forge';
-            process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify([process.execPath, client]))};
-            await import(${JSON.stringify(join(pack, 'scripts/publish-pr.ts'))});`,
-        },
-      ]);
+          publishNode,
+        ]));
+      } finally {
+        // Release the in-flight fake write even if the workflow assertion fails.
+        await writeFile(release, 'release');
+        for (let attempt = 0; attempt < 500 && !existsSync(finished); attempt++) {
+          await Bun.sleep(10);
+        }
+      }
+      expect(existsSync(finished)).toBe(true);
+      const pid = Number(await readFile(clientPid, 'utf8'));
+      const clientAlive = (): boolean => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch (error) {
+          if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
+          throw error;
+        }
+      };
+      for (let attempt = 0; attempt < 500 && clientAlive(); attempt++) await Bun.sleep(10);
+      expect(clientAlive()).toBe(false);
       expect(await readFile(pushed, 'utf8')).toBe('push\n');
       expect(
         (await readFile(calls, 'utf8'))
@@ -4833,10 +4896,34 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         );
       expect(terminals).toHaveLength(2);
       expect(terminals[0].data?.failure_kind).toBe('timeout');
-      expect(terminals[1].event_type).toBe('node_completed');
-      expect(JSON.stringify(terminals[1].data)).toContain(pr.url);
-      expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
-      expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalled();
+      if (delayed) {
+        expect(terminals[1].event_type).toBe('node_failed');
+        expect(terminals[1].data?.failure_kind).toBe('exec_failed');
+        expect(JSON.stringify(terminals[1].data)).toContain('a previous PR create is unresolved');
+        expect(mockDeps.store.failWorkflowRun).toHaveBeenCalled();
+        expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
+        const resumed = await runNodes([
+          {
+            ...publishNode,
+            depends_on: [],
+            with: { intent: intentPath },
+          },
+        ]);
+        expect(resumed.mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(resumed.mockDeps.store.completeWorkflowRun).toHaveBeenCalled();
+        expect((await readFile(calls, 'utf8')).trim().split('\n')).toEqual([
+          '"pr.view"',
+          '"pr.create"',
+          '"pr.view"',
+          '"pr.view"',
+        ]);
+        expect(await readFile(pushed, 'utf8')).toBe('push\n');
+      } else {
+        expect(terminals[1].event_type).toBe('node_completed');
+        expect(JSON.stringify(terminals[1].data)).toContain(pr.url);
+        expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalled();
+      }
     },
     testTimeout(10_000)
   );
