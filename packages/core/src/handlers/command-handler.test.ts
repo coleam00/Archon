@@ -982,7 +982,7 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         // cwd + isolation env go; codebase_id is deliberately absent from the
-        // payload — detaching the project is /setproject none's job.
+        // payload — detaching the project is /detach-project's job.
         expect(mockUpdateConversation).toHaveBeenCalledWith(baseConversation.id, {
           cwd: null,
           isolation_env_id: null,

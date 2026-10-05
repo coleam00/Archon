@@ -168,6 +168,59 @@ export function conversationDetachTests(
       ).toHaveLength(1);
     });
 
+    test('deactivates every active provider session before clearing the binding', async () => {
+      const secondSessionId = crypto.randomUUID();
+      await db.query(
+        `INSERT INTO remote_agent_sessions (id, conversation_id, codebase_id, ai_assistant_type)
+         VALUES ($1, $2, $3, 'codex')`,
+        [secondSessionId, conversationId, projectId]
+      );
+      useDatabase(
+        intercept(db, async (sql, query) => {
+          if (sql.includes('SET codebase_id = NULL')) {
+            const active = await query(
+              'SELECT id FROM remote_agent_sessions WHERE conversation_id = $1 AND active = true',
+              [conversationId]
+            );
+            expect(active.rows).toHaveLength(0);
+          }
+        })
+      );
+      expect((await detachConversationProject(input())).status).toBe('detached');
+      const sessions = await db.query<{
+        active: boolean | number;
+        ended_at: string | null;
+        ended_reason: string;
+      }>('SELECT * FROM remote_agent_sessions WHERE conversation_id = $1', [conversationId]);
+      expect(sessions.rows).toHaveLength(2);
+      for (const session of sessions.rows) {
+        expect(Boolean(session.active)).toBe(false);
+        expect(session.ended_at).not.toBeNull();
+        expect(session.ended_reason).toBe('project-changed');
+      }
+    });
+
+    for (const name of ['none', 'clear', '-']) {
+      test(`detaches a project literally named ${JSON.stringify(name)}`, async () => {
+        await db.query('UPDATE remote_agent_codebases SET name = $1 WHERE id = $2', [
+          name,
+          projectId,
+        ]);
+        expect(await detachConversationProject({ ...input(), projectName: name })).toEqual({
+          status: 'detached',
+          projectName: name,
+        });
+        const target = await db.query<{ codebase_id: string | null }>(
+          'SELECT codebase_id FROM remote_agent_conversations WHERE id = $1',
+          [conversationId]
+        );
+        expect(target.rows[0].codebase_id).toBeNull();
+        expect(
+          (await db.query('SELECT id FROM remote_agent_codebases WHERE id = $1', [projectId])).rows
+        ).toHaveLength(1);
+      });
+    }
+
     test('no active session is a valid success', async () => {
       await db.query('UPDATE remote_agent_sessions SET active = false WHERE id = $1', [sessionId]);
       expect((await detachConversationProject(input())).status).toBe('detached');
@@ -369,7 +422,7 @@ export function conversationDetachTests(
 
     for (const failingStatement of [
       'SELECT id, status',
-      'UPDATE remote_agent_sessions SET active',
+      'UPDATE remote_agent_sessions',
       'SET codebase_id = NULL',
     ]) {
       test(`failure at ${failingStatement} rolls back binding and session`, async () => {

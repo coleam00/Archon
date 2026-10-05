@@ -1,7 +1,6 @@
 /**
  * Database operations for sessions
  */
-import type { TransactionQuery } from './resource-slots';
 import { pool, getDialect, getDatabase } from './connection';
 import type { Session, SessionMetadata } from '../types';
 import { sessionMetadataSchema } from '../types';
@@ -25,11 +24,8 @@ export class SessionNotFoundError extends Error {
   }
 }
 
-export async function getActiveSession(
-  conversationId: string,
-  query: TransactionQuery = pool.query
-): Promise<Session | null> {
-  const result = await query<Session>(
+export async function getActiveSession(conversationId: string): Promise<Session | null> {
+  const result = await pool.query<Session>(
     'SELECT * FROM remote_agent_sessions WHERE conversation_id = $1 AND active = true LIMIT 1',
     [conversationId]
   );
@@ -72,13 +68,9 @@ export async function updateSession(id: string, sessionId: string | null): Promi
   }
 }
 
-export async function deactivateSession(
-  id: string,
-  reason: TransitionTrigger,
-  query: TransactionQuery = pool.query
-): Promise<void> {
+export async function deactivateSession(id: string, reason: TransitionTrigger): Promise<void> {
   const dialect = getDialect();
-  const result = await query(
+  const result = await pool.query(
     `UPDATE remote_agent_sessions SET active = false, ended_at = ${dialect.now()}, ended_reason = $2 WHERE id = $1`,
     [id, reason]
   );

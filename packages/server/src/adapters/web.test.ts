@@ -74,6 +74,10 @@ beforeEach(() => {
   mockLogger.error.mockClear();
 });
 
+test('WebAdapter supports durable conversation project detachment', () => {
+  expect(makeAdapter().adapter.capabilities.canDetachProject).toBe(true);
+});
+
 describe('WebAdapter.sendStructuredEvent — provider results', () => {
   test('does not emit a provider session id on SSE', async () => {
     const { adapter, emitted } = makeAdapter();

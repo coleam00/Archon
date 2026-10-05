@@ -3,7 +3,6 @@
  */
 import { lockConversationOwnership } from './conversation-ownership';
 import { listConversationDetachBlockers } from './workflows';
-import { getActiveSession, deactivateSession } from './sessions';
 import { pool, getDialect, getDatabase, getDatabaseType } from './connection';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
@@ -356,8 +355,12 @@ export async function detachConversationProject(input: {
     if (runs.length || conversation.isolation_env_id !== null) {
       return { status: 'blocked', runs, environmentId: conversation.isolation_env_id };
     }
-    const session = await getActiveSession(conversation.id, query);
-    if (session) await deactivateSession(session.id, 'project-changed', query);
+    await query(
+      `UPDATE remote_agent_sessions
+       SET active = false, ended_at = ${getDialect().now()}, ended_reason = 'project-changed'
+       WHERE conversation_id = $1 AND active = true`,
+      [conversation.id]
+    );
     const cleared = await query(
       `UPDATE remote_agent_conversations
        SET codebase_id = NULL, cwd = NULL, isolation_env_id = NULL, updated_at = ${getDialect().now()}
