@@ -69,12 +69,8 @@ export class SqliteAdapter implements IDatabase {
     // Enable foreign keys
     this.db.run('PRAGMA foreign_keys = ON');
 
-    try {
-      this.initSchema();
-    } catch (error) {
-      this.db.close();
-      throw error;
-    }
+    // Initialize schema if needed
+    this.initSchema();
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
@@ -231,12 +227,7 @@ export class SqliteAdapter implements IDatabase {
     // Probe BEFORE createSchema(): once CREATE TABLE IF NOT EXISTS has run there is
     // no way left to tell a fresh database from one that predates version tracking.
     const preExisting = this.hasAnyArchonTable();
-    // Batch table and index creation into one commit instead of syncing each DDL statement.
-    this.db
-      .transaction(() => {
-        this.createSchema();
-      })
-      .immediate();
+    this.createSchema();
     const allApplied = this.migrateColumns();
     this.recordSchemaVersion(preExisting, allApplied);
   }

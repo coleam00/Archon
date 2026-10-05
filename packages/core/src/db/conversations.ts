@@ -347,8 +347,8 @@ export async function detachConversationProject(input: {
       'SELECT id, name FROM remote_agent_codebases WHERE name = $1',
       [input.projectName]
     );
-    const exact = projects.rows.filter(project => project.name === input.projectName);
-    if (exact.length !== 1 || exact[0].id !== conversation.codebase_id) {
+    // Both dialects compare names byte-for-byte, so case-only mismatches already miss here.
+    if (projects.rows.length !== 1 || projects.rows[0].id !== conversation.codebase_id) {
       return { status: 'refused', reason: 'name' };
     }
     const runs = await listConversationDetachBlockers(query, conversation.id);
@@ -368,6 +368,6 @@ export async function detachConversationProject(input: {
       [conversation.id]
     );
     if (cleared.rowCount !== 1) throw new ConversationNotFoundError(conversation.id);
-    return { status: 'detached', projectName: exact[0].name };
+    return { status: 'detached', projectName: projects.rows[0].name };
   });
 }

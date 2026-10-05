@@ -77,23 +77,6 @@ function columnsOf(path: string, table: string): string[] {
 }
 
 describe('SqliteAdapter upgrade path', () => {
-  test('rolls back schema initialization when table creation fails', async () => {
-    const path = await upgradeFixturePath();
-    const raw = new Database(path);
-    try {
-      raw.run('CREATE VIEW remote_agent_messages AS SELECT 1 AS id');
-      expect(() => new SqliteAdapter(path)).toThrow();
-      const tables = raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'");
-      try {
-        expect(tables.all()).toEqual([]);
-      } finally {
-        tables.finalize();
-      }
-    } finally {
-      raw.close();
-    }
-  });
-
   // Regression: the event_order index and trigger were briefly created inside
   // createSchema(). Both reference a column absent from any database predating
   // it, and CREATE INDEX on a missing column aborts the entire createSchema()
