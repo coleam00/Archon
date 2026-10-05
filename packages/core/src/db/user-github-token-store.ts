@@ -95,18 +95,18 @@ export async function deleteUserGithubToken(userId: string): Promise<void> {
 
 type GithubIdentity = Pick<UserGithubTokenRow, 'github_user_id' | 'github_login'>;
 
+function formatGithubNoreplyEmail(identity: GithubIdentity): string {
+  return `${identity.github_user_id}+${identity.github_login}@users.noreply.github.com`;
+}
+
 /**
  * The commit no-reply email for a connected user, or null if not connected.
  * Format: `<numeric_id>+<login>@users.noreply.github.com`.
  */
-export function getUserGithubNoreplyEmail(userId: string): Promise<string | null>;
-export function getUserGithubNoreplyEmail(identity: GithubIdentity): Promise<string>;
-export async function getUserGithubNoreplyEmail(
-  user: string | GithubIdentity
-): Promise<string | null> {
-  const row = typeof user === 'string' ? await getUserGithubTokenRecord(user) : user;
+export async function getUserGithubNoreplyEmail(userId: string): Promise<string | null> {
+  const row = await getUserGithubTokenRecord(userId);
   if (!row) return null;
-  return `${row.github_user_id}+${row.github_login}@users.noreply.github.com`;
+  return formatGithubNoreplyEmail(row);
 }
 
 export async function getUserGithubAuthor(
@@ -114,8 +114,7 @@ export async function getUserGithubAuthor(
 ): Promise<{ name: string; email: string } | undefined> {
   const row = await getUserGithubTokenRecord(userId);
   if (!row) return undefined;
-  const email = await getUserGithubNoreplyEmail(row);
-  return { name: row.github_login, email };
+  return { name: row.github_login, email: formatGithubNoreplyEmail(row) };
 }
 
 const inflightRefreshes = new Map<string, Promise<string | null>>();
