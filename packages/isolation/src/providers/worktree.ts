@@ -434,11 +434,17 @@ export class WorktreeProvider implements IIsolationProvider {
     }
 
     // Post-removal verification: confirm worktree is actually gone from git
+    // A list that fails is no evidence of removal, so it is not reported as removed.
     if (result.worktreeRemoved) {
-      const stillRegistered = await this.isWorktreeRegistered(repoPath, worktreePath);
-      if (stillRegistered) {
+      let warning: string | undefined;
+      try {
+        if (await isWorktreeRegistered(toRepoPath(repoPath), worktreePath))
+          warning = `Worktree at ${worktreePath} was reported removed but is still registered in git`;
+      } catch (error) {
+        warning = `Could not confirm the worktree at ${worktreePath} was removed: ${(error as Error).message}`;
+      }
+      if (warning) {
         result.worktreeRemoved = false;
-        const warning = `Worktree at ${worktreePath} was reported removed but is still registered in git`;
         getLog().warn({ worktreePath, repoPath }, 'worktree_removal_verification_failed');
         result.warnings.push(warning);
       }
@@ -474,30 +480,6 @@ export class WorktreeProvider implements IIsolationProvider {
       errorText.includes('does not exist') ||
       errorText.includes('is not a working tree')
     );
-  }
-
-  /**
-   * Check if a worktree path is still registered in `git worktree list`.
-   * Used for post-removal verification.
-   */
-  private async isWorktreeRegistered(repoPath: string, worktreePath: string): Promise<boolean> {
-    try {
-      const { stdout } = await execFileAsync(
-        'git',
-        ['-C', repoPath, 'worktree', 'list', '--porcelain'],
-        { timeout: 15000 }
-      );
-      // Porcelain output has "worktree <path>" lines with resolved absolute paths
-      const normalizedTarget = resolve(worktreePath);
-      return stdout.split('\n').some(line => {
-        if (!line.startsWith('worktree ')) return false;
-        const listed = line.slice('worktree '.length).trim();
-        return resolve(listed) === normalizedTarget;
-      });
-    } catch (_error) {
-      // If we can't verify, assume it's gone (don't block on verification failure)
-      return false;
-    }
   }
 
   /**
@@ -1773,7 +1755,27 @@ export class WorktreeProvider implements IIsolationProvider {
     path: WorktreePath,
     removeError: unknown
   ): Promise<void> {
-    if (await isWorktreeRegistered(repoPath, path)) {
+    let registered: boolean;
+    try {
+      registered = await isWorktreeRegistered(repoPath, path);
+    } catch (checkError) {
+      // Unknown registration: delete nothing, and drop the lock so a retry can take it.
+      const lockNote = await unlockWorktree(repoPath, path).then(
+        () => '',
+        (unlockError: unknown) => {
+          getLog().error(
+            { err: unlockError, worktreePath: path },
+            'isolation.release_lock_drop_failed'
+          );
+          return `; the release lock could not be removed: ${(unlockError as Error).message}`;
+        }
+      );
+      throw new Error(
+        `Could not check whether Git still tracks ${path} after its removal failed: ${(checkError as Error).message}${lockNote}`,
+        { cause: removeError }
+      );
+    }
+    if (registered) {
       try {
         await unlockWorktree(repoPath, path);
       } catch (unlockError) {

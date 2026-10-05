@@ -10,7 +10,16 @@
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -214,6 +223,22 @@ describe('WorktreeProvider against real git', () => {
 
     expect(existsSync(repoPath)).toBe(true);
     expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
+  });
+
+  test('destroy does not report a removal git still tracks under a symlinked base', async () => {
+    // Git lists the symlink-resolved path; the worktree is detached and locked, so
+    // prune keeps its entry after the directory is gone.
+    await mkdir(join(root, 'real-base'));
+    await symlink(join(root, 'real-base'), join(root, 'link-base'));
+    const linked = join(root, 'link-base', 'wt');
+    await git(repoPath, 'worktree', 'add', '-q', '--detach', linked);
+    await git(repoPath, 'worktree', 'lock', linked);
+    await rm(linked, { recursive: true, force: true });
+
+    const result = await provider.destroy(linked, { canonicalRepoPath: toRepoPath(repoPath) });
+
+    expect(result.worktreeRemoved).toBe(false);
+    expect(result.warnings.join(' ')).toContain('still registered');
   });
 
   test('a setup failure after `git worktree add` leaves nothing for the next run to adopt', async () => {
