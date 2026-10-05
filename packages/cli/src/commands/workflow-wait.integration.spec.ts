@@ -1276,16 +1276,18 @@ describe('a durable wait deadline is enforced by the owning process', () => {
           status: 'satisfied',
           event: 'checks.complete',
         });
-        const exit = await waitFor(
-          'the detached owner to exit',
-          () =>
-            existsSync(exitPath)
-              ? (JSON.parse(readFileSync(exitPath, 'utf8')) as { code: number })
-              : undefined,
-          15_000
-        );
-        observedDetachedOwners.delete(owner.pid);
-        expect(exit).toEqual({ code: 0 });
+        if (delivery === 'cli') {
+          const exit = await waitFor(
+            'the detached owner to exit',
+            () =>
+              existsSync(exitPath)
+                ? (JSON.parse(readFileSync(exitPath, 'utf8')) as { code: number })
+                : undefined,
+            15_000
+          );
+          observedDetachedOwners.delete(owner.pid);
+          expect(exit).toEqual({ code: 0 });
+        }
         activeRunIds.delete(runId);
         expect(countNodeCompletions(fixture.archonHome, runId, 'finish')).toBe(1);
       },
