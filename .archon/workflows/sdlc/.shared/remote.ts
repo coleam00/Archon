@@ -77,3 +77,20 @@ export function remoteRefFor(repo: Repo, branch: string): string {
   gitOrThrow('fetch', '--quiet', remote, branch);
   return `${remote}/${branch}`;
 }
+
+/**
+ * Refuse a head that does not merge cleanly into `branch` freshly fetched from the
+ * remote that holds `repo` (`git merge-tree`, git 2.38 or later). Every ready mark
+ * runs this first: a conflicting pull request is never handed to a maintainer as
+ * ready.
+ */
+export function assertMergesCleanly(repo: Repo, branch: string): void {
+  const base = remoteRefFor(repo, branch);
+  const result = git('merge-tree', '--write-tree', '--name-only', base, 'HEAD');
+  if (result.code === 1) {
+    // Output: the tree id, then the conflicted paths, then a blank line and messages.
+    const conflicted = result.stdout.split('\n\n')[0].split('\n').slice(1).filter(Boolean);
+    throw new Error(`the head does not merge cleanly into ${base}: ${conflicted.join(', ')}`);
+  }
+  if (result.code !== 0) throw new Error(`mergeability could not be computed: ${result.stderr}`);
+}

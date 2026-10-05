@@ -103,6 +103,7 @@ nodes:
         triage.md itself is the verified work order. When triage.md routes this
         run to continue an open pull request, the work is to finish that pull
         request.
+      pull_request: "$triage.output.pull_request"
     depends_on: [gate-direct, gate-continue, gate-rooted, gate-planned]
     trigger_rule: none_failed_min_one_success
 

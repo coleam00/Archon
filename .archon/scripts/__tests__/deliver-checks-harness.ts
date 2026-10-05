@@ -76,8 +76,6 @@ export interface GhFake {
   readonly writeLost?: boolean;
   /** Existing tracker issues; `issue create` appends to them. */
   readonly issues?: readonly GhIssue[];
-  /** stderr for a failed `issue list` search. */
-  readonly issueSearchFail?: string;
 }
 
 /** One tracker issue the fake gh knows. */
@@ -86,6 +84,8 @@ export interface GhIssue {
   readonly title: string;
   readonly body: string;
   readonly state: 'OPEN' | 'CLOSED';
+  /** A pull request, which `gh issue view` also resolves by number. */
+  readonly pull?: boolean;
 }
 
 export type ForgeFake =
@@ -164,18 +164,12 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   };
   if (text.startsWith('issue ')) {
     const issueUrl = (n) => 'https://' + host + '/' + path + '/issues/' + String(n);
-    if (text.startsWith('issue list')) {
-      if (fake.issueSearchFail !== undefined) return result(1, '', fake.issueSearchFail);
-      const search = argv[argv.indexOf('--search') + 1];
-      const token = search.split('"')[1];
-      const hits = issues.filter(row => row.state === 'OPEN' && row.body.includes(token));
-      return result(0, JSON.stringify(hits.map(row => ({ url: issueUrl(row.number) }))));
-    }
     if (text.startsWith('issue view')) {
       const wanted = Number(argv[3].split('/').pop());
       const row = issues.find(candidate => candidate.number === wanted);
       if (row === undefined) return result(1, '', 'GraphQL: Could not resolve to an issue');
-      return result(0, JSON.stringify({ title: row.title, state: row.state, url: issueUrl(row.number) }));
+      const url = row.pull ? issueUrl(row.number).replace('/issues/', '/pull/') : issueUrl(row.number);
+      return result(0, JSON.stringify({ title: row.title, state: row.state, url }));
     }
     if (text.startsWith('issue create')) {
       const number = 100 + issues.length;
@@ -301,12 +295,16 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
   const preload = join(root, 'preload.ts');
   writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog));
 
+  // The engine hands every exec node a typed-artifact listing; an empty one by default.
+  const listing = join(root, 'typed-artifacts.json');
+  writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     INPUTS_PR: JSON.stringify(forgePrRecord()),
     INPUTS_EXPECTED: '[]',
-    INPUTS_REVIEW_ACTION: 'none',
     ARTIFACTS_DIR: artifacts,
+    TYPED_ARTIFACTS_FILE: listing,
     ARCHON_SDLC_FORGE: options.source ?? '',
     ARCHON_CLI_COMMAND: '',
     ...Object.fromEntries(
@@ -381,8 +379,9 @@ export function runDeliverScript(
   script: 'check-ci' | 'flip-ready' | 'confirm-ready' | 'mark-draft',
   options: ScriptOptions = {}
 ): ScriptRun {
-  // The flip checks mergeability against the base in a real checkout.
-  const cwd = options.cwd ?? (script === 'flip-ready' ? gitCheckout() : undefined);
+  // A ready mark checks mergeability against the base in a real checkout.
+  const merges = script === 'flip-ready' || script === 'confirm-ready';
+  const cwd = options.cwd ?? (merges ? gitCheckout() : undefined);
   return runPackScript(`deliver/scripts/${script}`, { ...options, cwd });
 }
 

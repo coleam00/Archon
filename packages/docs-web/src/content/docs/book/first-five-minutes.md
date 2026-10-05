@@ -78,7 +78,7 @@ Replace `<issue-number>` with a real issue number from your repo. Then watch wha
 2. **Investigate or plan** — It proves the root cause of a bug, or plans the shape of a feature
 3. **Implement** — It makes the change and runs your project's checks
 4. **Create PR and review** — It opens a draft pull request, reviews it, and fixes what the review finds
-5. **Ready** — Once checks pass, it marks the PR ready for your review
+5. **Ready** — It marks the PR ready for your review, then waits for CI and puts the PR back in draft if the checks stay red
 
 **You just ran a multi-stage automated workflow.** Each stage wrote its findings to files called artifacts, and the next stage read them. The PR is waiting for your review; Archon never merges.
 

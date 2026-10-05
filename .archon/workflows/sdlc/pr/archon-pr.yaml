@@ -17,6 +17,9 @@ inputs:
   draft:
     default: "true"
     description: '"true" opens the PR as a draft; anything else opens it ready for review.'
+  pull_request:
+    default: ""
+    description: The number of an open pull request to continue, as the caller resolved it; empty or `null` when it names none.
 
 returns: publish
 
@@ -116,6 +119,7 @@ nodes:
       title: "$prepare.output.title"
       body: "$ARTIFACTS_DIR/pr-body.md"
       draft: "$INPUTS.draft"
+      pull_request: "$INPUTS.pull_request"
     output_type: pull-request
     output_format:
       type: object

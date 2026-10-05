@@ -14,7 +14,7 @@ Record `HEAD_BRANCH=$(git branch --show-current)` before doing anything else; an
 
 Determine the base branch from evidence, in order: the repository's documented development flow (steering files, CONTRIBUTING); branch ancestry against likely integration branches (`dev`, `development`, the remote default); an existing pull request for this exact branch. Never assume `main`. Use the same resolved base for every diff.
 
-When this run continues an existing pull request — the run's context names its number, the run was launched onto it, or `$ARTIFACTS_DIR/triage.md` routes this run to continue it — record that number and the qualified head repository and head branch it belongs to. `HEAD` must descend from that pull request's current head revision; if it does not, stop and report rather than prepare a replacement. If the head lives in a fork and the author did not allow maintainer edits, this run cannot publish to it: stop and report.
+When this run continues an existing pull request — the caller resolved it (`$INPUTS.pull_request`; empty or `null` when it named none), the run's context names its number, or the run was launched onto it — record that number and the qualified head repository and head branch it belongs to. `HEAD` must descend from that pull request's current head revision; if it does not, stop and report rather than prepare a replacement. If the head lives in a fork and the author did not allow maintainer edits, this run cannot publish to it: stop and report.
 
 You do not look up whether this branch already has a pull request. The publishing node does that deterministically and never opens a second one.
 

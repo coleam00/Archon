@@ -19,6 +19,7 @@
  * - INPUTS_REPO / INPUTS_HEAD_REPO: `{host, path}` of the base and head repositories.
  * - INPUTS_HEAD / INPUTS_BASE: the head and base branch names.
  * - INPUTS_EXISTING: the pull request this run continues, or `null`.
+ * - INPUTS_PULL_REQUEST: the number the caller resolved for it, or empty or `null`.
  * - INPUTS_TITLE: the title.
  * - INPUTS_BODY: the certified body file.
  * - INPUTS_DRAFT: `true` opens a draft.
@@ -47,6 +48,14 @@ function publish(): PrRecord {
   const head = text(process.env.INPUTS_HEAD);
   const existing = JSON.parse(text(process.env.INPUTS_EXISTING)) as number | null;
   const artifacts = artifactsDir();
+
+  const raw = trimmed(process.env.INPUTS_PULL_REQUEST);
+  const named = raw === '' ? null : (JSON.parse(raw) as number | null);
+  if (named !== null && existing !== named) {
+    throw new Error(
+      `the caller named pull request ${String(named)} to continue, but prepare declared ${String(existing ?? 'none')}`
+    );
+  }
 
   const headRevision = pushHead({ repo, head_repo: headRepo, head });
 

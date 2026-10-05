@@ -34,7 +34,20 @@ afterAll(async () => {
 });
 const flip = (options: Parameters<typeof runDeliverScript>[1] = {}): ScriptRun =>
   runDeliverScript('flip-ready', { cwd: clean, ...options });
-const confirm = runDeliverScript.bind(null, 'confirm-ready');
+const confirm = (options: Parameters<typeof runDeliverScript>[1] = {}): ScriptRun =>
+  runDeliverScript('confirm-ready', { cwd: clean, ...options });
+
+/** A typed-artifact listing holding one record per named type, as the engine writes it. */
+function records(byType: Record<string, unknown>): { inputs: Record<string, string>; artifacts: Record<string, string> } {
+  const artifacts: Record<string, string> = {};
+  const artifactsByType: Record<string, { path: string; nodeId: string }[]> = {};
+  for (const [type, value] of Object.entries(byType)) {
+    artifacts[`nodes/${type}.json`] = JSON.stringify(value);
+    artifactsByType[type] = [{ path: `nodes/${type}.json`, nodeId: type }];
+  }
+  artifacts['listing.json'] = JSON.stringify({ runId: 'run', artifactsByType, errors: [] });
+  return { inputs: { TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' }, artifacts };
+}
 const readyCalled = (calls: readonly string[]): boolean =>
   calls.some(call => call.startsWith('pr ready') && !call.includes('--undo'));
 const undoCalled = (calls: readonly string[]): boolean =>
@@ -68,7 +81,6 @@ describe('confirm-ready on the final head, default gh source', () => {
     ['a cancelled check', { checks: [{ name: 'e2e', state: 'CANCELLED', bucket: 'cancel' }] }, {}, 'red checks: e2e (cancelled)'],
     ['no checks when some were expected', { rollup: 0 }, { INPUTS_EXPECTED: '["build"]' }, 'expected check(s) never ran: build'],
     ['an expected check that never ran', { checks: green }, { INPUTS_EXPECTED: '["build","e2e"]' }, 'expected check(s) never ran: e2e'],
-    ['an unconverged review of the CI fix', { checks: green }, { INPUTS_REVIEW_ACTION: 'correct' }, 'review of the CI fix did not converge'],
   ];
   for (const [label, gh, inputs, reason] of unresolved) {
     it(`puts the pull request back in draft on ${label}`, () => {
@@ -80,6 +92,43 @@ describe('confirm-ready on the final head, default gh source', () => {
       expect(result.stderr).toContain(reason);
     });
   }
+
+  describe('the CI fix owes a converged review', () => {
+    const fixed = { 'ci-cause': { cause: 'introduced' }, 'ci-fix-delta': { moved: true } };
+
+    it('puts the pull request back in draft when that review never converged', () => {
+      const result = confirm({ gh: { checks: green, pr: { isDraft: false } }, ...records(fixed) });
+      expect(result.code).not.toBe(0);
+      expect(undoCalled(result.gh)).toBe(true);
+      expect(result.stderr).toContain('the review of the CI fix did not converge');
+    });
+
+    it('keeps it ready once the review gate recorded convergence', () => {
+      const result = confirm({
+        gh: { checks: green, pr: { isDraft: false } },
+        ...records({ ...fixed, 'ci-fix-review': { ready: 'true' } }),
+      });
+      expect(result.code).toBe(0);
+      expect(undoCalled(result.gh)).toBe(false);
+    });
+
+    it('owes nothing when the fix moved nothing, or the red was not introduced', () => {
+      for (const byType of [
+        { 'ci-cause': { cause: 'introduced' }, 'ci-fix-delta': { moved: false } },
+        { 'ci-cause': { cause: 'inherited' } },
+      ]) {
+        const result = confirm({ gh: { checks: green, pr: { isDraft: false } }, ...records(byType) });
+        expect(result.code).toBe(0);
+      }
+    });
+  });
+
+  it('leaves a draft in draft when its head no longer merges into the base', () => {
+    const result = confirm({ gh: { checks: green }, cwd: gitCheckout({ conflict: true }) });
+    expect(result.code).not.toBe(0);
+    expect(readyCalled(result.gh)).toBe(false);
+    expect(result.stderr).toContain('does not merge cleanly into upstream/dev: a.txt');
+  });
 
   it('refuses when the draft conversion does not read back', () => {
     const result = confirm({

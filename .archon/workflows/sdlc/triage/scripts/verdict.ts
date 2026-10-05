@@ -154,15 +154,10 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
 /** One branch of the triage decision, as the node's schema admits it. */
 type Decision =
   | { contract: 'READY'; route: 'investigate' | 'plan' | 'deliver'; design_first: boolean }
-  | { contract: 'READY'; route: 'continue'; pull_request: PullRequest }
+  | { contract: 'READY'; route: 'continue'; pull_request: number }
   | { contract: 'NEEDS_CONTRACT_WORK'; proposed_edits: Edits }
   | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
   | { contract: 'NO_ACTION' };
-
-interface PullRequest {
-  readonly repo: { readonly host: string; readonly path: string };
-  readonly number: number;
-}
 
 function main(): void {
   const decision = bound(process.env.INPUTS_DECISION) as Decision;

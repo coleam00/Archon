@@ -7,6 +7,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import {
   fakeGhPreload,
   forgePrRecord,
+  gitCheckout,
   type GhFake,
 } from '../../../../.archon/scripts/__tests__/deliver-checks-harness';
 import {
@@ -401,16 +402,17 @@ describe('bundled-defaults', () => {
     });
 
     it('marks ready once the work is done, and certifies or drafts it after the CI wait', () => {
-      // publish-pr-body runs after every gate and is skipped when one failed, so the
-      // flip names it alone; the single CI wait follows the flip. confirm-ready runs
-      // however the CI path ended (ci-settled is all_done), so a failed CI step still
-      // leaves no red pull request ready, and is skipped when the flip never ran.
+      // publish-pr-body runs after every gate and is skipped when one failed; the
+      // single CI wait follows the flip. confirm-ready runs however the CI path ended
+      // (ci-settled is all_done), so it may bind only values that exist once the flip
+      // ran: the PR record and discover-ci's facts, which the flip waits on. A
+      // binding to a failed CI-path node would fail it before it drafts the PR.
       // That the gates really block is proved by execution: deliver's validate-red*
       // fixtures fail at the gate and never reach the flip.
       const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-deliver'], 'archon-deliver.yaml');
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const node = (id: string) => parsed.workflow?.nodes.find(candidate => candidate.id === id);
-      expect(node('flip-ready')?.depends_on).toEqual(['publish-pr-body']);
+      expect(node('flip-ready')?.depends_on).toEqual(['publish-pr-body', 'discover-ci']);
       expect(node('publish-pr-body')?.depends_on).toEqual([
         'fork',
         'gate-validated',
@@ -420,6 +422,11 @@ describe('bundled-defaults', () => {
       expect(node('ci-settled')?.trigger_rule).toBe('all_done');
       expect(node('confirm-ready')?.depends_on).toEqual(['flip-ready', 'ci-settled']);
       expect(node('confirm-ready')?.trigger_rule).toBeUndefined();
+      const confirm = node('confirm-ready');
+      expect(confirm && 'with' in confirm ? Object.keys(confirm.with ?? {}) : []).toEqual([
+        'pr',
+        'expected',
+      ]);
       expect(node('mark-draft')?.depends_on).toEqual(['ci-attention-route']);
       expect(node('ci-attention')?.depends_on).toEqual(['mark-draft']);
       expect(parsed.workflow.returns).toBe('confirm-ready');
@@ -931,17 +938,21 @@ describe('bundled-defaults', () => {
         const ghLog = join(root, 'gh.log');
         const preload = join(root, 'fake-gh.ts');
         writeFileSync(preload, fakeGhPreload({ checks: options.checks ?? 'fail' }, ghLog));
+        const listing = join(root, 'typed-artifacts.json');
+        writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
         const run = spawnSync(
           process.execPath,
           ['--preload', preload, join(root, 'sdlc', 'deliver', 'scripts', `${script}.ts`)],
           {
-            cwd: root,
+            // A draft is marked ready only after a merge check in a real checkout.
+            cwd: script === 'confirm-ready' ? gitCheckout() : root,
             encoding: 'utf8',
             env: {
               ...process.env,
               INPUTS_PR: JSON.stringify(forgePrRecord()),
               INPUTS_EXPECTED: '[]',
-              INPUTS_REVIEW_ACTION: 'none',
+              ARTIFACTS_DIR: root,
+              TYPED_ARTIFACTS_FILE: listing,
               ARCHON_SDLC_FORGE: options.source ?? '',
               ARCHON_CLI_COMMAND: '',
             },

@@ -82,7 +82,8 @@ try {
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
   };
   const missing = JSON.parse(text(process.env.INPUTS_MISSING)) as string[];
-  if (verdict.ready && missing.length > 0) {
+  // Delivery routes on `action`, so a verdict that is ready by either field counts.
+  if ((verdict.ready || verdict.action === 'none') && missing.length > 0) {
     throw new Error(
       `the review declared ready while enabled lenses did not complete: ${missing.join(', ')}`
     );

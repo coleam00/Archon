@@ -243,6 +243,23 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
   });
 
+  it('refuses before pushing when prepare did not continue the pull request the caller named', () => {
+    for (const existing of [null, 41]) {
+      const result = publishPr({ target: { existing }, inputs: { INPUTS_PULL_REQUEST: '42' } });
+      expect(result.code).not.toBe(0);
+      expect(result.stderr).toContain('the caller named pull request 42 to continue');
+      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
+    }
+    const agreed = publishPr({
+      target: { existing: 42 },
+      inputs: { INPUTS_PULL_REQUEST: '42' },
+      gh: { pr: { headRefName: 'feature' } },
+    });
+    expect(agreed.code).toBe(0);
+    // A caller with no pull request to continue binds null.
+    expect(publishPr({ inputs: { INPUTS_PULL_REQUEST: 'null' } }).code).toBe(0);
+  });
+
   it('refuses a named pull request whose head is not the recorded branch', () => {
     const result = publishPr({
       target: { existing: 42 },
@@ -616,6 +633,14 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('enabled lenses did not complete: code');
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
+  it('refuses action none while a lens is missing, whatever the ready field says', () => {
+    const result = publishReview({
+      inputs: { ...report, INPUTS_READY: 'false', INPUTS_ACTION: 'none', INPUTS_MISSING: JSON.stringify(['code']) },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('enabled lenses did not complete: code');
   });
 
   it('publishes a not-ready verdict that names a missing lens', () => {

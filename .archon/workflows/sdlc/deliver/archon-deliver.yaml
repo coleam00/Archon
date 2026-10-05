@@ -27,6 +27,12 @@ description: |
 requires: [github]
 
 inputs:
+  pull_request:
+    default: ""
+    description: >-
+      The number of an open pull request this delivery continues instead of opening
+      one, as a caller resolved it. Empty or `null` when the caller names none; the
+      run can still continue one it was launched onto.
   work:
     default: ""
     description: >-
@@ -145,6 +151,7 @@ nodes:
     include: archon-pr
     with:
       draft: "true"
+      pull_request: "$INPUTS.pull_request"
     depends_on: [shape, gate-reshape]
     trigger_rule: none_failed_min_one_success
 
@@ -368,7 +375,9 @@ nodes:
   #
   # Before filing, a small agent makes a best-effort search of the open issues for
   # ones that already describe the same defect. Its matches are a judgment the
-  # filing script validates; a miss files a duplicate, and nothing here blocks.
+  # filing script validates; a miss files a duplicate. The matcher failing outright
+  # fails the filing like any node on this off-ready path: the delivery stands, and
+  # the records stay in the review report for the operator.
   - id: match-discoveries
     command: match-discoveries
     model: small
@@ -388,8 +397,8 @@ nodes:
             type: object
             properties:
               index: { type: integer, minimum: 0 }
-              duplicate_of: { type: string, pattern: '^https?://' }
-            required: [index, duplicate_of]
+              issue: { type: integer, minimum: 1 }
+            required: [index, issue]
       required: [matches]
 
   - id: file-discoveries
@@ -542,8 +551,10 @@ nodes:
       pr:
         from: "$pr.output"
     # publish-pr-body runs after every gate and the resync, and is skipped when a
-    # gate failed, so the flip waits on it alone.
-    depends_on: [publish-pr-body]
+    # gate failed. discover-ci is named so the flip never runs without the CI facts
+    # confirm-ready binds: after the flip, nothing may fail before the draft
+    # conversion can.
+    depends_on: [publish-pr-body, discover-ci]
 
   # CI wait, durably. The probe classifies check state once; a pending state
   # routes into the engine's `wait:` node, which suspends the run and
@@ -797,6 +808,7 @@ nodes:
     runtime: bun
     depends_on: [push-ci-fix]
     when: "$ci-cause.output.cause == 'introduced'"
+    output_type: ci-fix-delta
     with:
       since: "$ci-fix.execution.checkoutStart"
     output_format:
@@ -817,11 +829,15 @@ nodes:
       errors: "$resolve-scope.output.errors"
       docs: "$classify.output.docs"
 
-  # The readiness gate's script on the CI fix's review: only `none` passes.
+  # The readiness gate's script on the CI fix's review: only `none` passes. Its
+  # typed record exists only when that review converged, which is how confirm-ready
+  # knows without binding a node that may have failed.
   - id: gate-ci-recheck
     script: gate-ready
     runtime: bun
     depends_on: [ci-recheck]
+    output_type: ci-fix-review
+    output_format: { type: object }
     with:
       review_action: "$ci-recheck.output.action"
       correction_action: ""
@@ -978,7 +994,6 @@ nodes:
       pr: "$pr.output"
       expected:
         from: "$discover-ci.output.expected_checks"
-      review_action: { from: "$ci-recheck.output.action", if_skipped: "none" }
     depends_on: [flip-ready, ci-settled]
 
   # This tail's terminal report, like every other SDLC tail's (scripts/outcome.ts).

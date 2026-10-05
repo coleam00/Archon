@@ -57,7 +57,7 @@ Grounds an issue or request against the current repository before spending on it
 archon workflow run archon-ship --branch fix/login-crash "#142"
 ```
 
-**What it produces**: A PR flipped ready for review once review findings are closed and checks pass, or an explained stop. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The workflow never merges; merging stays with you.
+**What it produces**: A PR marked ready for review once review findings are closed, kept ready only when checks pass on the final head, or an explained stop with the PR back in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The workflow never merges; merging stays with you.
 
 ---
 
@@ -135,7 +135,7 @@ archon workflow run archon-pr --no-worktree --input draft=false
 
 #### `archon-deliver`
 
-The delivery tail: implement the work, gate on green checks, bring the branch up to date with its base and open a draft PR, review it, correct and close the findings, validate, wait for the checks the project's CI requires, then flip the PR ready for review once it merges cleanly. A CI failure outside the change gets one re-run before anyone attributes it; red the change did not cause pauses for you rather than being "fixed". There is no approval gate inside the run; your gate is PR review and merge.
+The delivery tail: implement the work, gate on green checks, bring the branch up to date with its base and open a draft PR, review it, correct and close the findings, validate, mark the PR ready for review once it merges cleanly, then wait once for the checks the project's CI requires. A CI failure outside the change gets one re-run before anyone attributes it; red the change introduced gets one fix, and red from the base gets one merge of the repaired base. Red that stays unresolved puts the PR back in draft and pauses for you: a red PR never stays ready. `--input pull_request=<number>` continues that open PR instead of opening one. There is no approval gate inside the run; your gate is PR review and merge.
 
 **When to use it**: The work is decided, for example an approved plan, and should become a reviewed, ready-to-merge PR.
 

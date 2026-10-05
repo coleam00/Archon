@@ -5,7 +5,7 @@ triage:
   decision:
     contract: READY
     route: continue
-    pull_request: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+    pull_request: 7
   complexity: small
   item: { repository: "", number: 0 }
   area_labels: []

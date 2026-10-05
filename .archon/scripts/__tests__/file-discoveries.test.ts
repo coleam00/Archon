@@ -1,9 +1,11 @@
 /**
  * file-discoveries files each certified discovery once: across runs through the
  * matching agent's judgment (stubbed here as its typed output), within a run through
- * the per-record marker. Runs against the fake gh, so no tracker is touched.
+ * the run's ledger of filed records. Runs against the fake gh, so no tracker is touched.
  */
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { forgePrRecord, runPackScript, type GhIssue, type ScriptRun } from './deliver-checks-harness';
 
 const ISSUES = 'https://ghe.example.com/example/repo/issues';
@@ -23,18 +25,19 @@ const forgeBug = (wording: string): Record<string, unknown> =>
 
 function file(
   records: readonly object[],
-  matches: readonly { index: number; duplicate_of: string }[] = [],
+  matches: readonly { index: number; issue: number }[] = [],
   issues: readonly GhIssue[] = [],
-  extra: { issueSearchFail?: string } = {}
+  artifacts: Record<string, string> = {}
 ): ScriptRun {
   return runPackScript('deliver/scripts/file-discoveries', {
-    gh: { issues, ...extra },
+    gh: { issues },
     inputs: {
       INPUTS_PR: JSON.stringify(forgePrRecord()),
       INPUTS_INITIAL: JSON.stringify(records),
       INPUTS_FINAL: 'null',
       INPUTS_MATCHES: JSON.stringify(matches),
     },
+    artifacts,
   });
 }
 
@@ -53,7 +56,7 @@ describe('file-discoveries across runs', () => {
       'Scratch Archon home ignored by plugin discovery in tests',
       'Forge delivery fixture is not hermetic',
     ]) {
-      const run = file([forgeBug(wording)], [{ index: 0, duplicate_of: filed }], tracker);
+      const run = file([forgeBug(wording)], [{ index: 0, issue: tracker[0].number }], tracker);
       expect(run.code).toBe(0);
       expect(run.createdIssues).toEqual([]);
       expect(JSON.parse(run.stdout)).toEqual({ records: [{ title: wording, issue: filed }] });
@@ -64,7 +67,7 @@ describe('file-discoveries across runs', () => {
     const existing: GhIssue = { number: 7, title: 'Forge test leaks home', body: 'x', state: 'OPEN' };
     const run = file(
       [forgeBug('Forge test leaks home'), discovery('Forge test asserts a stale argv', 'The argv assertion pins an old flag.')],
-      [{ index: 0, duplicate_of: `${ISSUES}/7` }],
+      [{ index: 0, issue: 7 }],
       [existing]
     );
     expect(run.code).toBe(0);
@@ -73,31 +76,30 @@ describe('file-discoveries across runs', () => {
 
   it('files a record as new when its match is not an open issue, and says so', () => {
     const closed: GhIssue = { number: 7, title: 'Old', body: 'x', state: 'CLOSED' };
-    const run = file([forgeBug('Leak')], [{ index: 0, duplicate_of: `${ISSUES}/7` }], [closed]);
+    const run = file([forgeBug('Leak')], [{ index: 0, issue: 7 }], [closed]);
     expect(run.code).toBe(0);
     expect(run.createdIssues).toHaveLength(1);
     expect(run.stderr).toContain('is not an open issue');
+  });
+
+  it('never reuses a pull request the matcher named as the duplicate', () => {
+    const pull: GhIssue = { number: 7, title: 'Leak fix', body: 'x', state: 'OPEN', pull: true };
+    const run = file([forgeBug('Leak')], [{ index: 0, issue: 7 }], [pull]);
+    expect(run.code).toBe(0);
+    expect(run.createdIssues).toHaveLength(1);
   });
 });
 
 describe('file-discoveries within a run', () => {
   it('reuses the issue a resumed run already filed for the same record', () => {
     const first = file([forgeBug('Leak')]);
-    const again = file([forgeBug('Leak')], [], [{ ...first.createdIssues[0] }]);
+    const ledger = readFileSync(join(first.artifacts, 'discoveries-filed.json'), 'utf8');
+    const again = file([forgeBug('Leak')], [], [{ ...first.createdIssues[0] }], {
+      'discoveries-filed.json': ledger,
+    });
     expect(again.code).toBe(0);
     expect(again.createdIssues).toEqual([]);
-  });
-
-  it('carries the marker on the first line of every filed body', () => {
-    const run = file([forgeBug('Leak')]);
-    expect(run.createdIssues[0].body.split('\n')[0]).toMatch(/^<!-- archon-discovery:[0-9a-f]{64} -->$/);
-  });
-
-  it('refuses when the marker search fails, creating nothing', () => {
-    const run = file([forgeBug('Leak')], [], [], { issueSearchFail: 'HTTP 502' });
-    expect(run.code).not.toBe(0);
-    expect(run.createdIssues).toEqual([]);
-    expect(run.stderr).toContain('HTTP 502');
+    expect(JSON.parse(again.stdout)).toEqual({ records: [{ title: 'Leak', issue: `${ISSUES}/100` }] });
   });
 
   it('files the correction loop’s final records over the first review’s', () => {

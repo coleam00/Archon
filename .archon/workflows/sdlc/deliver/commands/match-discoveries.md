@@ -18,4 +18,4 @@ For each discovery, search the repository's open issues for the same defect — 
 
 ## Declare
 
-- `matches` — one entry per discovery that an open issue already describes: `index`, its zero-based position in the list you matched, and `duplicate_of`, the issue's full URL. Leave out every discovery with no match. Empty when there are no discoveries or no matches.
+- `matches` — one entry per discovery that an open issue already describes: `index`, its zero-based position in the list you matched, and `issue`, the matching issue's number in this repository. Leave out every discovery with no match. Empty when there are no discoveries or no matches.

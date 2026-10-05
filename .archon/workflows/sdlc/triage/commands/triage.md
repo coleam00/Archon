@@ -95,7 +95,7 @@ Do not investigate the full causal chain, choose the implementation design, impl
 
 - `decision` — the contract verdict and only what it carries, using the definitions above:
   - `READY` with `route` `investigate`, `plan`, or `deliver`, and `design_first` — true only for an item routed to `plan` because its engineering shape must be settled before implementation;
-  - `READY` with `route` `continue` and `pull_request` — `{ "repo": { "host", "path" }, "number": N }` of the open pull request to finish;
+  - `READY` with `route` `continue` and `pull_request` — the number of the open pull request to finish, in the item's repository;
   - `NEEDS_CONTRACT_WORK` with `proposed_edits` — `{ "title", "body" }`, both non-empty;
   - `BLOCKED` with `blocked_reason` — what it waits on — and `blocked_by` — fully qualified URLs of the items it waits on, possibly empty;
   - `NO_ACTION` alone.

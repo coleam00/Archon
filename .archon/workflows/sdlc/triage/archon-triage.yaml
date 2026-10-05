@@ -62,19 +62,10 @@ nodes:
               properties:
                 contract: { type: string, enum: [READY] }
                 route: { type: string, enum: [continue] }
-                # The open pull request that carries this outcome; the run
-                # continues it instead of opening another.
-                pull_request:
-                  type: object
-                  properties:
-                    repo:
-                      type: object
-                      properties:
-                        host: { type: string, pattern: '\S' }
-                        path: { type: string, pattern: '\S' }
-                      required: [host, path]
-                    number: { type: integer, minimum: 1 }
-                  required: [repo, number]
+                # The number of the open pull request in the item's repository
+                # that carries this outcome; the run continues it instead of
+                # opening another.
+                pull_request: { type: integer, minimum: 1 }
               required: [contract, route, pull_request]
             - type: object
               additionalProperties: false
@@ -160,18 +151,9 @@ nodes:
         route:
           type: string
           enum: [investigate, plan, deliver, continue, no_action]
-        # The open pull request a `continue` route finishes; null on every other route.
-        pull_request:
-          type: [object, 'null']
-          properties:
-            repo:
-              type: object
-              properties:
-                host: { type: string }
-                path: { type: string }
-              required: [host, path]
-            number: { type: integer }
-          required: [repo, number]
+        # The number of the open pull request a `continue` route finishes; null on
+        # every other route.
+        pull_request: { type: [integer, 'null'] }
         ready:
           type: boolean
         design_first:

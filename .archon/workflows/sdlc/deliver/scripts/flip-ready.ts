@@ -7,31 +7,18 @@
  * so a red pull request never stays ready.
  *
  * Before the flip it refuses a head that does not merge cleanly into its freshly
- * fetched base (`git merge-tree`, git 2.38 or later), found through the remote that
- * holds the recorded repository: a conflicting pull request is never handed to a
- * maintainer as ready. The flip targets the recorded qualified pull request through
+ * fetched base (../../.shared/remote.ts): a conflicting pull request is never handed
+ * to a maintainer as ready. The flip targets the recorded qualified pull request through
  * the source the run selected, and reads the state back. A pull request already
  * merged needs no flip; one closed without a merge refuses.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
  */
-import { forgeSource, parsePrRecord, type PrRecord } from '../../.shared/forge.ts';
-import { git } from '../../.shared/git.ts';
+import { forgeSource, parsePrRecord } from '../../.shared/forge.ts';
 import { markPrReady, viewPr } from '../../.shared/pr.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
-import { remoteRefFor } from '../../.shared/remote.ts';
-
-function mergesCleanly(pr: PrRecord): void {
-  const base = remoteRefFor(pr.repo, pr.base);
-  const result = git('merge-tree', '--write-tree', '--name-only', base, 'HEAD');
-  if (result.code === 1) {
-    // Output: the tree id, then the conflicted paths, then a blank line and messages.
-    const conflicted = result.stdout.split('\n\n')[0].split('\n').slice(1).filter(Boolean);
-    throw new Error(`the head does not merge cleanly into ${base}: ${conflicted.join(', ')}`);
-  }
-  if (result.code !== 0) throw new Error(`mergeability could not be computed: ${result.stderr}`);
-}
+import { assertMergesCleanly } from '../../.shared/remote.ts';
 
 function flipReady(): void {
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
@@ -45,7 +32,7 @@ function flipReady(): void {
   if (observed.state === 'closed') {
     throw new Error('the PR is CLOSED without a merge, so there is no delivery to report.');
   }
-  mergesCleanly(pr);
+  assertMergesCleanly(pr.repo, pr.base);
   emit({ pr_url: observed.is_draft ? markPrReady(pr, source).url : observed.url });
 }
 

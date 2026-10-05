@@ -10,13 +10,14 @@
  *
  * Two guards against duplicates, with different owners:
  * - Across runs, a defect another run already filed is a judgment: the preceding
- *   agent searched the open issues and declared matches. A match is reused only when
- *   the forge confirms an open issue in this repository; anything else files the
- *   record as new, with a note. A missed match files a duplicate; it never blocks.
- * - Within a run, a resume must not file the same record twice. Each issue carries a
- *   marker keyed by the repository, title and claim, and an open issue with this
- *   record's marker is reused. The marker is idempotency for one record, not a
- *   cross-run dedup: two runs word one defect differently.
+ *   agent searched the open issues and declared matches by issue number. A match is
+ *   reused only when the forge confirms an open issue at that number in this
+ *   repository; anything else files the record as new, with a note. A missed match
+ *   files a duplicate; it never blocks.
+ * - Within a run, a resume must not file the same record twice. Each filed issue is
+ *   recorded in the run's artifacts, keyed by the repository, title and claim, the
+ *   moment it is created, and a resume reuses it. Only a process killed between the
+ *   create and that write can file one twice.
  *
  * gh is the transport: the forge contract has no issue operations yet. Each created
  * issue is read back before the node succeeds.
@@ -25,15 +26,15 @@
  * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
  * - INPUTS_INITIAL / INPUTS_FINAL: the first review's and the correction loop's
  *   certified discoveries; FINAL is `null` when no correction ran.
- * - INPUTS_MATCHES: `[{index, duplicate_of}]` from the matching agent.
+ * - INPUTS_MATCHES: `[{index, issue}]` from the matching agent.
  */
 
 import { createHash } from 'node:crypto';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parsePrRecord } from '../../.shared/forge.ts';
-import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
 import type { Discovery } from '../../.shared/report.ts';
 
 function gh(...args: string[]): string {
@@ -44,9 +45,8 @@ function gh(...args: string[]): string {
   return result.stdout.toString().trim();
 }
 
-function body(record: Discovery, marker: string, prUrl: string): string {
+function body(record: Discovery, prUrl: string): string {
   return [
-    marker,
     record.claim,
     '',
     '## Evidence',
@@ -59,19 +59,21 @@ function body(record: Discovery, marker: string, prUrl: string): string {
 }
 
 /**
- * An open issue in `repo` at `url`, as the forge reports it. Matching is best effort
- * by decision: an issue that cannot be confirmed open, for whatever reason, is not
- * reused, and the record is filed as new rather than blocking the run.
+ * The URL of open issue `number` in `repo`, as the forge reports it. `gh issue view`
+ * also resolves a pull request, so the URL must be this repository's issue URL.
+ * Matching is best effort by decision: an issue that cannot be confirmed, for
+ * whatever reason, is not reused, and the record is filed as new rather than
+ * blocking the run.
  */
-function openIssue(repo: string, url: string): boolean {
+function openIssue(repo: string, number: number): string | undefined {
   try {
-    const view = JSON.parse(gh('issue', 'view', url, '--repo', repo, '--json', 'state,url')) as {
+    const view = JSON.parse(gh('issue', 'view', String(number), '--repo', repo, '--json', 'state,url')) as {
       state: string;
       url: string;
     };
-    return view.state === 'OPEN';
+    return view.state === 'OPEN' && view.url === `https://${repo}/issues/${String(number)}` ? view.url : undefined;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -80,35 +82,34 @@ try {
   const repo = `${pr.repo.host}/${pr.repo.path}`;
   const final = JSON.parse(text(process.env.INPUTS_FINAL)) as Discovery[] | null;
   const records = final ?? (JSON.parse(text(process.env.INPUTS_INITIAL)) as Discovery[]);
-  const matches = JSON.parse(text(process.env.INPUTS_MATCHES)) as {
-    index: number;
-    duplicate_of: string;
-  }[];
+  const matches = JSON.parse(text(process.env.INPUTS_MATCHES)) as { index: number; issue: number }[];
+  const ledgerPath = join(artifactsDir(), 'discoveries-filed.json');
+  const ledger = (existsSync(ledgerPath) ? JSON.parse(readFileSync(ledgerPath, 'utf8')) : {}) as Record<
+    string,
+    string
+  >;
 
   const filed: { title: string; issue: string }[] = [];
   const scratch = mkdtempSync(join(tmpdir(), 'archon-discovery-'));
   try {
     for (const [index, record] of records.entries()) {
-      const match = matches.find(candidate => candidate.index === index)?.duplicate_of;
+      const match = matches.find(candidate => candidate.index === index)?.issue;
       if (match !== undefined) {
-        if (openIssue(repo, match)) {
-          filed.push({ title: record.title, issue: match });
+        const url = openIssue(repo, match);
+        if (url !== undefined) {
+          filed.push({ title: record.title, issue: url });
           continue;
         }
-        note(`file-discoveries: ${match} is not an open issue in ${repo}; filing "${record.title}" as new.`);
+        note(`file-discoveries: #${String(match)} is not an open issue in ${repo}; filing "${record.title}" as new.`);
       }
-      const key = createHash('sha256')
-        .update(`${repo}\n${record.title}\n${record.claim}`)
-        .digest('hex');
-      const marker = `<!-- archon-discovery:${key} -->`;
-      const existing = JSON.parse(
-        gh('issue', 'list', '--repo', repo, '--state', 'open', '--search', `"archon-discovery:${key}" in:body`, '--json', 'url')
-      ) as { url: string }[];
-      let url = existing[0]?.url;
+      const key = createHash('sha256').update(`${repo}\n${record.title}\n${record.claim}`).digest('hex');
+      let url = ledger[key];
       if (url === undefined) {
         const bodyPath = join(scratch, `body-${String(index)}.md`);
-        writeFileSync(bodyPath, body(record, marker, pr.url));
+        writeFileSync(bodyPath, body(record, pr.url));
         url = gh('issue', 'create', '--repo', repo, '--title', record.title, '--body-file', bodyPath);
+        ledger[key] = url;
+        writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
         const readBack = JSON.parse(gh('issue', 'view', url, '--json', 'title')) as { title: string };
         if (readBack.title !== record.title) throw new Error(`issue read-back disagrees for ${url}`);
       }

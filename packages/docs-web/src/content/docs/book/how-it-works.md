@@ -61,7 +61,7 @@ That's the shape of it. Each `include:` node pulls in another bundled workflow, 
 | Implement | `archon-implement` (inside deliver) | Read the work order, made the changes, ran the project's checks, committed | `implementation.md` |
 | Create PR | `archon-pr` (inside deliver) | Pushed the branch and opened a draft PR | Draft PR on GitHub |
 | Review | `archon-review` (inside deliver) | Ran parallel review lenses; deliver then fixed the findings and re-reviewed each fix | PR comment |
-| Validate | `archon-validate` (inside deliver) | Ran the project's checks; deliver then waited for CI and flipped the PR ready | `validation.md` |
+| Validate | `archon-validate` (inside deliver) | Ran the project's checks; deliver then marked the PR ready, waited for CI once, and put it back in draft if CI stayed red | `validation.md` |
 
 Each stage is independent and focused. Triage doesn't know how the fix will be built; it writes a file. Deliver doesn't repeat triage's checks; it reads `triage.md` and whichever of `investigation.md` or `plan.md` the route produced. The workflow stitches them together.
 
