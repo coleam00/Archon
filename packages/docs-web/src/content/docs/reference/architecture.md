@@ -328,6 +328,7 @@ import type {
   ProviderCapabilities,
   SendQueryOptions,
 } from '@archon/provider-contract';
+import { truncateToolOutput } from '@archon/provider-contract';
 
 export class YourAssistantProvider implements IAgentProvider {
   async checkCredential(): Promise<CredentialStatus> {
@@ -1069,7 +1070,7 @@ remote_agent_codebases
 ├── name (VARCHAR)
 ├── repository_url (VARCHAR)
 ├── default_cwd (VARCHAR)
-├── default_branch (VARCHAR, nullable) -- detected branch used as sync context when available
+├── default_branch (VARCHAR, nullable) -- optional explicit base branch; NULL resolves the remote default at use
 ├── ai_assistant_type (VARCHAR, nullable) -- optional explicit provider choice; NULL follows project configuration for new conversations
 ├── kind (VARCHAR, default 'repo') -- 'repo' | 'folder' (folder projects are non-git, run in place)
 └── commands (JSONB) -- {command_name: {path, description}}

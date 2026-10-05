@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
 import { getWorkflowRun } from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';
@@ -15,7 +16,7 @@ import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/conne
 import { getConversationById } from '@archon/core/db/conversations';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { registerFolder, registerRepository } from '@archon/core';
-import { findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
+import { updateCodebase, findCodebaseByDefaultCwd } from '@archon/core/db/codebases';
 import { getStartReceipt } from '@archon/core/db/resource-starts';
 import { claimPendingWorkflowRun } from '@archon/core/db/workflows';
 import {
@@ -312,6 +313,44 @@ describe('server resource-start host', () => {
     await until(() => engine.claimed[0]);
     expect(engine.submitted[0]?.options?.preCreatedRun?.codebase_id).toBe(parent.codebaseId);
   });
+
+  for (const base of [null, 'release']) {
+    test(`resource start forwards ${String(base)} at worktree creation and engine submission`, async () => {
+      const { deliver, engine, host } = await fixture(false, { kind: 'worktree' });
+      const project = join(root, 'project');
+      if (base) {
+        execFileSync('git', ['-C', project, 'checkout', '-qb', base]);
+        execFileSync('git', [
+          '-C',
+          project,
+          '-c',
+          'user.name=t',
+          '-c',
+          'user.email=t@t',
+          'commit',
+          '--allow-empty',
+          '-qm',
+          'release',
+        ]);
+        execFileSync('git', ['-C', project, 'push', '-q', 'origin', base]);
+        execFileSync('git', ['-C', project, 'checkout', '-q', 'main']);
+      }
+      const registered = await registerRepository(project);
+      await updateCodebase(
+        { id: registered.codebaseId, name: registered.name },
+        { default_branch: base }
+      );
+      expect((await deliver('branch', 'queue')).status).toBe(200);
+      await host.requestDrain();
+      const submitted = await until(() => engine.submitted[0]);
+      expect(submitted.options?.baseBranch).toBe(base ?? undefined);
+      expect(submitted.cwd).not.toBe(join(root, 'project'));
+      expect(submitted.options?.resolveChildIsolation).toBeDefined();
+      const commit = (cwd: string, ref: string): string =>
+        execFileSync('git', ['-C', cwd, 'rev-parse', ref], { encoding: 'utf8' }).trim();
+      expect(commit(submitted.cwd, 'HEAD')).toBe(commit(project, `origin/${base ?? 'main'}`));
+    }, 30000);
+  }
 
   test('a queued receipt starts when its blocker ends and the scheduler tick drains', async () => {
     const { deliver, engine, host } = await fixture();

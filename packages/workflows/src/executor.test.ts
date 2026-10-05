@@ -120,6 +120,7 @@ mock.module('@archon/paths', () => ({
 const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
+  getDefaultRemote: mock(async () => 'origin'),
   toRepoPath: mock((p: string) => p),
   // The checkout baseline of a container run probes the container through here. Tests use
   // container ids that do not exist, so answer the way a real `docker exec` would.
@@ -2727,7 +2728,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
 
-      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree', 'origin');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 
@@ -2788,7 +2789,7 @@ describe('executeWorkflow', () => {
         { codebaseId: 'cb-repo' }
       );
 
-      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree', 'origin');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 
