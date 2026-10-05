@@ -227,7 +227,7 @@ nodes:
 | `when` | string | — | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
 | `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist. Distinct from a fan-out node's [`fan_out.join`](#the-four-fields), which reduces one node's N children and defaults to `all_done` |
 | `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | — | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
-| `idle_timeout` | number | — | Kill node if idle for this many milliseconds |
+| `idle_timeout` | number | — | Kill node after this many milliseconds without a provider chunk. Any chunk counts as progress, thinking included. Reported live background work suspends the timer |
 | `retry` | object | — | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `mutates_checkout` | boolean | — | `false` asserts this node leaves the git checkout untouched. The engine compares `git status` before and after the node and fails it, naming the changed paths, if anything outside the run's artifacts, state, and log directories changed. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
 | `always_run` | boolean | `false` | Not a scheduling field: it does not change whether the node runs in a normal pass (use `when:` and `trigger_rule` for that). It opts the node out of the resume cache, so on resume it is evaluated again instead of replaying a prior completion, and still runs only if its `when:` and `trigger_rule` allow it. See [Opting Out of Resume Caching](#opting-out-of-resume-caching) |
@@ -2209,7 +2209,7 @@ consequences worth planning for:
 
 | `join` | The node succeeds when… | `$<id>.output` |
 |--------|------------------------|----------------|
-| `all_done` (default) | every child reached a terminal state | JSON array in item order — each element is the child's **result value** (a structured child's terminal payload lands as the object itself, single-encoded; a text child's output stays the raw string), with each failed/cancelled child represented as `{ archon_failed: true, error, status }` in its slot |
+| `all_done` (default) | every child reached a terminal state and at least one child run was created (or the item list was empty) | JSON array in item order — each element is the child's **result value** (a structured child's terminal payload lands as the object itself, single-encoded; a text child's output stays the raw string), with each failed/cancelled child represented as `{ archon_failed: true, error, status }` in its slot |
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | — | Racing: **rejected**, not deferred — see below. Rejected at load rather than silently treated as another join |
 
@@ -2218,6 +2218,20 @@ child that fails does not stop its siblings, does not stop later items from bein
 and does not change any other child's outcome. `all_success` still fails the node if any
 child failed — it just reaches that verdict after everyone has finished rather than by
 ending the others early. The failure message names the child that failed.
+
+A non-empty `workflow:` fan-out fails if **no child run row was created**, even with
+`all_done`. The error names the node, the number of refused children, and the first
+refusal reason. Resume re-dispatches this failed node. If at least one child run was
+created, `all_done` still completes with the same failure markers for failed and refused
+children, even if every child that started failed. An empty item list still completes
+with `[]`.
+
+Resume skips a completed fan-out and reports how many children were previously refused.
+It does not repeat children that ran, including failed children in an `all_done` batch.
+Resume uses the captured parent source, so correcting a binding in that source requires
+a fresh launch. Project child workflows still resolve from the live authoring directory
+when spawned; installed packs remain captured. A transient refusal may also clear before
+resume.
 
 ##### Why `all_done` is the default
 

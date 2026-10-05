@@ -1,6 +1,31 @@
 import { describe, expect, test } from 'bun:test';
 
-import { parseClaudeConfig, parseClaudeSettingSources } from './config';
+import {
+  parseClaudeConfig,
+  parseClaudeConfigStrict,
+  parseClaudeSettingSources,
+  type ClaudeProviderDefaults,
+} from './config';
+
+// Exclude the opaque provider-config index signature, requiring every declared field.
+type CompleteClaudeConfig = {
+  [Key in keyof ClaudeProviderDefaults as string extends Key
+    ? never
+    : Key]-?: ClaudeProviderDefaults[Key];
+};
+
+describe('Claude config contract', () => {
+  test('strict and runtime parsers preserve every canonical Claude setting', () => {
+    const config = {
+      model: 'sonnet',
+      settingSources: ['project', 'user'],
+      claudeBinaryPath: '/configured/claude',
+    } satisfies CompleteClaudeConfig;
+
+    expect(parseClaudeConfigStrict(config)).toEqual(config);
+    expect(parseClaudeConfig(config)).toEqual(config);
+  });
+});
 
 describe('parseClaudeSettingSources', () => {
   test('returns undefined for a non-array value', () => {
