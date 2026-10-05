@@ -1167,6 +1167,11 @@ export async function discoverWorkflows(
     const err = error as NodeJS.ErrnoException;
     if (err.code !== 'ENOENT') {
       getLog().warn({ err, homeWorkflowPath }, 'home_workflows_access_error');
+      allErrors.push({
+        filename: homeWorkflowPath,
+        error: err.message,
+        errorType: 'read_error',
+      });
     } else {
       getLog().debug({ homeWorkflowPath }, 'home_workflows_not_found');
     }
