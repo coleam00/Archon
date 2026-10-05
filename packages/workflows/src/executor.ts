@@ -184,22 +184,41 @@ async function sendCriticalMessage(
 }
 
 /**
- * Parse `owner/repo` from a github.com URL. Returns null for non-GitHub URLs
+ * Parse `owner/repo` from a codebase's stored remote URL, which is the raw
+ * `git remote get-url origin` value for locally registered repos. Accepts URL
+ * forms (`https://`, `ssh://`, with or without userinfo) and scp-like
+ * `[user@]github.com:owner/repo`. Returns null when the host is not github.com
  * so the caller can fall through to env-inheritance.
  *
- *   https://github.com/owner/repo.git   → { owner, repo }
- *   https://github.com/owner/repo       → { owner, repo }
- *   git@github.com:owner/repo.git       → { owner, repo }
- *   <anything else>                     → null
+ * Throws when the host is github.com but the path is not exactly `owner/repo`:
+ * falling through there would let nodes run on whatever GitHub credential the
+ * host process holds instead of the App installation token.
  */
 function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
-  // HTTPS form
-  const https = /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url);
-  if (https) return { owner: https[1], repo: https[2] };
-  // SSH form (git@github.com:owner/repo[.git])
-  const ssh = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
-  if (ssh) return { owner: ssh[1], repo: ssh[2] };
-  return null;
+  let host: string;
+  let path: string;
+  if (url.includes('://')) {
+    try {
+      ({ hostname: host, pathname: path } = new URL(url));
+    } catch {
+      return null;
+    }
+  } else {
+    const scp = /^(?:[^@/]+@)?([^:/]+):(.*)$/.exec(url);
+    if (!scp) return null;
+    [, host, path] = scp;
+  }
+  host = host.toLowerCase();
+  if (host !== 'github.com' && host !== 'www.github.com') return null;
+  const [owner, repo, ...rest] = path
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\.git$/i, '')
+    .split('/');
+  if (!owner || !repo || rest.length > 0) {
+    // The URL is not logged: a stored remote can embed credentials in its userinfo.
+    throw new Error('Codebase repository URL is on github.com but names no owner/repo');
+  }
+  return { owner, repo };
 }
 
 async function resolveBotGitHubEnvForWorkflow(
