@@ -4153,12 +4153,14 @@ async function executeLoopGroupNode(
   const result = await executeLoopGroupBody(
     ctx,
     node,
+    execution,
     workflowProvider,
     workflowModel,
     workflowTier,
     workflowPreset,
     stepNamePrefix
   );
+  if (result.execution?.lifecycle.status === 'suspended') return result;
   let lifecycle: NodeExecutionRecord['lifecycle'];
   if (result.state === 'failed') {
     lifecycle = {
@@ -4189,12 +4191,13 @@ async function executeLoopGroupNode(
 }
 
 type LoopGroupBodyResult = NodeExecutionResult & {
-  suspensionPoint?: 'approval' | 'wait' | 'interactive_loop';
+  suspensionPoint?: 'approval' | 'wait';
 };
 
 async function executeLoopGroupBody(
   ctx: RunLayersContext,
   node: LoopGroupNode,
+  execution: NodeExecutionRecord,
   workflowProvider: string,
   workflowModel: string | undefined,
   workflowTier: TierName | undefined,
@@ -5020,7 +5023,18 @@ async function executeLoopGroupBody(
         lastIterationOutput,
         group.gate_message
       );
+      const suspended = finishNodeExecution(
+        execution,
+        { status: 'suspended', point: 'interactive_loop' },
+        {
+          output: { text: lastIterationOutput, structured: lastIterationStructuredOutput },
+          costUsd: loopTotalCostUsd,
+          tokens: loopTotalTokens,
+          diagnostics: { loopIterations: i },
+        }
+      );
       const approvalContext: ApprovalContext = {
+        execution: executionMetadata(suspended),
         nodeId: node.id,
         message: honestMessage,
         type: 'interactive_loop',
@@ -5046,7 +5060,8 @@ async function executeLoopGroupBody(
       const paused = await pauseGateRespectingExternalTransition(
         deps,
         workflowRun.id,
-        approvalContext
+        approvalContext,
+        { suspension: serializeNodeStateRecord(suspended) }
       );
       if (!paused)
         return {
@@ -5056,6 +5071,7 @@ async function executeLoopGroupBody(
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
         };
+      await recordDerivedExecution({ logDir }, suspended);
       const gateMsg =
         `⏸ **Input required** (loop_group \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
@@ -5097,14 +5113,7 @@ async function executeLoopGroupBody(
           logEventStoreError(err, i);
         });
 
-      return {
-        state: 'running',
-        output: lastIterationOutput,
-        costUsd: loopTotalCostUsd,
-        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-        loopIterations: i,
-        suspensionPoint: 'interactive_loop',
-      };
+      return serializeNodeOutput(suspended);
     }
   }
 
@@ -6573,9 +6582,11 @@ async function executeLoopNode(
       const paused = await pauseGateRespectingExternalTransition(
         deps,
         workflowRun.id,
-        approvalContext
+        approvalContext,
+        { suspension: serializeNodeStateRecord(suspended) }
       );
       if (!paused) return serializeNodeOutput(execution);
+      await recordDerivedExecution({ logDir }, suspended);
       const gateMsg =
         `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
         `Run ID: \`${workflowRun.id}\`\n` +
@@ -6619,7 +6630,7 @@ async function executeLoopNode(
           logEventStoreError(err, i);
         });
 
-      return recordNodeState({ store: deps.store, logDir }, suspended);
+      return serializeNodeOutput(suspended);
     }
   }
 
@@ -6678,6 +6689,14 @@ async function pauseGateRespectingExternalTransition(
     if (status === 'paused') {
       const run = await deps.store.getWorkflowRun(runId);
       const active = run?.metadata?.approval;
+      const wait = run?.metadata?.wait;
+      if (isWorkflowWaitContext(wait)) {
+        getLog().info(
+          { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
+          'dag.gate_deferred'
+        );
+        return false;
+      }
       if (
         !isApprovalContext(active) ||
         (active.nodeId === approvalContext.nodeId &&
@@ -7108,14 +7127,15 @@ async function executeApprovalNode(
       diagnostics: { iteration },
     }
   );
+  const bodyGateOwner = ctx.bodyGateOwner?.bodyGateId === node.id ? ctx.bodyGateOwner : undefined;
   const approvalContext: ApprovalContext = {
     execution: executionMetadata(suspended),
     message: renderedMessage,
-    nodeId: ctx.bodyGateOwner?.nodeId ?? node.id,
-    ...(ctx.bodyGateOwner
+    nodeId: bodyGateOwner?.nodeId ?? node.id,
+    ...(bodyGateOwner
       ? {
-          bodyGateId: ctx.bodyGateOwner.bodyGateId,
-          iteration: ctx.bodyGateOwner.iteration,
+          bodyGateId: bodyGateOwner.bodyGateId,
+          iteration: bodyGateOwner.iteration,
           sessionId: ctx.lastSequentialSession?.sessionId ?? null,
           sessionProvider: ctx.lastSequentialSession?.provider ?? null,
         }

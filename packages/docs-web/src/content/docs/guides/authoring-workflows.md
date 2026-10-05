@@ -2141,11 +2141,10 @@ statement about the children:
 | write to the repo | `isolation: worktree` on each **`workflow:` node** |
 | must not overlap at all | sequence them with `depends_on` |
 
-One constraint applies however the checkouts are arranged: **one blocking child gate at a
-time.** Two children in the same layer that both pause for approval contend for the parent
-run's single approval slot — the second pause is silently dropped, and that child stays
-unmentioned until a later resume re-pauses on it. Sequence gated sub-runs with `depends_on`
-until a later slice adds real concurrent gating.
+Each 1:1 child run presents its own approval gate independently, addressed by its own run
+ID. Concurrent children can both pause for approval; the parent stays blocked until its
+children finish. Within a single run, gates are presented one at a time, and deferred gates
+re-run when that run resumes.
 
 ### Fanning out over a list with `fan_out:`
 
