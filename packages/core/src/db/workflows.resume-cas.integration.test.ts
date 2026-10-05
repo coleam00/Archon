@@ -448,7 +448,7 @@ describe('gate approve staging — real SQLite end-to-end (#2075)', () => {
     expect(approval.resolved ?? null).toBeNull();
 
     // And the second gate is approvable again.
-    await approveWorkflow('gate-1', 'step 2 fine');
+    await approveWorkflow('gate-1', 'step 2 fine', readGateQueue(repaused!.metadata)!.active!.id);
     const staged = await getWorkflowRun('gate-1');
     expect((staged?.metadata.approval as Record<string, unknown>).resolved).toBe('approved');
     expect(staged?.status).toBe('paused');
@@ -474,7 +474,8 @@ async function pauseWorkflowRun(...args: Parameters<typeof registerGate>) {
 
 async function resumeGateRun(id: string) {
   const row = await getWorkflowRun(id);
-  if (row && readGateQueue(row.metadata)?.active) await approveWorkflow(id);
+  const gate = row ? readGateQueue(row.metadata)?.active : undefined;
+  if (gate) await approveWorkflow(id, undefined, gate.id);
   return resumeWorkflowRun(id);
 }
 

@@ -123,7 +123,7 @@ substitution:
 | `$DOCS_DIR` | Documentation directory path (default: `docs/`) |
 | `$WORKFLOW_ID` | Current workflow run ID |
 | `$nodeId.output` | Output from upstream nodes |
-| `$LOOP_USER_INPUT` | User feedback provided via `/workflow approve <id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations. |
+| `$LOOP_USER_INPUT` | User feedback provided via `/workflow approve <id> --gate <gate-id> <text>` at an interactive loop gate. Only populated on the first iteration of a resumed interactive loop; empty string on all other iterations. |
 | `$LOOP_PREV_OUTPUT` | Cleaned output of the previous loop iteration. Empty string on the first iteration. Useful for `fresh_context: true` loops that need to reference what the previous pass produced or why it failed. |
 
 `$USER_MESSAGE` is particularly important for `fresh_context: true` loops —
@@ -502,17 +502,18 @@ Now the only way out is a passing suite.
 Set `interactive: true` to pause the loop between iterations and wait for human input.
 After each iteration the executor:
 
-1. Sends the gate message to the user along with the run ID and a `/workflow approve` command.
+1. Registers the gate and pauses the run. Once the concurrent layer settles and this gate
+   becomes active, it sends the gate message with the run ID and a `/workflow approve` command
+   containing the gate ID.
    The gate text is engine-generated: a status line naming the completion channel or channels
    that ended the iteration, or every declared channel when none did, plus a bounded excerpt of
    the iteration output — followed by your `gate_message`, so the gate always reports the real
    iteration outcome. The status line **leads the persisted gate message**
    (`metadata.approval.message`, also the
    `approval_requested` event data — what `workflow get --json` and `manage_run` read);
-   the chat-delivered message wraps the same text in a `⏸ Input required (loop ..., iteration N):`
-   prefix, so in chat the status line appears right after that prefix.
-2. Pauses the workflow run
-3. Waits — the workflow resumes when the user runs `/workflow approve <id> [feedback]`
+   the chat-delivered message prefixes the same text with the `⏸ Input required` heading.
+2. Retains other concurrent gates in the queue until the active gate resolves
+3. Waits — the workflow resumes when the user runs `/workflow approve <id> --gate <gate-id> [feedback]`
 
 The user's feedback is injected into the next iteration's prompt via `$LOOP_USER_INPUT`.
 
@@ -521,7 +522,7 @@ completion channel ended the paused iteration:
 
 - **Gate paused on a completed iteration** (the status line starts
   `✅ Completion condition met via` for one completed channel or
-  `✅ Completion conditions met via` for several): `/workflow approve <id>` with **no
+  `✅ Completion conditions met via` for several): `/workflow approve <id> --gate <gate-id>` with **no
   feedback** *accepts the completion* — the node
   finalizes from the already-computed output and the workflow proceeds, with **no re-run**.
   Approving **with feedback** discards that completion and runs another iteration with your
@@ -531,7 +532,7 @@ completion channel ended the paused iteration:
   (there is nothing to finalize).
 
 The same rule applies on every approve surface: chat `/workflow approve`, the CLI
-(`archon workflow approve <id> [--json]` — omit the comment to finalize), the HTTP
+(`archon workflow approve <id> --gate <gate-id> [--json]` — omit the comment to finalize), the HTTP
 endpoint (omit `comment`), the web console ("Accept & complete" with an empty comment
 field), and the `manage_run` chat tool (no `message`, or `accept: true`).
 
@@ -539,7 +540,7 @@ A plain chat message at a loop gate is not itself an approve — the same rule n
 at [approval gates](/guides/approval-nodes/#asking-the-chat-agent). Say what you want and
 the agent resolves the gate for you, passing your words through as the feedback; ask a
 question and nothing is resolved. Because your words travel as the approve comment, that
-route iterates. To finalize, use `/workflow approve <id>` with no comment, the CLI/web
+route iterates. To finalize, use `/workflow approve <id> --gate <gate-id>` with no comment, the CLI/web
 surfaces above, `manage_run` with `accept: true`, or `signal_completes`.
 
 ### `signal_completes` — autonomous completion
@@ -570,7 +571,7 @@ without `interactive: true` emits a loader warning.
 read the structured gate state first (`archon workflow get <id> --json` →
 `.metadata.approval.completionSignaled`, or the `manage_run` `get` action, which prints
 `completionSignaled`, the iteration, and an output excerpt), then finalize with
-`archon workflow approve <id> --json` (no comment) or `manage_run` approve with
+`archon workflow approve <id> --gate <gate-id> --json` (no comment) or `manage_run` approve with
 `accept: true` — or iterate by passing feedback. The `--json` approve records the decision
 without resuming; a later `resume` executes the finalize or the next iteration.
 
@@ -780,7 +781,7 @@ body node.
 
 Two distinct cases:
 
-- **Interactive-gate resume** (`/workflow approve <id>`): the loop continues
+- **Interactive-gate resume** (`/workflow approve <id> --gate <gate-id>`): the loop continues
   with the **next** iteration's whole body. With `fresh_context: false`, the
   body's AI session continues from where it paused (the session cursor is
   persisted across the gate). `$LOOP_PREV.*` refs on the first resumed

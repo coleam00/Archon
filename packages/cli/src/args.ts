@@ -33,6 +33,7 @@ export const cliArgOptions: CliArgOptions = {
   type: { type: 'string' },
   data: { type: 'string' },
   'data-file': { type: 'string' },
+  gate: { type: 'string' },
   comment: { type: 'string' },
   reason: { type: 'string' },
   text: { type: 'string' },

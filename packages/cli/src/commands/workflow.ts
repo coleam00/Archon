@@ -5736,7 +5736,8 @@ export async function workflowApproveCommand(
   comment?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  gateId?: string
 ): Promise<void> {
   // --detach: hand the approve AND its inline auto-resume to a detached child
   // (same argv minus --detach/--json). Handled BEFORE any state change — the
@@ -5773,7 +5774,7 @@ export async function workflowApproveCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment);
+      const result = await approveWorkflow(resolvedId, comment, gateId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5789,7 +5790,7 @@ export async function workflowApproveCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => approveWorkflow(resolvedId, comment));
+  const result = await spelledForCli(() => approveWorkflow(resolvedId, comment, gateId));
 
   // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
   // above) is the one surface that records the decision without continuing.
@@ -5865,7 +5866,8 @@ export async function workflowRejectCommand(
   reason?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  gateId?: string
 ): Promise<void> {
   // --detach: hand the reject AND its inline on_reject rework to a detached child,
   // exactly as approve does. Without it, reject hosts the executor in the calling
@@ -5898,7 +5900,7 @@ export async function workflowRejectCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await rejectWorkflow(resolvedId, rejectText);
+      const result = await rejectWorkflow(resolvedId, rejectText, gateId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5915,7 +5917,7 @@ export async function workflowRejectCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => rejectWorkflow(resolvedId, rejectText));
+  const result = await spelledForCli(() => rejectWorkflow(resolvedId, rejectText, gateId));
 
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -6006,10 +6008,11 @@ export async function workflowRespondCommand(
   text?: string,
   json?: boolean,
   cwd?: string,
-  detach?: boolean
+  detach?: boolean,
+  gateId?: string
 ): Promise<void> {
-  if (decision === 'approve') return workflowApproveCommand(runId, text, json, cwd, detach);
-  if (decision === 'reject') return workflowRejectCommand(runId, text, json, cwd, detach);
+  if (decision === 'approve') return workflowApproveCommand(runId, text, json, cwd, detach, gateId);
+  if (decision === 'reject') return workflowRejectCommand(runId, text, json, cwd, detach, gateId);
 
   // --detach: same shape as approve/reject — the parent validates read-only via the
   // SAME gate respondToWorkflow enforces, then hands the whole command to a detached
@@ -6039,7 +6042,7 @@ export async function workflowRespondCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await respondToWorkflow(resolvedId, decision, text);
+      const result = await respondToWorkflow(resolvedId, decision, text, gateId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6055,7 +6058,7 @@ export async function workflowRespondCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => respondToWorkflow(resolvedId, decision, text));
+  const result = await spelledForCli(() => respondToWorkflow(resolvedId, decision, text, gateId));
 
   if (!result.workingPath) {
     throw new Error(

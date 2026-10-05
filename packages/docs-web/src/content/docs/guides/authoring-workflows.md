@@ -1910,7 +1910,7 @@ sub-pipeline.**
 
 - **Gates pause the whole tree.** When the child hits an approval gate, the child run
   pauses **and** the parent pauses "blocked on child". A reviewer approves the **child** by
-  its own run id (`/workflow approve <childRunId>` — shown in the pause message). When the
+  its own run id (`/workflow approve <childRunId> --gate <gate-id>` — shown in the pause message). When the
   child completes, the parent **auto-resumes** in-process, re-runs the `workflow:` node,
   finds the child finished, and threads its output onward. Because the parent pauses at a
   gate, mark a parent that contains a `workflow:` node with `interactive: true` so it runs
@@ -3226,10 +3226,12 @@ nodes:
     context: fresh
 ```
 
-When the workflow reaches `review-gate`, it pauses and notifies you. Approve or reject via:
+When the workflow reaches `review-gate`, it retains the gate and pauses. After the concurrent
+layer settles, the active gate notifies you; other gates stay queued until promoted.
+Approve or reject using the displayed gate ID via:
 
-- **Explicit command**: `/workflow approve <run-id>` or `/workflow reject <run-id>` — deterministic; resolves and continues the run
-- **CLI**: `bun run cli workflow approve <run-id>` or `bun run cli workflow reject <run-id>` — resolves and continues (`--json` records the decision only)
+- **Explicit command**: `/workflow approve <run-id> --gate <gate-id>` or `/workflow reject <run-id> --gate <gate-id>` — deterministic; resolves and continues the run
+- **CLI**: `bun run cli workflow approve <run-id> --gate <gate-id>` or `bun run cli workflow reject <run-id> --gate <gate-id>` — resolves and continues (`--json` records the decision only)
 - **Chat**: tell the agent what you want ("looks good, ship it" / "no, stop") — it resolves the gate and the run continues. An ambiguous message resolves nothing and the agent asks; a plain message is **not** an automatic approval
 - **Web UI**: Open the paused run in the console. Use **Continue** with an optional comment, or **Reject** and enter the required feedback that flows to `$REJECTION_REASON`. When the gate continues execution, Web-dispatched and headless CLI runs can auto-resume; the gate's rejection rules can instead cancel the run.
 - **API**: `POST /api/workflows/runs/<run-id>/approve` or `/reject`

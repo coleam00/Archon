@@ -821,7 +821,24 @@ describe('archon workflow wait against a detached run', () => {
     // Resolving the gate is the ordinary next step, and it is what makes the wake
     // actionable. Rejecting to termination also exercises the transition that writes
     // `cancelled` from the gate path.
-    const rejected = await runCli(fixture, ['workflow', 'reject', runId, 'not this time']);
+    const attention = gate.payload.attention;
+    const respondTo =
+      typeof attention === 'object' && attention !== null && 'respondTo' in attention
+        ? attention.respondTo
+        : undefined;
+    const gateId =
+      typeof respondTo === 'object' && respondTo !== null && 'gateId' in respondTo
+        ? respondTo.gateId
+        : undefined;
+    if (typeof gateId !== 'string') throw new Error('Wait returned no displayed gate ID');
+    const rejected = await runCli(fixture, [
+      'workflow',
+      'reject',
+      runId,
+      '--gate',
+      gateId,
+      'not this time',
+    ]);
     if (rejected.exitCode !== 0) {
       throw new Error(`reject failed: ${rejected.stderr || rejected.stdout}`);
     }

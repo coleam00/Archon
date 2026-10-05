@@ -484,7 +484,47 @@ describe('manage_run — destructive confirmation gate', () => {
       message: 'lgtm',
     });
     expect(out).toContain('Approved');
-    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'lgtm');
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'lgtm', undefined);
+  });
+
+  test('exposes the displayed gate ID and carries it unchanged through confirmation', async () => {
+    const first = makeRun({
+      status: 'paused',
+      metadata: {
+        approval: {
+          nodeId: 'first',
+          message: 'Review first',
+          gateId: 'first-gate',
+        },
+      },
+    });
+    mockFindByPrefix.mockResolvedValue([first]);
+    const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
+    expect(await tool.handler({ action: 'get', runId: 'r1abcdef' })).toContain(
+      'gateId: first-gate'
+    );
+    expect(await tool.handler({ action: 'approve', runId: 'r1abcdef' })).toContain(
+      "gateId: 'first-gate'"
+    );
+    mockFindByPrefix.mockResolvedValue([
+      makeRun({
+        status: 'paused',
+        metadata: {
+          approval: {
+            nodeId: 'second',
+            message: 'Review second',
+            gateId: 'second-gate',
+          },
+        },
+      }),
+    ]);
+    await tool.handler({
+      action: 'approve',
+      runId: 'r1abcdef',
+      confirm: true,
+      gateId: 'first-gate',
+    });
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined, 'first-gate');
   });
 
   test('a child-run redirect is spelled for the calling surface, not the chat default', async () => {
@@ -506,7 +546,7 @@ describe('manage_run — destructive confirmation gate', () => {
     mockApprove.mockResolvedValue(approvalResult('interactive_loop'));
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     const out = await tool.handler({ action: 'approve', runId: 'r1abcdef', confirm: true });
-    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined);
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined, undefined);
     expect(out).toContain('no feedback');
     expect(out).toContain('completion condition was met');
     expect(out).not.toContain('completion signal');
@@ -524,7 +564,7 @@ describe('manage_run — destructive confirmation gate', () => {
       message: 'looks good',
     });
     // accept forces the finalize path: no feedback reaches the gate.
-    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined);
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', undefined, undefined);
     expect(out).toContain('finalizes');
   });
 
@@ -538,7 +578,7 @@ describe('manage_run — destructive confirmation gate', () => {
       confirm: true,
       message: 'redo the check',
     });
-    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'redo the check');
+    expect(mockApprove).toHaveBeenCalledWith('r1abcdef-1234', 'redo the check', undefined);
     expect(out).toContain('another iteration');
   });
 
@@ -571,7 +611,7 @@ describe('manage_run — destructive confirmation gate', () => {
       message: 'no',
     });
     expect(out).toContain('Rejected and cancelled');
-    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'no');
+    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'no', undefined);
   });
 
   test('reject with no message defaults the rejection text to "Rejected"', async () => {
@@ -579,7 +619,7 @@ describe('manage_run — destructive confirmation gate', () => {
     mockReject.mockResolvedValue(rejectionResult());
     const tool = buildManageRunTool({ codebaseId: CODEBASE_ID });
     await tool.handler({ action: 'reject', runId: 'r1abcdef', confirm: true });
-    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'Rejected');
+    expect(mockReject).toHaveBeenCalledWith('r1abcdef-1234', 'Rejected', undefined);
   });
 
   test('reject with confirm and an on-reject prompt records rejection, not cancellation', async () => {
@@ -627,7 +667,12 @@ describe('manage_run — destructive confirmation gate', () => {
       confirm: true,
       message: 'needs more detail',
     });
-    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'revise', 'needs more detail');
+    expect(mockRespond).toHaveBeenCalledWith(
+      'r1abcdef-1234',
+      'revise',
+      'needs more detail',
+      undefined
+    );
     expect(out).toContain("Responded 'revise'");
     expect(out).not.toContain('cancel');
   });
@@ -647,7 +692,7 @@ describe('manage_run — destructive confirmation gate', () => {
       message: 'no',
     });
     expect(out).toContain('Rejected and cancelled');
-    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'reject', 'no');
+    expect(mockRespond).toHaveBeenCalledWith('r1abcdef-1234', 'reject', 'no', undefined);
   });
 
   test('an undeclared decision surfaces as an error, never a silent cancel', async () => {

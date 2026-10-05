@@ -54,12 +54,17 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |
 | Block until the run ends or needs a human decision | `archon workflow wait <run-id> --json` |
-| Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
-| Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
-| Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
+| Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> --gate <gate-id> [text]` |
+| Approve (default vocabulary) | `archon workflow approve <run-id> --gate <gate-id> [text]` |
+| Reject (default vocabulary) | `archon workflow reject <run-id> --gate <gate-id> "<reason>"` |
 | Stop a running run (its live owner first) | `archon workflow cancel <run-id>` |
 | Mark paused/failed/orphaned run cancelled | `archon workflow abandon <run-id>` |
 | Resume failed/paused from completed nodes | `archon workflow resume <run-id>` |
+
+Gate decisions require the ID from the displayed prompt or
+`workflow get <run-id> --json` (`.metadata.approval.gateId`). Pass it as `--gate`;
+a stale ID is refused after another gate is promoted. Only legacy singular gate
+records accept tokenless commands.
 
 ## The approve/resume two-step
 
@@ -68,13 +73,13 @@ the run becomes resumable but does not execute (streaming output would corrupt
 the JSON). To record AND continue:
 
 ```bash
-archon workflow approve <run-id> "ship it"   # no --json: records + auto-resumes; background task!
+archon workflow approve <run-id> --gate <gate-id> "ship it"   # no --json: records + auto-resumes; background task!
 ```
 
 Or deliberately in two steps:
 
 ```bash
-archon workflow approve <run-id> "ship it" --json   # recorded, resumable: true
+archon workflow approve <run-id> --gate <gate-id> "ship it" --json   # recorded, resumable: true
 archon workflow resume <run-id>                     # executes; background task
 ```
 
@@ -119,8 +124,7 @@ Choose deliberately after reading what the gate produced — not by reflex.
 
 ## Respond: gates beyond approve/reject
 
-Some gates declare decisions beyond the default pair (`respond <run-id> <decision>
-[text]`). Read the run's metadata to see which decisions its gates declare before
+Some gates declare decisions beyond the default pair (`respond <run-id> <decision> --gate <gate-id> [text]`). Read the run's metadata to see which decisions its gates declare before
 guessing one.
 
 ## Judging a finished run

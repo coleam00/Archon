@@ -13,12 +13,12 @@ export async function presentWorkflowGate(
   if (!gate) return;
   const interactive = gate.context.type === 'interactive_loop';
   const heading = interactive ? 'Input required' : 'Approval required';
-  const approve = `approve ${gate.runId}${interactive ? ' <your feedback>' : ''}`;
+  const approve = `approve ${gate.runId} --gate ${gate.id}${interactive ? ' <your feedback>' : ''}`;
   const message =
     `⏸ **${heading}**: ${gate.context.message}\n\n` +
     `Run ID: \`${gate.runId}\`\n` +
     `${interactive ? 'Respond' : 'Approve'}: \`${spellWorkflowCommand(platform, approve)}\` | ` +
-    `${interactive ? 'Cancel' : 'Reject'}: \`${spellWorkflowCommand(platform, `reject ${gate.runId}`)}\``;
+    `${interactive ? 'Cancel' : 'Reject'}: \`${spellWorkflowCommand(platform, `reject ${gate.runId} --gate ${gate.id}`)}\``;
   try {
     await platform.sendMessage(conversationId, message);
   } catch (cause) {

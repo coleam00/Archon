@@ -3,7 +3,11 @@ import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { registerBuiltinProviders } from '@archon/providers';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import { createWorkflowStore } from '../workflows/store-adapter';
-import { approveWorkflow } from '../operations/workflow-operations';
+import {
+  approveWorkflow,
+  rejectWorkflow,
+  respondToWorkflow,
+} from '../operations/workflow-operations';
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -226,6 +230,7 @@ describe('durable workflow gate admission', () => {
     const initial = await queue(id);
     const first = initial.active!;
     const second = initial.pending[0];
+    expect(messages.some(message => message.includes(`--gate ${first.id}`))).toBe(true);
     const resume = async (): Promise<void> => {
       const admission = await new InProcessWorkflowEngine(deps).resume({
         run: (await getWorkflowRun(id))!,
@@ -244,6 +249,10 @@ describe('durable workflow gate admission', () => {
     await resume();
     expect(messages.filter(message => message.includes('**Approval required**'))).toHaveLength(2);
     expect((await queue(id)).active?.id).toBe(second.id);
+    expect(messages.some(message => message.includes(`--gate ${second.id}`))).toBe(true);
+    await expect(approveWorkflow(id, 'unbound replay')).rejects.toThrow('gate');
+    await expect(rejectWorkflow(id, 'unbound replay')).rejects.toThrow('gate');
+    await expect(respondToWorkflow(id, 'approve', 'unbound replay')).rejects.toThrow('gate');
     await expect(approveWorkflow(id, 'stale click', first.id)).rejects.toThrow('gate has changed');
     await approveWorkflow(id, 'second decision', second.id);
     await resume();

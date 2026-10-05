@@ -533,13 +533,18 @@ Each conversation gets its own isolated copy of the repo:
 │   Switch repos                      "/repos" then pick one              │
 │   List available workflows          "/workflow list"                    │
 │   Reload workflow definitions       "/workflow reload"                  │
-│   Approve paused workflow           "/workflow approve <id> [comment]"  │
-│   Reject paused workflow           "/workflow reject <id> [reason]"   │
 │   Cancel stuck workflow             "/workflow cancel"                  │
 │   Start fresh                       "/reset"                            │
 │   Get help                          "/help"                             │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
+```
+
+For a paused gate, use its displayed ID:
+
+```text
+/workflow approve <run-id> --gate <gate-id> [comment]
+/workflow reject <run-id> --gate <gate-id> [reason]
 ```
 
 ---

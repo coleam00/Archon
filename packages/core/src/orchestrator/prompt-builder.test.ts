@@ -256,6 +256,24 @@ describe('formatPausedGateSection', () => {
     message: 'Approve the plan above.',
   });
 
+  test('binds model and explicit-command decisions to the displayed gate ID', () => {
+    const section = formatPausedGateSection(
+      pausedRun({
+        type: 'approval',
+        nodeId: 'review',
+        message: 'Approve?',
+        gateId: 'displayed-gate',
+        admissionOwnerId: 'run-abc',
+        admission: 'active',
+        presentation: 'delivered',
+      })
+    );
+    expect(section).toContain('Gate id: `displayed-gate`');
+    expect(section).toContain('pass this as gateId');
+    expect(section).toContain('/workflow approve run-abc --gate displayed-gate [comment]');
+    expect(section).toContain('/workflow reject run-abc --gate displayed-gate <reason>');
+  });
+
   test('states the gate facts the agent needs to act on', () => {
     const section = formatPausedGateSection(openGate);
 

@@ -9990,6 +9990,155 @@ describe('workflowApproveCommand', () => {
     consoleSpy.mockRestore();
   });
 
+  it.each(['approve', 'reject', 'respond'])(
+    'binds a %s decision to the displayed gate and retains feedback',
+    async action => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-gate',
+        workflow_name: 'gates',
+        status: 'paused',
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'second',
+            message: 'Review second',
+            captureResponse: true,
+            decisionsAuthored: true,
+            decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            gateId: 'second-gate',
+            admissionOwnerId: 'run-gate',
+            admission: 'active',
+            presentation: 'delivered',
+          },
+        },
+      });
+      const stdoutSpy = spyOnJsonStdout();
+      try {
+        if (action === 'approve')
+          await workflowApproveCommand(
+            'run-gate',
+            'feedback',
+            true,
+            undefined,
+            undefined,
+            'second-gate'
+          );
+        else if (action === 'reject')
+          await workflowRejectCommand(
+            'run-gate',
+            'feedback',
+            true,
+            undefined,
+            undefined,
+            'second-gate'
+          );
+        else
+          await workflowRespondCommand(
+            'run-gate',
+            'revise',
+            'feedback',
+            true,
+            undefined,
+            undefined,
+            'second-gate'
+          );
+        expect(JSON.parse(firstJsonPayload(stdoutSpy)).ok).toBe(true);
+        const resolution = (
+          workflowDb.resolveApprovalGate as Mock<typeof workflowDb.resolveApprovalGate>
+        ).mock.calls.at(-1);
+        expect(resolution?.[1]).toMatchObject({
+          approval: { gateId: 'second-gate' },
+        });
+        const received = resolution?.[2]?.find(event => event.event_type === 'approval_received');
+        expect(received?.data).toMatchObject(
+          action === 'reject' ? { reason: 'feedback' } : { comment: 'feedback' }
+        );
+      } finally {
+        stdoutSpy.mockRestore();
+      }
+    }
+  );
+
+  it.each(['approve', 'reject', 'respond'])(
+    'refuses a replayed %s decision after promotion',
+    async action => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-gate',
+        workflow_name: 'gates',
+        status: 'paused',
+        metadata: {
+          approval: {
+            type: 'approval',
+            nodeId: 'second',
+            message: 'Review second',
+            decisionsAuthored: true,
+            decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            gateId: 'second-gate',
+            admissionOwnerId: 'run-gate',
+            admission: 'active',
+            presentation: 'delivered',
+          },
+        },
+      });
+      const resolutions = (
+        workflowDb.resolveApprovalGate as Mock<typeof workflowDb.resolveApprovalGate>
+      ).mock.calls.length;
+      const cancellations = (
+        workflowDb.resolveAndCancelApprovalGate as Mock<
+          typeof workflowDb.resolveAndCancelApprovalGate
+        >
+      ).mock.calls.length;
+      const stdoutSpy = spyOnJsonStdout();
+      try {
+        if (action === 'approve')
+          await workflowApproveCommand(
+            'run-gate',
+            undefined,
+            true,
+            undefined,
+            undefined,
+            'first-gate'
+          );
+        else if (action === 'reject')
+          await workflowRejectCommand(
+            'run-gate',
+            undefined,
+            true,
+            undefined,
+            undefined,
+            'first-gate'
+          );
+        else
+          await workflowRespondCommand(
+            'run-gate',
+            'revise',
+            undefined,
+            true,
+            undefined,
+            undefined,
+            'first-gate'
+          );
+        const payload = JSON.parse(firstJsonPayload(stdoutSpy));
+        expect(payload.ok).toBe(false);
+        expect(payload.error).toContain('gate has changed');
+        expect(
+          (workflowDb.resolveApprovalGate as Mock<typeof workflowDb.resolveApprovalGate>).mock.calls
+        ).toHaveLength(resolutions);
+        expect(
+          (
+            workflowDb.resolveAndCancelApprovalGate as Mock<
+              typeof workflowDb.resolveAndCancelApprovalGate
+            >
+          ).mock.calls
+        ).toHaveLength(cancellations);
+      } finally {
+        stdoutSpy.mockRestore();
+      }
+    }
+  );
+
   it('should throw when run not found', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce(null);

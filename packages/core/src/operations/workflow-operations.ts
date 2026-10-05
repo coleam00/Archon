@@ -407,7 +407,8 @@ export class ChildRunRedirectError extends Error {
     readonly parentRunId: string,
     readonly childRunId: string,
     readonly nodeId: string,
-    readonly action: 'approve' | 'reject'
+    readonly action: 'approve' | 'reject',
+    readonly gateId?: string
   ) {
     super(
       `Run ${parentRunId} is paused waiting on sub-run ${childRunId} ` +
@@ -422,7 +423,8 @@ export class ChildRunRedirectError extends Error {
   /** The same refusal with the redirect command spelled for `surface`. */
   messageFor(surface: WorkflowCommandSurface): string {
     const label = this.action === 'approve' ? 'Approve' : 'Reject';
-    const command = spellWorkflowCommand(surface, `${this.action} ${this.childRunId}`);
+    const gateFlag = this.gateId ? ` --gate ${this.gateId}` : '';
+    const command = spellWorkflowCommand(surface, `${this.action} ${this.childRunId}${gateFlag}`);
     return `${this.message} ${label} it by run id: \`${command}\``;
   }
 }
@@ -467,7 +469,13 @@ export function assertApprovable(run: WorkflowRun): ApprovalContext {
       // parent's workflow node with empty output (the child's real output is then
       // discarded on resume) and orphan the still-paused child. Redirect the
       // operator to the child run, where the actual gate lives.
-      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'approve');
+      throw new ChildRunRedirectError(
+        run.id,
+        attention.childRunId,
+        attention.nodeId,
+        'approve',
+        approval?.gateId
+      );
     case 'action_required':
       throw new Error(
         `Run ${run.id} is paused for an outside action. Complete it, then resume the run; ` +
@@ -533,7 +541,13 @@ export function assertRejectable(run: WorkflowRun): ApprovalContext | undefined 
       // gate — cancelling the parent here would silently orphan the still-paused
       // child run. Reject the child (its own gate) or abandon the parent (which
       // cascade-cancels the subtree) instead.
-      throw new ChildRunRedirectError(run.id, attention.childRunId, attention.nodeId, 'reject');
+      throw new ChildRunRedirectError(
+        run.id,
+        attention.childRunId,
+        attention.nodeId,
+        'reject',
+        approval?.gateId
+      );
     case 'unreadable':
       // The one deliberate divergence from approve: unreadable gate METADATA is
       // still rejectable (see this function's doc comment). An unrecognized gate
@@ -1020,8 +1034,7 @@ function assertExpectedGate(
   approval: ApprovalContext | undefined,
   expectedGateId: string | undefined
 ): void {
-  if (expectedGateId !== undefined && approval?.gateId !== expectedGateId)
-    throw new WorkflowGateChangedError();
+  if (approval?.gateId !== expectedGateId) throw new WorkflowGateChangedError();
 }
 
 /** Record this gate's decision while leaving continuation to the caller. */

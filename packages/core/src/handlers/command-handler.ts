@@ -863,8 +863,11 @@ async function handleWorkflowCommand(
             msg += `  Resume: \`${cmd(`resume ${run.id}`)}\`\n`;
             msg += `  Abandon: \`${cmd(`abandon ${run.id}`)}\`\n`;
           } else if (attention?.kind === 'awaiting_response') {
-            msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}`)}\`\n`;
-            msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId} <reason>`)}\`\n`;
+            const gateFlag = attention.respondTo.gateId
+              ? ` --gate ${attention.respondTo.gateId}`
+              : '';
+            msg += `  Approve: \`${cmd(`approve ${attention.respondTo.runId}${gateFlag}`)}\`\n`;
+            msg += `  Reject: \`${cmd(`reject ${attention.respondTo.runId}${gateFlag} <reason>`)}\`\n`;
           }
           msg += '\n';
         }
@@ -969,7 +972,7 @@ async function handleWorkflowCommand(
       if (!runId) {
         return {
           success: false,
-          message: `Usage: ${cmd('approve <id> [comment]')}\n\nApproves a paused workflow run.`,
+          message: `Usage: ${cmd('approve <id> [--gate <gate-id>] [comment]')}\n\nApproves a paused workflow run.`,
         };
       }
       // Pass the RAW comment through (undefined when the user typed none) —
@@ -977,11 +980,12 @@ async function handleWorkflowCommand(
       // feedback" must survive so a signal-bearing interactive-loop gate
       // finalizes instead of re-running (#2074, loop_feedback_given). Mirrors
       // the HTTP route and CLI.
-      const rawComment = args.slice(2).join(' ');
+      const gateId = args[2] === '--gate' ? args[3] : undefined;
+      const rawComment = args.slice(args[2] === '--gate' ? 4 : 2).join(' ');
       const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await approveWorkflow(runId, comment);
+        const result = await approveWorkflow(runId, comment, gateId);
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
         const headline =
           result.type === 'interactive_loop'
@@ -1003,13 +1007,14 @@ async function handleWorkflowCommand(
       if (!runId) {
         return {
           success: false,
-          message: `Usage: ${cmd('reject <id> [reason]')}\n\nRejects a paused workflow run.`,
+          message: `Usage: ${cmd('reject <id> [--gate <gate-id>] [reason]')}\n\nRejects a paused workflow run.`,
         };
       }
-      const reason = args.slice(2).join(' ') || 'Rejected';
+      const gateId = args[2] === '--gate' ? args[3] : undefined;
+      const reason = args.slice(args[2] === '--gate' ? 4 : 2).join(' ') || 'Rejected';
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await rejectWorkflow(runId, reason);
+        const result = await rejectWorkflow(runId, reason, gateId);
         if (result.cancelled) {
           const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
           return {
@@ -1048,12 +1053,13 @@ async function handleWorkflowCommand(
         return {
           success: false,
           message:
-            `Usage: ${cmd('respond <id> <decision> [text]')}\n\n` +
+            `Usage: ${cmd('respond <id> <decision> [--gate <gate-id>] [text]')}\n\n` +
             "Resolves a paused gate with any of its declared decisions ('approve'/'reject' " +
             `are sugar for the dedicated ${cmd('approve|reject')} commands).`,
         };
       }
-      const rawText = args.slice(3).join(' ');
+      const gateId = args[3] === '--gate' ? args[4] : undefined;
+      const rawText = args.slice(args[3] === '--gate' ? 5 : 3).join(' ');
       // Mirrors the dedicated /workflow reject command's default: an empty reason
       // becomes 'Rejected' rather than reaching a new-mode gate's structured
       // output as ''. Only for decision === 'reject' — respond's other decisions
@@ -1061,7 +1067,7 @@ async function handleWorkflowCommand(
       const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await respondToWorkflow(runId, decision, text);
+        const result = await respondToWorkflow(runId, decision, text, gateId);
         if ('cancelled' in result) {
           if (result.cancelled) {
             const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -1208,8 +1214,8 @@ async function handleWorkflowCommand(
           `  ${cmd('cancel [id]')} - Cancel a running workflow (default: the one in this conversation)`,
           `  ${cmd('resume <id>')} - Resume a failed or paused run`,
           `  ${cmd('abandon <id>')} - Abandon a running, failed, or paused run`,
-          `  ${cmd('approve <id> [comment]')} - Approve a paused gate`,
-          `  ${cmd('reject <id> [reason]')} - Reject a paused gate`,
+          `  ${cmd('approve <id> [--gate <gate-id>] [comment]')} - Approve a paused gate`,
+          `  ${cmd('reject <id> [--gate <gate-id>] [reason]')} - Reject a paused gate`,
           `  ${cmd('reset-sessions <name> [<node-id>]')} - Clear persisted AI session memory for this conversation`,
           `  ${cmd('run <name> [args]')} - Run a workflow directly`,
         ].join('\n'),

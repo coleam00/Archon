@@ -677,6 +677,8 @@ export function isRecognizedSuspendReason(type: string | undefined): boolean {
   return type === undefined || suspendReasonSchema.safeParse(type).success;
 }
 
+const gatePresentationSchema = z.enum(['unclaimed', 'claimed', 'delivered']);
+
 /** The complete gate snapshot, persisted before requesting a decision. */
 export const approvalContextSchema = z.object({
   nodeId: z.string(),
@@ -708,7 +710,7 @@ export const approvalContextSchema = z.object({
   gateId: z.string().optional(),
   admissionOwnerId: z.string().optional(),
   admission: z.enum(['collecting', 'queued', 'active']).optional(),
-  presentation: z.enum(['unclaimed', 'claimed', 'delivered']).optional(),
+  presentation: gatePresentationSchema.optional(),
 });
 export type ApprovalContext = z.infer<typeof approvalContextSchema>;
 
@@ -735,7 +737,7 @@ const gateRecordFields = {
     })
     .strict(),
   readyForPresentation: z.boolean(),
-  presentation: z.enum(['unclaimed', 'claimed', 'delivered']),
+  presentation: gatePresentationSchema,
 };
 export const pendingGateSchema = z.object(gateRecordFields);
 export const resolvedGateSchema = z.object({

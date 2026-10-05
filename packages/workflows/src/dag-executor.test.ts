@@ -16762,11 +16762,12 @@ describe('executeDagWorkflow -- approval node', () => {
 
     it('approval gate prompt', async () => {
       const platform = slackPlatform();
+      const deps = createMockDeps();
       const workflowRun = makeWorkflowRun('gate-run');
 
       await executeDagWorkflow(
         dagOptions({
-          deps: createMockDeps(),
+          deps,
           platform,
           cwd: testDir,
           workflow: {
@@ -16787,8 +16788,9 @@ describe('executeDagWorkflow -- approval node', () => {
       );
 
       const text = sentText(platform);
-      expect(text).toContain('Approve: `/archon-workflow approve gate-run`');
-      expect(text).toContain('Reject: `/archon-workflow reject gate-run`');
+      const gateId = (await deps.store.getWorkflowGateState('gate-run')).queue!.active!.id;
+      expect(text).toContain(`Approve: \`/archon-workflow approve gate-run --gate ${gateId}\``);
+      expect(text).toContain(`Reject: \`/archon-workflow reject gate-run --gate ${gateId}\``);
       expectSlackSpelling(text);
     });
 
@@ -16798,10 +16800,11 @@ describe('executeDagWorkflow -- approval node', () => {
         yield { type: 'result', sessionId: 'loop-spelling' };
       });
       const platform = slackPlatform();
+      const deps = createMockDeps();
 
       await executeDagWorkflow(
         dagOptions({
-          deps: createMockDeps(),
+          deps,
           platform,
           cwd: testDir,
           workflow: {
@@ -16826,7 +16829,10 @@ describe('executeDagWorkflow -- approval node', () => {
       );
 
       const text = sentText(platform);
-      expect(text).toContain('`/archon-workflow approve loop-run <your feedback>`');
+      const gateId = (await deps.store.getWorkflowGateState('loop-run')).queue!.active!.id;
+      expect(text).toContain(
+        `\`/archon-workflow approve loop-run --gate ${gateId} <your feedback>\``
+      );
       expectSlackSpelling(text);
     });
 
@@ -16836,10 +16842,11 @@ describe('executeDagWorkflow -- approval node', () => {
         yield { type: 'result', sessionId: 'loop-group-spelling' };
       });
       const platform = slackPlatform();
+      const deps = createMockDeps();
 
       await executeDagWorkflow(
         dagOptions({
-          deps: createMockDeps(),
+          deps,
           platform,
           cwd: testDir,
           workflow: {
@@ -16869,7 +16876,10 @@ describe('executeDagWorkflow -- approval node', () => {
       );
 
       const text = sentText(platform);
-      expect(text).toContain('`/archon-workflow approve group-run <your feedback>`');
+      const gateId = (await deps.store.getWorkflowGateState('group-run')).queue!.active!.id;
+      expect(text).toContain(
+        `\`/archon-workflow approve group-run --gate ${gateId} <your feedback>\``
+      );
       expectSlackSpelling(text);
     });
   });
@@ -30511,6 +30521,80 @@ describe('executeDagWorkflow -- container write-back gate', () => {
 });
 
 describe('executeDagWorkflow -- concurrent gate admission (#2180)', () => {
+  it('keeps admission collecting until a delayed sibling registers and settles', async () => {
+    const testDir = join(tmpdir(), `dag-gate-barrier-${crypto.randomUUID()}`);
+    await mkdir(testDir, { recursive: true });
+    const run = makeWorkflowRun();
+    const store = createMockStore();
+    const gates = createGateStoreTestMethods(() => run, store.persistWorkflowEvent);
+    Object.assign(store, gates);
+    store.getWorkflowRun = mock(async () => ({ ...run, metadata: { ...run.metadata } }));
+    store.getWorkflowRunStatus = mock(async () => run.status);
+    const firstRegistered = Promise.withResolvers<void>();
+    const secondWaiting = Promise.withResolvers<void>();
+    const releaseSecond = Promise.withResolvers<void>();
+    store.pauseWorkflowRun = mock(async (id, context, extra) => {
+      if (context.nodeId === 'second') {
+        secondWaiting.resolve();
+        await releaseSecond.promise;
+      }
+      const result = await gates.pauseWorkflowRun(id, context, extra);
+      if (context.nodeId === 'first') firstRegistered.resolve();
+      return result;
+    });
+    const platform = createMockPlatform();
+    const execution = executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        conversationId: 'conv-barrier',
+        cwd: testDir,
+        workflowRun: run,
+        workflow: {
+          name: 'barrier',
+          nodes: ['first', 'second'].map(id =>
+            dagNodeSchema.parse({
+              id,
+              approval: { message: `Review ${id}` },
+            })
+          ),
+        },
+      })
+    );
+    try {
+      await Promise.all([firstRegistered.promise, secondWaiting.promise]);
+      await new Promise<void>(resolve => setImmediate(resolve));
+      const collecting = (await store.getWorkflowGateState(run.id)).queue!;
+      expect(collecting.phase).toBe('collecting');
+      expect(collecting.pending).toHaveLength(0);
+      expect(collecting.active?.readyForPresentation).toBe(false);
+      expect(platform.sendMessage).not.toHaveBeenCalled();
+      expect(store.settleWorkflowGates).not.toHaveBeenCalled();
+      expect(await store.claimWorkflowGatePresentation(run.id)).toBeNull();
+      expect(() => gates.resolveGate(run.id, { resolved: 'approved' })).toThrow(
+        'No presented test gate'
+      );
+      releaseSecond.resolve();
+      await execution;
+      const parked = (await store.getWorkflowGateState(run.id)).queue!;
+      expect(parked.phase).toBe('parked');
+      expect(parked.active?.presentation).toBe('delivered');
+      expect(parked.pending.map(gate => gate.context.nodeId)).toEqual(['second']);
+      expect(parked.pending[0].readyForPresentation).toBe(true);
+      const suspensions = store.createWorkflowEvent.mock.calls
+        .map(([event]) => event)
+        .filter(event => event.event_type === 'node_suspended')
+        .map(event => event.step_name);
+      expect(suspensions.sort()).toEqual(['first', 'second']);
+      expect(platform.sendMessage).toHaveBeenCalledTimes(1);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    } finally {
+      releaseSecond.resolve();
+      await execution;
+      await removeTempTree(testDir);
+    }
+  });
+
   it('durably suspends both independent gates and presents only the selected gate', async () => {
     const testDir = join(tmpdir(), `dag-concurrent-gates-${crypto.randomUUID()}`);
     await mkdir(testDir, { recursive: true });

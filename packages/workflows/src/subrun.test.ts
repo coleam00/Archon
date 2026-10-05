@@ -1353,7 +1353,8 @@ nodes:
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(call => (call as unknown[])[1] as string)
       .join('\n');
-    expect(sent).toContain(`Approve: \`/archon-workflow approve ${child!.id}\``);
+    const gateId = readGateQueue(parentRun!.metadata)!.active!.id;
+    expect(sent).toContain(`Approve: \`/archon-workflow approve ${child!.id} --gate ${gateId}\``);
     expect(sent.replaceAll('/archon-workflow ', '')).not.toContain('/workflow ');
     expect((parentRun?.metadata.approval as { message: string }).message).toBe(
       'review the sub-run'

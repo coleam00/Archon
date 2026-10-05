@@ -95,7 +95,7 @@ Two slash commands give the team an alternative to @mention:
 | Command | What it does |
 | --- | --- |
 | `/archon <message>` | Talks to Archon in the current channel. Equivalent to `@archon <message>`. |
-| `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `abandon <id>`, `resume <id>`. |
+| `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `run <name> <args>`, `approve <id> --gate <gate-id> [comment]`, `reject <id> --gate <gate-id> [reason]`, `abandon <id>`, `resume <id>`. |
 
 For each command:
 

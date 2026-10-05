@@ -1489,6 +1489,20 @@ describe('assertApprovable / assertRejectable — shared precondition gate', () 
 
   // The redirect names a command, and every surface spells it differently, so the
   // error carries the decision as data and never bakes one spelling into `message`.
+  test('child redirects retain the active gate identity in their command', () => {
+    for (const verb of ['approve', 'reject'] as const) {
+      const parent = withMeta(childGate({ childRunId: 'child-9', gateId: 'displayed-gate' }));
+      try {
+        if (verb === 'approve') assertApprovable(parent);
+        else assertRejectable(parent);
+        throw new Error('Expected child redirect');
+      } catch (error) {
+        if (!(error instanceof ChildRunRedirectError)) throw error;
+        expect(error.messageFor({})).toContain(`/workflow ${verb} child-9 --gate displayed-gate`);
+      }
+    }
+  });
+
   test('the child redirect is typed, command-free, and spells per surface', () => {
     const slack = { formatWorkflowCommand: (c: string) => `/archon-workflow ${c}` };
     const thrown = (verb: 'approve' | 'reject'): InstanceType<typeof ChildRunRedirectError> => {

@@ -718,6 +718,15 @@ const orderedFlags: FlagHelp[] = [
     ],
   },
   {
+    spec: '--gate <gate-id>',
+    description: 'ID from the displayed gate; required for queued approvals',
+    owners: [
+      { command: 'workflow', subcommand: 'approve' },
+      { command: 'workflow', subcommand: 'reject' },
+      { command: 'workflow', subcommand: 'respond' },
+    ],
+  },
+  {
     spec: '--detach',
     description:
       "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)",

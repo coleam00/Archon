@@ -15,10 +15,10 @@ Variables are placeholders in command files and workflow prompts that get replac
 | `$CONTEXT` | All modes | GitHub issue/PR context (if available from platform). Empty string if unavailable |
 | `$EXTERNAL_CONTEXT` | All modes | Alias for `$CONTEXT` |
 | `$ISSUE_CONTEXT` | All modes | Alias for `$CONTEXT` |
-| `$LOOP_USER_INPUT` | Loop / loop_group prompts | User feedback from `/workflow approve <id> <text>` at an interactive loop gate. Populated ONLY on the first iteration after a resume; empty string everywhere else |
+| `$LOOP_USER_INPUT` | Loop / loop_group prompts | User feedback from `/workflow approve <id> --gate <gate-id> <text>` at an interactive loop gate. Populated ONLY on the first iteration after a resume; empty string everywhere else |
 | `$LOOP_PREV_OUTPUT` | Loop prompts | Previous iteration's cleaned output (completion tags stripped). Empty on iteration 1. Key tool for `fresh_context: true` loops that need to know what the last pass did |
 | `$LOOP_PREV.<nodeId>.output[.field]` | loop_group body prompts and `when:` conditions | Previous iteration's output of a specific body node. Empty on iteration 1. Field access follows the strict contract below (except genuinely-absent prior output → `''`). In a body `when:`, it is a typed condition reference rather than text substitution |
-| `$REJECTION_REASON` | Legacy `approval.on_reject` prompts | Reviewer feedback from `/workflow reject <id> <reason>`. Empty string everywhere else. New gates read `$gate.output.text` |
+| `$REJECTION_REASON` | Legacy `approval.on_reject` prompts | Reviewer feedback from `/workflow reject <id> --gate <gate-id> <reason>`. Empty string everywhere else. New gates read `$gate.output.text` |
 | `$nodeId.output` | DAG only | Full text output of a completed upstream node. Unknown/skipped producer → `''` |
 | `$nodeId.output.field` | DAG only | JSON field access — **strict**: an unresolvable field FAILS the consuming node (see below) |
 

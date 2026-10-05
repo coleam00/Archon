@@ -3059,6 +3059,76 @@ describe('CommandHandler', () => {
         });
       }
 
+      test.each(['approve', 'reject', 'respond'])(
+        'refuses a replayed %s command after promotion',
+        async action => {
+          const run = pausedRun({
+            metadata: {
+              approval: {
+                type: 'approval',
+                nodeId: 'second',
+                message: 'Review second',
+                decisionsAuthored: true,
+                decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+                gateId: 'second-gate',
+                admissionOwnerId: 'run-gate',
+                admission: 'active',
+                presentation: 'delivered',
+              },
+            },
+          });
+          mockGetWorkflowRun.mockResolvedValueOnce(run);
+          const verb = action === 'respond' ? 'respond run-gate revise' : `${action} run-gate`;
+          const result = await handleCommand(
+            approveConversation,
+            `/workflow ${verb} --gate first-gate`
+          );
+          expect(result.success).toBe(false);
+          expect(result.message).toContain('gate has changed');
+          expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+          expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+        }
+      );
+
+      test.each(['approve', 'reject', 'respond'])(
+        'binds a %s command to the displayed gate and retains feedback',
+        async action => {
+          const run = pausedRun({
+            metadata: {
+              approval: {
+                type: 'approval',
+                nodeId: 'second',
+                message: 'Review second',
+                captureResponse: true,
+                decisionsAuthored: true,
+                decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+                gateId: 'second-gate',
+                admissionOwnerId: 'run-gate',
+                admission: 'active',
+                presentation: 'delivered',
+              },
+            },
+          });
+          stubRunReads(run);
+          stubWorkflowDiscovery();
+          const verb = action === 'respond' ? 'respond run-gate revise' : `${action} run-gate`;
+          const result = await handleCommand(
+            approveConversation,
+            `/workflow ${verb} --gate second-gate feedback`
+          );
+          expect(result.success).toBe(true);
+          expect(mockResolveApprovalGate.mock.calls[0]?.[1]).toMatchObject({
+            approval: { gateId: 'second-gate' },
+          });
+          const received = mockResolveApprovalGate.mock.calls[0]?.[2]?.find(
+            event => event.event_type === 'approval_received'
+          );
+          expect(received?.data).toMatchObject(
+            action === 'reject' ? { reason: 'feedback' } : { comment: 'feedback' }
+          );
+        }
+      );
+
       test('approve hands the orchestrator the resume payload for the same run', async () => {
         const run = pausedRun();
         stubRunReads(run);

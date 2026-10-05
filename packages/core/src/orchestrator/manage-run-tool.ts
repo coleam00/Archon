@@ -108,6 +108,11 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
       description:
         'Run id — required for get/resume/cancel/abandon/approve/reject/respond. Accepts the short (8-char) or full id.',
     },
+    gateId: {
+      kind: 'string',
+      description:
+        'The displayed gate ID from action=get or the confirmation preview; required for queued gate decisions. Reuse that ID when confirming.',
+    },
     workflow: {
       kind: 'string',
       description: 'Workflow name to launch — required for action=start.',
@@ -172,11 +177,11 @@ const HELP_BY_ACTION: Record<Exclude<Action, 'help'>, string> = {
   abandon:
     'abandon — discard a paused/failed (non-terminal) run. Required: runId, confirm=true. Irreversible: the run becomes cancelled.',
   approve:
-    'approve — approve a paused human gate; the run then continues on its own (no separate resume). Required: runId, confirm=true. Optional: accept, message. On an interactive loop whose gate shows completionSignaled=true: NO message (or accept=true) FINALIZES the node from the already-computed output without re-running; message=<feedback> runs another iteration with it. On other gates, message is just a comment recorded with the approval — pass the user’s own words, since a gate with capture_response reads it as the node’s output. Only paused runs with an approval gate.',
+    'approve — approve a paused human gate; the run then continues on its own (no separate resume). Required: runId, confirm=true, and the displayed gateId for queued gates (read it with action=get). Optional: accept, message. On an interactive loop whose gate shows completionSignaled=true: NO message (or accept=true) FINALIZES the node from the already-computed output without re-running; message=<feedback> runs another iteration with it. On other gates, message is just a comment recorded with the approval — pass the user’s own words, since a gate with capture_response reads it as the node’s output. Only paused runs with an approval gate.',
   reject:
-    'reject — reject a paused human gate. Required: runId, confirm=true. Recommended: message (the reason, in the user’s own words). If the gate has an on-reject prompt the run reworks and continues on its own; otherwise it is cancelled and nothing further runs.',
+    'reject — reject a paused human gate. Required: runId, confirm=true, and the displayed gateId for queued gates (read it with action=get). Recommended: message (the reason, in the user’s own words). If the gate has an on-reject prompt the run reworks and continues on its own; otherwise it is cancelled and nothing further runs.',
   respond:
-    "respond — resolve a paused human gate with any decision it declared, not just approve/reject. Required: runId, decision, confirm=true. Optional: message (text recorded alongside the decision). Call action=get first — the run detail lists the gate’s declared decisions when it has more than the default pair. decision='approve'/'reject' also works here, but prefer the dedicated approve/reject actions for those; use respond for anything else the gate declared (e.g. 'revise', 'escalate'). An id the gate did not declare fails and names the actual options — nothing is silently cancelled.",
+    "respond — resolve a paused human gate with any decision it declared, not just approve/reject. Required: runId, decision, confirm=true, and the displayed gateId for queued gates. Optional: message (text recorded alongside the decision). Call action=get first — the run detail lists the gate’s declared decisions when it has more than the default pair. decision='approve'/'reject' also works here, but prefer the dedicated approve/reject actions for those; use respond for anything else the gate declared (e.g. 'revise', 'escalate'). An id the gate did not declare fails and names the actual options — nothing is silently cancelled.",
 };
 
 /**
@@ -291,6 +296,8 @@ function formatRunDetail(run: WorkflowRun): string {
   // AI approver can decide finalize-vs-iterate without parsing prose.
   const rawApproval = run.metadata.approval;
   const attention = runAttention(run);
+  if (isApprovalContext(rawApproval) && rawApproval.gateId)
+    parts.push(`gateId: ${rawApproval.gateId}`);
   if (attention?.kind === 'action_required') {
     parts.push(`action required: ${attention.message.slice(0, 300)}`);
     parts.push(
@@ -361,6 +368,7 @@ async function handleWrite(
     return "manage_run: action=respond requires a decision (call action=get to see the gate's declared options).";
   }
 
+  const gateId = typeof input.gateId === 'string' ? input.gateId : undefined;
   const message = typeof input.message === 'string' ? input.message.trim() : '';
   // Single finalize-vs-iterate predicate for approve (#2074): accept=true or an
   // empty message means no feedback reaches the gate — used by both the confirm
@@ -388,9 +396,14 @@ async function handleWrite(
         ? ' A completion condition was met at this gate, and your args would FINALIZE the node from the already-computed output (no re-run).'
         : ' A completion condition was met at this gate, but your message would run ANOTHER iteration (pass accept:true or drop the message to finalize instead).';
     }
+    const gateIdentity =
+      GATE_ACTIONS.has(action) && isApprovalContext(approvalMeta) && approvalMeta.gateId
+        ? ` Pass gateId: '${approvalMeta.gateId}' with the confirmation.`
+        : '';
     return (
       `⚠️ This will ${action} ${subject}.${effect} ` +
-      'Confirm with the user, then call manage_run again with confirm: true to proceed.'
+      'Confirm with the user, then call manage_run again with confirm: true to proceed.' +
+      gateIdentity
     );
   }
 
@@ -451,7 +464,7 @@ async function handleWrite(
       // accept=true forces the finalize path (#2074): no feedback reaches the gate,
       // so a loop with a completed condition finalizes from its persisted output on resume.
       const feedback = willFinalize ? undefined : message;
-      const result = await approveWorkflow(id, feedback);
+      const result = await approveWorkflow(id, feedback, gateId);
       const continues = await signalGateResolved(ctx, run, 'approve');
       if (result.type !== 'interactive_loop') {
         return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
@@ -462,7 +475,7 @@ async function handleWrite(
     }
     case 'reject': {
       const rejectText = message.length > 0 ? message : 'Rejected';
-      const result = await rejectWorkflow(id, rejectText);
+      const result = await rejectWorkflow(id, rejectText, gateId);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
         return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
@@ -480,7 +493,7 @@ async function handleWrite(
       // gate's structured output as ''.
       const respondText =
         message.length > 0 ? message : decision === 'reject' ? 'Rejected' : undefined;
-      const result = await respondToWorkflow(id, decision, respondText);
+      const result = await respondToWorkflow(id, decision, respondText, gateId);
       if ('cancelled' in result) {
         // decision === 'reject' resolved through the legacy cancel/rework path.
         if (result.cancelled) {

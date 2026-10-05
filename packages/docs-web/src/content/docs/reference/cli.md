@@ -952,17 +952,17 @@ archon workflow abandon <run-id> --json
 
 ### `workflow approve`
 
-Approve a paused workflow run at an interactive approval gate. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
+Approve a paused workflow run at an interactive approval gate. Pass `--gate <gate-id>` using the ID in its prompt or `workflow get <run-id> --json` (`.metadata.approval.gateId`). Queued gate decisions require this ID; tokenless commands are supported only for legacy singular gate records. A delayed command for an earlier gate is refused. Optionally provide a comment that is available to the workflow via `$LOOP_USER_INPUT`.
 
-**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own run id — the id shown in the parent's block message — not the parent's; the parent auto-resumes when the child completes. A child gate is the exception: it works for a 1:1 sub-run, but a child that pauses inside a `fan_out:` expansion **fails the node** instead — a parent has one approval slot and cannot hand it to N children, so gate before or after the fan-out node rather than inside a child of it. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
+**Sub-run child gates (#2121 Phase 2):** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** using its own run id and the displayed gate ID. After the child completes, the parent auto-resumes. Concurrent 1:1 child gates share the parent tree's admission slot and are presented one at a time. Fan-out child gates remain rejected before spawn; place gates before or after the fan-out node. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id.
 
 **Interactive-loop gates — finalize vs iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion — the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration.
 
 ```bash
-archon workflow approve <run-id>
-archon workflow approve <run-id> "Looks good, proceed"
-archon workflow approve <run-id> --comment "Looks good, proceed"
-archon workflow approve <run-id> --json   # record approval + ack; does NOT auto-resume inline
+archon workflow approve <run-id> --gate <gate-id>
+archon workflow approve <run-id> --gate <gate-id> "Looks good, proceed"
+archon workflow approve <run-id> --gate <gate-id> --comment "Looks good, proceed"
+archon workflow approve <run-id> --gate <gate-id> --json   # record approval + ack; does NOT auto-resume inline
 ```
 
 In human mode `approve`/`reject` auto-resume the run inline. In `--json` mode they record the decision and return an ack **without** resuming (the run is left resumable for a backgrounded `resume`/`run --resume`).
@@ -989,8 +989,8 @@ startup surfaces as an error carrying the tail of its log. A run that finishes i
 that window is acknowledged normally; its outcome belongs to the run.
 
 ```bash
-archon workflow approve <run-id> --detach
-archon workflow approve <run-id> --detach --json
+archon workflow approve <run-id> --gate <gate-id> --detach
+archon workflow approve <run-id> --gate <gate-id> --detach --json
 ```
 
 **`--detach --json` deliberately differs from bare `--json`.** Bare `--json` records the
@@ -1023,9 +1023,9 @@ transcript. Precheck failures follow each verb's existing error contract:
 Reject a paused workflow run at an approval gate. Optionally provide a reason that is available to the workflow via `$REJECTION_REASON`.
 
 ```bash
-archon workflow reject <run-id>
-archon workflow reject <run-id> --reason "Needs more tests"
-archon workflow reject <run-id> --json
+archon workflow reject <run-id> --gate <gate-id>
+archon workflow reject <run-id> --gate <gate-id> --reason "Needs more tests"
+archon workflow reject <run-id> --gate <gate-id> --json
 ```
 
 ### `workflow cleanup`
@@ -1363,8 +1363,8 @@ archon workflow run implement --cwd ~/projects/my-app --branch feature-rate-limi
 archon workflow run implement --cwd ~/projects/my-app --branch test-adapters --from feature/extract-adapters "Test adapter changes"
 
 # Approve or reject a paused workflow
-archon workflow approve <run-id> "Ship it"
-archon workflow reject <run-id> --reason "Missing test coverage"
+archon workflow approve <run-id> --gate <gate-id> "Ship it"
+archon workflow reject <run-id> --gate <gate-id> --reason "Missing test coverage"
 
 # Check worktrees after work session
 archon isolation list

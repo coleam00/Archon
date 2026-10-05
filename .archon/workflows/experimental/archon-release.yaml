@@ -416,8 +416,7 @@ nodes:
 
       ══════════════════════════════════════════════════════════════════
 
-      Reply with `/workflow approve <run-id>` to continue, or
-      `/workflow reject <run-id> <reason>` to abort.
+      Use the commands in the following approval prompt to decide this release.
     depends_on: [format-changelog, collect-commits, bump-version, parse-args]
     model: haiku
     allowed_tools: []

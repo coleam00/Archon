@@ -41,21 +41,24 @@ nodes:
     depends_on: [review-gate]
 ```
 
-When execution reaches `review-gate`, the workflow pauses and sends a message
-to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On the
+When execution reaches `review-gate`, the workflow retains the gate and pauses.
+After the concurrent layer settles, one gate is presented to the user on their
+platform (CLI, Slack, GitHub, etc.). Other concurrent gates stay queued until the
+active gate resolves. See [concurrent gates](./authoring-workflows#running-sub-runs-side-by-side). On the
 **Web UI**, `interactive: true` is required for the message to appear in your chat.
 
 ## How It Works
 
 1. **Pause**: The executor sets the workflow run status to `paused` and stores
-   the approval context (node ID and message) in the run's metadata.
-2. **Notify**: A message is sent to the user with the approval prompt and
-   instructions for approving or rejecting.
+   each gate's context and identity in the run's durable admission queue.
+2. **Notify**: After the layer settles, the active gate sends its approval prompt
+   and commands containing its gate ID. Queued gates send no prompt until promoted.
+   Reuse the displayed ID when responding; a stale command cannot decide another gate.
 3. **Wait**: The workflow stays paused until the user takes action. Paused runs
    block the worktree path guard (no other workflow can start on the same path).
 4. **Approve**: The user approves, which writes a `node_completed` event for
    the approval node and transitions the run to resumable. Every approve surface
-   also continues the run: the `/workflow approve <run-id>` slash command, the
+   also continues the run: the `/workflow approve <run-id> --gate <gate-id>` slash command, the
    CLI, the Web UI approve button, the in-thread **Approve** button posted by the
    Slack adapter, and a chat agent resolving the gate on your behalf after you
    tell it to.
@@ -110,8 +113,8 @@ not `retry`.
 ### Explicit Commands (all platforms)
 
 ```
-/workflow approve <run-id> looks good
-/workflow reject <run-id> needs changes
+/workflow approve <run-id> --gate <gate-id> looks good
+/workflow reject <run-id> --gate <gate-id> needs changes
 ```
 
 Both resolve the gate **and** continue the run — approving no longer needs a
@@ -146,7 +149,7 @@ nothing is resolved until you are explicit.
 Two consequences worth knowing:
 
 - Providers without native tool support (Codex, OpenCode, Copilot) resolve the
-  gate by running `archon workflow approve|reject <run-id>` for you instead.
+  gate by running `archon workflow approve|reject <run-id> --gate <gate-id>` for you instead.
 - If you want a decision recorded with no interpretation at all, use the slash
   commands above — they are deterministic.
 :::
@@ -157,14 +160,14 @@ The CLI is non-interactive — use explicit commands:
 
 ```bash
 # Approve (resumes the workflow immediately)
-bun run cli workflow approve <run-id>
-bun run cli workflow approve <run-id> --comment "Looks good, proceed"
+bun run cli workflow approve <run-id> --gate <gate-id>
+bun run cli workflow approve <run-id> --gate <gate-id> --comment "Looks good, proceed"
 
 # Reject
 # Without on_reject: cancels the workflow
 # With on_reject: records feedback, triggers AI rework, re-pauses
-bun run cli workflow reject <run-id>
-bun run cli workflow reject <run-id> --reason "Plan needs more test coverage"
+bun run cli workflow reject <run-id> --gate <gate-id>
+bun run cli workflow reject <run-id> --gate <gate-id> --reason "Plan needs more test coverage"
 ```
 
 ### Interactive-loop gates: bare approve finalizes
@@ -178,7 +181,7 @@ in chat the same line follows the `⏸ Input required` prefix),
 approving **without a comment** finalizes the loop node from the already-computed output —
 no extra iteration runs. Approving **with** a comment runs another iteration with your
 comment as `$LOOP_USER_INPUT`. Asking the agent to approve without passing anything on
-finalizes too; if you want the finalize to be unambiguous, use `/workflow approve <id>`
+finalizes too; if you want the finalize to be unambiguous, use `/workflow approve <id> --gate <gate-id>`
 with no comment, the CLI, or the web button. See
 [Loop Nodes → `interactive` and `gate_message`](/guides/loop-nodes/#interactive-and-gate_message)
 for the full semantics, `signal_completes`, and the AI-approver steering pattern.
