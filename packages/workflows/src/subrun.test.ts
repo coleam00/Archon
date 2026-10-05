@@ -3618,6 +3618,20 @@ nodes:
       parent_run_id: parent.id,
       metadata: { parent_node_id: 'other-node', child_index: 0 },
     });
+    for (const metadata of [
+      { parent_node_id: 'work' },
+      { parent_node_id: 'work', child_index: -1 },
+      { parent_node_id: 'work', child_index: 3 },
+    ]) {
+      const historical = await store.createWorkflowRun({
+        workflow_name: 'historical-child',
+        conversation_id: 'conv-db',
+        user_message: '',
+        parent_run_id: parent.id,
+        metadata,
+      });
+      await store.failWorkflowRun(historical.id, 'historical failure');
+    }
     const resume = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
     expect(resume).not.toBeNull();
     const second = await executeWorkflow(

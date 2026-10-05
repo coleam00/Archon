@@ -8344,7 +8344,11 @@ async function executeFanOutWorkflowNode(
     await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
     return failResult(msg, 'unknown', totalCostUsd, totalTokens);
   }
-  if (children.length === 0) {
+  const anyChildStarted = children.some(child => {
+    const index = readSubrunMetadata(child.metadata).childIndex;
+    return index !== undefined && index >= 0 && index < items.length;
+  });
+  if (!anyChildStarted) {
     const reason = outcomes[0].error ?? `child ${outcomes[0].status}`;
     const msg = `fan_out node '${node.id}' refused all ${String(items.length)} children at spawn: ${reason}`;
     await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
