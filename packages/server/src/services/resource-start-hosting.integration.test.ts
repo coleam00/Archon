@@ -327,7 +327,10 @@ describe('server resource-start host', () => {
         execFileSync('git', ['-C', project, 'checkout', '-q', 'main']);
       }
       const registered = await registerRepository(project);
-      await updateCodebase(registered.codebaseId, { default_branch: base });
+      await updateCodebase(
+        { id: registered.codebaseId, name: registered.name },
+        { default_branch: base }
+      );
       expect((await deliver('branch', 'queue')).status).toBe(200);
       await host.requestDrain();
       const submitted = await until(() => engine.submitted[0]);

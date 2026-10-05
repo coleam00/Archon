@@ -142,10 +142,13 @@ test('offline explicit choice is stored; folders and invalid branch syntax rejec
 
 test('shipped rows retain null and explicit choices after opening the upgraded database and resolve at use', async () => {
   const { local } = await fixture('legacy');
-  expect((await getCodebase('legacy-explicit'))?.default_branch).toBe('release');
-  expect((await getCodebase('legacy-null'))?.default_branch).toBeNull();
-  await updateCodebase('legacy-explicit', { default_cwd: local });
-  await updateCodebase('legacy-null', { default_cwd: local });
+  const legacyExplicit = await getCodebase('legacy-explicit');
+  const legacyNull = await getCodebase('legacy-null');
+  expect(legacyExplicit?.default_branch).toBe('release');
+  expect(legacyNull?.default_branch).toBeNull();
+  if (!legacyExplicit || !legacyNull) throw new Error('legacy rows missing');
+  await updateCodebase(legacyExplicit, { default_cwd: local });
+  await updateCodebase(legacyNull, { default_cwd: local });
   const explicit = await worktree(local, 'legacy-explicit', 'legacy-explicit');
   const automatic = await worktree(local, 'legacy-null', 'legacy-null');
   expect(git(explicit, 'rev-parse', 'HEAD')).toBe(git(local, 'rev-parse', 'origin/release'));
