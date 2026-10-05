@@ -4,6 +4,7 @@
  * report. Run as the engine runs them, from their bound inputs.
  */
 import { describe, expect, it } from 'bun:test';
+import { join } from 'node:path';
 import { LENSES } from '../../workflows/sdlc/.shared/review-lenses';
 import { runPackScript } from './deliver-checks-harness';
 
@@ -175,7 +176,7 @@ describe('review lens gating', () => {
   // the first two lines of enabledLenses; this holds the two in step.
   it("keeps seams' and focused's gates in step with enabledLenses", async () => {
     const source = await Bun.file(
-      new URL('../../workflows/sdlc/review/archon-review.yaml', import.meta.url).pathname
+      join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
     ).text();
     const workflow = Bun.YAML.parse(source) as { nodes: { id: string; when?: string }[] };
     const when = (id: string): string | undefined => workflow.nodes.find(node => node.id === id)?.when;
@@ -185,7 +186,7 @@ describe('review lens gating', () => {
 
   it('names exactly the lens nodes the review graph declares', async () => {
     const source = await Bun.file(
-      new URL('../../workflows/sdlc/review/archon-review.yaml', import.meta.url).pathname
+      join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml')
     ).text();
     const workflow = Bun.YAML.parse(source) as {
       nodes: { id: string; output_type?: string; include?: string }[];

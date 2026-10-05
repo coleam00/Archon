@@ -5,9 +5,9 @@
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
 import { PR, forgePrRecord, gitCheckout, runPackScript, type ScriptRun } from './deliver-checks-harness';
@@ -125,6 +125,9 @@ describe('prune-scratch', () => {
     const scratch = join(artifacts, 'scratch', 'code');
     mkdirSync(scratch, { recursive: true });
     git(cwd, 'worktree', 'add', '-q', '--detach', join(scratch, 'one'), 'HEAD');
+    const oneSpellings = [join(scratch, 'one'), realpathSync.native(join(scratch, 'one'))].map(path =>
+      path.split(sep).join('/')
+    );
     const user = track(mkdtempSync(join(tmpdir(), 'archon-user-wt-')));
     git(cwd, 'worktree', 'add', '-q', '--detach', join(user, 'mine'), 'HEAD');
     writeFileSync(join(cwd, 'untracked.txt'), 'kept');
@@ -135,9 +138,16 @@ describe('prune-scratch', () => {
       encoding: 'utf8',
     });
     expect(run.status).toBe(0);
-    const listed = git(cwd, 'worktree', 'list', '--porcelain');
-    expect(listed).not.toContain(join(scratch, 'one'));
-    expect(listed).toContain(join(user, 'mine'));
+    // git prints a worktree's long, forward-slash path; tmpdir() can be a symlink (macOS)
+    // or an 8.3 short name (Windows). Every path is compared in both spellings.
+    const slashes = (path: string): string => path.split(sep).join('/');
+    const spellings = (path: string): string[] => [slashes(path), slashes(realpathSync.native(path))];
+    const listed = git(cwd, 'worktree', 'list', '--porcelain')
+      .split('\n')
+      .filter(line => line.startsWith('worktree '))
+      .map(line => slashes(line.slice('worktree '.length)));
+    expect(listed.some(path => oneSpellings.includes(path))).toBe(false);
+    expect(listed.some(path => spellings(join(user, 'mine')).includes(path))).toBe(true);
     expect(existsSync(join(artifacts, 'scratch'))).toBe(false);
     expect(existsSync(join(cwd, 'untracked.txt'))).toBe(true);
   });

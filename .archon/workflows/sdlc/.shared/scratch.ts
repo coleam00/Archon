@@ -15,7 +15,9 @@ import { join, sep } from 'node:path';
 /** Remove every registered worktree under `scratch`, then the directory itself. */
 export function pruneScratch(scratch: string): string[] {
   if (!existsSync(scratch)) return [];
-  const root = realpathSync(scratch);
+  // The native resolver: on Windows it expands 8.3 short names (RUNNER~1), which git
+  // never prints, so both sides of the comparison name a directory the same way.
+  const root = realpathSync.native(scratch);
   const listed = Bun.spawnSync(['git', 'worktree', 'list', '--porcelain'], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -29,7 +31,7 @@ export function pruneScratch(scratch: string): string[] {
     const path = line.slice('worktree '.length);
     let real: string;
     try {
-      real = realpathSync(path);
+      real = realpathSync.native(path);
     } catch {
       real = path;
     }
