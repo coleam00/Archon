@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -22,21 +22,10 @@ interface Check {
   argv: string[];
 }
 
-function git(cwd: string, ...args: string[]): void {
-  const result = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' });
-  if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-}
-
 function checkout(): { cwd: string; artifacts: string } {
   const root = track(mkdtempSync(join(tmpdir(), 'validation-run-')));
   const cwd = join(root, 'repo');
-  mkdirSync(join(cwd, '.archon', 'tracked'), { recursive: true });
-  git(cwd, 'init', '-q', '-b', 'main');
-  writeFileSync(join(cwd, '.archon', 'tracked', 'config.yaml'), 'tracked: true\n');
-  git(cwd, 'add', '.');
-  git(cwd, '-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit', '-qm', 'init');
-  mkdirSync(join(cwd, '.archon', 'injected'));
-  writeFileSync(join(cwd, '.archon', 'injected', 'workflow.yaml'), 'injected\n');
+  mkdirSync(cwd);
   return { cwd, artifacts: join(root, 'artifacts') };
 }
 
@@ -46,14 +35,13 @@ function env(artifacts: string, bindings: Record<string, string>): Record<string
 
 function run(
   f: { cwd: string; artifacts: string },
-  checks: Check[],
-  quarantine: string[] = []
+  checks: Check[]
 ): { exitCode: number; output: { status: string; summary: string } | null; stderr: string } {
   mkdirSync(f.artifacts, { recursive: true });
   const result = Bun.spawnSync([process.execPath, join(PACK, 'run-checks.ts')], {
     cwd: f.cwd,
     env: env(f.artifacts, {
-      INPUTS_DISCOVERY: JSON.stringify({ checks, quarantine, notes: 'test gate' }),
+      INPUTS_DISCOVERY: JSON.stringify({ checks, notes: 'test gate' }),
     }),
     stdout: 'pipe',
     stderr: 'pipe',
@@ -71,12 +59,6 @@ function report(artifacts: string): string {
 }
 
 const sh = (script: string): string[] => ['bash', '-c', script];
-
-/** The moved copies the latest attempt's `validation.md` says it kept. */
-function keptCopies(artifacts: string): string[] {
-  const [, kept = ''] = report(artifacts).split('The moved copy is kept at:\n');
-  return [...kept.matchAll(/^- `(.+)`$/gm)].map(match => match[1]!);
-}
 
 describe('run-checks', () => {
   it('reports green only when every declared check exits 0', () => {
@@ -128,119 +110,8 @@ describe('run-checks', () => {
     });
   });
 
-  it('moves quarantined run scaffolding aside while the checks run and restores it', () => {
-    const f = checkout();
-    const result = run(
-      f,
-      [{ name: 'clean tree', argv: sh('test ! -e .archon/injected && test -e .archon/tracked') }],
-      ['.archon/injected']
-    );
-    expect(result.output?.status).toBe('green');
-    expect(readFileSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'), 'utf8')).toBe(
-      'injected\n'
-    );
-    expect(report(f.artifacts)).toContain('- `.archon/injected`');
-  });
-
   it.skipIf(process.platform === 'win32')(
-    'puts back scaffolding an attempt killed without a catchable signal left moved aside',
-    async () => {
-      const f = checkout();
-      mkdirSync(f.artifacts, { recursive: true });
-      const started = join(f.artifacts, 'gate-started');
-      // SIGKILL is the stand-in for a Windows timeout: no handler runs, nothing is restored.
-      const killed = Bun.spawn([process.execPath, join(PACK, 'run-checks.ts')], {
-        cwd: f.cwd,
-        env: env(f.artifacts, {
-          INPUTS_DISCOVERY: JSON.stringify({
-            // `$$` is the check's shell, which leads the check's process group.
-            checks: [{ name: 'slow gate', argv: sh(`echo $$ > '${started}'; sleep 600`) }],
-            quarantine: ['.archon/injected'],
-            notes: '',
-          }),
-        }),
-        stdout: 'ignore',
-        stderr: 'ignore',
-      });
-      const group = (): number =>
-        existsSync(started) ? Number(readFileSync(started, 'utf8').trim()) : 0;
-      for (let i = 0; i < 250 && group() <= 0; i++) await Bun.sleep(20);
-      killed.kill('SIGKILL');
-      await killed.exited;
-      // Nothing stops the orphaned check after SIGKILL; the test does, by its group.
-      // A pid of 0 would name this test's own group, so it must be a real one.
-      expect(group()).toBeGreaterThan(0);
-      process.kill(-group(), 'SIGKILL');
-      expect(existsSync(join(f.cwd, '.archon', 'injected'))).toBe(false);
-
-      const result = run(
-        f,
-        [{ name: 'gate', argv: sh('test ! -e .archon/injected') }],
-        ['.archon/injected']
-      );
-      expect(result.output?.status).toBe('green');
-      expect(readFileSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'), 'utf8')).toBe(
-        'injected\n'
-      );
-    }
-  );
-
-  it('never overwrites a path a check recreated, and the next attempt still starts', () => {
-    const f = checkout();
-    mkdirSync(join(f.cwd, '.archon', 'second'));
-    writeFileSync(join(f.cwd, '.archon', 'second', 'workflow.yaml'), 'moved\n');
-    const quarantine = ['.archon/injected', '.archon/second'];
-    const first = run(
-      f,
-      [{ name: 'gate', argv: sh('mkdir .archon/second && echo recreated > .archon/second/x') }],
-      quarantine
-    );
-    expect(first.output?.status).toBe('green');
-    expect(readFileSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'), 'utf8')).toBe(
-      'injected\n'
-    );
-    expect(readFileSync(join(f.cwd, '.archon', 'second', 'x'), 'utf8')).toBe('recreated\n');
-    const firstKept = keptCopies(f.artifacts);
-    expect(firstKept).toHaveLength(1);
-    expect(readFileSync(join(firstKept[0]!, 'workflow.yaml'), 'utf8')).toBe('moved\n');
-
-    // Every restore settled, so a later attempt of the same run starts cleanly.
-    expect(existsSync(join(f.artifacts, 'validation', 'quarantine.json'))).toBe(false);
-
-    // The next attempt quarantines the same path, now a file, and the check recreates
-    // it again. The first kept copy must survive untouched, nothing may be merged into
-    // the checkout, and the attempt must still report.
-    rmSync(join(f.cwd, '.archon', 'second'), { recursive: true });
-    writeFileSync(join(f.cwd, '.archon', 'second'), 'now a file\n');
-    const second = run(
-      f,
-      [{ name: 'gate', argv: sh('echo again > .archon/second') }],
-      ['.archon/injected', '.archon/second']
-    );
-    expect(second.output?.status).toBe('green');
-    expect(readFileSync(join(f.cwd, '.archon', 'second'), 'utf8')).toBe('again\n');
-    expect(readFileSync(join(firstKept[0]!, 'workflow.yaml'), 'utf8')).toBe('moved\n');
-    const secondKept = keptCopies(f.artifacts);
-    expect(secondKept).toHaveLength(1);
-    expect(secondKept[0]).not.toBe(firstKept[0]);
-    expect(readFileSync(secondKept[0]!, 'utf8')).toBe('now a file\n');
-    expect(existsSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'))).toBe(true);
-  });
-
-  it('refuses to quarantine a tracked path or one outside .archon/, before moving anything', () => {
-    for (const path of ['.archon/tracked', 'README.md', '.archon/../x', '/etc']) {
-      const f = checkout();
-      const result = run(f, [{ name: 'gate', argv: sh('touch ran') }], ['.archon/injected', path]);
-      expect(result.exitCode).not.toBe(0);
-      expect(result.output).toBeNull();
-      expect(result.stderr).toContain('Refusing to quarantine');
-      expect(existsSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'))).toBe(true);
-      expect(existsSync(join(f.cwd, 'ran'))).toBe(false);
-    }
-  });
-
-  it.skipIf(process.platform === 'win32')(
-    "on the node's timeout, stops the whole check process tree, restores the quarantine and records the stop",
+    "on the node's timeout, stops the whole check process tree and records the stop",
     async () => {
       const f = checkout();
       mkdirSync(f.artifacts, { recursive: true });
@@ -257,7 +128,6 @@ describe('run-checks', () => {
         env: env(f.artifacts, {
           INPUTS_DISCOVERY: JSON.stringify({
             checks,
-            quarantine: ['.archon/injected'],
             notes: '',
           }),
         }),
@@ -284,7 +154,6 @@ describe('run-checks', () => {
       for (let i = 0; i < 50 && alive(); i++) await Bun.sleep(20);
       expect(alive()).toBe(false);
 
-      expect(existsSync(join(f.cwd, '.archon', 'injected', 'workflow.yaml'))).toBe(true);
       expect(existsSync(join(f.cwd, 'built'))).toBe(false);
       const text = report(f.artifacts);
       expect(text).toContain("did not finish: the node's time limit stopped it (SIGTERM)");
@@ -337,7 +206,6 @@ describe("the gate's environment", () => {
               ],
             },
           ],
-          quarantine: [],
           notes: '',
         }),
       }),

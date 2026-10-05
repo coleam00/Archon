@@ -34,9 +34,6 @@ nodes:
     command: simplify
     context: fresh
     mutates_checkout: false
-    retry:
-      max_attempts: 2
-      delay_ms: 20000
     output_format:
       type: object
       properties:
