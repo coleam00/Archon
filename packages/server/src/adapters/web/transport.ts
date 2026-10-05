@@ -119,15 +119,17 @@ export class SSETransport {
     }
   }
 
-  removeStream(conversationId: string, expectedStream?: SSEWriter): void {
+  /** Returns true when the conversation has no writers left afterwards. */
+  removeStream(conversationId: string, expectedStream?: SSEWriter): boolean {
     const streams = this.streams.get(conversationId);
-    if (!streams) return;
+    if (!streams) return true;
     if (expectedStream) {
-      if (!streams.delete(expectedStream)) return;
-      if (streams.size > 0) return;
+      if (!streams.delete(expectedStream)) return false;
+      if (streams.size > 0) return false;
     }
     this.streams.delete(conversationId);
     this.scheduleCleanup(conversationId, this.graceMs);
+    return true;
   }
 
   hasActiveStream(conversationId: string): boolean {

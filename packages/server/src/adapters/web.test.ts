@@ -21,7 +21,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { WebAdapter } from './web';
-import type { SSETransport } from './web/transport';
+import { SSETransport, type SSEWriter } from './web/transport';
 import type { MessagePersistence } from './web/persistence';
 import type { WorkflowEventBridge } from './web/workflow-bridge';
 
@@ -208,4 +208,56 @@ test('background preparation maps persistence and releases the bridge before awa
   release();
   await finished;
   expect(calls).toEqual(['mapping', 'unsubscribe', 'lock']);
+});
+
+describe('WebAdapter.removeStream — tool tracking', () => {
+  test('a stale writer disconnecting after a replacement registers keeps tool tracking', async () => {
+    const transport = new SSETransport();
+    const emitted: string[] = [];
+    const makeWriter = (): SSEWriter => ({
+      writeSSE: mock(async ({ data }: { data: string }) => {
+        emitted.push(data);
+      }),
+      close: mock(async () => {}),
+      closed: false,
+    });
+    const persistence = {
+      appendToolResult: mock(() => {}),
+      appendToolCall: mock(() => {}),
+      appendText: mock(() => {}),
+      flush: mock(async () => {}),
+      finalizeRunningTools: mock(() => {}),
+    } as unknown as MessagePersistence;
+    const bridge = {
+      setStepTransitionCallback: mock(() => {}),
+      start: mock(() => {}),
+      stop: mock(() => {}),
+      bridgeWorkerEvents: mock(() => () => {}),
+    } as unknown as WorkflowEventBridge;
+    const adapter = new WebAdapter(transport, persistence, bridge);
+
+    const stale = makeWriter();
+    const replacement = makeWriter();
+    adapter.registerStream('conv-1', stale);
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call',
+      toolCallId: 'a',
+      name: 'Bash',
+      rawInput: {},
+    });
+    adapter.registerStream('conv-1', replacement);
+    adapter.removeStream('conv-1', stale);
+    await adapter.sendStructuredEvent('conv-1', {
+      type: 'tool_call_update',
+      toolCallId: 'a',
+      status: 'completed',
+      output: 'done',
+    });
+
+    expect(mockLogger.warn).not.toHaveBeenCalled();
+    const result = emitted
+      .map(e => JSON.parse(e) as { type: string; name?: string })
+      .find(e => e.type === 'tool_result');
+    expect(result?.name).toBe('Bash');
+  });
 });
