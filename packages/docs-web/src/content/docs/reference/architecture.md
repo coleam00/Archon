@@ -328,6 +328,7 @@ import type {
   ProviderCapabilities,
   SendQueryOptions,
 } from '@archon/provider-contract';
+import { truncateToolOutput } from '@archon/provider-contract';
 
 export class YourAssistantProvider implements IAgentProvider {
   async checkCredential(): Promise<CredentialStatus> {
