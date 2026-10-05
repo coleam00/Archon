@@ -4868,7 +4868,11 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       );
       const publishNode: ExecNode = {
         ...publish,
-        timeout: 1000,
+        // The timeout must fire after the create is submitted: one that lands during the
+        // first attempt's start-up (a bun script plus a pr.view client spawn) tests a
+        // different, earlier failure. That start-up takes ~200 ms on Linux and macOS and
+        // has run past 1000 ms on Windows CI.
+        timeout: process.platform === 'win32' ? 5000 : 1000,
         retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
         script: `process.env.ARCHON_SDLC_FORGE = ${JSON.stringify(source)};
           process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify([process.execPath, client]))};
