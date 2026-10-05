@@ -195,6 +195,9 @@
       "src/mcp/config.test.ts"
     ],
     [
+      "src/claude/container-sdk.test.ts"
+    ],
+    [
       "src/claude/container-spawn.test.ts"
     ],
     [

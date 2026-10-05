@@ -28,7 +28,7 @@ export interface WebhookEvent {
     /** ISO timestamp of the comment's last update; GitHub bumps it on edit */
     updated_at?: string;
   };
-  repository: {
+  repository?: {
     owner: { login: string };
     name: string;
     full_name: string;
