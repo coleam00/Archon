@@ -407,13 +407,14 @@ describe('GitHubAdapter', () => {
     test.each(['installation', 'installation_repositories', 'future_event'])(
       'ignores %s without a repository',
       async eventName => {
-        await receive(eventName, {
+        const event = {
           action: 'created',
           installation: { id: 123 },
           repositories_added: [],
           repositories_removed: [],
           sender: { login: 'user123' },
-        });
+        };
+        await receive(eventName, event satisfies WebhookEvent);
         expect(mockLogger.debug).toHaveBeenCalledWith(
           { githubEvent: eventName },
           'github.repositoryless_webhook_ignored'
