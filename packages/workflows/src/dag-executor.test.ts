@@ -29571,9 +29571,9 @@ describe('container preflight provider equivalence with dispatch', () => {
       });
       expect([...new Set(preflightProviders)]).toEqual([...new Set(dispatched)]);
       const incompatible = dispatched.filter(p => !getProviderCapabilities(p).containerExec);
-      expect(collectContainerIncompatibleProviders([node], workflowProvider, aiProfile)).toEqual(
-        new Set(incompatible)
-      );
+      expect(
+        collectContainerIncompatibleProviders(providerRegistry, [node], workflowProvider, aiProfile)
+      ).toEqual(new Set(incompatible));
     } finally {
       await removeTempTree(cwd);
     }
@@ -29585,7 +29585,9 @@ describe('container preflight provider equivalence with dispatch', () => {
       gate({ provider: 'codex', decisions: [{ id: 'approve' }, { id: 'reject' }] }),
       agent({ provider: 'unknown-provider' }),
     ];
-    expect(collectContainerIncompatibleProviders(nodes, 'codex', aiProfile)).toEqual(new Set());
+    expect(
+      collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex', aiProfile)
+    ).toEqual(new Set());
   });
 });
 
