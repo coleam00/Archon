@@ -358,27 +358,32 @@ export async function checkOpenCode(
     };
   }
 
-  if (availability === 'ready') {
-    return {
-      label,
-      status: 'pass',
-      message: 'embedded runtime SDK and opencode executable present (server not started)',
-    };
+  switch (availability) {
+    case 'ready':
+      return {
+        label,
+        status: 'pass',
+        message: 'embedded runtime SDK and opencode executable present (server not started)',
+      };
+    case 'executable-missing':
+      return {
+        label,
+        status: 'fail',
+        message:
+          'opencode executable not found on PATH. Install the OpenCode CLI and add it to PATH.',
+      };
+    case 'sdk-entrypoint-missing':
+      return {
+        label,
+        status: 'fail',
+        message:
+          '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
+      };
+    default: {
+      const unhandled: never = availability;
+      throw new Error(`unhandled OpenCode availability: ${String(unhandled)}`);
+    }
   }
-  if (availability === 'executable-missing') {
-    return {
-      label,
-      status: 'fail',
-      message:
-        'opencode executable not found on PATH. Install the OpenCode CLI and add it to PATH.',
-    };
-  }
-  return {
-    label,
-    status: 'fail',
-    message:
-      '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
-  };
 }
 
 async function defaultLoadOpenCodeDeps(): Promise<OpenCodeDeps> {
