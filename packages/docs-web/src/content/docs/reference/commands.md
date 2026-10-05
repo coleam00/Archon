@@ -25,6 +25,7 @@ These commands are handled deterministically by the orchestrator — they always
 | `/update-project <name> <path>` | Update a project's directory path |
 | `/remove-project <name>` | Remove a project registration |
 | `/setproject <name>` | Bind this conversation to a registered project. Clears any working-directory/worktree override and starts a fresh AI session on the next message (chat history stays visible) |
+| `/detach-project "<current-project-name>"` | Make only this conversation neutral; the project stays registered. Requires the exact, unambiguous current name (quote names containing spaces). Refuses pending/running/paused/resumable failed runs and any attached worktree or container. Resolve runs through `manage_run`, CLI or Web controls, and clean the environment through existing isolation controls before retrying. Supported on Web, Telegram and independently scoped Slack/Discord conversations; refuses children with bound parents, forge conversations and ephemeral CLI chat |
 
 ## Workflows
 
@@ -48,7 +49,7 @@ These commands are handled deterministically by the orchestrator — they always
 | Command | Description |
 |---------|-------------|
 | `/status` | Show conversation state |
-| `/reset` | Start fresh: clears the AI session, releases the execution binding (working-directory override + isolation env), and abandons this conversation's **resumable** run trees (`paused`/`failed`) so the next message does not continue one. Runs that are actively executing (`pending`/`running`) are never touched -- they may belong to another process entirely. Each cleanup effect still runs if another fails; an incomplete reset tells you to retry and does not promise a fresh next message. The project attachment (`codebase_id`) is preserved; use `/setproject none` to drop that too |
+| `/reset` | Start fresh: clears the AI session, releases the execution binding (working-directory override + isolation env), and abandons this conversation's **resumable** run trees (`paused`/`failed`) so the next message does not continue one. Runs that are actively executing (`pending`/`running`) are never touched -- they may belong to another process entirely. Each cleanup effect still runs if another fails; an incomplete reset tells you to retry and does not promise a fresh next message. The project attachment (`codebase_id`) is preserved; use `/detach-project "<current-project-name>"` to detach it after resolving blockers |
 | `/help` | Show all commands |
 
 ---
