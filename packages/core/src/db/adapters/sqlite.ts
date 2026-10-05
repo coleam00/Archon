@@ -83,10 +83,11 @@ export class SqliteAdapter implements IDatabase {
   readonly dialect = 'sqlite' as const;
   readonly sql: SqlDialect = sqliteDialect;
   /**
-   * Tail of the transaction queue. bun:sqlite is a single connection, so two
+   * Tail of the connection queue. bun:sqlite is a single connection, so two
    * overlapping `withTransaction` blocks would interleave their BEGINs and throw
-   * "cannot start a transaction within a transaction." Chaining each transaction
-   * onto this tail serializes them: the second waits for the first to COMMIT,
+   * "cannot start a transaction within a transaction", and a plain `query()` would
+   * run inside whichever transaction is open. Chaining every transaction and every
+   * plain statement onto this tail serializes them: the second waits for the first to COMMIT,
    * then sees its committed state — exactly what the approval-gate CAS needs so a
    * concurrent second resolver cleanly loses (rowCount 0) instead of erroring.
    */
@@ -116,21 +117,10 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
-    // Inside a transaction a busy statement cannot be retried alone: under
-    // SQLITE_BUSY_SNAPSHOT its read snapshot is stale for good. withTransaction
-    // reruns the whole block instead.
-    if (this.db.inTransaction) return this.execute<T>(sql, params);
-    let firstAttempt = true;
-    return retryWhileBusy('statement', () => {
-      if (firstAttempt) {
-        firstAttempt = false;
-        return this.execute<T>(sql, params);
-      }
-      // A retry wakes after a sleep, when another caller's transaction may be open on
-      // this shared connection. Queue behind it, or the write would join that
-      // transaction and vanish if it rolls back.
-      return this.serialize(() => this.execute<T>(sql, params));
-    });
+    // bun:sqlite is one connection shared by every caller. Queue each attempt behind
+    // open transactions, or the statement would join another caller's transaction
+    // and vanish if that transaction rolls back.
+    return retryWhileBusy('statement', () => this.serialize(() => this.execute<T>(sql, params)));
   }
 
   private async execute<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
@@ -177,7 +167,7 @@ export class SqliteAdapter implements IDatabase {
         return { rows: [], rowCount };
       }
     } catch (error) {
-      // A busy statement is retried by the caller of execute(), which logs the wait.
+      // A busy statement is retried by query() or withTransaction(), which log the wait.
       if (!isSqliteBusy(error)) {
         getLog().error(
           { err: error as Error, sql: convertedSql, params },
@@ -191,15 +181,19 @@ export class SqliteAdapter implements IDatabase {
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
+    // The block's own statements run directly on the open transaction, without a
+    // per-statement retry: under SQLITE_BUSY_SNAPSHOT the read snapshot is stale for
+    // good, so only rerunning the whole block can succeed.
+    const execute = this.execute.bind(this);
     const runOnce = async (): Promise<T> => {
-      await this.query('BEGIN');
+      await execute('BEGIN');
       try {
-        const result = await fn(this.query.bind(this));
-        await this.query('COMMIT');
+        const result = await fn(execute);
+        await execute('COMMIT');
         return result;
       } catch (e) {
         try {
-          await this.query('ROLLBACK');
+          await execute('ROLLBACK');
         } catch (rollbackError) {
           getLog().error({ err: rollbackError as Error }, 'db.sqlite_transaction_rollback_failed');
         }
@@ -213,7 +207,7 @@ export class SqliteAdapter implements IDatabase {
   }
 
   /**
-   * Run `work` after every in-flight transaction (see `txTail`). The stored tail is
+   * Run `work` after every queued transaction and statement (see `txTail`). The stored tail is
    * made non-rejecting so one failure never blocks the next.
    */
   private serialize<T>(work: () => Promise<T>): Promise<T> {

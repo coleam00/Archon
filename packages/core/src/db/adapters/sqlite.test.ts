@@ -1249,6 +1249,25 @@ describe('SqliteAdapter busy locks', () => {
     expect(await codebaseCount()).toBe(1);
   });
 
+  test("a plain statement never runs inside another caller's open transaction", async () => {
+    await lockedAdapter();
+    holder.run('COMMIT');
+
+    const transaction = adapter.withTransaction(async query => {
+      await query('SELECT 1');
+      await Bun.sleep(100);
+      throw new Error('abort');
+    });
+    // Issued while the transaction is open and waiting on something else.
+    await Bun.sleep(20);
+    const statement = insertCodebase(adapter, 'cb-plain');
+
+    await expect(transaction).rejects.toThrow('abort');
+    await statement;
+
+    expect(await codebaseCount()).toBe(1);
+  });
+
   test('a non-busy error still fails on the first attempt', async () => {
     await lockedAdapter();
     holder.run('COMMIT');
