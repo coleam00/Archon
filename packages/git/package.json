@@ -26,9 +26,6 @@
     ],
     [
       "src/merge-signals.test.ts"
-    ],
-    [
-      "src/worktree-release.test.ts"
     ]
   ]
 }

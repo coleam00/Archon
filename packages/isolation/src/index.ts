@@ -40,7 +40,12 @@ export type {
   ContainerBackendConfig,
 } from './types';
 
-export { isPRIsolationRequest, CONTAINER_LABELS } from './types';
+export {
+  isPRIsolationRequest,
+  CONTAINER_LABELS,
+  worktreeRegistrationMetadata,
+  readWorktreeCreationId,
+} from './types';
 
 // --- Backend seam (folder projects) ---
 export { resolveFolderBackend } from './backend-router';

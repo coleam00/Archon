@@ -177,6 +177,24 @@ export type WorktreeCreationEnvironment = WorktreeEnvironment<
   CreatedWorktreeMetadata | AdoptedWorktreeMetadata
 >;
 
+/** Isolation-record metadata carrying a worktree's creation proof; null when adopted. */
+export interface WorktreeRegistrationMetadata {
+  worktree_creation_id: string | null;
+}
+
+/** The one encoding of creation provenance every isolation-record writer persists. */
+export function worktreeRegistrationMetadata(
+  metadata: WorktreeCreationEnvironment['metadata']
+): WorktreeRegistrationMetadata {
+  return { worktree_creation_id: metadata.provenance === 'created' ? metadata.creationId : null };
+}
+
+/** Read the creation proof that worktreeRegistrationMetadata persisted. */
+export function readWorktreeCreationId(metadata: Record<string, unknown>): string | null {
+  const id = (metadata as Partial<WorktreeRegistrationMetadata>).worktree_creation_id;
+  return typeof id === 'string' ? id : null;
+}
+
 // --- Provider Interface ---
 
 export interface DestroyOptions {
@@ -184,7 +202,12 @@ export interface DestroyOptions {
 }
 
 export interface WorktreeDestroyOptions extends DestroyOptions {
-  guardedRemoval?: { creationId: string; head: string };
+  /**
+   * Remove a checkout Archon created, with force, after proving its creation ID.
+   * `beforeRemove` runs while the checkout is locked against adoption; throwing
+   * refuses the removal and drops the lock.
+   */
+  guardedRemoval?: { creationId: string; beforeRemove: () => Promise<void> };
   branchName?: BranchName;
   /**
    * Remove the worktree even while it is locked. Implies `force`: `git worktree

@@ -30,6 +30,7 @@ import type {
   WorktreeStatusBreakdown,
   ResolveRequest,
 } from './types';
+import { worktreeRegistrationMetadata } from './types';
 import type { IIsolationStore } from './store';
 import { classifyIsolationError, isKnownIsolationError } from './errors';
 import { resolveFolderBackend } from './backend-router';
@@ -551,9 +552,7 @@ export class IsolationResolver {
         created_by_platform: platformType,
         created_by_user_id: userId,
         metadata: {
-          worktree_creation_id: isolatedEnv.metadata.adopted
-            ? null
-            : isolatedEnv.metadata.creationId,
+          ...worktreeRegistrationMetadata(isolatedEnv.metadata),
           related_issues: hints?.linkedIssues ?? [],
           related_prs: hints?.linkedPRs ?? [],
         },

@@ -55,6 +55,7 @@ import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
+  worktreeRegistrationMetadata,
 } from '@archon/isolation';
 import type {
   ExecutionContext,
@@ -172,6 +173,7 @@ import {
   workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
+  describeReleasedWorktrees,
   assertApprovable,
   assertRejectable,
   assertRespondable,
@@ -3149,11 +3151,7 @@ async function runWorkflowWithOwnedSource(
         working_path: isolatedEnv.workingPath,
         branch_name: isolatedEnv.branchName,
         created_by_platform: 'cli',
-        metadata: {
-          worktree_creation_id: isolatedEnv.metadata.adopted
-            ? null
-            : isolatedEnv.metadata.creationId,
-        },
+        metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
       });
 
       workingCwd = isolatedEnv.workingPath;
@@ -5716,8 +5714,14 @@ export async function workflowAbandonCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-        await abandonWorkflow(resolvedId);
+      const {
+        run,
+        cascadeFailures,
+        cleanupWarnings,
+        releasedWorktrees,
+        blockedParentRunId,
+        owner,
+      } = await abandonWorkflow(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5735,6 +5739,7 @@ export async function workflowAbandonCommand(
                 recordedUid: owner.recordedOwner?.uid ?? null,
                 lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
               },
+        ...(releasedWorktrees ? { releasedWorktrees } : {}),
         ...(cleanupWarnings ? { cleanupWarnings } : {}),
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
@@ -5746,11 +5751,12 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+  const { run, cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
     await abandonWorkflow(resolvedId);
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+  for (const line of describeReleasedWorktrees(releasedWorktrees)) console.log(line);
   for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
 }

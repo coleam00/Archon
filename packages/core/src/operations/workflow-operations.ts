@@ -42,7 +42,11 @@ import {
 } from '../services/run-owner-stop';
 import type { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 import { hostname } from 'node:os';
-import type { reclaimRunWorktree as ReclaimRunWorktree } from '../services/cleanup-service';
+import type {
+  reclaimRunWorktree as ReclaimRunWorktree,
+  ReleasedWorktree,
+  RunWorktreeRelease,
+} from '../services/cleanup-service';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -506,6 +510,14 @@ export function describeAbandonOwner(outcome: AbandonOwnerOutcome): string[] {
   return lines;
 }
 
+/** Report each removed worktree with the branch that keeps its committed work. */
+export function describeReleasedWorktrees(released: readonly ReleasedWorktree[] = []): string[] {
+  return released.map(
+    worktree =>
+      `Removed worktree ${worktree.path} with any uncommitted changes; branch ${worktree.branch} is kept.`
+  );
+}
+
 export interface AbandonWorkflowResult {
   run: WorkflowRun;
   /** Whether this call won the state transition to `cancelled`. */
@@ -516,6 +528,8 @@ export interface AbandonWorkflowResult {
    */
   cascadeFailures: number;
   cleanupWarnings?: string[];
+  /** Worktrees removed because their run was abandoned; each branch is kept. */
+  releasedWorktrees?: ReleasedWorktree[];
   /**
    * When the abandoned run was itself a `workflow:` sub-run and its parent is
    * paused blocked on it: the parent's run id. Nothing auto-resumes that parent
@@ -604,6 +618,7 @@ export interface AbandonConversationRunsResult {
   /** Runs this call actually took to 'cancelled'. */
   abandoned: number;
   cleanupWarnings?: string[];
+  releasedWorktrees?: ReleasedWorktree[];
   /**
    * First cancelled run that left a parent outside the conversation-scoped
    * mutation paused blocked-on-child (stranded parent id), or null. The user
@@ -950,58 +965,36 @@ export function createWorkflowOperations({
   ): Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }> {
     const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
     assertAbandonable(run);
-    const tree = await collectAbandonmentTree(run);
-    const retry = run.status === 'cancelled';
-    const selected = retry
-      ? tree.runs.filter(row => row.status === 'cancelled')
-      : tree.runs.filter(row => row.status !== 'completed' && row.status !== 'cancelled');
-    const exclusions = selected.map(row => row.id);
-    for (const row of selected) {
-      try {
-        await reclaimRunWorktree(row, hostStore.isolation, {
-          phase: 'inspect',
-          excludeRunIds: exclusions,
-        });
-      } catch (err) {
-        throw new AbandonRefusedError((err as Error).message, { cause: err });
-      }
-    }
     const owner = await stopLiveOwner(run);
     if (owner.kind === 'not_stopped') throw new AbandonOwnerNotStoppedError(owner.message);
-    for (const row of selected) {
-      try {
-        await reclaimRunWorktree(row, hostStore.isolation, {
-          phase: 'inspect',
-          excludeRunIds: exclusions,
-        });
-      } catch (err) {
+    // A cancelled run reaches here only with creation proof: the retry finishes a
+    // worktree release that an earlier abandonment reported as failed.
+    const retry = run.status === 'cancelled';
+    let result: AbandonAttemptResult;
+    if (retry) {
+      const tree = await collectAbandonmentTree(run);
+      result = {
+        run,
+        cancelled: false,
+        cancelledRuns: tree.runs.filter(row => row.id !== run.id && row.status === 'cancelled'),
+        cascadeFailures: tree.failures,
+        blockedParentRunId: null,
+      };
+    } else {
+      result = await cancelRunAndCleanup(run, cancelByOperator);
+      if (!result.cancelled)
         throw new AbandonRefusedError(
-          `${owner.kind === 'stopped' ? 'The owner was stopped, but the run was not abandoned. ' : ''}${(err as Error).message}`,
-          { cause: err }
+          `Run ${run.id} changed before abandonment; no worktree was released. Inspect its current status.`
         );
-      }
     }
-    const result: AbandonAttemptResult = retry
-      ? {
-          run,
-          cancelled: false,
-          cancelledRuns: selected.filter(row => row.id !== run.id),
-          cascadeFailures: tree.failures,
-          blockedParentRunId: null,
-          cleanupWarnings: [],
-        }
-      : await cancelRunAndCleanup(run, cancelByOperator);
-    if (!retry && !result.cancelled)
-      throw new AbandonRefusedError(
-        `Run ${run.id} changed before abandonment; no worktree was released. Inspect its current status.`
-      );
     const warnings = [...(result.cleanupWarnings ?? [])];
+    const releasedWorktrees: ReleasedWorktree[] = [];
     const released = new Set<string>();
     let unsafeDescendant = false;
     for (const row of [...result.cancelledRuns].reverse().concat(run)) {
       const proof = readOwnedWorktree(row.metadata);
       if (proof && released.has(proof.envId)) continue;
-      if (row.id === run.id && (result.cascadeFailures || tree.failures || unsafeDescendant)) {
+      if (row.id === run.id && (result.cascadeFailures || unsafeDescendant)) {
         warnings.push(
           `Retained checkout for run ${run.id}: descendants could not all be accounted for; inspect them before retrying abandonment.`
         );
@@ -1013,16 +1006,19 @@ export function createWorkflowOperations({
         unsafeDescendant = true;
         continue;
       }
-      warnings.push(...(await releaseRunWorktree(row)));
+      const release = await releaseRunWorktree(row);
+      warnings.push(...release.warnings);
+      if (release.released) releasedWorktrees.push(release.released);
       if (proof) released.add(proof.envId);
     }
     return {
       run,
       cancelled: result.cancelled,
-      cascadeFailures: result.cascadeFailures + (retry ? 0 : tree.failures),
+      cascadeFailures: result.cascadeFailures,
       blockedParentRunId: result.blockedParentRunId,
       owner,
       ...(warnings.length ? { cleanupWarnings: warnings } : {}),
+      ...(releasedWorktrees.length ? { releasedWorktrees } : {}),
     };
   }
 
@@ -1093,12 +1089,12 @@ export function createWorkflowOperations({
     }
   }
 
-  async function releaseRunWorktree(row: WorkflowRun): Promise<string[]> {
+  async function releaseRunWorktree(row: WorkflowRun): Promise<RunWorktreeRelease> {
     try {
-      return await reclaimRunWorktree(row, hostStore.isolation, { phase: 'release' });
+      return await reclaimRunWorktree(row, hostStore.isolation);
     } catch (err) {
       getLog().warn({ err, runId: row.id }, 'operations.workflow_abandon_worktree_reclaim_failed');
-      return [`${(err as Error).message} The run remains cancelled.`];
+      return { warnings: [`${(err as Error).message} The run remains cancelled.`] };
     }
   }
 
@@ -1243,11 +1239,16 @@ export function createWorkflowOperations({
     const runs = await store.cancelResumableRunsForConversation(conversationId);
     let blockedParentRunId: string | null = null;
     const cleanupWarnings: string[] = [];
+    const releasedWorktrees: ReleasedWorktree[] = [];
     for (const run of runs) {
       cleanupWarnings.push(...(await reclaimCancelledRunContainer(run)));
       const ownerWarning = await worktreeOwnerWarning(run);
       if (ownerWarning) cleanupWarnings.push(ownerWarning);
-      else cleanupWarnings.push(...(await releaseRunWorktree(run)));
+      else {
+        const release = await releaseRunWorktree(run);
+        cleanupWarnings.push(...release.warnings);
+        if (release.released) releasedWorktrees.push(release.released);
+      }
       const blocked = await findParentBlockedOn(run);
       if (blockedParentRunId === null) blockedParentRunId = blocked;
     }
@@ -1261,6 +1262,7 @@ export function createWorkflowOperations({
       abandoned: runs.length,
       blockedParentRunId,
       ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
+      ...(releasedWorktrees.length > 0 ? { releasedWorktrees } : {}),
     };
   }
 

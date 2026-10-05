@@ -434,12 +434,26 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
   }
 }
 
+/**
+ * A run whose checkout belongs only to destroyed worktree records cannot start.
+ * Abandonment marks the record destroyed before its final claimant check, so a run
+ * that reused the record too late to be seen fails here instead of starting in a
+ * checkout that is being removed.
+ */
 export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()}
         WHERE id = $1 AND status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM remote_agent_isolation_environments e
+             WHERE e.provider = 'worktree'
+               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
+               AND e.working_path = remote_agent_workflow_runs.working_path
+             GROUP BY e.working_path
+            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+          )
           AND (
             NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
             OR EXISTS (

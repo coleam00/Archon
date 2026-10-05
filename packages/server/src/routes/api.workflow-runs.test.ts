@@ -437,7 +437,7 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
 const mockReclaimContainerEnv = mock(async () => {});
 mock.module('@archon/core/services/cleanup-service', () => ({
-  reclaimRunWorktree: async () => [],
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
 }));
 // Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.

@@ -206,10 +206,10 @@ mock.module('@archon/core/services/run-live-owner', () => ({
 mock.module(
   '@archon/core/services/cleanup-service',
   (): {
-    reclaimRunWorktree: () => Promise<string[]>;
+    reclaimRunWorktree: () => Promise<{ warnings: string[] }>;
     reclaimContainerEnv: typeof mockReclaimContainerEnv;
   } => ({
-    reclaimRunWorktree: async () => [],
+    reclaimRunWorktree: async () => ({ warnings: [] }),
     reclaimContainerEnv: mockReclaimContainerEnv,
   })
 );
@@ -280,7 +280,9 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
   configureIsolation: mock(() => undefined),
   // Marked rather than reimplemented: these tests prove a failure path routes
   // through the classifier, while what the real one produces is the isolation
@@ -805,7 +807,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
       requestDetachedRunStop: mockRequestDetachedRunStop,
       isRunOwnedByThisProcess: () => false,
       isRunOwnerAnswering: mockIsRunOwnerAnswering,
-      reclaimRunWorktree: async () => [],
+      reclaimRunWorktree: async () => ({ warnings: [] }),
       reclaimContainerEnv: mockReclaimContainerEnv,
     }),
 }));

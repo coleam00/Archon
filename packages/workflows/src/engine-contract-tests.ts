@@ -287,7 +287,8 @@ export function runWorkflowEngineContractTests(
       expect(result).toEqual({
         success: false,
         workflowRunId: pending.id,
-        error: 'Workflow run is no longer pending or no longer owns its admitted resource',
+        error:
+          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
       });
     });
 

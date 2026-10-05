@@ -289,8 +289,7 @@ const UNCLAIMABLE_WORKFLOW_STATUSES = TERMINAL_WORKFLOW_STATUSES.filter(
  * estate. Creation proof governs deletion, while any claimable user blocks it.
  */
 export async function getLiveRunOwningEnv(
-  envId: string,
-  excludeRunIds: readonly string[] = []
+  envId: string
 ): Promise<{ id: string; status: string } | null> {
   const postgres = getDatabaseType() === 'postgresql';
   const envIdExtract = postgres
@@ -307,9 +306,6 @@ export async function getLiveRunOwningEnv(
   const ownedEnvExtract = postgres
     ? "r.metadata->'owned_worktree'->>'envId'"
     : "json_extract(r.metadata, '$.owned_worktree.envId')";
-  const exclusions = excludeRunIds.length
-    ? `AND r.id NOT IN (${excludeRunIds.map((_, i) => '$' + String(i + UNCLAIMABLE_WORKFLOW_STATUSES.length + 2)).join(', ')})`
-    : '';
   const result = await pool.query<{ id: string; status: string }>(
     `SELECT r.id, r.status
      FROM remote_agent_workflow_runs r
@@ -318,10 +314,9 @@ export async function getLiveRunOwningEnv(
        AND (${envIdExtract} = $1 OR ${ownedEnvExtract} = $1 OR ${conversationEnvMatch} = $1
          OR EXISTS (SELECT 1 FROM remote_agent_isolation_environments e
            WHERE ${postgres ? 'e.id::text' : 'e.id'} = $1 AND e.codebase_id = r.codebase_id AND e.working_path = r.working_path))
-       ${exclusions}
      ORDER BY r.started_at DESC
      LIMIT 1`,
-    [envId, ...UNCLAIMABLE_WORKFLOW_STATUSES, ...excludeRunIds]
+    [envId, ...UNCLAIMABLE_WORKFLOW_STATUSES]
   );
   return result.rows[0] ?? null;
 }

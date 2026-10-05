@@ -33,7 +33,9 @@ const mockProviderCreate = mock((_req: { identifier: string }) =>
 /** Records the loader the resolver hands to the isolation factory (see the M1 test). */
 const mockConfigureIsolation = mock((_loader: (repoPath: string) => Promise<unknown>) => undefined);
 
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
   getIsolationProvider: () => ({ create: mockProviderCreate }),
   configureIsolation: mockConfigureIsolation,
   // Distinctive prefix, not identity: proves the resolver actually routes provider

@@ -141,7 +141,7 @@ const {
   requestDetachedRunStop: mockRequestDetachedRunStop,
   isRunOwnedByThisProcess,
   isRunOwnerAnswering,
-  reclaimRunWorktree: async () => [],
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
 });
 
@@ -1991,7 +1991,7 @@ describe('supplied stores', () => {
         requestDetachedRunStop: mockRequestDetachedRunStop,
         isRunOwnedByThisProcess,
         isRunOwnerAnswering,
-        reclaimRunWorktree: async () => [],
+        reclaimRunWorktree: async () => ({ warnings: [] }),
         reclaimContainerEnv: mockReclaimContainerEnv,
       });
     const first = makeOperations(firstRun);
@@ -2039,7 +2039,7 @@ describe('supplied stores', () => {
       requestDetachedRunStop: async () => ({ pid: 42, stop, release: () => {} }),
       isRunOwnedByThisProcess: () => false,
       isRunOwnerAnswering: async () => false,
-      reclaimRunWorktree: async () => [],
+      reclaimRunWorktree: async () => ({ warnings: [] }),
       reclaimContainerEnv: cleanup,
     });
     const result = await operations.cancelWorkflow(run.id);
@@ -2429,7 +2429,7 @@ describe('abandonResumableRunsForConversation', () => {
       requestDetachedRunStop: mockRequestDetachedRunStop,
       isRunOwnedByThisProcess,
       isRunOwnerAnswering,
-      reclaimRunWorktree: async () => [],
+      reclaimRunWorktree: async () => ({ warnings: [] }),
       reclaimContainerEnv: reclaim,
     });
     mockCancelResumableRunsForConversation.mockResolvedValueOnce([
@@ -2549,7 +2549,9 @@ describe('resetWorkflowNodeSessions', () => {
 });
 
 describe('abandon owned worktrees', () => {
-  const reclaim = mock<WorkflowOperationsDeps['reclaimRunWorktree']>(async () => []);
+  const reclaim = mock<WorkflowOperationsDeps['reclaimRunWorktree']>(async () => ({
+    warnings: [],
+  }));
   const operations = createWorkflowOperations({
     store,
     hostStore: { isolation: isolationStore },
@@ -2570,7 +2572,7 @@ describe('abandon owned worktrees', () => {
     });
   beforeEach(() => {
     reclaim.mockReset();
-    reclaim.mockResolvedValue([]);
+    reclaim.mockResolvedValue({ warnings: [] });
     mockGetWorkflowRun.mockReset();
     mockGetWorkflowRun.mockResolvedValue(owned());
     mockFindChildRuns.mockReset();
@@ -2583,24 +2585,7 @@ describe('abandon owned worktrees', () => {
     );
   });
 
-  test('preflight refusal stops neither owner nor lifecycle; post-stop refusal reports the stopped owner', async () => {
-    reclaim.mockRejectedValueOnce(new Error('dirty checkout'));
-    await expect(operations.abandonWorkflow('run-1')).rejects.toThrow('dirty checkout');
-    expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
-    reclaim.mockReset();
-    reclaim.mockResolvedValueOnce([]);
-    reclaim.mockRejectedValueOnce(new Error('new edits'));
-    const stop = mock(async () => {});
-    mockRequestDetachedRunStop.mockResolvedValueOnce({ pid: 4242, stop, release: () => {} });
-    await expect(operations.abandonWorkflow('run-1')).rejects.toThrow(
-      'owner was stopped, but the run was not abandoned'
-    );
-    expect(stop).toHaveBeenCalledTimes(1);
-    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
-  });
-
-  test('cancels before release and releases children before root, excluding only selected runs during preflight', async () => {
+  test('cancels before release, releases children before root, and reports each removal', async () => {
     const child = owned('child');
     mockFindChildRuns.mockImplementation(async id => (id === 'run-1' ? [child] : []));
     const order: string[] = [];
@@ -2608,26 +2593,33 @@ describe('abandon owned worktrees', () => {
       order.push(`cancel ${id}`);
       return { cancelled: true };
     });
-    reclaim.mockImplementation(async (run, _, options) => {
-      if (options.phase === 'release') order.push(`release ${run.id}`);
-      else expect(options.excludeRunIds).toEqual(['run-1', 'child']);
-      return [];
-    });
-    await operations.abandonWorkflow('run-1');
-    expect(order).toEqual(['cancel run-1', 'cancel child', 'release child', 'release run-1']);
-  });
-
-  test('CAS loss never releases; late removal failure is a cancelled-run warning', async () => {
-    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
-    await expect(operations.abandonWorkflow('run-1')).rejects.toThrow('changed before abandonment');
-    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
-    reclaim.mockImplementation(async (_, __, options) => {
-      if (options.phase === 'release') throw new Error('git removal failed; retry abandon run-1');
-      return [];
+    reclaim.mockImplementation(async (run, store) => {
+      expect(store).toBe(isolationStore);
+      order.push(`release ${run.id}`);
+      return { released: { path: `/wt/${run.id}`, branch: `b-${run.id}` }, warnings: [] };
     });
     const result = await operations.abandonWorkflow('run-1');
+    expect(order).toEqual(['cancel run-1', 'cancel child', 'release child', 'release run-1']);
+    expect(result.releasedWorktrees).toEqual([
+      { path: '/wt/child', branch: 'b-child' },
+      { path: '/wt/run-1', branch: 'b-run-1' },
+    ]);
+  });
+
+  test('a release failure never blocks cancellation; it is a cancelled-run warning', async () => {
+    reclaim.mockRejectedValueOnce(new Error('git removal failed; retry abandon run-1'));
+    const result = await operations.abandonWorkflow('run-1');
     expect(result.cancelled).toBe(true);
-    expect(result.cleanupWarnings).toEqual([expect.stringContaining('git removal failed')]);
+    expect(mockCancelWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(result.cleanupWarnings).toEqual([
+      expect.stringContaining('git removal failed; retry abandon run-1 The run remains cancelled.'),
+    ]);
+  });
+
+  test('CAS loss never releases', async () => {
+    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
+    await expect(operations.abandonWorkflow('run-1')).rejects.toThrow('changed before abandonment');
+    expect(reclaim).not.toHaveBeenCalled();
   });
 
   test('cancelled cleanup retry does not repeat cancellation and leaves active descendants untouched', async () => {
@@ -2638,7 +2630,7 @@ describe('abandon owned worktrees', () => {
     const result = await operations.abandonWorkflow('run-1');
     expect(result.cancelled).toBe(false);
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
-    expect(reclaim.mock.calls.every(call => call[0].id === 'run-1')).toBe(true);
+    expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(['run-1']);
   });
 
   test.each(['foreign-host', 'foreign-user', 'missing'])('retains %s owner estate', async kind => {
@@ -2654,7 +2646,7 @@ describe('abandon owned worktrees', () => {
     const result = await operations.abandonWorkflow('run-1');
     expect(result.cancelled).toBe(true);
     expect(result.cleanupWarnings?.[0]).toContain('execution owner');
-    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
+    expect(reclaim).not.toHaveBeenCalled();
   });
 
   test('an unaccounted inherited child prevents removing its root checkout', async () => {
@@ -2665,7 +2657,7 @@ describe('abandon owned worktrees', () => {
     expect(result.cleanupWarnings?.join(' ')).toContain(
       'descendants could not all be accounted for'
     );
-    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
+    expect(reclaim).not.toHaveBeenCalled();
   });
 
   test('unexpected descendant owner errors are warnings after cancellation, and protect the root', async () => {
@@ -2677,7 +2669,37 @@ describe('abandon owned worktrees', () => {
     const result = await operations.abandonWorkflow('run-1');
     expect(result.cancelled).toBe(true);
     expect(result.cleanupWarnings?.join(' ')).toContain('endpoint inspection failed');
-    expect(reclaim.mock.calls.every(call => call[2].phase === 'inspect')).toBe(true);
+    expect(reclaim).not.toHaveBeenCalled();
+  });
+
+  test('reset releases an owned worktree through its supplied store and reports a failure', async () => {
+    const sentinel: IIsolationStore = { ...isolationStore };
+    const resetReclaim = mock<WorkflowOperationsDeps['reclaimRunWorktree']>(async () => ({
+      released: { path: '/wt/run-a', branch: 'b-a' },
+      warnings: [],
+    }));
+    resetReclaim.mockRejectedValueOnce(new Error('removal failed for run-b'));
+    const resetOperations = createWorkflowOperations({
+      store,
+      hostStore: { isolation: sentinel },
+      requestDetachedRunStop: mockRequestDetachedRunStop,
+      isRunOwnedByThisProcess,
+      isRunOwnerAnswering,
+      reclaimContainerEnv: mockReclaimContainerEnv,
+      reclaimRunWorktree: resetReclaim,
+    });
+    const runB = owned('run-b');
+    const runA = owned('run-a');
+    mockCancelResumableRunsForConversation.mockResolvedValueOnce([runB, runA]);
+    const result = await resetOperations.abandonResumableRunsForConversation('conv-1');
+    expect(resetReclaim.mock.calls).toEqual([
+      [runB, sentinel],
+      [runA, sentinel],
+    ]);
+    expect(result.cleanupWarnings).toEqual([
+      expect.stringContaining('removal failed for run-b The run remains cancelled.'),
+    ]);
+    expect(result.releasedWorktrees).toEqual([{ path: '/wt/run-a', branch: 'b-a' }]);
   });
 
   test('ordinary cancel retains worktrees', async () => {

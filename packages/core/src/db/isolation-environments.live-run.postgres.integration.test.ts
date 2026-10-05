@@ -160,7 +160,6 @@ describe.skipIf(!baseUrl)('getLiveRunOwningEnv — real Postgres behavior', () =
         [env.codebase_id, env.working_path, run]
       );
       await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: run, status });
-      await expect(getLiveRunOwningEnv(env.id, [run])).resolves.toBeNull();
     }
   );
 });

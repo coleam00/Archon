@@ -17,7 +17,7 @@ import { randomUUID } from 'node:crypto';
 import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath, findRepoRoot } from '@archon/git';
-import { getIsolationProvider } from '@archon/isolation';
+import { getIsolationProvider, worktreeRegistrationMetadata } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
@@ -391,7 +391,7 @@ async function worktreeLane(
     branch_name: env.branchName,
     created_by_platform: platformType,
     created_by_user_id: userId,
-    metadata: { worktree_creation_id: env.metadata.adopted ? null : env.metadata.creationId },
+    metadata: { ...worktreeRegistrationMetadata(env.metadata) },
   });
   return {
     cwd: env.workingPath,

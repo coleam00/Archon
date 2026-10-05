@@ -12,7 +12,6 @@ import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
   getGitCheckoutIdentity,
-  inspectWorktreeForRelease,
   fetchWithRefLockRetry,
   findWorktreeByBranch,
   getCanonicalRepoPath,
@@ -72,6 +71,12 @@ function getLog(): ReturnType<typeof createLogger> {
  * directory exists unmarked.
  */
 const SETUP_LOCK_REASON = 'archon: worktree setup in progress';
+
+/** Lock reason held while an abandoned run's checkout is being removed. */
+const RELEASE_LOCK_REASON = 'archon: worktree release in progress';
+
+/** File in a created worktree's Git directory holding its creation ID. */
+const CREATION_MARKER = 'archon-creation-id';
 
 /**
  * Resolve the anchors from which Git worktree commands should run.
@@ -271,28 +276,50 @@ export class WorktreeProvider implements IIsolationProvider {
   async destroy(envId: string, options?: WorktreeDestroyOptions): Promise<DestroyResult> {
     const worktreePath = envId;
     if (options?.guardedRemoval) {
-      if (
-        !options.canonicalRepoPath ||
-        options.force ||
-        options.removeLocked ||
-        options.branchName ||
-        options.deleteRemoteBranch
-      ) {
+      if (!options.canonicalRepoPath || options.branchName || options.deleteRemoteBranch) {
         throw new Error(
-          'Guarded worktree release requires the canonical repository and unforced checkout-only removal'
+          'Guarded worktree release requires the canonical repository and checkout-only removal'
         );
       }
-      await verifyWorktreeOwnership(toWorktreePath(worktreePath), options.canonicalRepoPath);
+      const path = toWorktreePath(worktreePath);
+      await verifyWorktreeOwnership(path, options.canonicalRepoPath);
       const identity = await getGitCheckoutIdentity(worktreePath);
-      const marker = await readFile(join(identity.gitDir, 'archon-creation-id'), 'utf8');
+      const marker = await readFile(join(identity.gitDir, CREATION_MARKER), 'utf8');
       if (marker !== options.guardedRemoval.creationId)
         throw new Error('Worktree creation identity changed');
-      const { head } = await inspectWorktreeForRelease(toWorktreePath(worktreePath));
-      if (head !== options.guardedRemoval.head)
-        throw new Error('Worktree HEAD changed; retry abandonment');
+      // `lock` fails on an already locked worktree, so an operator's lock or an
+      // unfinished setup refuses release. Adoption refuses this lock, so no new
+      // run can pick the checkout up while beforeRemove checks for claimants.
       await execFileAsync(
         'git',
-        ['-C', options.canonicalRepoPath, 'worktree', 'remove', '--', worktreePath],
+        [
+          '-C',
+          options.canonicalRepoPath,
+          'worktree',
+          'lock',
+          '--reason',
+          RELEASE_LOCK_REASON,
+          path,
+        ],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
+      try {
+        await options.guardedRemoval.beforeRemove();
+      } catch (error) {
+        const refusal = error instanceof Error ? error : new Error(String(error));
+        await unlockWorktree(options.canonicalRepoPath, path).catch((unlockError: unknown) => {
+          throw new Error(
+            `${refusal.message}; the release lock on ${path} could not be removed: ${(unlockError as Error).message}`,
+            { cause: refusal }
+          );
+        });
+        throw refusal;
+      }
+      // Abandon discards the checkout: force removes uncommitted work and
+      // initialized submodules, and the second force passes our own lock.
+      await execFileAsync(
+        'git',
+        ['-C', options.canonicalRepoPath, 'worktree', 'remove', '--force', '--force', '--', path],
         { timeout: GIT_OPERATION_TIMEOUT_MS }
       );
       return {
@@ -855,9 +882,11 @@ export class WorktreeProvider implements IIsolationProvider {
   }
 
   /**
-   * Refuse a worktree that still carries Archon's setup lock.
+   * Refuse a worktree that still carries Archon's setup or release lock.
    *
-   * The marker means one of two things, and neither is adoptable: another
+   * A release lock means an abandoned run's checkout is being removed.
+   *
+   * The setup marker means one of two things, and neither is adoptable: another
    * process is setting this checkout up right now and may yet roll it back, or a
    * setup died before finishing and left a checkout with no submodules, no git
    * identity, and none of the configured files. Ownership here is ambiguous, so
@@ -865,6 +894,11 @@ export class WorktreeProvider implements IIsolationProvider {
    */
   private async refuseUnfinishedWorktree(worktreePath: string): Promise<void> {
     const lock = await readWorktreeLock(toWorktreePath(worktreePath));
+    if (lock?.reason === RELEASE_LOCK_REASON) {
+      throw new Error(
+        `Cannot adopt the worktree at ${worktreePath}: an abandoned run is removing it. Retry once the removal finishes.`
+      );
+    }
     if (lock?.reason !== SETUP_LOCK_REASON) {
       return;
     }
@@ -955,7 +989,7 @@ export class WorktreeProvider implements IIsolationProvider {
       if (existingBranch) return { kind: 'adopted' as const, warnings };
       const creationId = randomUUID();
       const identity = await getGitCheckoutIdentity(worktreePath);
-      await writeFile(join(identity.gitDir, 'archon-creation-id'), creationId, { flag: 'wx' });
+      await writeFile(join(identity.gitDir, CREATION_MARKER), creationId, { flag: 'wx' });
       return { kind: 'created' as const, creationId, warnings };
     });
 

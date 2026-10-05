@@ -19,9 +19,9 @@ export function createSqlWorkflowOperations(): WorkflowOperations {
     requestDetachedRunStop,
     isRunOwnedByThisProcess,
     isRunOwnerAnswering,
-    reclaimRunWorktree: async (run, isolation, options) => {
+    reclaimRunWorktree: async (run, isolation) => {
       const { reclaimRunWorktree } = await import('../services/cleanup-service');
-      return reclaimRunWorktree(run, isolation, options);
+      return reclaimRunWorktree(run, isolation);
     },
     reclaimContainerEnv: async (envId, isolation) => {
       const { reclaimContainerEnv } = await import('../services/cleanup-service');

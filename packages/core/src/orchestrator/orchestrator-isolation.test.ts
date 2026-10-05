@@ -201,7 +201,9 @@ class MockIsolationResolver {
   constructor(_deps: unknown) {}
 }
 
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
   IsolationResolver: MockIsolationResolver,
   IsolationBlockedError: class IsolationBlockedError extends Error {
     constructor(

@@ -106,7 +106,7 @@ const { approveWorkflow, rejectWorkflow } = createWorkflowOperations({
   requestDetachedRunStop,
   isRunOwnedByThisProcess,
   isRunOwnerAnswering,
-  reclaimRunWorktree: async () => [],
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: async () => {
     throw new Error('Unexpected container cleanup');
   },

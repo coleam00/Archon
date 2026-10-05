@@ -83,5 +83,3 @@ export {
   InvalidBaseBranchError,
 } from './remote-branches';
 export type { RemoteBranchTarget, RemoteBranches } from './remote-branches';
-
-export { inspectWorktreeForRelease, verifyWorktreeCommitsPushed } from './branch';

@@ -26,6 +26,7 @@ import {
   getIsolationProvider,
   configureIsolation,
   classifyIsolationError,
+  worktreeRegistrationMetadata,
 } from '@archon/isolation';
 import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
@@ -204,9 +205,7 @@ export function createCodebaseChildResolver(
           // Durable on purpose: a log line is gone by the time anyone asks why two runs
           // touched one checkout.
           metadata: {
-            worktree_creation_id: isolatedEnv.metadata.adopted
-              ? null
-              : isolatedEnv.metadata.creationId,
+            ...worktreeRegistrationMetadata(isolatedEnv.metadata),
             parent_run_id: req.parentRun.id,
             child_index: childIndex,
             adopted: isolatedEnv.metadata.adopted,

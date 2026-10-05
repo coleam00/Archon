@@ -308,6 +308,7 @@ import {
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
   describeAbandonOwner,
+  describeReleasedWorktrees,
   AbandonRefusedError,
   assertRespondable,
 } from '@archon/core/operations/workflow-operations';
@@ -3891,9 +3892,13 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      const { cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+      const { cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
         await abandonWorkflow(runId);
-      let message = `${describeAbandonOwner(owner).join(' ')} Abandoned workflow: ${run.workflow_name}`;
+      let message = [
+        ...describeAbandonOwner(owner),
+        `Abandoned workflow: ${run.workflow_name}`,
+        ...describeReleasedWorktrees(releasedWorktrees),
+      ].join(' ');
       for (const warning of cleanupWarnings ?? []) message += ` — warning: ${warning}`;
       if (cascadeFailures > 0) {
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;

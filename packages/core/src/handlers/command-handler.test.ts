@@ -435,7 +435,7 @@ mock.module('../services/run-owner-stop', () => ({
 
 const mockReclaimContainerEnv = mock(async () => {});
 mock.module('../services/cleanup-service', () => ({
-  reclaimRunWorktree: async () => [],
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,
