@@ -320,23 +320,42 @@ describe('checkCodexBinary', () => {
 describe('checkOpenCode', () => {
   const makeDeps = (over: Partial<OpenCodeDeps> = {}): OpenCodeDeps => ({
     isDefaultAssistant: false,
-    probeRuntimeModule: async () => true,
+    probeRuntime: async () => 'ready',
     ...over,
   });
 
   it('skips when OpenCode is not configured and --full is absent', async () => {
-    const result = await checkOpenCode({}, false, async () => makeDeps());
+    const probe = mock(async () => 'ready' as const);
+    const result = await checkOpenCode({}, false, async () => makeDeps({ probeRuntime: probe }));
+    expect(probe).not.toHaveBeenCalled();
     expect(result.status).toBe('skip');
     expect(result.label).toBe('OpenCode runtime');
     expect(result.message).toContain('pass --full');
   });
 
-  it('passes when OpenCode is the configured assistant and the SDK resolves', async () => {
+  it('passes when OpenCode is the configured assistant and both dependencies are present', async () => {
     const result = await checkOpenCode({}, false, async () =>
       makeDeps({ isDefaultAssistant: true })
     );
     expect(result.status).toBe('pass');
     expect(result.message).toContain('server not started');
+  });
+
+  it('fails when the SDK is present but the executable is missing', async () => {
+    const result = await checkOpenCode({}, true, async () =>
+      makeDeps({ probeRuntime: async () => 'executable-missing' })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('opencode');
+    expect(result.message).toContain('PATH');
+  });
+
+  it('fails for a configured assistant when the executable is missing', async () => {
+    const result = await checkOpenCode({}, false, async () =>
+      makeDeps({ isDefaultAssistant: true, probeRuntime: async () => 'executable-missing' })
+    );
+    expect(result.status).toBe('fail');
+    expect(result.message).toContain('Install the OpenCode CLI');
   });
 
   it('passes under --full even when OpenCode is not configured', async () => {
@@ -351,13 +370,13 @@ describe('checkOpenCode', () => {
     expect(result.status).toBe('pass');
   });
 
-  it('never boots the runtime — only the cheap module probe is called', async () => {
+  it('calls the cheap dependency probe once', async () => {
     let probeCalls = 0;
     await checkOpenCode({}, true, async () =>
       makeDeps({
-        probeRuntimeModule: async () => {
+        probeRuntime: async () => {
           probeCalls += 1;
-          return true;
+          return 'ready';
         },
       })
     );
@@ -367,7 +386,7 @@ describe('checkOpenCode', () => {
   it('fails when the runtime SDK cannot be resolved', async () => {
     const result = await checkOpenCode({}, true, async () =>
       makeDeps({
-        probeRuntimeModule: async () => {
+        probeRuntime: async () => {
           throw new Error('Cannot find module @opencode-ai/sdk');
         },
       })
@@ -379,7 +398,7 @@ describe('checkOpenCode', () => {
 
   it('fails when the SDK resolves but the entrypoint is missing', async () => {
     const result = await checkOpenCode({}, true, async () =>
-      makeDeps({ probeRuntimeModule: async () => false })
+      makeDeps({ probeRuntime: async () => 'sdk-entrypoint-missing' })
     );
     expect(result.status).toBe('fail');
     expect(result.message).toContain('createOpencode');
