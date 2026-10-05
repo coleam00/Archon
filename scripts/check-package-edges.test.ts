@@ -78,6 +78,26 @@ describe('package source edges', () => {
     });
   }
 
+  test('a test file is still limited to its runtime and test edges', () => {
+    expect(
+      check("import { run } from '@archon/providers';", 'packages/contract/src/a.test.ts').some(
+        v => v.message === 'contract → @archon/providers is forbidden; allowed: (none)'
+      )
+    ).toBe(true);
+  });
+
+  test('a test-only import must be declared in devDependencies', () => {
+    const packages = manifests();
+    delete packages[0].devDependencies;
+    expect(
+      check(
+        "import { run } from '@archon/providers';",
+        'packages/engine/src/execute.test.ts',
+        packages
+      ).some(v => v.message.includes('undeclared'))
+    ).toBe(true);
+  });
+
   test('a devDependency cannot satisfy a production import', () => {
     const violations = check("import { run } from '@archon/providers';");
     expect(violations.some(v => v.message.includes('undeclared'))).toBe(true);

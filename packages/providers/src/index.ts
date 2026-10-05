@@ -1,21 +1,14 @@
-// Types (contract layer — re-exported for convenience)
+// Contract types owned by @archon/provider-contract, re-exported for existing consumers
 export type {
   IAgentProvider,
-  AgentRequestOptions,
   SendQueryOptions,
-  NodeConfig,
-  ProviderDefaults,
   ProviderDefaultsMap,
-  ProviderConfigParser,
-  ProviderConfigScope,
   ProviderCapabilities,
   ProviderRegistration,
   ProviderInfo,
   MessageChunk,
   TokenUsage,
   CredentialKind,
-  CredentialSpec,
-  ProviderCredentialCatalog,
   ProviderAdmissionEvent,
 } from './types';
 export { CREDENTIAL_KINDS } from './types';
@@ -39,7 +32,7 @@ export {
 } from './registry';
 
 // Error
-export { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
+export { InvalidProviderRunConfigError } from '@archon/provider-contract';
 
 // Provider classes
 export { ClaudeProvider } from './claude/provider';

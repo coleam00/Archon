@@ -20,7 +20,8 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   git: { runtime: ['paths'] },
   // SDK implementations adapt the provider contract.
   providers: { runtime: ['paths', 'provider-contract'] },
-  // Isolation implements the engine-owned write-back port using type-only imports.
+  // Isolation imports the engine-owned write-back shapes type-only. This table checks the
+  // edge, not the import kind; keep those imports `import type`.
   isolation: { runtime: ['git', 'paths', 'provider-contract', 'workflows'] },
   // The registry edge remains until #3638 introduces the injected port.
   workflows: { runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract', 'providers'] },

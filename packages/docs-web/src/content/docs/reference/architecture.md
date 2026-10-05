@@ -321,8 +321,13 @@ Readers go through the engine's store seam: `IWorkflowStore.listProviderEvents(r
 **2. Implement the interface:**
 
 ```typescript
-import type { CredentialStatus } from '@archon/provider-contract';
-import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../types';
+import type {
+  CredentialStatus,
+  IAgentProvider,
+  MessageChunk,
+  ProviderCapabilities,
+  SendQueryOptions,
+} from '@archon/provider-contract';
 
 export class YourAssistantProvider implements IAgentProvider {
   async checkCredential(): Promise<CredentialStatus> {

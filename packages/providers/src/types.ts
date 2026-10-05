@@ -7,7 +7,6 @@ import type {
 export type {
   MessageChunk,
   ResultChunk,
-  SystemPromptPreset,
   SystemPromptInput,
   ExecutionContext,
   AgentRequestOptions,
@@ -26,13 +25,9 @@ export type {
   CredentialSpec,
   ProviderCredentialCatalog,
   ProviderRegistration,
-  PiExtensionPosture,
   ProviderCapabilities,
-  ProviderChunk,
   ProviderEvent,
-  ProviderResult,
   ProviderWarning,
-  ResolvedModel,
   TokenUsage,
 } from '@archon/provider-contract';
 export {

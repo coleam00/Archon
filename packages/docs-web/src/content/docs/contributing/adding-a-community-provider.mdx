@@ -57,8 +57,13 @@ Implement `IAgentProvider`. Pattern:
 ```typescript
 // provider.ts
 import { createLogger } from '@archon/paths';
-import type { CredentialStatus } from '@archon/provider-contract';
-import type { IAgentProvider, MessageChunk, ProviderCapabilities, SendQueryOptions } from '../../types';
+import type {
+  CredentialStatus,
+  IAgentProvider,
+  MessageChunk,
+  ProviderCapabilities,
+  SendQueryOptions,
+} from '@archon/provider-contract';
 import { YOUR_CAPABILITIES } from './capabilities';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;

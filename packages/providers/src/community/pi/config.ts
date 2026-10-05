@@ -1,6 +1,6 @@
 import type { PiExtensionPosture } from '@archon/provider-contract';
 import type { PiProviderDefaults, ProviderConfigScope } from '../../types';
-import { InvalidProviderRunConfigError } from '../../errors';
+import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,

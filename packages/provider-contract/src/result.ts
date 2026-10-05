@@ -11,7 +11,7 @@ export const tokenUsageSchema = z.object({
   /** Provider-reported cache-creation input. Absent means unsupported or unknown; zero is known. */
   cacheWrite: z.number().optional(),
   /**
-   * Set only by aggregation (`mergeTokenUsage` in `@archon/providers`), never by a provider.
+   * Set only by aggregation (`mergeTokenUsage` below), never by a provider.
    * When true the cache axes on this usage are a FLOOR: at least one contributing usage did
    * not report that axis, so true cache use is at least the reported total and
    * `input - cacheRead - cacheWrite` is an UPPER bound on full-price input rather than an
