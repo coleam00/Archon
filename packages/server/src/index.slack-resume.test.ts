@@ -12,6 +12,7 @@ import type { WorkflowResumeTarget } from './services/workflow-resume-service';
 type SlackWorkflowResume = (runId: string, slackUserId: string) => Promise<boolean>;
 
 const persistedRun: WorkflowRun = {
+  origin: { conversationId: 'conversation-1' },
   id: 'run-1',
   workflow_name: 'deliver',
   conversation_id: 'conversation-1',

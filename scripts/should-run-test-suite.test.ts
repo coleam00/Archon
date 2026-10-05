@@ -180,7 +180,7 @@ describe('test-suite change decision', () => {
     expect(changesJob).toContain('echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"');
   });
 
-  test('the workflow fixture bar runs for every pull request and push', () => {
+  test('the workflow fixture bar runs for every non-draft pull request and push', () => {
     const workflow = readFileSync(
       resolve(import.meta.dir, '../.github/workflows/test.yml'),
       'utf8'
@@ -194,9 +194,12 @@ describe('test-suite change decision', () => {
       workflow.indexOf('  test:')
     );
 
-    expect(pullRequestTrigger).toBe('  pull_request:\n    branches: [main, dev]');
-    // No `if:` and no `changes` gate: this job is the only Linux run of the fixtures.
-    expect(fixtureJob).not.toContain('if:');
+    expect(pullRequestTrigger).toBe(
+      '  pull_request:\n    branches: [main, dev]\n    types: [opened, synchronize, reopened, ready_for_review]'
+    );
+    // Only the draft gate and no `changes` gate: this job is the only Linux run of the fixtures.
+    expect(fixtureJob).toContain('    if: ${{ !github.event.pull_request.draft }}\n');
+    expect(fixtureJob.match(/if:/g)).toHaveLength(1);
     expect(fixtureJob).toContain('runs-on: ubuntu-latest');
     expect(fixtureJob).not.toContain('needs:');
     expect(fixtureJob).not.toContain('changes');

@@ -22,7 +22,12 @@ import {
   ResourceSlotCapacityConflictError,
 } from './resource-slots';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
-import { claimPendingWorkflowRun, resumeWorkflowRun, WorkflowResourceBusyError } from './workflows';
+import {
+  claimPendingWorkflowRun,
+  getWorkflowRun,
+  resumeWorkflowRun,
+  WorkflowResourceBusyError,
+} from './workflows';
 
 let root = '';
 const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
@@ -31,15 +36,17 @@ const originalDatabaseUrl = process.env.DATABASE_URL;
 
 function launch(id: string): PreparedWorkflowLaunch {
   return {
-    version: 1,
+    version: 2,
     run: {
       id,
       workflow_name: 'test',
-      conversation_id: '11111111-1111-4111-8111-111111111111',
+      origin: {
+        conversationId: '11111111-1111-4111-8111-111111111111',
+        userId: '22222222-2222-4222-8222-222222222222',
+      },
       codebase_id: CODEBASE_ID,
       user_message: '',
       metadata: {},
-      user_id: '22222222-2222-4222-8222-222222222222',
     },
     execution: {
       cwd: '/tmp/test',
@@ -262,6 +269,59 @@ describe('durable resource starts', () => {
     expect(await drainResourceStarts({ resource: 'repo:one', hostId: 'host' })).toEqual([
       { status: 'admitted', requestId: secondId, runId: secondId },
     ]);
+  });
+
+  test('drains a version-1 launch queued by an older writer with its provenance as origin', async () => {
+    const blockerId = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+    const legacyId = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+    for (const id of [blockerId, legacyId]) {
+      await admitResourceStart({
+        resource: 'repo:legacy',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: launch(id),
+      });
+    }
+    const stored = await getDatabase().query<{ launch: string }>(
+      'SELECT launch FROM remote_agent_resource_start_requests WHERE id = $1',
+      [legacyId]
+    );
+    // New launches store only the canonical origin.
+    const written = JSON.parse(stored.rows[0]?.launch ?? 'null') as Record<string, unknown>;
+    expect(written).toMatchObject({ version: 2, run: { origin: launch(legacyId).run.origin } });
+    expect(JSON.stringify(written)).not.toContain('conversation_id');
+
+    const { origin: _origin, ...run } = launch(legacyId).run;
+    await getDatabase().query(
+      'UPDATE remote_agent_resource_start_requests SET launch = $1 WHERE id = $2',
+      [
+        JSON.stringify({
+          ...launch(legacyId),
+          version: 1,
+          run: {
+            ...run,
+            conversation_id: '11111111-1111-4111-8111-111111111111',
+            user_id: '22222222-2222-4222-8222-222222222222',
+          },
+        }),
+        legacyId,
+      ]
+    );
+    expect((await getResourceStartRequest(legacyId))?.launch).toEqual(launch(legacyId));
+
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1",
+      [blockerId]
+    );
+    expect(await drainResourceStarts({ resource: 'repo:legacy', hostId: 'host' })).toEqual([
+      { status: 'admitted', requestId: legacyId, runId: legacyId },
+    ]);
+    expect(await getWorkflowRun(legacyId)).toMatchObject({
+      origin: launch(legacyId).run.origin,
+      conversation_id: '11111111-1111-4111-8111-111111111111',
+      user_id: '22222222-2222-4222-8222-222222222222',
+    });
   });
 
   test('deduplicates trusted delivery identity and rejects digest conflicts', async () => {

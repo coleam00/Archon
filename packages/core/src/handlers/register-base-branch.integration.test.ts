@@ -263,7 +263,7 @@ test('configured upstream controls the worktree commit, dispatch metadata and BA
       ],
     }),
     'prove the configured remote',
-    conversation.id,
+    { conversationId: conversation.id },
     { codebaseId: project.codebaseId }
   );
   expect(result.success).toBe(true);

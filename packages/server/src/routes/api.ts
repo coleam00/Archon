@@ -4167,23 +4167,7 @@ export function registerApiRoutes(
       if (respondBlocker) {
         return c.json(respondBlocker, 400);
       }
-      const rawBody = await c.req.text();
-      let body: { decision?: string; text?: string } = {};
-      if (rawBody.trim().length > 0) {
-        try {
-          body = JSON.parse(rawBody) as { decision?: string; text?: string };
-        } catch (parseError) {
-          getLog().warn({ err: parseError, runId }, 'api.respond_body_parse_failed');
-          return apiError(
-            c,
-            400,
-            'Request body is not valid JSON — send {"decision": "...", "text": "..."}'
-          );
-        }
-      }
-      if (!body.decision) {
-        return apiError(c, 400, 'Request body must include a non-empty "decision"');
-      }
+      const body = getValidatedBody(c, respondWorkflowRunBodySchema);
       const decision = body.decision;
 
       // Pre-validate a non-default decision so an undeclared id is a 400 naming the
@@ -4205,7 +4189,7 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text);
+      const result = await respondToWorkflow(runId, decision, text, body.expectedGate);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({
@@ -5259,7 +5243,7 @@ export function registerApiRoutes(
     const lockActiveSet = new Set(stats.activeConversationIds);
     const backgroundConversationIds = runningWorkflowRows
       .map(r => r.conversation_id)
-      .filter(id => !lockActiveSet.has(id));
+      .filter((id): id is string => id !== null && !lockActiveSet.has(id));
     const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 

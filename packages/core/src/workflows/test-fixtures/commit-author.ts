@@ -143,13 +143,12 @@ try {
         hostId: 'author-host',
         overlap: 'queue',
         launch: {
-          version: 1,
+          version: 2,
           run: {
             id: source.runId,
             workflow_name: workflow.name,
-            conversation_id: conversation.id,
+            origin: { conversationId: conversation.id, userId: user.id },
             codebase_id: codebase.id,
-            user_id: user.id,
             user_message: '',
             working_path: project,
             metadata: { workflow_source: preparedWorkflowSourceRecord(source) },

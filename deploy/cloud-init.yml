@@ -126,9 +126,12 @@ runcmd:
            DATABASE_URL=postgresql://postgres:postgres@postgres:5432/remote_coding_agent
 
       2. (Optional) Set up basic auth to protect the Web UI:
-         docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-         # Add to .env (use $$ to escape $ in hashes):
-           CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$<hash> }
+         docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+         # Compose dotenv syntax, not a shell command to source.
+         # Add this multiline value to .env; replace admin and paste the complete hash unchanged:
+           CADDY_BASIC_AUTH='basic_auth @protected {
+             admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+           }'
          # Skip if using IP-based firewall rules instead.
 
       3. Start all services:

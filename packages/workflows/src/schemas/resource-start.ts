@@ -1,5 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import { jsonValueSchema } from '../output-ref';
+import { workflowRunOriginSchema } from './workflow-run';
 
 const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
 const preparedIsolationSchema = z.discriminatedUnion('kind', [
@@ -14,34 +15,64 @@ const preparedIsolationSchema = z.discriminatedUnion('kind', [
     .strict(),
 ]);
 
-export const preparedWorkflowLaunchSchema = z
+const preparedRunShape = {
+  id: z.string().uuid(),
+  workflow_name: z.string().min(1),
+  codebase_id: z.string().min(1),
+  user_message: z.string(),
+  metadata: jsonObjectSchema,
+  // Absent for a worktree lane: the checkout exists only once execution starts.
+  working_path: z.string().min(1).optional(),
+};
+// Only what the run row cannot carry: the origin, inputs and sealed run configuration
+// already live on `run`.
+const preparedExecutionSchema = z
+  .object({
+    cwd: z.string().min(1),
+    conversationId: z.string().min(1),
+    isolation: preparedIsolationSchema,
+  })
+  .strict();
+
+const preparedWorkflowLaunchV2Schema = z
+  .object({
+    version: z.literal(2),
+    run: z.object({ ...preparedRunShape, origin: workflowRunOriginSchema.optional() }).strict(),
+    execution: preparedExecutionSchema,
+  })
+  .strict();
+
+/**
+ * Launches written before runs could omit provenance. A queued one stays readable, and
+ * its conversation and acting user become the run's origin when it is read.
+ */
+const preparedWorkflowLaunchV1Schema = z
   .object({
     version: z.literal(1),
     run: z
       .object({
-        id: z.string().uuid(),
-        workflow_name: z.string().min(1),
+        ...preparedRunShape,
         conversation_id: z.string().min(1),
-        codebase_id: z.string().min(1),
-        user_message: z.string(),
-        metadata: jsonObjectSchema,
-        // Absent for a worktree lane: the checkout exists only once execution starts.
-        working_path: z.string().min(1).optional(),
         user_id: z.string().min(1),
       })
       .strict(),
-    // Only what the run row cannot carry: the acting user, conversation, inputs and
-    // sealed run configuration already live on `run`.
-    execution: z
-      .object({
-        cwd: z.string().min(1),
-        conversationId: z.string().min(1),
-        isolation: preparedIsolationSchema,
-      })
-      .strict(),
+    execution: preparedExecutionSchema,
   })
-  .strict();
-export type PreparedWorkflowLaunch = z.infer<typeof preparedWorkflowLaunchSchema>;
+  .strict()
+  .transform(
+    ({ run: { conversation_id, user_id, ...run }, execution }): PreparedWorkflowLaunch => ({
+      version: 2,
+      run: { ...run, origin: { conversationId: conversation_id, userId: user_id } },
+      execution,
+    })
+  );
+
+/** Reads either stored version; every reader receives version 2. */
+export const preparedWorkflowLaunchSchema = z.union([
+  preparedWorkflowLaunchV2Schema,
+  preparedWorkflowLaunchV1Schema,
+]);
+export type PreparedWorkflowLaunch = z.infer<typeof preparedWorkflowLaunchV2Schema>;
 
 /** Run metadata key naming the receipt binding that requested a resource start. */
 export const RESOURCE_START_METADATA_KEY = 'resource_start';

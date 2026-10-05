@@ -1,3 +1,5 @@
+import { addMessage } from '@archon/core/db/messages';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createWorkflowDeps } from '@archon/core';
 import * as conversationDb from '@archon/core/db/conversations';
 import {
@@ -31,8 +33,8 @@ export type WorkflowResumeTarget =
 
 export type WorkflowResumeDestinationResolver = (run: WorkflowRun) => Promise<WorkflowResumeTarget>;
 
-export function workflowResumeConversationId(run: WorkflowRun): string {
-  return run.conversation_id;
+export function workflowResumeConversationId(run: WorkflowRun): string | null {
+  return run.conversation_id ?? run.parent_conversation_id;
 }
 
 export function workflowResumeTargetForConversation(
@@ -72,11 +74,13 @@ export async function workflowResumeTargetForRun(
   run: WorkflowRun,
   platforms: ReadonlyMap<string, IWorkflowPlatform>
 ): Promise<WorkflowResumeTarget> {
-  const conversation = await conversationDb.getConversationById(workflowResumeConversationId(run));
+  const conversationId = workflowResumeConversationId(run);
+  if (conversationId === null) return { kind: 'headless' };
+  const conversation = await conversationDb.getConversationById(conversationId);
   if (!conversation) {
     return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
   }
-  if (run.parent_conversation_id === null) {
+  if (run.parent_conversation_id === null || run.conversation_id === null) {
     return workflowResumeTargetForConversation(conversation, platforms);
   }
 
@@ -121,13 +125,34 @@ async function admitFromServer(
     new InProcessWorkflowEngine(createWorkflowDeps()),
     run.id,
     async freshRun => {
+      const historyConversationId = workflowResumeConversationId(freshRun);
       const target = await resolveTarget(freshRun);
       if (target.kind === 'unavailable') return target;
+      if (
+        target.kind === 'headless' &&
+        historyConversationId &&
+        !(await conversationDb.getConversationById(historyConversationId))
+      ) {
+        return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
+      }
       destination = target.kind === 'platform' ? target.destination : undefined;
       return {
         kind: 'ready',
-        platform: destination?.platform ?? new HeadlessPlatform(freshRun.conversation_id),
-        conversationId: destination?.conversationId ?? freshRun.conversation_id,
+        platform:
+          destination?.platform ??
+          new HeadlessPlatform(
+            historyConversationId
+              ? async (message, metadata): Promise<void> => {
+                  await addMessage(
+                    historyConversationId,
+                    'assistant',
+                    message,
+                    toPersistedMessageMetadata(metadata)
+                  );
+                }
+              : undefined
+          ),
+        conversationId: destination?.conversationId ?? freshRun.conversation_id ?? freshRun.id,
       };
     },
     cursor,

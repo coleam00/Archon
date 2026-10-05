@@ -397,6 +397,10 @@ export class SqliteAdapter implements IDatabase {
         );
       }
 
+      if (!wfColNames.has('origin')) {
+        this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN origin TEXT');
+      }
+
       if (!wfColNames.has('working_path')) {
         this.db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN working_path TEXT');
       }
@@ -815,6 +819,7 @@ export class SqliteAdapter implements IDatabase {
       -- the COMMENT ON COLUMN in migrations/000_combined.sql.
       CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
         id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        origin TEXT,
         conversation_id TEXT NOT NULL REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
         codebase_id TEXT REFERENCES remote_agent_codebases(id) ON DELETE SET NULL,
         workflow_name TEXT NOT NULL,
