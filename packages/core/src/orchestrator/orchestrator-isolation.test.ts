@@ -441,7 +441,13 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase();
 
-    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created', autoCleanedCount: 3 }));
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation({
+        type: 'created',
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        autoCleanedCount: 3,
+      })
+    );
 
     const result = await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -456,7 +462,9 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: 'develop' });
 
-    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created' }));
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation({ type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' })
+    );
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -468,7 +476,9 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: null });
 
-    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created' }));
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation({ type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' })
+    );
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -845,7 +855,7 @@ describe('dispatchBackgroundWorkflow', () => {
     const workflow = makeWorkflow();
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        { type: 'created' },
+        { type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
         makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
       )
     );
@@ -907,7 +917,7 @@ describe('dispatchBackgroundWorkflow', () => {
     const workflow = makeWorkflow();
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        { type: 'created' },
+        { type: 'provider_adoption' },
         makeEnvRow({
           working_path: '/worktrees/feature-adopted',
           branch_name: 'feature/adopted',
@@ -937,5 +947,6 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/worktrees/feature-adopted');
 
     await flushBackgroundExecution();
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.ownedWorktree).toBeUndefined();
   });
 });

@@ -538,8 +538,6 @@ export class IsolationResolver {
       };
     }
 
-    if (!isolatedEnv.metadata.adopted && !isolatedEnv.metadata.creationId)
-      throw new Error('Fresh worktree creation did not return creation identity');
     // provider.create() succeeded — worktree exists on disk.
     // If store.create() fails, clean up a worktree created by this call.
     let env: IsolationEnvironmentRow;
@@ -605,13 +603,16 @@ export class IsolationResolver {
       status: 'resolved',
       env,
       cwd: env.working_path,
-      method: {
-        type: 'created',
-        ...(!isolatedEnv.metadata.adopted ? { creationId: isolatedEnv.metadata.creationId } : {}),
-        ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.cutFromCommit !== undefined
-          ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
-          : {}),
-      },
+      method:
+        isolatedEnv.metadata.provenance === 'created'
+          ? {
+              type: 'created',
+              creationId: isolatedEnv.metadata.creationId,
+              ...(isolatedEnv.metadata.cutFromCommit !== undefined
+                ? { cutFromCommit: isolatedEnv.metadata.cutFromCommit }
+                : {}),
+            }
+          : { type: 'provider_adoption' },
       ...(isolatedEnv.warnings?.length ? { warnings: isolatedEnv.warnings } : {}),
     };
   }

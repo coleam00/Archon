@@ -20,10 +20,13 @@ const mockProviderCreate = mock((_req: { identifier: string }) =>
     branchName: 'archon/task-stub',
     status: 'active' as const,
     createdAt: new Date(),
-    metadata: {
-      adopted: nextCreateAdopts,
-      ...(!nextCreateAdopts ? { creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' } : {}),
-    },
+    metadata: nextCreateAdopts
+      ? { provenance: 'adopted' as const, adopted: true as const }
+      : {
+          provenance: 'created' as const,
+          adopted: false as const,
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        },
   })
 );
 

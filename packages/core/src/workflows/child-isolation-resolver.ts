@@ -189,8 +189,6 @@ export function createCodebaseChildResolver(
           description: `sub-run child ${String(childIndex)} (node ${req.nodeId})`,
         });
 
-        if (!isolatedEnv.metadata.adopted && !isolatedEnv.metadata.creationId)
-          throw new Error('Fresh worktree creation did not return creation identity');
         // Register the env so `isolation list`/`cleanup`/`complete <branch>` see it.
         const envRecord = await isolationDb.create({
           codebase_id: codebase.id,
@@ -245,7 +243,7 @@ export function createCodebaseChildResolver(
         return {
           cwd: isolatedEnv.workingPath,
           envId: envRecord.id,
-          ...(!isolatedEnv.metadata.adopted && isolatedEnv.metadata.creationId
+          ...(isolatedEnv.metadata.provenance === 'created'
             ? {
                 ownedWorktree: { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId },
               }

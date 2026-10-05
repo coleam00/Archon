@@ -60,7 +60,7 @@ import type {
   ExecutionContext,
   ContainerBackend,
   ContainerBackendConfig,
-  IsolatedEnvironment,
+  WorktreeCreationEnvironment,
 } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import {
@@ -3104,7 +3104,7 @@ async function runWorkflowWithOwnedSource(
         'worktree_creating'
       );
 
-      let isolatedEnv: IsolatedEnvironment;
+      let isolatedEnv: WorktreeCreationEnvironment;
       try {
         isolatedEnv = await provider.create({
           workflowType: 'task',
@@ -3141,8 +3141,6 @@ async function runWorkflowWithOwnedSource(
       }
 
       // Track in database
-      if (!isolatedEnv.metadata.adopted && !isolatedEnv.metadata.creationId)
-        throw new Error('Fresh worktree creation did not return creation identity');
       const envRecord = await isolationDb.create({
         codebase_id: codebase.id,
         workflow_type: 'task',
@@ -3160,7 +3158,7 @@ async function runWorkflowWithOwnedSource(
 
       workingCwd = isolatedEnv.workingPath;
       isolationEnvId = envRecord.id;
-      if (!isolatedEnv.metadata.adopted && isolatedEnv.metadata.creationId)
+      if (isolatedEnv.metadata.provenance === 'created')
         ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
       if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
       getLog().info({ path: workingCwd }, 'worktree_created');

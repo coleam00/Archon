@@ -312,14 +312,22 @@ describe('WorktreeProvider against real git', () => {
     };
     const fresh = await provider.create(freshRequest);
     expect(fresh.metadata.adopted).toBe(false);
-    if (fresh.metadata.adopted || !fresh.metadata.creationId)
-      throw new Error('missing creation proof');
+    expect(fresh.metadata.provenance).toBe('created');
+    if (fresh.metadata.provenance !== 'created') throw new Error('expected fresh creation');
     const admin = (await git(fresh.workingPath, 'rev-parse', '--absolute-git-dir')).trim();
     expect(await readFile(join(admin, 'archon-creation-id'), 'utf8')).toBe(
       fresh.metadata.creationId
     );
     expect((await git(fresh.workingPath, 'status', '--porcelain')).trim()).toBe('');
+    const observed = await provider.get(fresh.id);
+    expect(observed?.metadata).toEqual({ provenance: 'observed', adopted: false });
+    const listed = await provider.list(repoPath);
+    expect(listed.find(env => env.id === fresh.id)?.metadata).toEqual({
+      provenance: 'observed',
+      adopted: false,
+    });
     const adopted = await provider.create(freshRequest);
+    expect(adopted.metadata.provenance).toBe('adopted');
     expect(adopted.metadata.adopted).toBe(true);
     expect(adopted.metadata).not.toHaveProperty('creationId');
     await git(repoPath, 'worktree', 'remove', fresh.workingPath);

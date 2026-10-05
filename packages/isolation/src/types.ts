@@ -125,20 +125,30 @@ export type IsolationRequest =
 // --- Isolated Environment Types ---
 
 export interface AdoptedWorktreeMetadata {
+  provenance: 'adopted';
   adopted: true;
   adoptedFrom?: 'path' | 'branch';
   request?: IsolationRequest;
 }
 
 export interface CreatedWorktreeMetadata {
+  provenance: 'created';
   adopted: false;
-  creationId?: string;
+  creationId: string;
   request?: IsolationRequest;
   /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
   cutFromCommit?: string;
 }
 
-export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
+export interface ObservedWorktreeMetadata {
+  provenance: 'observed';
+  adopted: false;
+}
+
+export type WorktreeMetadata =
+  | AdoptedWorktreeMetadata
+  | CreatedWorktreeMetadata
+  | ObservedWorktreeMetadata;
 
 interface IsolatedEnvironmentBase {
   /** For worktrees, this is the filesystem path */
@@ -154,13 +164,18 @@ interface IsolatedEnvironmentBase {
   warnings?: string[];
 }
 
-export interface WorktreeEnvironment extends IsolatedEnvironmentBase {
+export interface WorktreeEnvironment<
+  Metadata extends WorktreeMetadata = WorktreeMetadata,
+> extends IsolatedEnvironmentBase {
   provider: 'worktree';
   branchName: BranchName;
-  metadata: WorktreeMetadata;
+  metadata: Metadata;
 }
 
 export type IsolatedEnvironment = WorktreeEnvironment;
+export type WorktreeCreationEnvironment = WorktreeEnvironment<
+  CreatedWorktreeMetadata | AdoptedWorktreeMetadata
+>;
 
 // --- Provider Interface ---
 
@@ -215,7 +230,7 @@ export interface DestroyResult {
 export interface IIsolationProvider {
   readonly providerType: IsolationProviderType;
 
-  create(request: IsolationRequest): Promise<IsolatedEnvironment>;
+  create(request: IsolationRequest): Promise<WorktreeCreationEnvironment>;
 
   /**
    * Best-effort cleanup. Throws only for unexpected errors (permissions, git failures).
@@ -394,9 +409,10 @@ export type ResolutionMethod =
   | { type: 'workflow_reuse' }
   | { type: 'linked_issue_reuse'; issueNumber: number }
   | { type: 'branch_adoption'; branch: string }
+  | { type: 'provider_adoption' }
   | {
       type: 'created';
-      creationId?: string;
+      creationId: string;
       autoCleanedCount?: number;
       /** The commit the new branch was cut from, when this resolution created one. */
       cutFromCommit?: string;

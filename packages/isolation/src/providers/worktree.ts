@@ -46,7 +46,7 @@ import type {
   PRIsolationRequest,
   RepoConfigLoader,
   WorktreeDestroyOptions,
-  WorktreeEnvironment,
+  WorktreeCreationEnvironment,
 } from '../types';
 import { isPRIsolationRequest } from '../types';
 import type { WorktreeCreateConfig } from '../types';
@@ -86,8 +86,8 @@ interface GitCommandAnchors {
 }
 
 type WorktreeCreationResult =
-  | { kind: 'created'; warnings: string[]; cutFromCommit?: string; creationId?: string }
-  | { kind: 'adopted'; environment: WorktreeEnvironment };
+  | { kind: 'created'; warnings: string[]; cutFromCommit?: string; creationId: string }
+  | { kind: 'adopted'; environment: WorktreeCreationEnvironment };
 
 function getForkReviewBranch(prNumber: string): BranchName {
   return toBranchName(`pr-${prNumber}-review`);
@@ -186,7 +186,7 @@ export class WorktreeProvider implements IIsolationProvider {
    * Errors". Downstream helpers assume they receive either a valid config
    * object or `null`, never a second chance to reload.
    */
-  async create(request: IsolationRequest): Promise<IsolatedEnvironment> {
+  async create(request: IsolationRequest): Promise<WorktreeCreationEnvironment> {
     if (!(await this.projectDirectoryExists(request.canonicalRepoPath))) {
       throw new MissingProjectDirectoryError(
         request.canonicalRepoPath,
@@ -223,8 +223,6 @@ export class WorktreeProvider implements IIsolationProvider {
       return creation.environment;
     }
 
-    const existingTaskBranch =
-      request.workflowType === 'task' && request.taskBranch?.kind === 'existing';
     const checkedOutBranch =
       isPRIsolationRequest(request) && request.isForkPR
         ? getForkReviewBranch(request.identifier)
@@ -236,16 +234,13 @@ export class WorktreeProvider implements IIsolationProvider {
       branchName: checkedOutBranch,
       status: 'active',
       createdAt: new Date(),
-      metadata: existingTaskBranch
-        ? { adopted: true, adoptedFrom: 'branch', request }
-        : {
-            adopted: false,
-            creationId: creation.creationId,
-            request,
-            ...(creation.cutFromCommit !== undefined
-              ? { cutFromCommit: creation.cutFromCommit }
-              : {}),
-          },
+      metadata: {
+        provenance: 'created',
+        adopted: false,
+        creationId: creation.creationId,
+        request,
+        ...(creation.cutFromCommit !== undefined ? { cutFromCommit: creation.cutFromCommit } : {}),
+      },
       ...(creation.warnings.length > 0 ? { warnings: creation.warnings } : {}),
     };
   }
@@ -575,7 +570,7 @@ export class WorktreeProvider implements IIsolationProvider {
       branchName: toBranchName(wt.branch),
       status: 'active',
       createdAt: new Date(), // Cannot determine actual creation time
-      metadata: { adopted: false },
+      metadata: { provenance: 'observed', adopted: false },
     };
   }
 
@@ -597,7 +592,7 @@ export class WorktreeProvider implements IIsolationProvider {
         branchName: toBranchName(wt.branch),
         status: 'active' as const,
         createdAt: new Date(),
-        metadata: { adopted: false },
+        metadata: { provenance: 'observed', adopted: false },
       }));
   }
 
@@ -652,7 +647,7 @@ export class WorktreeProvider implements IIsolationProvider {
       branchName: toBranchName(wt.branch),
       status: 'active',
       createdAt: new Date(),
-      metadata: { adopted: true },
+      metadata: { provenance: 'adopted', adopted: true },
     };
   }
 
@@ -736,7 +731,7 @@ export class WorktreeProvider implements IIsolationProvider {
     request: IsolationRequest,
     branchName: string,
     worktreePath: string
-  ): Promise<WorktreeEnvironment | null> {
+  ): Promise<WorktreeCreationEnvironment | null> {
     const exactTaskBranch =
       request.workflowType === 'task' && request.taskBranch?.kind === 'existing'
         ? request.taskBranch.branch
@@ -798,7 +793,7 @@ export class WorktreeProvider implements IIsolationProvider {
     request: IsolationRequest,
     branchName: BranchName,
     requireExactBranch = false
-  ): Promise<WorktreeEnvironment | null> {
+  ): Promise<WorktreeCreationEnvironment | null> {
     const worktreePath = requireExactBranch
       ? ((await listWorktrees(request.canonicalRepoPath)).find(
           worktree => worktree.branch === branchName
@@ -840,7 +835,7 @@ export class WorktreeProvider implements IIsolationProvider {
     branchName: string,
     request: IsolationRequest,
     adoptedFrom?: 'branch'
-  ): Promise<WorktreeEnvironment> {
+  ): Promise<WorktreeCreationEnvironment> {
     await this.refuseUnfinishedWorktree(path);
     getLog().info({ worktreePath: path, branchName }, 'worktree_adopted');
     return {
@@ -850,7 +845,12 @@ export class WorktreeProvider implements IIsolationProvider {
       branchName: toBranchName(branchName),
       status: 'active',
       createdAt: new Date(),
-      metadata: { adopted: true, ...(adoptedFrom ? { adoptedFrom } : {}), request },
+      metadata: {
+        provenance: 'adopted',
+        adopted: true,
+        ...(adoptedFrom ? { adoptedFrom } : {}),
+        request,
+      },
     };
   }
 
@@ -950,22 +950,37 @@ export class WorktreeProvider implements IIsolationProvider {
     // adopts it as ready (#3448).
     const existingBranch =
       request.workflowType === 'task' && request.taskBranch?.kind === 'existing';
-    const creationId = existingBranch ? undefined : randomUUID();
-    const warnings = await this.rollBackOnFailure(repoPath, worktreePath, async () => {
+    const setup = await this.rollBackOnFailure(repoPath, worktreePath, async () => {
       const warnings = await this.finishWorktreeSetup(repoPath, worktreePath, worktreeConfig);
-      if (creationId) {
-        const identity = await getGitCheckoutIdentity(worktreePath);
-        await writeFile(join(identity.gitDir, 'archon-creation-id'), creationId, { flag: 'wx' });
-      }
-      return warnings;
+      if (existingBranch) return { kind: 'adopted' as const, warnings };
+      const creationId = randomUUID();
+      const identity = await getGitCheckoutIdentity(worktreePath);
+      await writeFile(join(identity.gitDir, 'archon-creation-id'), creationId, { flag: 'wx' });
+      return { kind: 'created' as const, creationId, warnings };
     });
 
     const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
+    const warnings = lockWarning ? [...setup.warnings, lockWarning] : setup.warnings;
+    if (setup.kind === 'adopted') {
+      return {
+        kind: 'adopted',
+        environment: {
+          id: worktreePath,
+          provider: 'worktree',
+          workingPath: worktreePath,
+          branchName: toBranchName(branchName),
+          status: 'active',
+          createdAt: new Date(),
+          metadata: { provenance: 'adopted', adopted: true, adoptedFrom: 'branch', request },
+          ...(warnings.length ? { warnings } : {}),
+        },
+      };
+    }
 
     return {
       kind: 'created',
-      creationId,
-      warnings: lockWarning ? [...warnings, lockWarning] : warnings,
+      creationId: setup.creationId,
+      warnings,
       ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
     };
   }
@@ -1342,7 +1357,7 @@ export class WorktreeProvider implements IIsolationProvider {
     request: PRIsolationRequest,
     worktreePath: string,
     remote = 'origin'
-  ): Promise<WorktreeEnvironment | null> {
+  ): Promise<WorktreeCreationEnvironment | null> {
     // Clean up any orphan directory before creating worktree
     await this.cleanOrphanDirectoryIfExists(worktreePath);
 
@@ -1460,7 +1475,7 @@ export class WorktreeProvider implements IIsolationProvider {
     request: PRIsolationRequest,
     worktreePath: string,
     remote = 'origin'
-  ): Promise<WorktreeEnvironment | null> {
+  ): Promise<WorktreeCreationEnvironment | null> {
     const repoPath = request.canonicalRepoPath;
     const prNumber = request.identifier;
     const reviewBranch = getForkReviewBranch(prNumber);

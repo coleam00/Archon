@@ -33,7 +33,11 @@ const providerCreate = mock<IIsolationProvider['create']>(async () => ({
   branchName: toBranchName('child'),
   status: 'active',
   createdAt: new Date(),
-  metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+  metadata: {
+    provenance: 'created',
+    adopted: false,
+    creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+  },
 }));
 const isolation = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({

@@ -12,6 +12,8 @@ export type {
   IsolationRequest,
   AdoptedWorktreeMetadata,
   CreatedWorktreeMetadata,
+  ObservedWorktreeMetadata,
+  WorktreeCreationEnvironment,
   WorktreeMetadata,
   WorktreeEnvironment,
   IsolatedEnvironment,

@@ -382,8 +382,6 @@ async function worktreeLane(
     canonicalRepoPath: toRepoPath(codebase.default_cwd),
     description: `Resource start: ${identifier}`,
   });
-  if (!env.metadata.adopted && !env.metadata.creationId)
-    throw new Error('Fresh worktree creation did not return creation identity');
   const record = await isolationDb.create({
     codebase_id: codebase.id,
     workflow_type: 'task',
@@ -398,7 +396,7 @@ async function worktreeLane(
   return {
     cwd: env.workingPath,
     envId: record.id,
-    ...(!env.metadata.adopted && env.metadata.creationId
+    ...(env.metadata.provenance === 'created'
       ? { ownedWorktree: { envId: record.id, creationId: env.metadata.creationId } }
       : {}),
     ...(!env.metadata.adopted && env.metadata.cutFromCommit !== undefined

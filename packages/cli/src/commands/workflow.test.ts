@@ -295,7 +295,11 @@ mock.module('@archon/isolation', () => ({
         branchName: 'test-branch',
         status: 'active',
         createdAt: new Date(),
-        metadata: { adopted: false, creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+        metadata: {
+          provenance: 'created',
+          adopted: false,
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        },
       })
     ),
     healthCheck: mock(() => Promise.resolve(true)),
@@ -13333,7 +13337,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         branchName: 'feature/live-pr',
         status: 'active' as const,
         createdAt: new Date(),
-        metadata: { adopted: true },
+        metadata: { provenance: 'adopted', adopted: true },
       })
     );
     (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
@@ -13371,7 +13375,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
           branchName: 'feature/live-pr',
           status: 'active' as const,
           createdAt: new Date(),
-          metadata: { adopted: true },
+          metadata: { provenance: 'adopted', adopted: true },
         })
       ),
       healthCheck: mock(() => Promise.resolve(true)),

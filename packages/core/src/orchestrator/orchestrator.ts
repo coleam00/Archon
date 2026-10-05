@@ -217,7 +217,7 @@ export async function validateAndResolveIsolation(
       }
       return {
         status: 'new',
-        ...(result.method.type === 'created' && result.method.creationId
+        ...(result.method.type === 'created'
           ? { ownedWorktree: { envId: result.env.id, creationId: result.method.creationId } }
           : {}),
         cwd: result.cwd,
