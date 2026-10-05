@@ -9,7 +9,7 @@ import { handleGithubOperation } from '../../../packages/adapters/src/forge/gith
 import { ghCheckUnit } from '../../workflows/sdlc/.shared/checks';
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { validateStructuredOutput } from '../../../packages/providers/src/shared/structured-output';
+import { validateStructuredOutput } from '../../../packages/workflows/src/structured-output';
 import { parseWorkflow } from '../../../packages/workflows/src/loader';
 import {
   CHECK_STATES,

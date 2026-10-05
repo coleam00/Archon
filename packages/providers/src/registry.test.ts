@@ -15,9 +15,8 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
-import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider } from './types';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { EFFORT_LADDER, UnknownProviderError } from '@archon/provider-contract';
 
 // The registry creates its logger on first use and keeps it; hand it one this file can
 // observe. Module scope, so the spy is in place before any test makes the registry log.
@@ -33,6 +32,7 @@ function makeMockProvider(id: string): IAgentProvider {
     getType: () => id,
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
     getCapabilities: () => ({
+      backgroundWork: 'unobserved' as const,
       sessionResume: false,
       mcp: false,
       hooks: false,
@@ -218,6 +218,7 @@ describe('registry', () => {
         capabilities: {
           ...makeMockProvider('invalid-fork').getCapabilities(),
           sessionFork: true,
+          backgroundWork: 'unobserved' as const,
           sessionResume: false,
         },
       });

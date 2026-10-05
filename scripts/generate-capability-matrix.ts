@@ -51,6 +51,7 @@ const CHECK_ONLY = process.argv.includes('--check');
  * matrix can never silently omit a capability.
  */
 const AXES: readonly { key: keyof ProviderCapabilities; label: string }[] = [
+  { key: 'backgroundWork', label: 'Background work observation' },
   { key: 'sessionResume', label: 'Session resume' },
   {
     key: 'sessionFork',
@@ -128,6 +129,7 @@ interface ResolvedCaveat {
 
 /** Render a single provider's value for an axis. */
 export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabilities): string {
+  if (key === 'backgroundWork') return caps.backgroundWork;
   if (key === 'structuredOutput') {
     const tier = caps.structuredOutput;
     if (tier === 'enforced') return '**enforced**';
@@ -257,6 +259,10 @@ function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCavea
     'count events as turns, or substitute the requested model for an unreported model.',
     'Cost reporting is independent of spend-limit support. Older providers may omit',
     'reporting declarations; absence means unknown, not unsupported.',
+    '',
+    'Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;',
+    '`unobserved` means background work may exist without an observable lifecycle. A process',
+    'backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.',
     '',
     '## Providers',
     '',

@@ -9,7 +9,7 @@ import {
 } from '@archon/providers';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { EFFORT_LADDER } from '@archon/provider-contract';
 import { InvalidConfigError } from '@archon/core/config';
 import {
   makeDiscoverWorkflowsMock,

@@ -145,7 +145,7 @@ A workflow pack installs complete at one commit. The command fetches the tag, or
 
 ### `auth github`
 
-Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
+Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits name you as author while keeping the ambient Git identity as committer. PR comments and pushes use your connected identity.
 
 ```bash
 archon auth github
@@ -769,6 +769,8 @@ exit code would make a legitimately cancelled run look like a broken command.
 Owner loss is also exit `0`: the wait obtained a typed answer, but Archon did not
 invent a terminal status or change the run. Its JSON result is `owner_lost` with the
 persisted non-terminal `observedStatus` and no `attention` or terminal `status` field.
+A slow or incomplete owner handshake is not evidence of loss; the wait retries until
+it can attach, observe attention, or reach an explicit timeout.
 After verifying that the run's work has stopped, release its persisted state with
 `archon workflow abandon <run-id>`.
 

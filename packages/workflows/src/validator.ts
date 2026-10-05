@@ -24,14 +24,12 @@ import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
-  compileOutputSchema,
   findInstalledSkillNames,
-  findStrictSchemaIssues,
-  getProviderCapabilities,
-  isRegisteredProvider,
-  isObjectSchemaNode,
   skillSearchRoots,
-} from '@archon/providers';
+} from '@archon/paths/skills';
+import { compileOutputSchema } from './structured-output';
+import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -69,6 +67,7 @@ import type { RawAliasesConfig, RawTiersConfig, ResolvedAiProfile } from './mode
 /** A single validation issue with actionable hint */
 export interface ValidationIssue {
   level: 'error' | 'warning';
+  code?: 'shell_output_ref';
   nodeId?: string;
   field: string;
   message: string;
@@ -945,6 +944,7 @@ export async function validateWorkflowResources(
         if (bare) {
           issues.push({
             level: 'warning',
+            code: 'shell_output_ref',
             nodeId: node.id,
             field: slot.path,
             message:
@@ -955,6 +955,7 @@ export async function validateWorkflowResources(
         if (!quoted) return;
         issues.push({
           level: 'warning',
+          code: 'shell_output_ref',
           nodeId: node.id,
           field: slot.path,
           message:

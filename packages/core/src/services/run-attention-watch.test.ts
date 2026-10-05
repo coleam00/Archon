@@ -1,5 +1,6 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { RunLiveOwnerWatchEvent, RunLiveOwnerWatchResult } from './run-live-owner';
 import type { DbNotificationListener } from '../db/adapters/types';
 
 // ---------------------------------------------------------------------------
@@ -39,18 +40,19 @@ mock.module('@archon/paths', () => ({
 }));
 
 let reachableOwners: Set<string> | null = null;
-const ownerEvents = new Map<
-  string,
-  (event: 'attention' | 'control_handoff' | 'disconnected') => void
->();
+const ownerEvents = new Map<string, (event: RunLiveOwnerWatchEvent) => void>();
 const ownerUnsubscribes: ReturnType<typeof mock>[] = [];
 const mockWatchRunLiveOwner = mock(
-  (runId: string, onEvent: (event: 'attention' | 'control_handoff' | 'disconnected') => void) => {
-    if (reachableOwners !== null && !reachableOwners.has(runId)) return Promise.resolve(null);
+  (
+    runId: string,
+    onEvent: (event: RunLiveOwnerWatchEvent) => void
+  ): Promise<RunLiveOwnerWatchResult> => {
+    if (reachableOwners !== null && !reachableOwners.has(runId))
+      return Promise.resolve({ kind: 'unreachable' });
     ownerEvents.set(runId, onEvent);
     const unsubscribe = mock(() => undefined);
     ownerUnsubscribes.push(unsubscribe);
-    return Promise.resolve({ unsubscribe });
+    return Promise.resolve({ kind: 'attached', handle: { unsubscribe } });
   }
 );
 mock.module('./run-live-owner', () => ({
@@ -156,6 +158,27 @@ describe('waitForRunAttention', () => {
     expect(rows.get('r1')).toEqual(before);
   });
 
+  test('keeps an unproven ancestor waiting even when the child endpoint is absent', async () => {
+    putRun('parent', { status: 'running' });
+    putRun('child', { status: 'running', parent_run_id: 'parent' });
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unreachable' }));
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unproven' }));
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unreachable' }));
+    mockWatchRunLiveOwner.mockImplementationOnce(async () => ({ kind: 'unproven' }));
+
+    expect(await wait('child', { deadlineMs: 0 })).toEqual({
+      kind: 'deadline',
+      runId: 'child',
+      observedStatus: 'running',
+    });
+    expect(mockWatchRunLiveOwner.mock.calls.map(call => call[0])).toEqual([
+      'child',
+      'parent',
+      'child',
+      'parent',
+    ]);
+  });
+
   test('a terminal row racing a missing owner wins', async () => {
     const running = putRun('r1', { status: 'running' });
     const completed = { ...running, status: 'completed', completed_at: new Date() } as WorkflowRun;
@@ -208,7 +231,7 @@ describe('waitForRunAttention', () => {
       ownerUnsubscribes.push(unsubscribe);
       reachableOwners = new Set();
       onEvent('disconnected');
-      return Promise.resolve({ unsubscribe });
+      return Promise.resolve({ kind: 'attached', handle: { unsubscribe } });
     });
 
     expect(await wait('r1')).toEqual({

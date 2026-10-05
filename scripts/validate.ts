@@ -32,6 +32,11 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     command: ['bun', 'run', 'check:cli-import-boundary'],
   },
   {
+    id: 'package-edges',
+    label: '@archon package dependency edges',
+    command: ['bun', 'run', 'check:package-edges'],
+  },
+  {
     id: 'bundled-defaults',
     label: 'Bundled workflow and command defaults are regenerated',
     command: ['bun', 'run', 'check:bundled'],
