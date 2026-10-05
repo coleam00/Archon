@@ -221,9 +221,7 @@ import {
   type SendMessageContext,
 } from './executor-shared';
 import {
-  isLiteralSpec,
   isTierName,
-  resolveModelSpec,
   resolvePresetEffort,
   type ModelAliasPreset,
   type PresetEffortRejection,
@@ -1655,11 +1653,8 @@ async function resolveNodeProviderAndModel(
   // The one reasoning depth this node will run at, before any preset fallback.
   const declaredEffort = resolution.declaredEffort;
 
-  // Runtime backstop for container dispatch: the run-start pre-scan
-  // (collectContainerIncompatibleProviders) hand-mirrors this same provider
-  // resolution, so it could drift. Re-check the RESOLVED provider here, at the
-  // actual dispatch point, so a container turn can never reach a provider that
-  // can't honor it — no silent host downgrade (defense in depth).
+  // Keep the container capability check at dispatch as well as preflight: every
+  // actual turn must honour the requested execution context.
   if (execContext.kind === 'container' && !caps.containerExec) {
     throw new Error(
       `Provider '${provider}' cannot run inside a container yet (containerExec ` +
@@ -1667,8 +1662,7 @@ async function resolveNodeProviderAndModel(
     );
   }
 
-  // Dispatch backstop for the run-start pre-scan (collectScopedCapabilityMismatches),
-  // which resolves providers on its own path and could drift from this one.
+  // Re-check scoped capabilities at the actual dispatch boundary.
   const unscoped = unsupportedScopedCapabilities(node, caps);
   if (unscoped.length > 0) {
     throw new Error(
@@ -4064,7 +4058,7 @@ async function finalizeLoopFromSignal(
       )
     );
   }
-  // Old approval cursors have no execution identity or observed start time.
+  // Older paused loop gates may lack execution identity and observed start time.
   // Preserve their completion without inventing historical execution metadata.
   const event: import('./store').NodeStateEventInput = {
     workflow_run_id: workflowRun.id,
@@ -6944,6 +6938,16 @@ async function executeWaitNode(
   };
 }
 
+function gateReworkNode(node: GateNode, prompt: string): AgentNode {
+  return {
+    id: `${node.id}:on_reject`,
+    kind: 'agent',
+    source: { kind: 'inline', prompt },
+    ...(node.depends_on ? { depends_on: node.depends_on } : {}),
+    ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
+  };
+}
+
 /**
  * Execute an approval node — pauses workflow for human review.
  * On rejection resume (when on_reject is configured): runs the on_reject prompt via AI,
@@ -7059,13 +7063,10 @@ async function executeApprovalNode(
     // execution view during an on_reject cycle. This is cosmetic-only — the approval gate
     // still re-presents correctly and the human gate contract is preserved. A follow-up can
     // filter synthetic `:on_reject` IDs from the UI's nodeMap if needed.
-    const syntheticNode: AgentNode = {
-      id: `${node.id}:on_reject`,
-      kind: 'agent',
-      source: { kind: 'inline', prompt: substituteNodeOutputRefs(substitutedPrompt, nodeOutputs) },
-      ...(node.depends_on ? { depends_on: node.depends_on } : {}),
-      ...(node.idle_timeout ? { idle_timeout: node.idle_timeout } : {}),
-    };
+    const syntheticNode = gateReworkNode(
+      node,
+      substituteNodeOutputRefs(substitutedPrompt, nodeOutputs)
+    );
 
     const {
       provider,
@@ -10443,39 +10444,32 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
 }
 
 /**
- * Resolve the AI provider a node would use, WITHOUT the messaging/side effects
- * of `resolveNodeProviderAndModel` — just enough for the container capability
- * pre-flight. Mirrors the provider half of that resolver: `node.provider ??
- * workflowProvider`, then a model tier/alias ref may override the provider.
- */
-function resolveNodeProviderForPreflight(
-  node: DagNode,
-  workflowProvider: string,
-  aiProfile?: ResolvedAiProfile
-): string {
-  let provider: string = node.provider ?? workflowProvider;
-  if (node.model && aiProfile) {
-    const spec = resolveModelSpec(aiProfile, node.model);
-    if (!isLiteralSpec(spec)) provider = spec.provider;
-  }
-  return provider;
-}
-
-/**
  * Walk every node (including loop_group bodies) that can invoke a provider.
  * bash/script/cancel nodes are skipped (deterministic, no provider). An approval
  * node counts only when it has an `on_reject` reprompt (the one AI turn it can
  * spawn). For each visited node the resolved provider is passed to `visit`.
  * Unknown providers are passed through — the caller decides how to handle them.
  */
-function visitProviderInvokingNodes(
+export function visitProviderInvokingNodes(
   nodes: readonly (DagNode | IncludeDirective)[],
   workflowProvider: string,
   aiProfile: ResolvedAiProfile | undefined,
   visit: (node: DagNode, provider: string) => void
 ): void {
   const resolve = (node: DagNode): string =>
-    resolveNodeProviderForPreflight(node, workflowProvider, aiProfile);
+    resolveNodeModel(
+      node,
+      {
+        provider: workflowProvider,
+        providerOrigin: 'workflow',
+        model: undefined,
+        preset: undefined,
+        tier: undefined,
+        effort: undefined,
+      },
+      {},
+      aiProfile
+    ).provider;
   for (const node of nodes) {
     if (isIncludeDirective(node) || isExecNode(node) || isHaltNode(node) || isWaitNode(node))
       continue;
@@ -10486,8 +10480,9 @@ function visitProviderInvokingNodes(
       continue;
     }
     if (isGateNode(node)) {
-      if (node.decisions.some(d => d.rework !== undefined)) {
-        visit(node, resolve(node));
+      const rework = node.decisions.find(d => d.rework !== undefined)?.rework;
+      if (rework) {
+        visit(node, resolve(gateReworkNode(node, rework.prompt)));
       }
       continue;
     }

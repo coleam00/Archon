@@ -5,7 +5,8 @@ mock.module('../workflows/branch-launch-source', () => ({
     prepare: (path: string) => Promise<unknown>
   ) => prepare('/adopted/snapshot'),
 }));
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import * as git from '@archon/git';
+import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { mkdtemp, realpath } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { tmpdir } from 'os';
@@ -117,6 +118,12 @@ const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
+  listCodebaseRegistrations: async () =>
+    (await mockListCodebases()).map(row => ({
+      id: row.id,
+      name: row.name,
+      stored_default_cwd: row.default_cwd,
+    })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
 }));
@@ -347,10 +354,10 @@ const mockBuildOrchestratorPrompt = mock<typeof PromptBuilder.buildOrchestratorP
   () => 'You are the orchestrator agent.'
 );
 const mockBuildProjectScopedPrompt = mock<typeof PromptBuilder.buildProjectScopedPrompt>(
-  () => 'You are scoped to project X.'
+  async () => 'You are scoped to project X.'
 );
 const mockBuildOrchestratorSystemAppend = mock<typeof PromptBuilder.buildOrchestratorSystemAppend>(
-  () => 'orchestrator system append'
+  async () => 'orchestrator system append'
 );
 
 mock.module('./prompt-builder', () => ({
@@ -1790,7 +1797,6 @@ describe('orchestrator-agent handleMessage', () => {
           name: 'my-app',
           default_cwd: canonicalPath,
           default_branch: null,
-          ai_assistant_type: 'claude',
           kind: 'folder',
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -1802,27 +1808,13 @@ describe('orchestrator-agent handleMessage', () => {
       }
     });
 
-    test('/register-project stores detected current branch', async () => {
+    test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
       // handleRegisterProject canonicalizes before storing (macOS tmpdir lives
       // under /var → /private/var), so the stored default_cwd is canonical.
       const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+      const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(git.toRepoPath(canonicalPath));
       try {
-        const initExit = await Bun.spawn(['git', 'init', '-b', 'develop'], {
-          cwd: projectPath,
-        }).exited;
-        expect(initExit, 'git init failed during registration fixture setup').toBe(0);
-        const commitExit = await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
-          cwd: projectPath,
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: 'Archon Test',
-            GIT_AUTHOR_EMAIL: 'archon-test@example.com',
-            GIT_COMMITTER_NAME: 'Archon Test',
-            GIT_COMMITTER_EMAIL: 'archon-test@example.com',
-          },
-        }).exited;
-        expect(commitExit, 'git commit failed during registration fixture setup').toBe(0);
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
@@ -1837,11 +1829,11 @@ describe('orchestrator-agent handleMessage', () => {
         expect(mockCreateCodebase).toHaveBeenCalledWith({
           name: 'my-app',
           default_cwd: canonicalPath,
-          default_branch: 'develop',
-          ai_assistant_type: 'claude',
+          default_branch: null,
           kind: 'repo',
         });
       } finally {
+        repoSpy.mockRestore();
         await removeTempTree(projectPath);
       }
     });
@@ -1955,9 +1947,12 @@ describe('orchestrator-agent handleMessage', () => {
           `/update-project ${mockCodebase.name} ${suppliedPath}`
         );
 
-        expect(mockUpdateCodebase).toHaveBeenCalledWith(mockCodebase.id, {
-          default_cwd: canonicalPath,
-        });
+        expect(mockUpdateCodebase).toHaveBeenCalledWith(
+          expect.objectContaining({ id: mockCodebase.id, name: mockCodebase.name }),
+          {
+            default_cwd: canonicalPath,
+          }
+        );
       } finally {
         await removeTempTree(suppliedPath);
         await removeTempTree(canonicalPath);

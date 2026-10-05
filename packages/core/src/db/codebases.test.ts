@@ -1,7 +1,8 @@
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
-import { join, sep } from 'path';
+import { join, sep, resolve } from 'node:path';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 import { Codebase } from '../types';
+import { quoteCommandArg } from '../utils/command-args';
 
 const mockQuery = createMockQuery();
 
@@ -26,6 +27,9 @@ import {
   updateCodebase,
   deleteCodebase,
   CodebaseNotFoundError,
+  InvalidCodebaseDefaultCwdError,
+  listCodebases,
+  listCodebaseRegistrations,
 } from './codebases';
 
 describe('codebases', () => {
@@ -45,6 +49,63 @@ describe('codebases', () => {
     created_at: new Date(),
     updated_at: new Date(),
   };
+
+  describe('absolute stored paths', () => {
+    for (const path of ['projects/repo', '', './repo', '~/repo']) {
+      test(`rejects writes of ${JSON.stringify(path)} before querying`, async () => {
+        await expect(createCodebase({ name: 'project', default_cwd: path })).rejects.toBeInstanceOf(
+          InvalidCodebaseDefaultCwdError
+        );
+        await expect(
+          updateCodebase({ id: 'id', name: 'project' }, { default_cwd: path })
+        ).rejects.toBeInstanceOf(InvalidCodebaseDefaultCwdError);
+        await expect(
+          updateCodebase({ id: 'id', name: 'project' }, { default_cwd: path })
+        ).rejects.toThrow('/register-project ' + quoteCommandArg('project') + ' <absolute-path>');
+        expect(mockQuery).not.toHaveBeenCalled();
+      });
+    }
+
+    const readers = [
+      () => getCodebase('id'),
+      () => findCodebaseByName('project'),
+      () => findCodebaseByRepoUrl('url'),
+      () => findCodebaseByDefaultCwd('projects/repo'),
+      () => listCodebases(),
+      () => findCodebaseByPathPrefix(resolve('projects/repo')),
+    ];
+    for (const [index, read] of readers.entries()) {
+      test(`reader ${index} rejects legacy values without guessing`, async () => {
+        mockQuery.mockResolvedValueOnce(
+          createQueryResult([
+            { ...mockCodebase, name: 'Client "Ops"', default_cwd: 'projects/repo' },
+          ])
+        );
+        await expect(read()).rejects.toThrow(
+          '/register-project ' + quoteCommandArg('Client "Ops"') + ' <absolute-path>'
+        );
+      });
+    }
+
+    test('absolute spelling is preserved on write and read', async () => {
+      const path = resolve('project') + sep + '..' + sep + 'project' + sep;
+      mockQuery.mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
+      expect((await createCodebase({ name: 'project', default_cwd: path })).default_cwd).toBe(path);
+      expect(mockQuery.mock.calls[0]?.[1]).toContain(path);
+    });
+
+    test('administrative metadata remains readable with an invalid stored path', async () => {
+      const row = { id: 'id', name: 'project', stored_default_cwd: 'projects/repo' };
+      mockQuery.mockResolvedValueOnce(createQueryResult([row]));
+      expect(await listCodebaseRegistrations()).toEqual([row]);
+      expect(mockQuery.mock.calls[0]?.[0]).toContain('default_cwd AS stored_default_cwd');
+    });
+
+    test('empty lists remain usable', async () => {
+      mockQuery.mockResolvedValueOnce(createQueryResult([]));
+      expect(await listCodebases()).toEqual([]);
+    });
+  });
 
   describe('createCodebase', () => {
     test('creates codebase with all fields', async () => {
@@ -76,6 +137,7 @@ describe('codebases', () => {
       const codebaseWithoutOptional: Codebase = {
         ...mockCodebase,
         repository_url: null,
+        ai_assistant_type: null,
       };
       mockQuery.mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
 
@@ -87,38 +149,8 @@ describe('codebases', () => {
       expect(result).toEqual(codebaseWithoutOptional);
       expect(mockQuery).toHaveBeenCalledWith(
         'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
-        ['test-project', null, '/workspace/test-project', null, 'claude', 'repo']
+        ['test-project', null, '/workspace/test-project', null, null, 'repo']
       );
-    });
-
-    test('defaults ai_assistant_type to claude when no env var set', async () => {
-      delete process.env.DEFAULT_AI_ASSISTANT;
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockCodebase]));
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.arrayContaining(['claude'])
-      );
-    });
-
-    test('reads DEFAULT_AI_ASSISTANT env var when ai_assistant_type omitted', async () => {
-      process.env.DEFAULT_AI_ASSISTANT = 'codex';
-      mockQuery.mockResolvedValueOnce(
-        createQueryResult([{ ...mockCodebase, ai_assistant_type: 'codex' }])
-      );
-
-      await createCodebase({
-        name: 'test-project',
-        default_cwd: '/workspace/test-project',
-      });
-
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['codex']));
-      delete process.env.DEFAULT_AI_ASSISTANT;
     });
 
     test('explicit ai_assistant_type takes priority over env var', async () => {
@@ -486,7 +518,7 @@ describe('codebases', () => {
     test('updates default_cwd only', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', { default_cwd: '/new/path' });
+      await updateCodebase(mockCodebase, { default_cwd: '/new/path' });
 
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET default_cwd = $1, updated_at = NOW() WHERE id = $2',
@@ -497,7 +529,7 @@ describe('codebases', () => {
     test('updates repository_url only', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', { repository_url: 'https://github.com/owner/repo' });
+      await updateCodebase(mockCodebase, { repository_url: 'https://github.com/owner/repo' });
 
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET repository_url = $1, updated_at = NOW() WHERE id = $2',
@@ -508,7 +540,7 @@ describe('codebases', () => {
     test('updates both default_cwd and repository_url', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', {
+      await updateCodebase(mockCodebase, {
         default_cwd: '/new/path',
         repository_url: 'https://github.com/owner/repo',
       });
@@ -522,7 +554,7 @@ describe('codebases', () => {
     test('updates default_branch', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', { default_branch: 'develop' });
+      await updateCodebase(mockCodebase, { default_branch: 'develop' });
 
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET default_branch = $1, updated_at = NOW() WHERE id = $2',
@@ -533,7 +565,10 @@ describe('codebases', () => {
     test('throws CodebaseNotFoundError when codebase not found', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
-      const error = await updateCodebase('nonexistent', { default_cwd: '/path' }).catch(e => e);
+      const error = await updateCodebase(
+        { id: 'nonexistent', name: 'project' },
+        { default_cwd: '/path' }
+      ).catch(e => e);
 
       expect(error).toBeInstanceOf(CodebaseNotFoundError);
       expect(error.message).toBe('Codebase nonexistent not found');
@@ -543,7 +578,7 @@ describe('codebases', () => {
     test('does not wrap operational DB errors in CodebaseNotFoundError', async () => {
       mockQuery.mockRejectedValueOnce(new Error('connection refused'));
 
-      const error = await updateCodebase('codebase-123', { default_cwd: '/path' }).catch(e => e);
+      const error = await updateCodebase(mockCodebase, { default_cwd: '/path' }).catch(e => e);
 
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(CodebaseNotFoundError);
@@ -551,7 +586,7 @@ describe('codebases', () => {
     });
 
     test('no-ops when no fields provided', async () => {
-      await updateCodebase('codebase-123', {});
+      await updateCodebase(mockCodebase, {});
 
       expect(mockQuery).not.toHaveBeenCalled();
     });

@@ -22,7 +22,7 @@ import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowTerminal } from '@archon/paths';
 import { workflowTelemetryShape } from './telemetry-shape';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
-import { getDefaultBranch, toRepoPath } from '@archon/git';
+import { getDefaultBranch, getDefaultRemote, toRepoPath } from '@archon/git';
 import type {
   DagNode,
   IncludeDirective,
@@ -2017,7 +2017,10 @@ export async function executeWorkflow(
     baseBranch = '';
   } else {
     try {
-      baseBranch = await getDefaultBranch(toRepoPath(cwd));
+      const repoPath = toRepoPath(cwd);
+      const remote = config.remote?.trim() || (await getDefaultRemote(repoPath));
+      if (!remote) throw new Error('Set worktree.remote to select a git remote.');
+      baseBranch = await getDefaultBranch(repoPath, remote);
     } catch (error) {
       // Intentional fallback: auto-detection failure is non-fatal.
       // substituteWorkflowVariables throws if $BASE_BRANCH is actually referenced in a prompt.

@@ -1,3 +1,4 @@
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
 /**
@@ -10,6 +11,7 @@ import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflo
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'fs';
+import { isAbsolute } from 'node:path';
 import { createLogger, captureChatTurn, canonicalizeProjectPath } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -37,7 +39,6 @@ import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
-  execFileAsync,
   findRepoRoot,
   getDefaultRemote,
   syncWorkspace,
@@ -2443,7 +2444,7 @@ export async function handleMessage(
 
     // Claude supports the preset object for prompt caching; other providers
     // need a plain string (Pi coerces non-string to undefined, Codex ignores it).
-    let systemAppend = buildOrchestratorSystemAppend(conversation, codebases, workflows);
+    let systemAppend = await buildOrchestratorSystemAppend(conversation, codebases, workflows);
     // Capabilities are only consulted for project-scoped chats (both the native tool
     // and the CLI pointer are scoped features), so look them up lazily — this also
     // avoids a registry lookup (and a throw for an unregistered provider) on the
@@ -2521,6 +2522,7 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and
@@ -3383,15 +3385,17 @@ async function handleRegisterProject(
   }
 
   // Check if codebase already exists with this name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
-  if (alreadyExists) {
-    return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
+  if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
+    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath });
+    return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
 
-  // Use config default provider instead of hardcoding 'claude'
-  const config = await loadConfig();
+  if (alreadyExists) {
+    return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
+  }
 
   // Detect whether the path is a git repository. Non-git paths (multi-repo roots
   // or plain ops folders) register as folder projects — run-in-place, no branch.
@@ -3412,12 +3416,10 @@ async function handleRegisterProject(
     );
   }
   const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
-  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(canonicalPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,
-    default_branch: detectedBranch,
-    ai_assistant_type: config.assistant,
+    default_branch: null,
     kind,
   });
 
@@ -3432,20 +3434,6 @@ async function handleRegisterProject(
       'If this should be a git repo, resolve the error and re-register.';
   }
   return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
-}
-
-async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', projectPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
-      { timeout: 5000 }
-    );
-    const branch = stdout.trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -3473,7 +3461,7 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3481,7 +3469,7 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   try {
-    await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
+    await codebaseDb.updateCodebase(codebase, { default_cwd: newPath });
   } catch (err) {
     getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
     // Row gone (deleted between the fetch above and the UPDATE) is the only
@@ -3493,10 +3481,10 @@ async function handleUpdateProject(message: string): Promise<string> {
     return `Project "${projectName}" could not be updated — database error. Please try again.`;
   }
   getLog().info(
-    { name: projectName, oldPath: codebase.default_cwd, newPath, id: codebase.id },
+    { name: projectName, oldPath: codebase.stored_default_cwd, newPath, id: codebase.id },
     'project.update_completed'
   );
-  return `Project "${projectName}" updated.\nOld path: ${codebase.default_cwd}\nNew path: ${newPath}`;
+  return `Project "${projectName}" updated.\nOld path: ${codebase.stored_default_cwd}\nNew path: ${newPath}`;
 }
 
 /**
@@ -3512,7 +3500,7 @@ async function handleRemoveProject(message: string): Promise<string> {
   const projectName = args[0];
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3521,7 +3509,7 @@ async function handleRemoveProject(message: string): Promise<string> {
 
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
-  return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+  return `Project "${projectName}" removed.\nPath was: ${codebase.stored_default_cwd}`;
 }
 
 /**

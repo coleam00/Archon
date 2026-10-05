@@ -19,7 +19,6 @@
     "./handlers": "./src/handlers/command-handler.ts",
     "./config": "./src/config/index.ts",
     "./config/run-config-handoff": "./src/config/run-config-handoff.ts",
-    "./config/resolve-assistant": "./src/config/resolve-assistant.ts",
     "./utils/*": "./src/utils/*.ts",
     "./services/*": "./src/services/*.ts",
     "./state/*": "./src/state/*.ts",
@@ -54,6 +53,15 @@
     "typescript": "^5.0.0"
   },
   "testGroups": [
+    [
+      "src/db/codebase-assistant.integration.test.ts"
+    ],
+    [
+      "src/db/codebase-paths.integration.test.ts"
+    ],
+    [
+      "src/db/codebase-paths.postgres.integration.test.ts"
+    ],
     [
       "src/workflows/branch-launch-source.test.ts"
     ],
@@ -113,7 +121,6 @@
       "src/utils/github-graphql.test.ts",
       "src/types/message-metadata.test.ts",
       "src/config/config-loader.test.ts",
-      "src/config/resolve-assistant.test.ts",
       "src/state/"
     ],
     [
@@ -162,7 +169,7 @@
       "src/db/resource-slots.postgres.integration.test.ts"
     ],
     [
-      "src/db/workflows.metadata-merge.postgres.integration.test.ts"
+      "src/db/workflows.postgres.integration.test.ts"
     ],
     [
       "src/db/workflows.adoption-timestamp.integration.test.ts"
@@ -271,6 +278,12 @@
     ],
     [
       "src/db/isolation-environments.retention.integration.test.ts"
+    ],
+    [
+      "src/handlers/register-base-branch.integration.test.ts"
+    ],
+    [
+      "src/workflows/continuation-host-base-branch.test.ts"
     ],
     [
       "src/workflows/commit-author.integration.test.ts"

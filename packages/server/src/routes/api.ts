@@ -34,6 +34,8 @@ import {
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
+  inspectProjectBaseBranch,
+  ProjectRegistrationError,
   registerRepository,
   registerFolder,
   ConversationNotFoundError,
@@ -69,9 +71,16 @@ import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/cor
 import { InvalidConfigError, parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
-import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
+import {
+  ConfiguredBaseBranchNotFoundError,
+  findRepoRoot,
+  removeWorktree,
+  toRepoPath,
+  toWorktreePath,
+} from '@archon/git';
 import {
   createLogger,
+  canonicalizeProjectPath,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
   getBundledWorkflowsPath,
@@ -296,17 +305,12 @@ import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
 import * as messageDb from '@archon/core/db/messages';
 import * as userDb from '@archon/core/db/users';
 import {
-  abandonWorkflow,
   AbandonOwnerNotStoppedError,
-  cancelWorkflow,
   CancelRefusedError,
   describeAbandonOwner,
-  approveWorkflow,
-  rejectWorkflow,
-  respondToWorkflow,
   assertRespondable,
-  resetWorkflowNodeSessions,
 } from '@archon/core/operations/workflow-operations';
+import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { getAuth, isWebAuthEnabled, getSignupMode, isApiGateEnabled } from '../auth';
 import { errorSchema } from './schemas/common.schemas';
 import { updateCheckResponseSchema } from './schemas/system.schemas';
@@ -355,6 +359,8 @@ import {
   codebaseSchema,
   codebaseIdParamsSchema,
   addCodebaseBodySchema,
+  inspectBaseBranchBodySchema,
+  inspectBaseBranchResponseSchema,
   deleteCodebaseResponseSchema,
   codebaseEnvVarsResponseSchema,
   setEnvVarBodySchema,
@@ -369,6 +375,7 @@ import {
   updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import { validateAliasName } from './alias-name';
 import {
   TIER_NAMES,
   isTierName,
@@ -775,6 +782,27 @@ const getCodebaseRoute = createRoute({
       description: 'Codebase',
     },
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const inspectBaseBranchRoute = createRoute({
+  method: 'post',
+  path: '/api/codebases/base-branch',
+  tags: ['Codebases'],
+  summary: 'Inspect the remote default without registering a project',
+  request: {
+    body: {
+      content: { 'application/json': { schema: inspectBaseBranchBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: inspectBaseBranchResponseSchema } },
+      description: 'Base branch inspection',
+    },
+    400: jsonError('Bad request'),
     500: jsonError('Server error'),
   },
 });
@@ -1767,6 +1795,15 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[]
 ): void {
+  const {
+    abandonWorkflow,
+    cancelWorkflow,
+    approveWorkflow,
+    rejectWorkflow,
+    respondToWorkflow,
+    resetWorkflowNodeSessions,
+  } = createSqlWorkflowOperations();
+
   app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
 
   /**
@@ -2140,17 +2177,6 @@ export function registerApiRoutes(
           `Valid: ${validEfforts.join(', ')}`
         );
       }
-    }
-    return null;
-  }
-
-  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
-  function validateAliasName(name: string): string | null {
-    if ((TIER_NAMES as readonly string[]).includes(name)) {
-      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
-    }
-    if (!name.startsWith('@')) {
-      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
     }
     return null;
   }
@@ -3148,21 +3174,31 @@ export function registerApiRoutes(
     }
   });
 
+  registerOpenApiRoute(inspectBaseBranchRoute, async c => {
+    const body = getValidatedBody(c, inspectBaseBranchBodySchema);
+    try {
+      return c.json(await inspectProjectBaseBranch(body), 200);
+    } catch (error) {
+      if (error instanceof ProjectRegistrationError) return apiError(c, 400, error.message);
+      getLog().error({ err: error }, 'inspect_base_branch_failed');
+      return apiError(c, 500, `Failed to inspect base branch: ${(error as Error).message}`);
+    }
+  });
+
   // POST /api/codebases - Add a project (clone from URL or register local path)
   registerOpenApiRoute(addCodebaseRoute, async c => {
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
-      // .refine() guarantees exactly one of url/path is present.
       // For a local path, detect git-ness: a non-git directory registers as a
       // folder project (kind: 'folder') instead of being rejected. Folder-ness
       // is detected here, not declared in the request body, so the web form
       // needs no new field.
       let result;
-      if (body.url) {
-        result = await cloneRepository(body.url);
+      if ('url' in body) {
+        result = await cloneRepository(body.url, { baseBranch: body.base_branch ?? undefined });
       } else {
-        const localPath = body.path ?? '';
+        const localPath = await canonicalizeProjectPath(body.path);
         // Detect git-ness. A resolvable repo root → register as a repo project;
         // a definitive null ("not a git repository") → folder project. A THROW
         // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
@@ -3183,7 +3219,11 @@ export function registerApiRoutes(
             );
           }
         }
-        result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
+        result = repoRoot
+          ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
+          : await registerFolder(localPath, undefined, {
+              baseBranch: body.base_branch ?? undefined,
+            });
       }
 
       // Fetch the full codebase record for a consistent response
@@ -3194,6 +3234,11 @@ export function registerApiRoutes(
 
       return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
+      if (
+        error instanceof ProjectRegistrationError ||
+        error instanceof ConfiguredBaseBranchNotFoundError
+      )
+        return apiError(c, 400, error.message);
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
         c,
@@ -3727,6 +3772,7 @@ export function registerApiRoutes(
         });
       }
       let message = `Stopped the run's live owner process (pid ${String(result.pid)}), then cancelled workflow: ${run.workflow_name}`;
+      for (const warning of result.cleanupWarnings ?? []) message += ` — warning: ${warning}`;
       if (result.cascadeFailures > 0) {
         message += ` — warning: ${String(result.cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }
@@ -3858,8 +3904,10 @@ export function registerApiRoutes(
       // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
       // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
       // orphaned children that CLI/chat abandons cleaned up.
-      const { cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(runId);
+      const { cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+        await abandonWorkflow(runId);
       let message = `${describeAbandonOwner(owner).join(' ')} Abandoned workflow: ${run.workflow_name}`;
+      for (const warning of cleanupWarnings ?? []) message += ` — warning: ${warning}`;
       if (cascadeFailures > 0) {
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
       }

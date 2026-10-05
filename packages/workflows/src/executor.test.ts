@@ -120,6 +120,7 @@ mock.module('@archon/paths', () => ({
 const mockGetDefaultBranch = mock(async () => 'main');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
+  getDefaultRemote: mock(async () => 'origin'),
   toRepoPath: mock((p: string) => p),
   // The checkout baseline of a container run probes the container through here. Tests use
   // container ids that do not exist, so answer the way a real `docker exec` would.
@@ -201,6 +202,24 @@ import { TerminalStatusWriteError } from './terminal-status-write';
 
 function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
+    resolveApprovalGate: mock<IWorkflowStore['resolveApprovalGate']>(() => {
+      throw new Error('Unexpected resolveApprovalGate');
+    }),
+    resolveAndCancelApprovalGate: mock<IWorkflowStore['resolveAndCancelApprovalGate']>(() => {
+      throw new Error('Unexpected resolveAndCancelApprovalGate');
+    }),
+    cancelResumableRunsForConversation: mock<IWorkflowStore['cancelResumableRunsForConversation']>(
+      () => {
+        throw new Error('Unexpected cancelResumableRunsForConversation');
+      }
+    ),
+    deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
+      throw new Error('Unexpected deleteWorkflowNodeSessions');
+    }),
+    findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
+    listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
+      throw new Error('Unexpected listWorkflowRuns');
+    }),
     getActiveWorkflowRunByPath: mock(async () => null),
     findChildRuns: mock(async () => []),
     getRunAncestry: mock(async () => []),
@@ -2709,7 +2728,7 @@ describe('executeWorkflow', () => {
         'db-conv-1'
       );
 
-      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree', 'origin');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 
@@ -2770,7 +2789,7 @@ describe('executeWorkflow', () => {
         { codebaseId: 'cb-repo' }
       );
 
-      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree');
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/tmp/worktree', 'origin');
       expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].baseBranch).toBe('main');
     });
 

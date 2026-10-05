@@ -2,6 +2,7 @@
  * Cleanup service for isolation environments
  * Handles removal triggered by events, schedule, or commands
  */
+import type { IIsolationStore } from '@archon/isolation';
 import { retainedPlatformIds, retainsWorkspace } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
@@ -47,8 +48,8 @@ interface RepoGitContext {
 
 // Resolve the base branch and remote for a repo, preferring worktree.baseBranch /
 // worktree.remote from .archon/config.yaml before falling back to runtime git
-// detection. Repos that use 'master' as default and don't have <remote>/HEAD set
-// will fail getDefaultBranch — reading the config first avoids that error.
+// detection. A reachable remote with a known symbolic HEAD is required unless
+// worktree.baseBranch is configured.
 // loadRepoConfig returns {} for a missing or unreadable config, so those degrade
 // to git detection; it throws only when `assistants.*` names a setting the
 // provider cannot honour, which cleanup surfaces rather than working around.
@@ -119,9 +120,9 @@ export interface ContainerCleanupReport {
  * (the caller surfaces it), a no-op if the row/container is already gone. The
  * placeholder config is unused by `destroy` (see CLEANUP_PLACEHOLDER_CONTAINER_CONFIG).
  */
-export async function reclaimContainerEnv(envId: string): Promise<void> {
+export async function reclaimContainerEnv(envId: string, store: IIsolationStore): Promise<void> {
   const backend = new ContainerBackend({
-    store: isolationEnvDb.createIsolationStore(),
+    store,
     config: CLEANUP_PLACEHOLDER_CONTAINER_CONFIG,
   });
   await backend.destroy(envId);

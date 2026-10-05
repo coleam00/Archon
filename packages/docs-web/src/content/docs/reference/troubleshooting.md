@@ -10,6 +10,29 @@ sidebar:
 
 Common issues and their solutions when running Archon.
 
+## Project uses an unexpected provider
+
+New projects follow the configured provider when a conversation is created: repository
+`.archon/config.yaml` `assistant:`, global `defaultAssistant`, `DEFAULT_AI_ASSISTANT`,
+then the first registered built-in provider. `.claude` and `.codex` directories no
+longer select a provider. Set `assistant:` in repository configuration to choose one.
+
+Projects registered by older versions retain their stored provider. Upgrades cannot
+distinguish an explicit choice from a registration-time snapshot, so they preserve
+all stored values. To let one of these projects follow configuration, find its ID
+and clear only that project's choice in your SQLite or PostgreSQL database:
+
+```sql
+SELECT id, name, ai_assistant_type FROM remote_agent_codebases;
+UPDATE remote_agent_codebases
+SET ai_assistant_type = NULL
+WHERE id = '<project-id>';
+```
+
+This affects new conversations. Existing conversations retain the provider recorded
+when they were created. Older Archon binaries can still open the database, but resolve
+a project's `NULL` choice to Claude instead of the configured default on downgrade.
+
 ## Bot Not Responding
 
 **Check if the application is running:**
@@ -382,3 +405,47 @@ Archon refuses the turn instead of passing the missing path to the AI provider. 
 2. **`/worktree remove`** is offered *only* when the conversation is still bound to an isolation environment. It detaches and returns you to the project root. When the environment reference has already been cleared, this command reports `This conversation is not using a worktree.`, which is why it is not suggested in that state.
 
 The refusal writes nothing and changes no state, so a transient cause (a mount blip, a directory mid-move) costs one refused message and nothing else — the next turn re-evaluates from scratch. Operators can find these events in the logs under `orchestrator.conversation_cwd_missing`, which records the conversation id, the path, and the isolation environment id.
+
+## Project base branch points at an old local branch
+
+Older registrations stored whichever local branch was checked out. Existing stored values
+are preserved because Archon cannot distinguish a past choice from a detected snapshot.
+New registrations store only an explicit choice; `NULL` follows the remote default when needed.
+The engine reads the remote's live HEAD advertisement, so a renamed default is picked up
+without refreshing local `origin/HEAD`. An unreachable remote or unknown HEAD fails resolution
+with configuration guidance rather than guessing a branch.
+
+Until project settings support editing this value, look up the project in your database:
+
+```sql
+SELECT id, name, default_branch FROM remote_agent_codebases;
+```
+
+To make that project follow its remote default, replace the ID below with the selected ID:
+
+```sql
+UPDATE remote_agent_codebases SET default_branch = NULL WHERE id = '<project-id>';
+```
+
+This leaves other projects unchanged. `worktree.baseBranch` in `.archon/config.yaml` still
+outranks the project choice, and `--base` overrides the base for a single dispatch.
+`--base-branch` is for initial CLI registration, not editing an existing project.
+No database migration is needed: older binaries already accept `NULL` as auto-detection,
+although they retain their older cached remote-HEAD behavior.
+
+## Stored project path is relative
+
+Workflow runs and isolation cleanup reject a registration whose stored `default_cwd`
+is not absolute before using that path for Git or removing environments. The error
+names the project and gives a recovery command. Changing the invocation directory
+does not repair the registration.
+
+In Archon chat, supply the project's actual absolute path:
+
+```text
+/register-project "my-project" /absolute/path/to/project
+```
+
+For a legacy relative path, this updates the existing registration and preserves its
+ID, kind, settings, and history. Archon does not guess a replacement or rewrite
+legacy rows automatically.

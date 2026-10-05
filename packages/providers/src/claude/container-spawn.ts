@@ -3,10 +3,10 @@
  *
  * Implements the Claude Agent SDK's `spawnClaudeCodeProcess` option so the CLI
  * runs INSIDE a prepared isolation container via `docker exec -i`, rather than
- * on the host. The SDK bypasses its own disk resolution entirely when this hook
- * is set (so `pathToClaudeCodeExecutable` is intentionally omitted for container
- * runs) and drives the returned {@link SpawnedProcess} over stdin/stdout exactly
- * as it would a local child.
+ * on the host. The provider supplies a placeholder executable path to prevent
+ * SDK host-binary resolution before this hook runs. The hook ignores the SDK's
+ * command and drives the returned {@link SpawnedProcess} over stdin/stdout
+ * exactly as it would a local child.
  *
  * The one thing a plain `ChildProcess` gets wrong across the docker boundary is
  * signalling: `child.kill()` signals the LOCAL `docker exec` client, which does

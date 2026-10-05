@@ -1,3 +1,5 @@
+import type { ResourceStartDisposition } from './schemas/resource-start';
+import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
 import { serializeNodeStateRecord, type SerializedNodeEvent } from './node-record-serialization';
 import type { NodeExecutionMetadata, NodeExecutionRecord } from './schemas/node-execution';
@@ -301,6 +303,28 @@ export interface IWorkflowRunNodeSessionStore {
 }
 
 export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionStore {
+  /** Resolve an open paused gate and commit its audit events atomically; a CAS loser writes nothing. */
+  resolveApprovalGate(
+    id: string,
+    metadata: Record<string, unknown>,
+    events: GateResolutionEvent[]
+  ): Promise<{ resolved: boolean }>;
+  /** Resolve, cancel and commit gate plus terminal events atomically; reports telemetry after a winning commit. */
+  resolveAndCancelApprovalGate(
+    id: string,
+    events: GateResolutionEvent[],
+    cancellation: WorkflowCancellationEventDetails
+  ): Promise<{ resolved: boolean }>;
+  /** Atomically cancel conversation-scoped resumable runs and their descendants; return only winning rows. */
+  cancelResumableRunsForConversation(conversationId: string): Promise<WorkflowRun[]>;
+  deleteWorkflowNodeSessions(filter: {
+    workflow_name: string;
+    scope_key?: string;
+    node_id?: string;
+  }): Promise<{ deleted: number }>;
+  findWorkflowRunsByIdPrefix(prefix: string, codebaseId: string): Promise<WorkflowRun[]>;
+  listWorkflowRuns(options?: ListDashboardRunsOptions): Promise<DashboardRunsResult>;
+
   // Run lifecycle
   createWorkflowRun(data: {
     /**
@@ -573,4 +597,50 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
       last_run_id: string | null;
     }
   ): Promise<void>;
+}
+
+/**
+ * An audit event written atomically with a gate resolution (#2146). The winning
+ * resolver inserts these in the SAME transaction as the resolution UPDATE, so a
+ * failed event write rolls the resolution back — a resolved gate can never be
+ * left with no audit trail, which the fast-path guard would then wrongly block
+ * from retrying. `workflow_run_id` is supplied by the CAS function.
+ */
+export type GateResolutionEvent =
+  | Omit<NodeStateEventInput, 'workflow_run_id'>
+  | {
+      event_type: Exclude<WorkflowEventType, NodeStateEventInput['event_type']>;
+      step_name: string;
+      data: Record<string, unknown>;
+    };
+
+/**
+ * Thrown by resumeWorkflowRun when the target run is no longer in a resumable
+ * state (already running/terminal, or concurrently resumed). Callers translate
+ * this into a user-facing "already being resumed" message instead of leaking
+ * the raw internal error string.
+ */
+export class WorkflowNotResumableError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly currentStatus: string
+  ) {
+    super(
+      `Workflow run is not resumable (id: ${runId}, status: ${currentStatus}). ` +
+        'It may have already been resumed, completed, or cancelled.'
+    );
+    this.name = 'WorkflowNotResumableError';
+  }
+}
+
+export class WorkflowResourceBusyError extends Error {
+  constructor(
+    public readonly runId: string,
+    public readonly blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker']
+  ) {
+    super(
+      `Workflow run '${runId}' cannot resume while ${blocker.kind === 'run' ? 'resource owner' : 'queued request'} '${blocker.id}' has priority.`
+    );
+    this.name = 'WorkflowResourceBusyError';
+  }
 }

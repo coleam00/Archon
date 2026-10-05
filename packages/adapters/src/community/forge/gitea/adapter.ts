@@ -34,7 +34,6 @@ import {
 } from '@archon/git';
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGiteaUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { WebhookEvent } from './types';
@@ -647,7 +646,7 @@ export class GiteaAdapter implements IPlatformAdapter {
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
       if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
         getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
+        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
       }
 
@@ -663,7 +662,6 @@ export class GiteaAdapter implements IPlatformAdapter {
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'codebase_created');
@@ -838,10 +836,6 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
     // 7. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number, isPR);
 
-    // 8. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('gitea', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
-
     // 9. Get/create codebase (checks for existing first!)
     const {
       codebase,
@@ -849,8 +843,16 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
 
-    // 9b. Link conversation to codebase
-    if (isNewConversation) {
+    // 10. Get default branch from repository info
+    const defaultBranch = event.repository.default_branch;
+
+    // 11. Ensure repo ready (clone if needed, sync if new conversation)
+    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+
+    const existingConv = await db.getOrCreateConversation('gitea', conversationId, codebase.id);
+    const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+    if (needsProjectContext) {
       try {
         await db.updateConversation(existingConv.id, {
           codebase_id: codebase.id,
@@ -868,12 +870,6 @@ Use 'tea pr view ${String(pr.number)}' for full details if needed.`;
         throw updateError;
       }
     }
-
-    // 10. Get default branch from repository info
-    const defaultBranch = event.repository.default_branch;
-
-    // 11. Ensure repo ready (clone if needed, sync if new conversation)
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
 
     // 12. Auto-load commands if new codebase
     if (isNewCodebase) {
