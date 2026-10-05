@@ -39,9 +39,11 @@ const WORKSPACE_TEST_COMMAND = ['bun', '--filter', '*', '--parallel', 'test'];
 const REPO_ROOT = join(import.meta.dir, '..');
 
 /** Directories the root tests directly. Every other test belongs to a workspace package. */
-const ROOT_OWNED_PREFIXES = ROOT_TEST_PLAN.flatMap((step): string[] =>
+const ROOT_OWNED_DIRECTORIES = ROOT_TEST_PLAN.flatMap((step): string[] =>
   step.kind === 'root'
-    ? step.selectors.map((selector): string => selector.replace(/^\.\//, ''))
+    ? step.selectors.map((selector): string =>
+        normalizePath(relative(REPO_ROOT, resolve(REPO_ROOT, selector)))
+      )
     : []
 );
 
@@ -93,7 +95,9 @@ function routeArgument(argument: string): RoutedArgument | undefined {
       : undefined;
   }
 
-  return ROOT_OWNED_PREFIXES.some((prefix): boolean => repoPath.startsWith(prefix))
+  return ROOT_OWNED_DIRECTORIES.some(
+    (directory): boolean => repoPath === directory || repoPath.startsWith(`${directory}/`)
+  )
     ? { owner: { label: 'the repository root', cwd: REPO_ROOT }, selector: `./${repoPath}` }
     : undefined;
 }

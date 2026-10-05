@@ -34,6 +34,29 @@ describe('planRequestedRuns', () => {
     expect(runs[0].args).toEqual(['./scripts/test-inventory.test.ts']);
   });
 
+  test.each(['.archon/scripts', '.archon/scripts/', 'scripts', 'scripts/'])(
+    'routes the root-owned directory %s',
+    selector => {
+      expect(planRequestedRuns([selector])).toEqual([
+        {
+          owner: { label: 'the repository root', cwd: REPO_ROOT },
+          args: [`./${selector.replace(/\/$/, '')}`],
+        },
+      ]);
+    }
+  );
+
+  test.each([
+    'scriptsx',
+    'scripts-other/',
+    'scripts-other/example.test.ts',
+    '.archon/scriptsx',
+    '.archon/scripts-other/',
+    '.archon/scripts-other/example.test.ts',
+  ])('rejects the sibling-prefix selector %s', selector => {
+    expect(planRequestedRuns([selector])).toEqual([]);
+  });
+
   test('plans one run per owner, in the order the owners were named', () => {
     const runs = planRequestedRuns([
       fromRoot('packages/isolation/src/resolver.test.ts'),
