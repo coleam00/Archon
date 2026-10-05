@@ -20,6 +20,7 @@ impl__assert-changed: "3 files changed"
 # unstubbed: the real scripts must accept this run at every gate it reaches.
 pr__pr: { intent: "/fixture/pr-intent.json" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 7, url: "https://github.com/example/repo/pull/7", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
   errors: false
@@ -29,7 +30,8 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
+review__coverage: { full: true }
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -55,7 +57,8 @@ fix__implement:
   green: false
   red_cause: inherited
   summary: "stub: the finding is already satisfied on the branch and needed no edit; lint is red only for a violation present at the reviewed starting commit, in a file this diff never touches"
-recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior"}'
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"recheck__mode","invocation":{"loopPath":[]}}}'
+recheck__coverage: { full: false }
 recheck__scope:
   # light mode; delta since cursor
   docs: false
@@ -71,7 +74,7 @@ recheck__publish:
   findings_summary: "stub: no open blocking finding"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/7" }
-validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: red, summary: "stub: a check in the project gate failed" }
 validate__classify:
   red_cause: inherited

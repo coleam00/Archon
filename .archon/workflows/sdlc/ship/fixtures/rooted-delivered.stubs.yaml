@@ -37,14 +37,15 @@ ci-probe: '{"state":"concluded","detail":"all checks passed"}'
 deliver__ci-verdict: '{"state":"concluded","detail":"all checks green"}'
 deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 deliver__outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
-deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], quarantine: [], notes: "stub: the project's aggregate gate" }
+deliver__validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
 deliver__validate__run: { status: green, summary: "stub: project gate green" }
 deliver__impl__implement:
   done: true
   green: true
   red_cause: ""
   summary: "stub: fix built per the investigation, checks green"
-deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"deliver__review__mode","invocation":{"loopPath":[]}}}'
+deliver__review__coverage: { full: true }
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -66,6 +67,7 @@ deliver__review__publish:
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 deliver__gate-ready: '{"ready":"true"}'
+deliver__review-policy: { risks: "fixture-owned-policy" }
 deliver__classify:
   tier: full
   errors: false
