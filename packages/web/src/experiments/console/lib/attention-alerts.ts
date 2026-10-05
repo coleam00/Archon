@@ -16,6 +16,8 @@ export type NotificationAccess = NotificationPermission | 'unsupported';
 
 export interface AttentionAlertsState {
   enabled: boolean;
+  /** Why the on/off choice could not be saved, so it lasts only until the page reloads. */
+  saveError: string | null;
   notifications: NotificationAccess;
   /** Why the last alert sound did not play; cleared by the next one that does. */
   soundError: string | null;
@@ -38,6 +40,7 @@ function readNotificationAccess(): NotificationAccess {
 
 let state: AttentionAlertsState = {
   enabled: readEnabled(),
+  saveError: null,
   notifications: readNotificationAccess(),
   soundError: null,
   notificationError: null,
@@ -91,23 +94,23 @@ function playChime(): void {
  * confirms the sound works.
  */
 export function enableAttentionAlerts(): void {
-  try {
-    localStorage.setItem(ENABLED_KEY, '1');
-  } catch {
-    /* the setting still applies until the page reloads */
-  }
-  update({ enabled: true, watchError: null });
+  setEnabled(true);
   playChime();
   requestNotificationAccess();
 }
 
 export function disableAttentionAlerts(): void {
+  setEnabled(false);
+}
+
+function setEnabled(enabled: boolean): void {
+  let saveError: string | null = null;
   try {
-    localStorage.setItem(ENABLED_KEY, '0');
-  } catch {
-    /* ignore */
+    localStorage.setItem(ENABLED_KEY, enabled ? '1' : '0');
+  } catch (e) {
+    saveError = `This browser could not save the alert setting, so it lasts only until the page reloads: ${e instanceof Error ? e.message : String(e)}`;
   }
-  update({ enabled: false, watchError: null });
+  update({ enabled, saveError, watchError: null });
 }
 
 /** Permission can change in the browser's site settings while the console is open. */
@@ -121,7 +124,7 @@ export function requestNotificationAccess(): void {
   if (typeof Notification === 'undefined' || Notification.permission !== 'default') return;
   Notification.requestPermission().then(
     permission => {
-      update({ notifications: permission });
+      update({ notifications: permission, notificationError: null });
     },
     (e: unknown) => {
       update({

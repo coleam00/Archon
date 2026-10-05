@@ -17,9 +17,12 @@ export function AttentionAlertsPanel(): ReactElement {
     refreshNotificationAccess();
   }, []);
 
-  const problems = [alerts.soundError, alerts.notificationError, alerts.watchError].filter(
-    (p): p is string => p !== null
-  );
+  const problems = [
+    alerts.saveError,
+    alerts.soundError,
+    alerts.notificationError,
+    alerts.watchError,
+  ].filter((p): p is string => p !== null);
 
   return (
     <SettingsSection title="Alerts">
