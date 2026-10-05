@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
-import { rawAliasesConfigSchema, rawTiersConfigSchema } from './schemas/model-binding';
+import { validationSourceConfigSchema, workflowValidationConfig } from './validation-config';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
 import { validateWorkflowResources, type ValidationIssue } from './validator';
 
@@ -21,34 +21,27 @@ afterAll(async () => {
   await removeTempTree(root);
 });
 
-const configSchema = z.object({
-  assistant: z.string().default('claude'),
-  aliases: rawAliasesConfigSchema.optional(),
-  tiers: rawTiersConfigSchema.optional(),
-  defaults: z
-    .object({
-      loadDefaultWorkflows: z.boolean().optional(),
-      loadDefaultCommands: z.boolean().optional(),
-    })
-    .optional(),
-  commands: z.object({ folder: z.string().optional() }).optional(),
-  env: z.record(z.string(), z.string()).optional(),
-});
-
 interface Finding {
   file: string;
   issue: ValidationIssue;
 }
 
+function workflowSourceFiles(paths: string[]): string[] {
+  return paths
+    .map(file => file.replaceAll('\\', '/'))
+    .filter(file => !file.split('/').includes('fixtures'))
+    .sort();
+}
+
 async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files: string[] }> {
   const configPath = join(cwd, '.archon/config.yaml');
-  const config = configSchema.parse(
+  const config = validationSourceConfigSchema.parse(
     (await Bun.file(configPath).exists()) ? Bun.YAML.parse(await readFile(configPath, 'utf8')) : {}
   );
   const workflowRoot = join(cwd, '.archon/workflows');
-  const files = (await Array.fromAsync(new Bun.Glob('**/*.{yaml,yml}').scan(workflowRoot)))
-    .filter(file => !file.split('/').includes('fixtures'))
-    .sort();
+  const files = workflowSourceFiles(
+    await Array.fromAsync(new Bun.Glob('**/*.{yaml,yml}').scan(workflowRoot))
+  );
   const fileByName = new Map<string, string>();
   for (const file of files) {
     const value = z
@@ -76,12 +69,8 @@ async function validateCorpus(cwd: string): Promise<{ findings: Finding[]; files
       workflow,
       cwd,
       {
+        ...workflowValidationConfig(config),
         workflowSource: source,
-        assistant: config.assistant,
-        aliases: config.aliases,
-        tiers: config.tiers,
-        loadDefaultCommands: config.defaults?.loadDefaultCommands,
-        commandFolder: config.commands?.folder,
       },
       config.assistant
     );
@@ -100,6 +89,17 @@ test('repository workflows have no errors or unsafe shell output references', as
   expect(files.length).toBeGreaterThan(0);
   expect(files.some(file => file.startsWith('sdlc/'))).toBe(true);
   expect(findings).toEqual([]);
+});
+
+test('corpus inventory excludes fixtures and identifies SDLC sources with either path separator', () => {
+  const paths = [
+    'sdlc/deliver/fixtures/clean.stubs.yaml',
+    'sdlc/deliver/archon-deliver.yaml',
+    'scratch.yml',
+  ];
+  const expected = ['scratch.yml', 'sdlc/deliver/archon-deliver.yaml'];
+  expect(workflowSourceFiles(paths)).toEqual(expected);
+  expect(workflowSourceFiles(paths.map(file => file.replaceAll('/', '\\')))).toEqual(expected);
 });
 
 test.each<[string, string, ValidationIssue['code']]>([
@@ -129,3 +129,37 @@ nodes:
   else expect(findings[0].issue.level).toBe('error');
   expect(() => expect(findings).toEqual([])).toThrow();
 });
+
+test.each(['project', 'custom-user'])(
+  'honours Claude configuration for a %s skill',
+  async scope => {
+    const project = join(root, `skill-${scope}`);
+    const folder = join(project, '.archon/workflows');
+    const configDir = join(project, 'custom-claude');
+    const skillDir = join(
+      scope === 'project' ? join(project, '.claude') : configDir,
+      'skills',
+      'corpus-skill'
+    );
+    await mkdir(folder, { recursive: true });
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), '# Corpus skill\n');
+    await writeFile(
+      join(folder, 'skill.yaml'),
+      `name: corpus-skill-${scope}\ndescription: scratch skill corpus\nprovider: claude\nnodes:\n  - id: use\n    prompt: use the skill\n    skills: [corpus-skill]\n`
+    );
+    const configPath = join(project, '.archon/config.yaml');
+    const config = {
+      assistants: { claude: { settingSources: [scope === 'project' ? 'user' : 'project'] } },
+      env: { CLAUDE_CONFIG_DIR: configDir },
+    };
+    await writeFile(configPath, Bun.YAML.stringify(config));
+    const { findings } = await validateCorpus(project);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].issue.field).toBe('skills');
+    expect(findings[0].issue.level).toBe('error');
+    config.assistants.claude.settingSources = [scope === 'project' ? 'project' : 'user'];
+    await writeFile(configPath, Bun.YAML.stringify(config));
+    expect((await validateCorpus(project)).findings).toEqual([]);
+  }
+);

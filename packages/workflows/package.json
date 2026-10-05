@@ -22,6 +22,7 @@
     "./fixture-layout": "./src/fixture-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
+    "./validation-config": "./src/validation-config.ts",
     "./dry-run": "./src/dry-run.ts",
     "./graph-plan": "./src/graph-plan.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
