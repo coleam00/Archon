@@ -165,7 +165,7 @@ describe('registry', () => {
 
     test('returns Codex capabilities without instantiation', () => {
       const caps = getProviderCapabilities('codex');
-      expect(caps.sessionFork).toBe(false);
+      expect(caps.sessionFork).toBe(true);
       expect(caps.mcp).toBe(true);
       expect(caps.hooks).toBe(false);
       expect(caps.envInjection).toBe(true);

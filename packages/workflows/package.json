@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
+    "./run-preflight": "./src/run-preflight.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",
     "./deprecation": "./src/deprecation.ts",
@@ -120,6 +121,7 @@
     [
       "src/defaults/",
       "src/run-config.test.ts",
+      "src/run-preflight.test.ts",
       "src/model-validation.test.ts",
       "src/router.test.ts",
       "src/utils/",

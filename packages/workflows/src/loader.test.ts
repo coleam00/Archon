@@ -30,7 +30,11 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
-import { registerBuiltinProviders, clearRegistry } from '@archon/providers';
+import {
+  registerBuiltinProviders,
+  registerCommunityProviders,
+  clearRegistry,
+} from '@archon/providers';
 import { type ProviderDefaults } from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
@@ -6807,10 +6811,12 @@ nodes:
       expect(mismatch.error?.error).toContain("source 'source' uses provider 'claude'");
       expect(mismatch.error?.error).toContain("consumer uses 'codex'");
 
-      const incapable = parseAddressable(`
+      registerCommunityProviders();
+      try {
+        const incapable = parseAddressable(`
 name: incapable
 description: incapable
-provider: codex
+provider: copilot
 nodes:
   - id: source
     prompt: source
@@ -6819,7 +6825,11 @@ nodes:
     depends_on: [source]
     context: { resume: source }
 `);
-      expect(incapable.error?.error).toContain("provider 'codex' does not support sessionFork");
+        expect(incapable.error?.error).toContain("provider 'copilot' does not support sessionFork");
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
     });
 
     it('defers implicit provider resolution to runtime', () => {
@@ -6977,14 +6987,20 @@ nodes:
     });
 
     it('warns, and still loads, when the provider cannot fork the persisted session', () => {
-      const codex = parseWorkflow(
-        `name: t\ndescription: t\nprovider: codex\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
-        't.yaml'
-      );
-      expect(codex.error).toBeNull();
-      expect(codex.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
-        expect.stringContaining("Node 'planner'"),
-      ]);
+      registerCommunityProviders();
+      try {
+        const copilot = parseWorkflow(
+          `name: t\ndescription: t\nprovider: copilot\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,
+          't.yaml'
+        );
+        expect(copilot.error).toBeNull();
+        expect(copilot.warnings?.filter(w => w.includes('cannot fork a session'))).toEqual([
+          expect.stringContaining("Node 'planner'"),
+        ]);
+      } finally {
+        clearRegistry();
+        registerBuiltinProviders();
+      }
 
       const claude = parseWorkflow(
         `name: t\ndescription: t\nprovider: claude\npersist_sessions: true\nnodes:\n  - id: planner\n    prompt: p\n`,

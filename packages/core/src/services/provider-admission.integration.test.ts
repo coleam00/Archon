@@ -46,6 +46,9 @@ beforeAll(() => {
     displayName: 'Admission fake',
     builtIn: false,
     factory: () => ({
+      async resolveCredentialModel(request): Promise<string> {
+        return `${this.getType()}/${request.model ?? 'default'}`;
+      },
       checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
       getType: () => PROVIDER,
       getCapabilities: () => claude.capabilities,
@@ -495,4 +498,13 @@ describe('schema upgrade', () => {
       await db.close();
     }
   });
+});
+
+test('forwards the provider-owned credential model resolver with its receiver', async () => {
+  const provider = getAgentProvider(PROVIDER);
+  expect(await provider.resolveCredentialModel?.({ cwd: root, model: 'selected' })).toBe(
+    `${PROVIDER}/selected`
+  );
+  expect(calls).toHaveLength(0);
+  expect(await holderCount()).toBe(0);
 });

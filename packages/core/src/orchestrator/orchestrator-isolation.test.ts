@@ -1,4 +1,11 @@
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+mock.module('../workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
+import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { MockPlatformAdapter } from '../test/mocks/platform';
 import type { Conversation, Codebase, IPlatformAdapter } from '../types';
@@ -117,6 +124,11 @@ mock.module('../handlers/command-handler', () => ({
 }));
 
 mock.module('@archon/providers', () => ({
+  isRegisteredProvider: () => true,
+  getRegistration: () => ({
+    parseConfig: (raw: Record<string, unknown>) => raw,
+    credentials: { vendorFor: () => 'anthropic' },
+  }),
   getAgentProvider: mock(() => null),
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
@@ -150,9 +162,21 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() => Promise.resolve());
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: { createWorkflowRun: mockCreateWorkflowRun, failWorkflowRun: mockFailWorkflowRun },
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
+    store: {
+      createWorkflowRun: mockCreateWorkflowRun,
+      failWorkflowRun: mockFailWorkflowRun,
+      getCodebaseEnvVars: async () => ({}),
+    },
+    sealRunConfig: (_layer: unknown, source: unknown) => ({
+      version: 1,
+      ciphertext: 'sealed',
+      source,
+      keys: [],
+    }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    }),
+    loadConfig: async () => ({ assistant: 'claude', assistants: { claude: {} }, commands: {} }),
   })),
 }));
 
@@ -515,6 +539,39 @@ describe('dispatchBackgroundWorkflow', () => {
     mockGetCodebase.mockResolvedValue(makeCodebase());
   });
 
+  test('credential refusal prevents worker isolation and engine submission', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const original = adapter.createWorkflowDeps();
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      isPerUserProviderKeysEnabled: () => true,
+      getUserProviderCredentialStatus: async () => ({
+        state: 'unusable',
+        source: 'archon',
+        evidence: 'cannot read',
+      }),
+    }));
+    try {
+      await expect(
+        dispatchBackgroundWorkflow(
+          makeRoutingCtx({ userId: 'origin' }),
+          makeTestResolvedWorkflow({
+            name: 'credential-run',
+            nodes: [{ id: 'one', prompt: 'do work' }],
+          })
+        )
+      ).rejects.toThrow(
+        "provider 'claude' (vendor 'anthropic'): credential cannot be used: cannot read"
+      );
+      expect(mockResolve).not.toHaveBeenCalled();
+      expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    } finally {
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
+  });
+
   for (const structured of [false, true]) {
     for (const fails of [false, true]) {
       test(`new adapter background lifecycle, structured=${structured}, fails=${fails}`, async () => {
@@ -873,7 +930,7 @@ describe('dispatchBackgroundWorkflow', () => {
     const runRow = mockCreateWorkflowRun.mock.calls[0]?.[0];
     expect(runRow?.working_path).toBe('/worktrees/feature-adopted');
     const captureArgs = mockPrepareWorkflowSource.mock.calls.at(-1);
-    expect(captureArgs?.[1].sourceRoot).toBe('/worktrees/feature-adopted');
+    expect(captureArgs?.[1].sourceRoot).toBe('/adopted/snapshot');
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/worktrees/feature-adopted');
 
     await flushBackgroundExecution();

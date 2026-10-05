@@ -267,6 +267,12 @@ export interface SendQueryOptions extends AgentRequestOptions {
  * Allows supporting multiple agent providers (Claude, Codex, etc.)
  */
 export interface IAgentProvider {
+  resolveCredentialModel?(request: {
+    model?: string;
+    assistantConfig?: SendQueryOptions['assistantConfig'];
+    cwd: string;
+  }): Promise<string | undefined>;
+
   /** Check the credential this provider uses when Archon delivers none. */
   checkCredential(request: {
     assistantConfig?: SendQueryOptions['assistantConfig'];

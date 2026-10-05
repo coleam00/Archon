@@ -803,6 +803,10 @@ DEFAULT_AI_ASSISTANT=copilot
 
 Everything above configures the **install-wide** assistant credentials (env vars, `claude /login`, etc.) — every run uses the same shared keys. On a **shared Archon box** where several people use the same server, each user can instead connect **their own** provider — by API key or subscription — so their runs and chats bill to them, not to the install's shared key.
 
+Runs check the credentials required by their AI nodes before creating isolation and again when execution starts or resumes. An unreadable or rejected connected credential blocks the run instead of falling back to another account. An inconclusive check also blocks, reported as "could not verify" rather than rejected. Credentials for vendors the run does not use are not checked. Child workflows check their own graph when they start.
+
+Without a connected credential, the provider checks its native login. Providers that cannot check without a model session, including Claude, report "not checked" and may proceed. A usable API key means it resolved; only a model request proves the vendor accepts it. Pi resolves command-backed keys through its own runtime during each native check. Launch and execution checks are separate, so a key command can run or prompt more than once.
+
 ### When you need this
 
 - You run Archon for a team and want each person to bring their own provider key or Claude Pro/Max / Copilot subscription.
