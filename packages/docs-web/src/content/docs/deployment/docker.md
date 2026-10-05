@@ -624,6 +624,39 @@ Uses `ghcr.io/coleam00/archon:latest`. To add PostgreSQL, uncomment the `postgre
 
 To layer custom tools on top of the pre-built image, see [Customizing the Image](#customizing-the-image).
 
+### Verifying image attestations
+
+Published images include BuildKit provenance and SPDX SBOM attestations. With Docker
+Buildx installed, resolve the tag you plan to deploy to a digest, then inspect that
+immutable image reference:
+
+```bash
+docker buildx imagetools inspect ghcr.io/coleam00/archon:latest
+# Copy the top-level Digest above, not a platform manifest's digest.
+image='ghcr.io/coleam00/archon@sha256:<digest>'
+docker buildx imagetools inspect "$image" --format '{{ json .Provenance }}'
+docker buildx imagetools inspect "$image" --format '{{ json .SBOM }}'
+```
+
+Both results must be non-empty. For multi-platform images, each platform's
+provenance has a non-empty `SLSA` object and its SBOM has a non-empty `SPDX` object.
+In the provenance, check the source repository is `https://github.com/coleam00/Archon`,
+the commit SHA matches the release you intend to run, and the workflow ref identifies
+`.github/workflows/publish.yml` at the expected ref. Current releases record the
+source and revision in `buildDefinition.externalParameters.request.args`
+(`label:org.opencontainers.image.source` and `label:org.opencontainers.image.revision`),
+and the workflow ref in `buildDefinition.internalParameters.github_workflow_ref`.
+Older BuildKit versions may use `invocation.configSource` and `invocation.environment`.
+The builder ID links to the GitHub Actions run (`builder.id` or `runDetails.builder.id`).
+Inspect the SBOM's package inventory under `SPDX.packages`.
+
+The `unknown/unknown` entries in the manifest list are expected attestation
+manifests. These BuildKit attestations are unsigned metadata; their presence
+alone does not cryptographically authenticate the publisher. See
+[Docker's provenance documentation](https://docs.docker.com/build/metadata/attestations/slsa-provenance/)
+for the metadata format. Deploy the same digest you inspected to avoid a tag
+changing between inspection and deployment.
+
 ---
 
 ## Building the Image

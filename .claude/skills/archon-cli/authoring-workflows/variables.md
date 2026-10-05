@@ -50,16 +50,16 @@ Despite older docs suggesting otherwise, positional `$1`…`$9` are **not substi
 
 `$nodeId.output` resolves to the full text output of the upstream node. If the node used `output_format:` (structured output), the output is the JSON-stringified validated result. Bash/script output without `output_format` is stdout with the trailing newline trimmed; with it, stdout is certified as JSON under the same result contract (see `node-reference.md` → Result contracts). Loop/loop_group output is the final iteration's output with completion-signal tags stripped. A gate with authored `approval.decisions` always outputs JSON `{decision, text}`; read its fields as `$gate.output.decision` and `$gate.output.text`. A legacy gate without authored decisions keeps the old behavior: its approval comment is output only when `capture_response: true`, otherwise `''`. Unknown or skipped producers resolve to an empty string (with a warning logged).
 
-`$nodeId.output.field` is **strict** (no-silent-drop) — it either resolves or **fails the consuming node**:
+`$nodeId.output.field` and nested paths such as `$nodeId.output.proposal.action` are **strict** (no-silent-drop) — they either resolve or **fail the consuming node**. Paths are object field names only: no array indexing, wildcards or expressions. The same paths work in templates, `when:` (which needs a scalar), whole-value `with:` bindings and `$LOOP_PREV.<id>.output.a.b`. Do not flatten a producer's schema to reach a nested field.
 
-- Producer has `output_format`: a field **declared** in the schema resolves to its value, or `''` if absent (declared-optional). A field **not in the schema** fails the consumer (typo protection).
-- Schemaless producer (no `output_format` on the producing node): the output must be a JSON object containing the key — anything else (non-JSON output, missing key) fails the consumer.
+- Producer has `output_format`: every segment must be a declared `properties` entry; a declared field or parent that is absent or null resolves to `''` (declared-optional). An undeclared segment, at any depth, fails `archon validate workflows` when the producer's schema is known at load, and fails the consumer otherwise (typo protection).
+- Schemaless producer (no `output_format` on the producing node): the output must be a JSON object containing every key on the path, with an object at each intermediate step — anything else (non-JSON output, missing key, a scalar or array mid-path) fails the consumer.
 - Producer skipped or pending: fails the consumer — guard the reference with `when:` or a permissive `trigger_rule`.
 
 Values: strings pass through; numbers/booleans stringify; objects/arrays are JSON-stringified.
 
 For `workflow:` results, these field rules use the child's `returns:` node's
-schema, whose field names travel with the value and survive cold resume. The
+schema, whose declared paths travel with the value and survive cold resume. The
 caller cannot add or narrow the contract. An `include:` alias uses its selected
 producer directly after flattening.
 

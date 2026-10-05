@@ -5,8 +5,11 @@ on:
     branches: [main]
     paths:
       - 'packages/docs-web/**'
+      - 'packages/plugin-manifest/**'
       # The community-provider page renders this file's contents, so changing it changes the site.
       - 'packages/providers/src/community/_template/capabilities.ts'
+  schedule:
+    - cron: '17 4 * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,6 +23,8 @@ concurrency:
 
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +36,8 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Build docs
         run: bun run build:docs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

@@ -14,6 +14,7 @@ on:
   pull_request:
     paths:
       - 'packages/docs-web/**'
+      - 'packages/plugin-manifest/**'
       # The community-provider page renders this file's contents, so changing it changes the site.
       - 'packages/providers/src/community/_template/capabilities.ts'
       - 'bun.lock'
@@ -45,3 +46,7 @@ jobs:
       # the gate must run on a Bun-only checkout, and this build needs the Node setup above.
       - name: Build docs
         run: bun run build:docs
+        env:
+          NODE_OPTIONS: --import=${{ github.workspace }}/packages/docs-web/tests/github-preload.mjs
+      - name: Check plugin pages
+        run: node packages/docs-web/tests/check-build.mjs

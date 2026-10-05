@@ -24,6 +24,8 @@ import type { AtomNode, ParseResult, WhenAst, WhenOp } from '../types/when';
 /** A path segment (`output`, or a field name) — no hyphen, unlike a node id. */
 const SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
 
+const OUTPUT_PATH_SOURCE = `${SEGMENT_SOURCE}(?:\\.${SEGMENT_SOURCE})*`;
+
 /**
  * The reserved scope name for workflow inputs (the engine's `WHEN_INPUTS_SCOPE`).
  * It can never be a node id — the engine's node schema rejects it outright — so
@@ -47,7 +49,7 @@ const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
  *   2. nodeId    — `$nodeId`, using the package-wide id grammar (`@/lib/node-ref`)
  *   3. segment1  — first path segment (`output` for canonical refs, else a
  *                  shorthand field name)
- *   4. segment2  — optional second segment (the field name when segment1 is `output`)
+ *   4. segment2  — optional object-field path (when segment1 is `output`)
  *   5. op        — one of the six operators
  *   6. quoted    — single-quoted RHS literal (may be empty)
  *   7. bare      — unquoted RHS: number (`-?\d+(.\d+)?`) or `true`/`false`
@@ -66,7 +68,7 @@ export const ATOM_PATTERN = new RegExp(
   '^(?:' +
     String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
     '|' +
-    String.raw`\$(${NODE_ID_SOURCE})\.(${SEGMENT_SOURCE})(?:\.(${SEGMENT_SOURCE}))?` +
+    String.raw`\$(${NODE_ID_SOURCE})\.(${SEGMENT_SOURCE})(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     ')' +
     String.raw`\s*(==|!=|<=|>=|<|>)\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`

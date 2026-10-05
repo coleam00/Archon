@@ -22,6 +22,7 @@ import {
   describeIssues,
   forgeReleaseAsset,
   isForgeReceipt,
+  isPluginPathSegment,
   PLUGIN_MANIFEST_FILE,
   pluginManifestSchema,
   pluginReceiptSchema,
@@ -83,7 +84,6 @@ function resolved(
 }
 
 const OWNER = /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/;
-const SEGMENT = /^[A-Za-z0-9._-]+$/;
 const TAG = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
 
 // Every part becomes a directory under the receipts tree or a URL path segment,
@@ -92,9 +92,7 @@ export function parsePluginRef(input: string): PluginRef {
   const at = input.lastIndexOf('@');
   const tag = at === -1 ? undefined : input.slice(at + 1);
   const [owner = '', repo = '', ...path] = (at === -1 ? input : input.slice(0, at)).split('/');
-  const segmentsValid = [repo, ...path].every(
-    segment => SEGMENT.test(segment) && segment !== '.' && segment !== '..'
-  );
+  const segmentsValid = [repo, ...path].every(isPluginPathSegment);
   if (!OWNER.test(owner) || !segmentsValid || (tag !== undefined && !TAG.test(tag))) {
     throw new Error(
       `Invalid plugin "${input}". Expected owner/repo[/path][@tag], for example coleam00/Archon/plugins/forge-github`

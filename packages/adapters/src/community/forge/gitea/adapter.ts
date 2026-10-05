@@ -54,6 +54,10 @@ const BOT_RESPONSE_MARKER = '<!-- archon-bot-response -->';
 type ConversationLocker = Pick<ConversationLockManager, 'acquireLock'>;
 
 export class GiteaAdapter implements IPlatformAdapter {
+  readonly capabilities = {
+    messagePersistence: 'core',
+    defaultWorkflowDispatch: 'foreground',
+  } as const;
   private baseUrl: string;
   private token: string;
   private webhookSecret: string;

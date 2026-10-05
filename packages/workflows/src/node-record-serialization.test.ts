@@ -38,7 +38,7 @@ const record = (): NodeExecutionRecord => ({
   output: {
     text: 'full runtime output',
     structured: { verdict: 'pass' },
-    declaredFields: ['verdict'],
+    declaredOutputPaths: [['verdict']],
     persisted: { text: 'preview', truncated: true, originalBytes: 100, spillPath: '/spill' },
   },
   diagnostics: {
@@ -276,4 +276,35 @@ describe('node record serializers', () => {
     expect(serializeNodeOutput(source)).not.toHaveProperty('tokens');
     expect(serializeNodeOutput(source)).not.toHaveProperty('costUsd');
   });
+});
+
+it('persists the path contract beside its legacy root fields and reads either shape', () => {
+  const source = record();
+  const paths = [['proposal'], ['proposal', 'action']];
+  source.output = { text: '{"proposal":{"action":"add"}}', declaredOutputPaths: paths };
+  expect(serializeNodeOutput(source)).toMatchObject({ declaredOutputPaths: paths });
+  for (const event of [
+    serializeNodeStateRecord(source),
+    serializeNodeStateRecord({
+      runId: source.runId,
+      path: source.path,
+      node: source.node,
+      cache: { action: 'replayed', output: source.output },
+    }),
+  ]) {
+    // Older binaries read only `declared_fields`, so every write still carries it.
+    expect(event.data).toMatchObject({
+      declared_fields: ['proposal'],
+      declared_output_paths: paths,
+    });
+    expect(
+      readNodeRecordEvent({ ...event, data: JSON.stringify(event.data) })?.data
+        .declared_output_paths
+    ).toEqual(paths);
+    // A row an older binary wrote has only the root fields: they read as depth-1 paths.
+    expect(
+      readNodeRecordEvent({ ...event, data: { node_output: '{}', declared_fields: ['a', 'b'] } })
+        ?.data.declared_output_paths
+    ).toEqual([['a'], ['b']]);
+  }
 });

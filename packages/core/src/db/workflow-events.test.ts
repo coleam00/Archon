@@ -6,6 +6,7 @@ import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { NODE_STATE_EVENT_TYPES, type NodeStateEventType } from '@archon/workflows/store';
+import { inMemoryDagResumeSnapshot } from '@archon/workflows/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -517,7 +518,7 @@ describe('workflow-events', () => {
       });
     });
 
-    test('carries declared_fields back out; rows without it re-derive from the schema (#2453)', async () => {
+    test('carries the path contract back out, reading a legacy declared_fields row as depth-1 paths (#2453)', async () => {
       mockQuery.mockResolvedValueOnce(
         createQueryResult([
           {
@@ -529,10 +530,11 @@ describe('workflow-events', () => {
               node_output: '{"green":true}',
               structured_output: { green: true },
               declared_fields: ['green', 'note'],
+              declared_output_paths: [['green'], ['note'], ['note', 'text']],
             },
           },
           {
-            // The resume re-emit copies it forward for a SECOND resume.
+            // Written by an older binary (or its resume re-emit): only the root fields.
             step_name: 'replayed-sub',
             event_type: 'node_skipped_prior_success',
             data: { node_output: '{"n":1}', declared_fields: ['n'] },
@@ -558,17 +560,30 @@ describe('workflow-events', () => {
       expect(result.completedNodeOutputs.get('sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
-        declaredFields: ['green', 'note'],
+        declaredOutputPaths: [['green'], ['note'], ['note', 'text']],
       });
       expect(result.completedNodeOutputs.get('replayed-sub')).toEqual({
         output: '{"n":1}',
-        declaredFields: ['n'],
+        declaredOutputPaths: [['n']],
       });
       expect(result.completedNodeOutputs.get('legacy-sub')).toEqual({
         output: '{"green":true}',
         structuredOutput: { green: true },
       });
       expect(result.completedNodeOutputs.get('corrupt-sub')).toEqual({ output: '{}' });
+    });
+
+    test('rejects malformed persisted nested contracts instead of restoring schemaless output', async () => {
+      mockQuery.mockResolvedValueOnce(
+        createQueryResult([
+          {
+            step_name: 'sub',
+            event_type: 'node_completed',
+            data: { node_output: '{}', declared_output_paths: [[]] },
+          },
+        ])
+      );
+      await expect(getDagResumeSnapshot('bad-contract')).rejects.toThrow();
     });
 
     test('reports cache from a mixed run as a floor instead of withholding it', async () => {
@@ -1338,6 +1353,63 @@ describe('workflow-events', () => {
         expect(snapshot.costUsd).toBe(2);
       }
     );
+
+    test('selects the same reusable outputs and usage as the workflows in-memory store double', async () => {
+      // Typed rows carry the scope in `accounting`, not the legacy `aggregate` marker.
+      const typedUsage = (accounting: 'node' | 'aggregate', input: number, cost_usd: number) => ({
+        node: { id: 'worker', kind: 'exec', runtime: 'sh' },
+        invocation: {
+          id: `${accounting}-invocation`,
+          startedAt: '2026-09-22T10:00:00Z',
+          loopPath: [],
+        },
+        attempt: { id: `${accounting}-attempt`, startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting,
+        tokens: { input, output: 1 },
+        cost_usd,
+      });
+      const rows = [
+        { step_name: 'text', event_type: 'node_completed', data: { node_output: 'kept' } },
+        { step_name: 'number', event_type: 'node_completed', data: { node_output: 42 } },
+        { step_name: 'object', event_type: 'node_completed', data: { node_output: { a: 1 } } },
+        { step_name: 'null', event_type: 'node_completed', data: { node_output: null } },
+        { step_name: 'missing', event_type: 'node_completed', data: {} },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 7 } },
+        { step_name: 'restarted', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'restarted', event_type: 'node_started', data: {} },
+        { step_name: 'failed', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'failed', event_type: 'node_failed', data: { error: 'boom' } },
+        { step_name: 'own', event_type: 'node_completed', data: typedUsage('node', 3, 0.5) },
+        {
+          step_name: 'rollup',
+          event_type: 'node_completed',
+          data: typedUsage('aggregate', 30, 5),
+        },
+      ];
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+
+      const production = await getDagResumeSnapshot('run-double');
+      const double = inMemoryDagResumeSnapshot(
+        rows.map(row => ({ workflow_run_id: 'run-double', ...row })),
+        'run-double'
+      );
+
+      expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
+      expect(double.completedNodeOutputs).toEqual(production.completedNodeOutputs);
+      expect(production.tokens).toEqual({ input: 3, output: 1 });
+      expect(production.costUsd).toBe(0.5);
+      expect(double.tokens).toEqual(production.tokens);
+      expect(double.costUsd).toBe(production.costUsd);
+    });
 
     test('returns an empty snapshot when no events exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));

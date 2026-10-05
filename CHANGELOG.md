@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Deprecated
 
 - Archon's Codex setup variables are renamed to `ARCHON_CODEX_ID_TOKEN`, `ARCHON_CODEX_ACCESS_TOKEN`, `ARCHON_CODEX_REFRESH_TOKEN` and `ARCHON_CODEX_ACCOUNT_ID`. Archon passes its environment to Codex, and Codex reads `CODEX_ACCESS_TOKEN` as an auth input, so the old name could override your own Codex login. `archon setup` now writes the new names, and re-running it moves an old Codex setup in your `.env` to the new names and removes the old lines. Until the next release, the old `CODEX_*` names are still read, but only when `CODEX_ID_TOKEN` is set and no `ARCHON_CODEX_*` variable is; the server then logs a warning naming each replacement. Old lines left beside new ones are ignored by Archon but still reach Codex, so they are warned about too. A `CODEX_ACCESS_TOKEN` without `CODEX_ID_TOKEN` is treated as your own Codex auth and passed to Codex untouched. (#3562)
+- The OpenCode and Copilot providers are deprecated. No Archon maintainer owns them; they keep working unchanged and stay bundled, with no removal date, until a community owner publishes each as a plugin. `archon doctor` warns when one is your default assistant, `archon ai default` prints the notice when you select one, and a process logs one warning the first time a run uses one. To take one on, see [Deprecated providers](https://archon.diy/getting-started/ai-assistants/#deprecated-providers). (#3684)
 
 ### Fixed
 

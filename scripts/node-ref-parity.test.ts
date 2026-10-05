@@ -225,6 +225,12 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     "$classify.output.type != 'FEATURE'",
     '$build.exit_code == 0',
     "$a.field.sub == 'x'",
+    "$review.output.proposal.action == 'add'",
+    '$review.output.proposal.details.count >= 0',
+    "$review.output.proposal.action == '$review.output.proposal.typo'",
+    "$review.output.proposal.action[0] == 'add'",
+    "$review.output.proposal.* == 'add'",
+
     // #2567: hyphenated ids, which the builder's legacy `\w` copy rejected.
     "$check-reproduction.output == 'done'",
     "$classify-testability.output.testable == 'e2e_testable'",

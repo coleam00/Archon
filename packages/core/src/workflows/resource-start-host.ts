@@ -83,7 +83,7 @@ import { registerRepository } from '../handlers/clone';
 import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
-import { createChildWorktreeResolver } from './child-isolation-resolver';
+import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { createWorkflowDeps } from './store-adapter';
 
 const log = createLogger('resource-start-host');
@@ -519,17 +519,11 @@ export async function startAdmittedResourceStart(
         ...(lane.kind === 'worktree' && lane.baseOverride
           ? { baseOverride: lane.baseOverride }
           : {}),
-        resolveChildIsolation:
-          codebase.kind === 'folder'
-            ? undefined
-            : createChildWorktreeResolver({
-                codebaseId: codebase.id,
-                codebaseName: codebase.name,
-                canonicalRepoPath: codebase.default_cwd,
-                baseBranch,
-                createdByPlatform: platform.getPlatformType(),
-                createdByUserId: launch.run.user_id,
-              }),
+        resolveChildIsolation: createCodebaseChildResolver(codebase, {
+          baseBranch,
+          createdByPlatform: platform.getPlatformType(),
+          createdByUserId: launch.run.user_id,
+        }),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed
           ? { runConfig: { layer: unsealWorkflowRunConfig(sealed), source: sealed.source } }

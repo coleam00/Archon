@@ -81,6 +81,11 @@ import {
   SlackAdapter,
   SlackWorkflowBridge,
 } from '@archon/adapters';
+import { bundledPlatformPolicies } from '@archon/adapters/platform-policies';
+import { setPlatformPolicies } from '@archon/core/platforms/registry';
+import { telegramPolicy } from '@archon/adapters/chat/telegram/policy';
+import { slackPolicy } from '@archon/adapters/chat/slack/policy';
+import { discordPolicy } from '@archon/adapters/community/chat/discord/policy';
 import { GiteaAdapter } from '@archon/adapters/community/forge/gitea';
 import { GitLabAdapter } from '@archon/adapters/community/forge/gitlab';
 import { WebAdapter } from './adapters/web';
@@ -269,6 +274,7 @@ export interface ServerOptions {
 }
 
 export async function startServer(opts: ServerOptions = {}): Promise<void> {
+  setPlatformPolicies(bundledPlatformPolicies);
   getLog().info('server_starting');
   // Anonymous once-per-boot startup event (self-gates on opt-out). Flushed by
   // the shutdownTelemetry() call in the SIGINT/SIGTERM shutdown handler.
@@ -576,9 +582,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Initialize Discord adapter (conditional)
     if (process.env.DISCORD_BOT_TOKEN) {
-      const discordStreamingMode = (process.env.DISCORD_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+      const discordStreamingMode = (process.env[discordPolicy.streaming.envVar] ??
+        discordPolicy.streaming.defaultMode) as 'stream' | 'batch';
       discord = new DiscordAdapter(process.env.DISCORD_BOT_TOKEN, discordStreamingMode);
       const discordAdapter = discord; // Capture for use in callback
       const discordRequireMention = isDiscordMentionRequired();
@@ -663,9 +668,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
     // Initialize Slack adapter (conditional)
     if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
-      const slackStreamingMode = (process.env.SLACK_STREAMING_MODE ?? 'batch') as
-        | 'stream'
-        | 'batch';
+      const slackStreamingMode = (process.env[slackPolicy.streaming.envVar] ??
+        slackPolicy.streaming.defaultMode) as 'stream' | 'batch';
       slack = new SlackAdapter(
         process.env.SLACK_BOT_TOKEN,
         process.env.SLACK_APP_TOKEN,
@@ -1007,7 +1011,8 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Initialize Telegram adapter (conditional, skipped in CLI serve mode)
   let telegram: TelegramAdapter | null = null;
   if (!opts.skipPlatformAdapters && process.env.TELEGRAM_BOT_TOKEN) {
-    const streamingMode = (process.env.TELEGRAM_STREAMING_MODE ?? 'stream') as 'stream' | 'batch';
+    const streamingMode = (process.env[telegramPolicy.streaming.envVar] ??
+      telegramPolicy.streaming.defaultMode) as 'stream' | 'batch';
     telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN, streamingMode);
     const telegramAdapter = telegram; // Capture for use in callback
 

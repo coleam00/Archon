@@ -20,6 +20,7 @@ import {
   checkClaudeBinary,
   checkCodexBinary,
   checkConfigFiles,
+  checkProviderDeprecation,
   checkOpenCode,
   checkDatabase,
   checkConnectedProviders,
@@ -43,6 +44,7 @@ import {
   type ProviderDeps,
 } from './doctor';
 import type { MergedConfig } from '@archon/core';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 
 // doctor creates its logger on first use and keeps it; hand it one this file can observe.
 // Module scope, so the spy is in place before any test makes doctor log.
@@ -761,6 +763,29 @@ describe('checkConfigFiles', () => {
     });
     expect(result.status).toBe('fail');
     expect(result.message).toContain('assistants.codex.modelReasoningEffort');
+  });
+});
+
+describe('checkProviderDeprecation', () => {
+  it('warns with the registry notice when the default assistant is deprecated', async () => {
+    registerBuiltinProviders();
+    registerCommunityProviders();
+    const result = await checkProviderDeprecation('/repo', async () => ({ assistant: 'copilot' }));
+    expect(result.status).toBe('warn');
+    expect(result.message).toContain('Copilot is deprecated');
+  });
+
+  it('passes when the default assistant carries no notice', async () => {
+    registerBuiltinProviders();
+    const result = await checkProviderDeprecation('/repo', async () => ({ assistant: 'claude' }));
+    expect(result.status).toBe('pass');
+  });
+
+  it('skips when the config does not load, leaving the failure to Config files', async () => {
+    const result = await checkProviderDeprecation('/repo', async () => {
+      throw new Error('bad config');
+    });
+    expect(result.status).toBe('skip');
   });
 });
 

@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, mock } from 'bun:test';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { mkdir, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,12 +40,18 @@ describe('node-event-write', () => {
     await mkdir(logDir, { recursive: true });
   });
 
+  afterEach(async () => {
+    await removeTempTree(logDir);
+  });
+
   it('writes one canonical record to durable, transcript, emitter and runtime sinks', async () => {
     const durable: NodeStateEventInput[] = [];
     const emitted: WorkflowEmitterEvent[] = [];
     const store = {
-      persistWorkflowEvent: mock(async (event: NodeStateEventInput) => durable.push(event)),
-    } as never;
+      persistWorkflowEvent: mock(async (event: NodeStateEventInput) => {
+        durable.push(event);
+      }),
+    };
     const emitter = { emit: mock((event: WorkflowEmitterEvent) => emitted.push(event)) };
     const result = await recordNodeState({ store, logDir, emitter }, completedRecord());
 
@@ -60,9 +67,34 @@ describe('node-event-write', () => {
     expect(result).toMatchObject({ state: 'completed', output: 'full output', costUsd: 0 });
   });
 
+  it('returns and persists the same nested contract on cache replay', async () => {
+    const durable: NodeStateEventInput[] = [];
+    const store = {
+      persistWorkflowEvent: async (event: NodeStateEventInput) => {
+        durable.push(event);
+      },
+    };
+    const source = completedRecord();
+    const paths = [['proposal'], ['proposal', 'action']];
+    const result = await recordNodeState(
+      { store, logDir },
+      {
+        runId: source.runId,
+        path: source.path,
+        node: source.node,
+        cache: {
+          action: 'replayed',
+          output: { text: 'json', declaredOutputPaths: paths },
+        },
+      }
+    );
+    expect(result).toMatchObject({ state: 'completed', declaredOutputPaths: paths });
+    expect(durable[0]?.data?.declared_output_paths).toEqual(paths);
+  });
+
   it('stops after a durable write rejection and preserves the original failure', async () => {
     const cause = new Error('database unavailable');
-    const store = { persistWorkflowEvent: mock(async () => Promise.reject(cause)) } as never;
+    const store = { persistWorkflowEvent: mock(async () => Promise.reject(cause)) };
     const emitter = { emit: mock(() => {}) };
     const record = {
       ...completedRecord(),

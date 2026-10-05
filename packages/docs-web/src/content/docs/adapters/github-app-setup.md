@@ -16,7 +16,7 @@ This is the recommended GitHub auth mode for teams sharing one Archon instance. 
 - Webhooks centralise — one URL per App covers every installation.
 - A team's repos can span multiple GitHub orgs (or a mix of orgs and personal accounts) — Archon routes per-(owner, repo) to the right installation transparently.
 
-Solo installs that only need the PAT model can ignore this page; see [GitHub](./github.md) for the legacy setup.
+Solo installs that only need the PAT model can ignore this page; see [GitHub](/adapters/github/) for the legacy setup.
 
 ## When to use App mode vs. PAT mode
 
@@ -205,7 +205,7 @@ The `!override` tag (compose-spec) replaces the base file's `ports` list instead
 
 **2. In `Caddyfile` — drop `/internal/*` requests.**
 
-Insert this `handle` block before the fallthrough `handle { }` block:
+The maintained `Caddyfile.example` includes this denial. Keep it in your deployed `Caddyfile`; if you use an older or custom configuration, insert it before the fallthrough `handle { }` block:
 
 ```txt
 handle /internal/* {

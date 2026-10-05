@@ -8,7 +8,7 @@ mock.module('../workflows/branch-launch-source', () => ({
 import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { MockPlatformAdapter } from '../test/mocks/platform';
-import type { Conversation, Codebase } from '../types';
+import type { Conversation, Codebase, IPlatformAdapter } from '../types';
 import type {
   IsolationEnvironmentRow,
   IsolationResolution,
@@ -77,7 +77,9 @@ mock.module('../services/run-live-owner', () => ({
 }));
 
 const mockUpdateConversation = mock(() => Promise.resolve());
-const mockGetOrCreateConversation = mock((): Promise<Conversation | null> => Promise.resolve(null));
+const mockGetOrCreateConversation = mock<
+  typeof import('../db/conversations').getOrCreateConversation
+>(async () => makeConversation());
 mock.module('../db/conversations', () => ({
   getOrCreateConversation: mockGetOrCreateConversation,
   getConversationByPlatformId: mock(() => Promise.resolve(null)),
@@ -530,6 +532,7 @@ describe('dispatchBackgroundWorkflow', () => {
     mockResolveWorkflowSourceRoot.mockClear();
     mockResolveWorkflowSourceRoot.mockResolvedValue(undefined);
     mockLogger.info.mockClear();
+    mockGetOrCreateConversation.mockClear();
     mockGetOrCreateConversation.mockResolvedValue(
       makeConversation({ id: 'worker-conv-1', platform_conversation_id: 'web-worker-1' })
     );
@@ -567,6 +570,72 @@ describe('dispatchBackgroundWorkflow', () => {
       factory.mockRestore();
       (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
     }
+  });
+
+  for (const structured of [false, true]) {
+    for (const fails of [false, true]) {
+      test(`new adapter background lifecycle, structured=${structured}, fails=${fails}`, async () => {
+        platform.getPlatformType.mockReturnValue('matrix-chat');
+        const finalize = mock(async () => {});
+        const prepare = mock<NonNullable<IPlatformAdapter['prepareBackgroundConversation']>>(
+          async () => finalize
+        );
+        const sendStructuredEvent = mock(async () => {});
+        if (fails) mockExecuteWorkflow.mockRejectedValueOnce(new Error('execution failed'));
+        await dispatchBackgroundWorkflow(
+          makeRoutingCtx({
+            platform: {
+              ...platform,
+              prepareBackgroundConversation: prepare,
+              ...(structured ? { sendStructuredEvent } : {}),
+            },
+          }),
+          makeWorkflow()
+        );
+        await flushBackgroundExecution();
+        const workerId = mockGetOrCreateConversation.mock.calls[0]?.[1];
+        expect(mockGetOrCreateConversation.mock.calls[0]?.[0]).toBe('matrix-chat');
+        expect(workerId).toStartWith('matrix-chat-worker-');
+        expect(prepare).toHaveBeenCalledWith({
+          workerConversationId: workerId,
+          parentConversationId: 'parent-conv',
+          conversationDbId: 'worker-conv-1',
+        });
+        expect(finalize).toHaveBeenCalledTimes(1);
+        expect(sendStructuredEvent).toHaveBeenCalledTimes(structured ? 1 : 0);
+        if (structured)
+          expect(sendStructuredEvent).toHaveBeenCalledWith('parent-conv', {
+            type: 'workflow_dispatch',
+            workerConversationId: workerId,
+            workflowName: 'bg-workflow',
+          });
+        expect(platform.sendMessage).toHaveBeenCalledWith(
+          'parent-conv',
+          expect.stringContaining('(background)'),
+          expect.anything()
+        );
+        if (fails)
+          expect(platform.sendMessage).toHaveBeenCalledWith(
+            'parent-conv',
+            expect.stringContaining('execution failed'),
+            expect.anything()
+          );
+      });
+    }
+  }
+
+  test('nothing is prepared when source preparation fails', async () => {
+    const prepare = mock<NonNullable<IPlatformAdapter['prepareBackgroundConversation']>>(
+      async () => async () => {}
+    );
+    mockPrepareWorkflowSource.mockRejectedValueOnce(new Error('capture failed'));
+    await dispatchBackgroundWorkflow(
+      makeRoutingCtx({ platform: { ...platform, prepareBackgroundConversation: prepare } }),
+      makeWorkflow()
+    );
+    await flushBackgroundExecution();
+    expect(prepare).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
   test('refuses a composed approval gate before creating anything (#1764)', async () => {
