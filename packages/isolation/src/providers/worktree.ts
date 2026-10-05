@@ -12,6 +12,7 @@ import { createLogger } from '@archon/paths';
 import {
   execFileAsync,
   getGitCheckoutIdentity,
+  isSameWorktreePath,
   isWorktreeRegistered,
   fetchWithRefLockRetry,
   findWorktreeByBranch,
@@ -581,7 +582,7 @@ export class WorktreeProvider implements IIsolationProvider {
       throw error;
     }
 
-    const wt = worktrees.find(w => w.path === worktreePath);
+    const wt = worktrees.find(w => isSameWorktreePath(w.path, worktreePath));
 
     // If worktree exists on disk but not in git's list, it's a corrupted state
     if (!wt) {
@@ -653,7 +654,7 @@ export class WorktreeProvider implements IIsolationProvider {
       throw error;
     }
 
-    const wt = worktrees.find(w => w.path === path);
+    const wt = worktrees.find(w => isSameWorktreePath(w.path, path));
 
     if (!wt) {
       // Worktree directory exists but isn't registered with git - possible corruption

@@ -32,6 +32,7 @@ export {
   CanonicalRepoPathUnavailableError,
   verifyWorktreeOwnership,
   isWorktreeRegistered,
+  isSameWorktreePath,
 } from './worktree';
 export type {
   WorktreeLayout,

@@ -1,4 +1,5 @@
 import { readFile, access, realpath } from 'fs/promises';
+import * as nodePath from 'path';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'path';
 import {
   createLogger,
@@ -555,6 +556,25 @@ export async function verifyWorktreeOwnership(
 }
 
 /**
+ * Whether two spellings name the same worktree path.
+ *
+ * Git prints Windows paths with forward slashes and its own drive-letter case,
+ * so on win32 both sides are normalized and compared case-insensitively.
+ * Symlinks are not resolved here; callers that need that resolve first.
+ */
+export function isSameWorktreePath(
+  a: string,
+  b: string,
+  paths: nodePath.PlatformPath = nodePath
+): boolean {
+  const normalize = (value: string): string => {
+    const resolved = paths.resolve(value);
+    return paths.sep === '\\' ? resolved.toLowerCase() : resolved;
+  };
+  return normalize(a) === normalize(b);
+}
+
+/**
  * Whether Git still lists `worktreePath` as a worktree of `repoPath`.
  *
  * Unlike listWorktrees, this counts detached worktrees and lets a failed
@@ -575,7 +595,7 @@ export async function isWorktreeRegistered(
   for (const record of stdout.split('\0')) {
     if (!record.startsWith('worktree ')) continue;
     const listed = await resolveThroughExistingAncestor(record.slice('worktree '.length));
-    if (listed === target) return true;
+    if (isSameWorktreePath(listed, target)) return true;
   }
   return false;
 }
