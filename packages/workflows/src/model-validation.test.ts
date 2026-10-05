@@ -401,6 +401,23 @@ describe('per-run model bindings', () => {
     );
   });
 
+  test('unprefixed refs reject multiple owners regardless of registration order', () => {
+    const first: ProviderDescriptor = { ...requireProvider(providerRegistry, 'pi'), id: 'first' };
+    const second: ProviderDescriptor = { ...first, id: 'second' };
+    for (const owners of [
+      [first, second],
+      [second, first],
+    ]) {
+      const providers: ProviderRegistry = {
+        get: id => owners.find(provider => provider.id === id),
+        list: () => owners,
+      };
+      expect(() =>
+        resolveRunModelOverrides(providers, base, { tiers: { large: 'vendor/model' } })
+      ).toThrow("Model override 'large' has ambiguous unprefixed model ownership: first, second.");
+    }
+  });
+
   test('unprefixed refs without an owner fail with the provider-neutral message', () => {
     const providers: ProviderRegistry = {
       get: id => providerRegistry.get(id),

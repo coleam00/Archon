@@ -372,7 +372,16 @@ function resolveRunOverrideSpec(
     });
   }
 
-  const owner = providers.list().find(provider => provider.ownsUnprefixedModelRefs);
+  const owners = providers.list().filter(provider => provider.ownsUnprefixedModelRefs);
+  if (owners.length > 1) {
+    throw new Error(
+      `Model override '${targetName}' has ambiguous unprefixed model ownership: ${owners
+        .map(provider => provider.id)
+        .sort()
+        .join(', ')}.`
+    );
+  }
+  const owner = owners[0];
   try {
     if (!owner) throw new Error('No provider owns unprefixed model refs');
     parseProviderRunModel(owner, spec);
