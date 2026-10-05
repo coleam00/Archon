@@ -607,7 +607,6 @@ async function dispatchBackgroundWorkflowOwned(
         conversationId: workerConv.id,
         parentConversationId: ctx.conversationDbId,
         userId: ctx.userId,
-        platform: { type: ctx.platform.getPlatformType(), conversationId: workerPlatformId },
       },
       codebase_id: ctx.codebaseId,
       user_message: ctx.originalMessage,
@@ -667,7 +666,6 @@ async function dispatchBackgroundWorkflowOwned(
             conversationId: workerConv.id,
             parentConversationId: ctx.conversationDbId,
             userId: ctx.userId,
-            platform: { type: ctx.platform.getPlatformType(), conversationId: workerPlatformId },
           },
           options: {
             codebaseId: ctx.codebaseId,

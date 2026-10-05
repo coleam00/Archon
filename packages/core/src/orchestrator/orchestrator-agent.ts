@@ -1276,7 +1276,6 @@ async function dispatchOrchestratorWorkflowOwned(
               conversationId: conversation.id,
               userId,
               parentConversationId: conversation.id,
-              platform: { type: platform.getPlatformType(), conversationId },
             },
             run: resumableRun,
             options: {
@@ -1359,7 +1358,6 @@ async function dispatchOrchestratorWorkflowOwned(
               conversationId: conversation.id,
               userId,
               parentConversationId: conversation.id,
-              platform: { type: platform.getPlatformType(), conversationId },
             },
             options: {
               codebaseId: codebase.id,
@@ -1464,7 +1462,6 @@ async function dispatchOrchestratorWorkflowOwned(
           conversationId: conversation.id,
           parentConversationId: conversation.id,
           userId,
-          platform: { type: platform.getPlatformType(), conversationId },
         },
         options: {
           codebaseId: codebase.id,

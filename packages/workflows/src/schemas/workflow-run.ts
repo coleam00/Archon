@@ -271,13 +271,6 @@ export const workflowRunOriginSchema = z
     conversationId: z.string().optional(),
     parentConversationId: z.string().optional(),
     userId: z.string().optional(),
-    platform: z
-      .object({
-        type: z.string(),
-        conversationId: z.string().optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 

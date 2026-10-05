@@ -4345,10 +4345,6 @@ export interface components {
         conversationId?: string;
         parentConversationId?: string;
         userId?: string;
-        platform?: {
-          type: string;
-          conversationId?: string;
-        };
       } | null;
       id: string;
       workflow_name: string;
@@ -4570,10 +4566,6 @@ export interface components {
         conversationId?: string;
         parentConversationId?: string;
         userId?: string;
-        platform?: {
-          type: string;
-          conversationId?: string;
-        };
       } | null;
       id: string;
       workflow_name: string;

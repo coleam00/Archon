@@ -76,7 +76,6 @@ describe('optional workflow origin', () => {
       userId,
       conversationId,
       parentConversationId,
-      platform: { type: 'cli', conversationId: 'opaque' },
     };
     const run = await workflows.createWorkflowRun({
       workflow_name: 'chat',

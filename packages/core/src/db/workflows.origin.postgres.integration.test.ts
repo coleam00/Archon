@@ -72,7 +72,6 @@ describe.skipIf(!baseUrl)('workflow origin on scratch PostgreSQL', () => {
     const origin = {
       conversationId,
       userId,
-      platform: { type: 'cli', conversationId: 'platform-id' },
     };
     const run = await workflows.createWorkflowRun({
       workflow_name: 'chat',

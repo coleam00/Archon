@@ -2436,10 +2436,6 @@ async function runWorkflowWithOwnedSource(
           origin: {
             conversationId: detachedConversation.id,
             userId: detachedUserId,
-            platform: {
-              type: 'cli',
-              conversationId: detachedConversation.platform_conversation_id,
-            },
           },
           ...(detachCodebase ? { codebase_id: detachCodebase.id } : {}),
           user_message: userMessage,
@@ -3327,7 +3323,6 @@ async function runWorkflowWithOwnedSource(
           origin: {
             conversationId: conversation.id,
             userId: cliUserId,
-            platform: { type: 'cli', conversationId },
           },
           run: resumable,
           options: commonOptions,
@@ -3406,7 +3401,6 @@ async function runWorkflowWithOwnedSource(
         origin: {
           conversationId: conversation.id,
           userId: cliUserId,
-          platform: { type: 'cli', conversationId },
         },
         options: opts,
       });
