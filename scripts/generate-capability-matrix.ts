@@ -15,7 +15,7 @@
  * failure until the docs are regenerated.
  *
  * Source of truth: the provider registry (registerBuiltinProviders +
- * registerCommunityProviders → getProviderInfoList). The factories stay lazy,
+ * registerCommunityProviders → getRegisteredProviders). The factories stay lazy,
  * so no provider is instantiated; we only read the static capability metadata.
  *
  * Usage:
@@ -32,9 +32,10 @@ import { join, resolve } from 'path';
 import {
   registerBuiltinProviders,
   registerCommunityProviders,
-  getProviderInfoList,
+  getRegisteredProviders,
+  DEPRECATED_PROVIDERS_DOCS_PATH,
 } from '@archon/providers';
-import type { ProviderCapabilities, ProviderInfo } from '@archon/providers';
+import type { ProviderCapabilities, ProviderRegistration } from '@archon/providers';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const OUTPUT_PATH = join(
@@ -143,7 +144,7 @@ export function renderCell(caps: ProviderCapabilities, key: keyof ProviderCapabi
  * renders nor explicitly skips — i.e. someone added a field to
  * `ProviderCapabilities` without giving it a matrix axis.
  */
-function assertTotalCoverage(providers: ProviderInfo[]): void {
+function assertTotalCoverage(providers: ProviderRegistration[]): void {
   const covered = new Set<string>([...AXES.map(a => a.key), ...SKIP_KEYS]);
   const uncovered = new Set<string>();
   for (const p of providers) {
@@ -166,7 +167,7 @@ function assertTotalCoverage(providers: ProviderInfo[]): void {
  * renders as supported — a caveat on a ❌ cell means the capability was turned
  * off and the caveat text is stale.
  */
-function resolveCaveats(providers: ProviderInfo[]): ResolvedCaveat[] {
+function resolveCaveats(providers: ProviderRegistration[]): ResolvedCaveat[] {
   const axisByKey = new Map(AXES.map(a => [a.key, a] as const));
   return CAVEATS.map(caveat => {
     const provider = providers.find(p => p.id === caveat.provider);
@@ -190,11 +191,19 @@ function resolveCaveats(providers: ProviderInfo[]): ResolvedCaveat[] {
   });
 }
 
-function buildMarkdown(providers: ProviderInfo[], caveats: ResolvedCaveat[]): string {
+function providerTags(p: ProviderRegistration): string {
+  const tags = [
+    ...(p.builtIn ? [] : ['community provider']),
+    ...(p.deprecationNotice ? [`[deprecated](${DEPRECATED_PROVIDERS_DOCS_PATH})`] : []),
+  ];
+  return tags.length > 0 ? ` *(${tags.join(', ')})*` : '';
+}
+
+function buildMarkdown(providers: ProviderRegistration[], caveats: ResolvedCaveat[]): string {
   const ids = providers.map(p => p.id);
 
   const providerList = providers
-    .map(p => `- \`${p.id}\` — ${p.displayName}${p.builtIn ? '' : ' *(community provider)*'}`)
+    .map(p => `- \`${p.id}\` — ${p.displayName}${providerTags(p)}`)
     .join('\n');
 
   const header = `| Capability | ${ids.map(id => `\`${id}\``).join(' | ')} |`;
@@ -281,7 +290,7 @@ function buildMarkdown(providers: ProviderInfo[], caveats: ResolvedCaveat[]): st
 async function main(): Promise<void> {
   registerBuiltinProviders();
   registerCommunityProviders();
-  const providers = getProviderInfoList();
+  const providers = getRegisteredProviders();
   if (providers.length === 0) {
     throw new Error('No providers registered — registry bootstrap failed.');
   }

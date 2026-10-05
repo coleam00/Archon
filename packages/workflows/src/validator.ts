@@ -29,6 +29,7 @@ import {
   findStrictSchemaIssues,
   getProviderCapabilities,
   isRegisteredProvider,
+  isObjectSchemaNode,
   skillSearchRoots,
 } from '@archon/providers';
 
@@ -457,6 +458,9 @@ export async function validateWorkflowResources(
     // boundary after the spend. Same predicate as the loader, so the two gates cannot
     // disagree on an inert schema.
     const ownershipError = workflowNodeOutputFormatError(node);
+    const outputSchema =
+      ownershipError === null && isOutputFormatEnforced(node) ? node.output_format : undefined;
+    const compileError = outputSchema === undefined ? null : compileOutputSchema(outputSchema);
     if (ownershipError !== null) {
       issues.push({
         level: 'error',
@@ -465,17 +469,14 @@ export async function validateWorkflowResources(
         message: ownershipError,
         hint: "Move the schema to the child workflow's returns: node — its declared fields travel back with the result.",
       });
-    } else if (isOutputFormatEnforced(node) && node.output_format !== undefined) {
-      const compileError = compileOutputSchema(node.output_format);
-      if (compileError !== null) {
-        issues.push({
-          level: 'error',
-          nodeId: node.id,
-          field: 'output_format',
-          message: `Node '${node.id}' declares an output_format that cannot be compiled: ${compileError}`,
-          hint: 'Fix the JSON Schema — a declared contract is enforced against the node output, so it cannot be skipped.',
-        });
-      }
+    } else if (compileError !== null) {
+      issues.push({
+        level: 'error',
+        nodeId: node.id,
+        field: 'output_format',
+        message: `Node '${node.id}' declares an output_format that cannot be compiled: ${compileError}`,
+        hint: 'Fix the JSON Schema — a declared contract is enforced against the node output, so it cannot be skipped.',
+      });
     }
 
     const providerCaps =
@@ -490,33 +491,50 @@ export async function validateWorkflowResources(
     // every node kind that both enforces output_format
     // (isOutputFormatEnforced) AND sends the schema to a provider (agent and
     // loop; not exec/bash/script, and not a wait's engine-injected schema).
-    if (
-      ownershipError === null &&
+    const strictSchemaIssues =
       !isExecNode(node) &&
       !isWaitNode(node) &&
-      isOutputFormatEnforced(node) &&
-      node.output_format !== undefined &&
+      outputSchema !== undefined &&
       providerCaps?.requiresAllPropertiesRequired
-    ) {
-      for (const issue of findStrictSchemaIssues(node.output_format, 'output_format')) {
-        if (issue.kind === 'missing-properties') {
-          issues.push({
-            level: 'error',
-            nodeId: node.id,
-            field: 'output_format',
-            message: `Node '${node.id}' declares an object schema without 'properties' at '${issue.schemaPath}'. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
-            hint: 'Declare the object properties and list every property in required. When the value may be absent, use a nullable object such as type: ["object","null"].',
-          });
-        } else {
-          issues.push({
-            level: 'error',
-            nodeId: node.id,
-            field: 'output_format',
-            message: `Node '${node.id}' declares properties not in 'required' at '${issue.schemaPath}': ${issue.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
-            hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
-          });
-        }
+        ? findStrictSchemaIssues(outputSchema, 'output_format')
+        : [];
+    for (const issue of strictSchemaIssues) {
+      if (issue.kind === 'missing-properties') {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'output_format',
+          message: `Node '${node.id}' declares an object schema without 'properties' at '${issue.schemaPath}'. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+          hint: 'Declare the object properties and list every property in required. When the value may be absent, use a nullable object such as type: ["object","null"].',
+        });
+      } else {
+        issues.push({
+          level: 'error',
+          nodeId: node.id,
+          field: 'output_format',
+          message: `Node '${node.id}' declares properties not in 'required' at '${issue.schemaPath}': ${issue.missing.join(', ')}. Provider '${provider}' enforces OpenAI strict mode and will reject this schema (HTTP 400 invalid_json_schema).`,
+          hint: 'List every property key in the required array. Express optionality inside the type (e.g. a ["string","null"] union or an enum sentinel like "none").',
+        });
       }
+    }
+
+    if (
+      !isWaitNode(node) &&
+      compileError === null &&
+      strictSchemaIssues.length === 0 &&
+      outputSchema !== undefined &&
+      isObjectSchemaNode(outputSchema) &&
+      outputSchema.properties !== undefined &&
+      !(Array.isArray(outputSchema.required) && outputSchema.required.length > 0) &&
+      outputSchema.additionalProperties !== false
+    ) {
+      issues.push({
+        level: 'warning',
+        nodeId: node.id,
+        field: 'output_format',
+        message: `Node '${node.id}' declares output_format properties without a non-empty required array or additionalProperties: false. Missing fields or a schema-echo response can validate successfully.`,
+        hint: 'List fields that downstream nodes need in required, or set additionalProperties: false to reject undeclared fields. Keep the schema loose only when every field is intentionally optional.',
+      });
     }
 
     if (requiresPortableModelRefs && 'model' in node && node.model?.startsWith('@')) {

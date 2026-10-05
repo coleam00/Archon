@@ -636,6 +636,12 @@ export interface ProviderRegistration {
   builtIn: boolean;
 
   /**
+   * Set when the provider is deprecated. The registry logs it once per process when a
+   * run first uses the provider; `archon doctor` and `archon ai default` show it too.
+   */
+  deprecationNotice?: string;
+
+  /**
    * Credentials this agent can consume. Required: registering an agent without
    * declaring its credential surface is a bug, not a default (#1955) — the
    * connectable-vendor catalog and the agent→credential matrix in

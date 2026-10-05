@@ -48,6 +48,7 @@ export {
   validateStructuredOutput,
   formatSchemaErrors,
   findStrictSchemaIssues,
+  isObjectSchemaNode,
   type StrictSchemaIssue,
   type StructuredValidationResult,
 } from './shared/structured-output';
@@ -115,6 +116,7 @@ export {
   resolveCopilotBinaryPath,
   fileExists as copilotFileExists,
 } from './community/copilot/binary-resolver';
+export { DEPRECATED_PROVIDERS_DOCS_PATH } from './community/deprecation';
 
 export {
   singleVendorCatalog,

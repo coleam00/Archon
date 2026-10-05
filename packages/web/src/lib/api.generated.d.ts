@@ -4947,12 +4947,7 @@ export interface components {
         [key: string]: components['schemas']['ProviderDefaults'];
       };
       streaming: {
-        /** @enum {string} */
-        telegram: 'stream' | 'batch';
-        /** @enum {string} */
-        discord: 'stream' | 'batch';
-        /** @enum {string} */
-        slack: 'stream' | 'batch';
+        [key: string]: 'stream' | 'batch';
       };
       concurrency: {
         maxConversations: number;

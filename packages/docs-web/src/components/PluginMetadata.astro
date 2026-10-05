@@ -1,0 +1,30 @@
+---
+import type { ListedPlugin } from '../data/plugins';
+interface Props { plugin: ListedPlugin }
+const { plugin } = Astro.props;
+const { manifest } = plugin;
+---
+<p>{manifest.description}</p>
+<dl>
+  <dt>Source</dt><dd><a href={plugin.sourceUrl}>{plugin.id}</a></dd>
+  <dt>Kind</dt><dd>{manifest.kind}</dd>
+  <dt>Latest tag</dt><dd>{plugin.latestTag ?? 'No tags published'}</dd>
+  <dt>Archived</dt><dd>{plugin.archived ? 'Yes' : 'No'}</dd>
+  <dt>Indexed commit</dt><dd><code>{plugin.commit}</code></dd>
+  <dt>Archon compatibility</dt><dd>{manifest.compatibility?.archon ?? 'Not declared'}</dd>
+  <dt>README</dt><dd><a href={plugin.readmeUrl}>Read on GitHub</a></dd>
+  <dt>Entrypoints</dt>
+  <dd>
+    {manifest.kind === 'workflow-pack' ? (
+      <ul>{Object.entries(manifest.entrypoints).map(([name, path]) => <li><code>{name}</code>: <code>{path}</code></li>)}</ul>
+    ) : <span>Executable: <code>{manifest.executable}</code></span>}
+  </dd>
+</dl>
+<pre><code>{plugin.installCommand}</code></pre>
+<style>
+  dl { display: grid; grid-template-columns: minmax(7rem, 1fr) minmax(0, 3fr); gap: .5rem 1rem; }
+  dt { margin: 0; font-weight: 600; }
+  dd { margin: 0; overflow-wrap: anywhere; }
+  ul { margin: 0; padding-left: 1rem; }
+  pre { padding: 1rem; overflow-x: auto; background: var(--sl-color-gray-6); border-radius: .5rem; }
+</style>

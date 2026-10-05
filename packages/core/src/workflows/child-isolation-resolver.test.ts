@@ -43,8 +43,25 @@ mock.module('../db/isolation-environments', () => ({
   create: mockIsolationDbCreate,
 }));
 
-const { buildChildIdentifier, createChildWorktreeResolver } =
+const { buildChildIdentifier, createCodebaseChildResolver } =
   await import('./child-isolation-resolver');
+
+const REPO_CODEBASE = {
+  id: 'cb-1',
+  name: 'owner/repo',
+  default_cwd: '/repo',
+  kind: 'repo' as const,
+};
+
+function repoResolver(): NonNullable<ReturnType<typeof createCodebaseChildResolver>> {
+  const resolver = createCodebaseChildResolver(REPO_CODEBASE, {
+    baseBranch: 'main',
+    createdByPlatform: 'cli',
+    createdByUserId: undefined,
+  });
+  if (!resolver) throw new Error('a repo codebase must get a resolver');
+  return resolver;
+}
 
 /** Mirrors `WorktreeProvider.slugify()` — the cap the identifier has to survive. */
 const PROVIDER_SLUG_CAP = 50;
@@ -162,18 +179,55 @@ describe('buildChildIdentifier', () => {
   });
 });
 
-describe('createChildWorktreeResolver', () => {
-  const parentRun = { id: PARENT_RUN_ID } as Parameters<
-    ReturnType<typeof createChildWorktreeResolver>['resolve']
-  >[0]['parentRun'];
+const parentRun = { id: PARENT_RUN_ID } as Parameters<
+  ReturnType<typeof repoResolver>['resolve']
+>[0]['parentRun'];
 
-  const resolver = createChildWorktreeResolver({
-    codebaseId: 'cb-1',
-    codebaseName: 'owner/repo',
-    canonicalRepoPath: '/repo',
-    baseBranch: 'main',
-    createdByPlatform: 'cli',
+describe('createCodebaseChildResolver', () => {
+  beforeEach(() => {
+    mockProviderCreate.mockClear();
+    mockIsolationDbCreate.mockClear();
+    mockConfigureIsolation.mockClear();
   });
+
+  test('a repo codebase gets a resolver bound to it and to the surface attribution', async () => {
+    const resolver = createCodebaseChildResolver(
+      { id: 'cb-7', name: 'acme/api', default_cwd: '/repos/api', kind: 'repo' },
+      { baseBranch: 'develop', createdByPlatform: 'slack', createdByUserId: 'user-42' }
+    );
+
+    await resolver?.resolve({ parentRun, nodeId: 'build', codebaseId: 'cb-7' });
+
+    expect(mockProviderCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codebaseId: 'cb-7',
+        codebaseName: 'acme/api',
+        canonicalRepoPath: '/repos/api',
+        baseBranch: 'develop',
+      })
+    );
+    expect(mockIsolationDbCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codebase_id: 'cb-7',
+        created_by_platform: 'slack',
+        created_by_user_id: 'user-42',
+      })
+    );
+  });
+
+  test('a folder codebase gets no resolver', () => {
+    const resolver = createCodebaseChildResolver(
+      { id: 'cb-8', name: 'ops', default_cwd: '/ops', kind: 'folder' },
+      { baseBranch: undefined, createdByPlatform: 'cli', createdByUserId: 'user-42' }
+    );
+
+    expect(resolver).toBeUndefined();
+    expect(mockConfigureIsolation).not.toHaveBeenCalled();
+  });
+});
+
+describe('child worktree resolver', () => {
+  const resolver = repoResolver();
 
   beforeEach(() => {
     nextCreateAdopts = false;
@@ -190,12 +244,7 @@ describe('createChildWorktreeResolver', () => {
     // block (baseBranch, path, remote, and copyFiles, which is what actually bites:
     // seeded files like .env never reach the child and its build fails confusingly).
     // Binding it to the resolver covers every construction site, present and future.
-    createChildWorktreeResolver({
-      codebaseId: 'cb-2',
-      codebaseName: 'owner/repo',
-      canonicalRepoPath: '/repo',
-      createdByPlatform: 'cli',
-    });
+    repoResolver();
 
     expect(mockConfigureIsolation).toHaveBeenCalledTimes(1);
     expect(typeof mockConfigureIsolation.mock.calls[0][0]).toBe('function');

@@ -391,6 +391,7 @@ async function handleWorktreeCommand(
         const provider = getIsolationProvider();
         const env = await provider.create({
           codebaseId: conversation.codebase_id,
+          codebaseName: codebase.name,
           canonicalRepoPath: toRepoPath(mainPath),
           workflowType: 'task',
           identifier: branchName,
