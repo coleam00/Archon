@@ -11,7 +11,7 @@ const [runId] = process.argv.slice(2);
 if (!runId) throw new Error('Usage: cancel-run.ts <run-id>');
 
 try {
-  const result = await cancelWorkflow(runId);
+  const result = await cancelWorkflow(runId, { kind: 'operator' });
   console.log(
     JSON.stringify({
       ok: true,

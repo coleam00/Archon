@@ -150,7 +150,13 @@ mock.module('@archon/core/utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-import { registerApiRoutes, resolveAuthContext, resolveWebUserId, requireWebUser } from './api';
+import {
+  registerApiRoutes,
+  resolveAuthContext,
+  resolveWebUserId,
+  resolveRunActor,
+  requireWebUser,
+} from './api';
 
 function makeApp(): OpenAPIHono {
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
@@ -404,6 +410,22 @@ describe('per-request auth helpers', () => {
     else process.env.ARCHON_WEB_AUTH_HEADER = originalHeader;
   });
 
+  test('run actor uses session identity before proxy identity', async () => {
+    authEnabled = true;
+    authInstance = { api: { getSession: async () => ({ user: { id: 'session-user' } }) } };
+    expect(await resolveRunActor(await request({ 'X-Archon-User': 'proxy-user' }))).toEqual({
+      kind: 'user',
+      userId: 'user-from-session-user',
+    });
+  });
+
+  test('run actor uses a proxy identity with web auth off', async () => {
+    expect(await resolveRunActor(await request({ 'X-Archon-User': 'proxy-user' }))).toEqual({
+      kind: 'user',
+      userId: 'user-from-proxy-user',
+    });
+  });
+
   for (const enabled of [false, true]) {
     test(`no identity with web auth ${enabled ? 'enabled' : 'disabled'} preserves unattributed requests`, async () => {
       authEnabled = enabled;
@@ -411,6 +433,7 @@ describe('per-request auth helpers', () => {
       const c = await request();
       expect(await resolveAuthContext(c)).toBeUndefined();
       expect(await resolveWebUserId(c)).toBeUndefined();
+      expect(await resolveRunActor(c)).toEqual({ kind: enabled ? 'unidentified' : 'operator' });
       const result = await requireWebUser(c, 'Login to manage keys');
       expect(result).toHaveProperty('error');
       if (!('error' in result)) throw new Error('Expected authentication refusal');

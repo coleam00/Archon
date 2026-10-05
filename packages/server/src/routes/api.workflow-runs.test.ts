@@ -2152,7 +2152,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   });
 
   test('returns 400 when parent conversation no longer exists', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: 'deleted-conv-uuid',
     });
@@ -2168,7 +2168,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   test('returns 400 when parent conversation is non-web', async () => {
     // Slack/Telegram/GitHub-sourced runs cannot route through the web
     // adapter — the dispatcher is wired to webAdapter + lockManager.
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: 'slack-parent-uuid',
     });
@@ -2188,7 +2188,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   });
 
   test('returns 200 and dispatches resume when parent is a web conversation', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: 'parent-conv-uuid',
       user_message: 'Run the deploy',
@@ -2214,6 +2214,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] ?? [];
     expect(platformConvId).toBe('web-plat-abc');
     expect(dispatchedMessage).toBe('/workflow resume run-uuid-4');
+    expect(mockHandleMessage.mock.calls[0]?.[3]).toMatchObject({ actor: { kind: 'operator' } });
   });
 });
 

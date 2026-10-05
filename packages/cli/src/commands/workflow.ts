@@ -5600,7 +5600,7 @@ export async function workflowResumeCommand(
   if (detach) {
     const resolvedId = await resolveRunIdArg(runId, cwd);
     await runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
-      const run = await resumeWorkflowOp(resolvedId);
+      const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
       // The inline path below refuses a run with no recorded working path. Check it
       // here too, on the run the precheck already holds (message copied verbatim):
       // otherwise the parent acks success and the child throws where nobody reads it.
@@ -5626,7 +5626,7 @@ export async function workflowResumeCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const run = await resumeWorkflowOp(resolvedId);
+      const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5643,7 +5643,7 @@ export async function workflowResumeCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const run = await resumeWorkflowOp(resolvedId);
+  const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
   if (!run.working_path) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -5707,7 +5707,7 @@ export async function workflowAbandonCommand(
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
       const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-        await abandonWorkflow(resolvedId);
+        await abandonWorkflow(resolvedId, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5737,7 +5737,7 @@ export async function workflowAbandonCommand(
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
   const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-    await abandonWorkflow(resolvedId);
+    await abandonWorkflow(resolvedId, { kind: 'operator' });
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
@@ -5781,7 +5781,7 @@ export async function workflowCancelCommand(
   const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
     const resolvedId = await resolveRunIdArg(runId, cwd);
     try {
-      const result = await cancelWorkflow(resolvedId);
+      const result = await cancelWorkflow(resolvedId, { kind: 'operator' });
       if (result.kind === 'cooperative' && !result.cancelled) {
         throw new Error(`Workflow run ${resolvedId} already finished; nothing to cancel.`);
       }
@@ -5892,7 +5892,7 @@ export async function workflowApproveCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await approveWorkflow(resolvedId, comment);
+      const result = await approveWorkflow(resolvedId, comment, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5908,7 +5908,9 @@ export async function workflowApproveCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => approveWorkflow(resolvedId, comment));
+  const result = await spelledForCli(() =>
+    approveWorkflow(resolvedId, comment, { kind: 'operator' })
+  );
 
   // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
   // above) is the one surface that records the decision without continuing.
@@ -6019,7 +6021,7 @@ export async function workflowRejectCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await rejectWorkflow(resolvedId, rejectText);
+      const result = await rejectWorkflow(resolvedId, rejectText, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6036,7 +6038,9 @@ export async function workflowRejectCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => rejectWorkflow(resolvedId, rejectText));
+  const result = await spelledForCli(() =>
+    rejectWorkflow(resolvedId, rejectText, { kind: 'operator' })
+  );
 
   if (result.cancelled) {
     const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -6162,7 +6166,7 @@ export async function workflowRespondCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const result = await respondToWorkflow(resolvedId, decision, text);
+      const result = await respondToWorkflow(resolvedId, decision, text, { kind: 'operator' });
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -6178,7 +6182,9 @@ export async function workflowRespondCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const result = await spelledForCli(() => respondToWorkflow(resolvedId, decision, text));
+  const result = await spelledForCli(() =>
+    respondToWorkflow(resolvedId, decision, text, { kind: 'operator' })
+  );
 
   if (!result.workingPath) {
     throw new Error(

@@ -14,7 +14,15 @@ import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import type {
   ApprovalOperationResult,
   RejectionOperationResult,
+  WorkflowOperations,
 } from '@archon/core/operations/workflow-operations';
+
+const mockFindOrCreateUser = mock(async (_platform: string, userId: string) => ({
+  id: `archon-${userId}`,
+}));
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
+}));
 
 // ─── Mocks ────────────────────────────────────────────────────────────────
 
@@ -65,12 +73,12 @@ function rejectionResult(
   };
 }
 
-const mockApproveWorkflow = mock<
-  (runId: string, comment?: string) => Promise<ApprovalOperationResult>
->(async () => approvalResult('approval_gate'));
-const mockRejectWorkflow = mock<
-  (runId: string, reason?: string) => Promise<RejectionOperationResult>
->(async () => rejectionResult());
+const mockApproveWorkflow = mock<WorkflowOperations['approveWorkflow']>(async () =>
+  approvalResult('approval_gate')
+);
+const mockRejectWorkflow = mock<WorkflowOperations['rejectWorkflow']>(async () =>
+  rejectionResult()
+);
 const mockCancelWorkflow = mock<(runId: string) => Promise<unknown>>(async () => ({}));
 const mockGetWorkflowRun = mock<
   (runId: string) => Promise<{
@@ -458,6 +466,18 @@ describe('SlackWorkflowBridge', () => {
     }
   );
 
+  test('identity lookup failure passes unidentified without changing cancellation behavior', async () => {
+    const { adapter, dispatchAction } = makeFakeAdapter();
+    new SlackWorkflowBridge(adapter as never).attach();
+    mockFindOrCreateUser.mockRejectedValueOnce(new Error('identity unavailable'));
+    await dispatchAction('cancel:r1', {
+      user: { id: 'U123' },
+      channel: { id: 'C1' },
+      message: { ts: '2.000' },
+    });
+    expect(mockCancelWorkflow).toHaveBeenCalledWith('r1', { kind: 'unidentified' });
+  });
+
   test('approve button calls approveWorkflow and edits the message', async () => {
     const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
     const resumeWorkflow = mock(async () => true);
@@ -489,7 +509,10 @@ describe('SlackWorkflowBridge', () => {
     });
 
     expect(mockApproveWorkflow).toHaveBeenCalledTimes(1);
-    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1');
+    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1', undefined, {
+      kind: 'user',
+      userId: 'archon-U123',
+    });
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
     const resolution = updated.find(message => message.ts === '2.000');
     expect(resolution?.channel).toBe('C1');
@@ -567,7 +590,10 @@ describe('SlackWorkflowBridge', () => {
     // The reject button has no text-entry affordance, so it can never supply a
     // reason — the bridge must default it to 'Rejected' itself (#2740),
     // otherwise a new-mode gate's structured output.text records ''.
-    expect(mockRejectWorkflow).toHaveBeenCalledWith('r1', 'Rejected');
+    expect(mockRejectWorkflow).toHaveBeenCalledWith('r1', 'Rejected', {
+      kind: 'user',
+      userId: 'archon-U999',
+    });
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U999');
     const resolution = updated.find(message => message.ts === '2.000');
     const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
@@ -587,7 +613,10 @@ describe('SlackWorkflowBridge', () => {
       message: { ts: '2.000' },
     });
 
-    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1');
+    expect(mockApproveWorkflow).toHaveBeenCalledWith('r1', undefined, {
+      kind: 'user',
+      userId: 'archon-U123',
+    });
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
     const resolution = updated.find(message => message.ts === '2.000');
     const text = (resolution?.blocks?.[0] as { text?: { text?: string } } | undefined)?.text?.text;
@@ -718,7 +747,7 @@ describe('SlackWorkflowBridge', () => {
     });
 
     expect(mockCancelWorkflow).toHaveBeenCalledTimes(1);
-    expect(mockCancelWorkflow).toHaveBeenCalledWith('r1');
+    expect(mockCancelWorkflow).toHaveBeenCalledWith('r1', { kind: 'user', userId: 'archon-U123' });
   });
 
   describe('cancel button owner outcomes (#2325)', () => {

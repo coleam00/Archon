@@ -1,3 +1,5 @@
+import type { RunActor } from './run-authorization';
+import type { UserRole } from '../schemas/user';
 import { recordDerivedExecution } from '@archon/workflows/node-event-write';
 import { logGateDecision } from '@archon/workflows/logger';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
@@ -643,6 +645,7 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
 }
 
 export interface WorkflowOperationsDeps {
+  getUserRole: (userId: string) => Promise<UserRole | undefined>;
   store: Pick<
     IWorkflowStore,
     | 'getWorkflowRun'
@@ -667,20 +670,31 @@ export interface WorkflowOperations {
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'];
   getWorkflowStatus: (options?: { codebaseId?: string }) => Promise<WorkflowStatusData>;
-  resumeWorkflow: (runId: string) => Promise<WorkflowRun>;
+  resumeWorkflow: (runId: string, actor: RunActor) => Promise<WorkflowRun>;
   abandonWorkflow: (
-    runId: string
+    runId: string,
+    actor: RunActor
   ) => Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }>;
-  cancelWorkflow: (runId: string) => Promise<CancelWorkflowResult>;
+  cancelWorkflow: (runId: string, actor: RunActor) => Promise<CancelWorkflowResult>;
   abandonResumableRunsForConversation: (
-    conversationId: string
+    conversationId: string,
+    actor: RunActor
   ) => Promise<AbandonConversationRunsResult>;
-  approveWorkflow: (runId: string, comment?: string) => Promise<ApprovalOperationResult>;
-  rejectWorkflow: (runId: string, reason?: string) => Promise<RejectionOperationResult>;
+  approveWorkflow: (
+    runId: string,
+    comment: string | undefined,
+    actor: RunActor
+  ) => Promise<ApprovalOperationResult>;
+  rejectWorkflow: (
+    runId: string,
+    reason: string | undefined,
+    actor: RunActor
+  ) => Promise<RejectionOperationResult>;
   respondToWorkflow: (
     runId: string,
     decision: string,
-    text?: string
+    text: string | undefined,
+    actor: RunActor
   ) => Promise<ApprovalOperationResult | RejectionOperationResult>;
   resetWorkflowNodeSessions: (
     filter: Parameters<IWorkflowStore['deleteWorkflowNodeSessions']>[0]
@@ -832,7 +846,7 @@ export function createWorkflowOperations({
    * Validate that a run can be resumed and return it.
    * Does NOT execute the workflow — callers decide whether to run.
    */
-  async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
+  async function resumeWorkflow(runId: string, _actor: RunActor): Promise<WorkflowRun> {
     const run = await getRunOrThrow(runId, 'operations.workflow_resume_lookup_failed');
     if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
       throw new Error(
@@ -935,7 +949,8 @@ export function createWorkflowOperations({
    * no timer, age, or PID decides that the run is dead.
    */
   async function abandonWorkflow(
-    runId: string
+    runId: string,
+    _actor: RunActor
   ): Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }> {
     const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
     assertAbandonable(run);
@@ -980,7 +995,7 @@ export function createWorkflowOperations({
    *   {@link CancelRefusedError} and leave the run unchanged. `cancelled` releases the
    *   run's worktree lock and resource slot, so it is never recorded on a guess.
    */
-  async function cancelWorkflow(runId: string): Promise<CancelWorkflowResult> {
+  async function cancelWorkflow(runId: string, _actor: RunActor): Promise<CancelWorkflowResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_cancel_lookup_failed');
     if (run.status !== 'running') {
       throw new CancelRefusedError(
@@ -1080,7 +1095,8 @@ export function createWorkflowOperations({
    * abandon` keeps its broader running/paused/failed cascading policy.
    */
   async function abandonResumableRunsForConversation(
-    conversationId: string
+    conversationId: string,
+    _actor: RunActor
   ): Promise<AbandonConversationRunsResult> {
     const runs = await store.cancelResumableRunsForConversation(conversationId);
     let blockedParentRunId: string | null = null;
@@ -1114,7 +1130,8 @@ export function createWorkflowOperations({
    */
   async function approveWorkflow(
     runId: string,
-    comment?: string
+    comment: string | undefined,
+    _actor: RunActor
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
     const approval = assertApprovable(run);
@@ -1274,7 +1291,11 @@ export function createWorkflowOperations({
    * #2075) — the resume machinery picks it up and runs the on_reject rework.
    * Otherwise, cancels the run.
    */
-  async function rejectWorkflow(runId: string, reason?: string): Promise<RejectionOperationResult> {
+  async function rejectWorkflow(
+    runId: string,
+    reason: string | undefined,
+    _actor: RunActor
+  ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
     const approval = assertRejectable(run);
 
@@ -1528,10 +1549,11 @@ export function createWorkflowOperations({
   async function respondToWorkflow(
     runId: string,
     decision: string,
-    text?: string
+    text: string | undefined,
+    actor: RunActor
   ): Promise<ApprovalOperationResult | RejectionOperationResult> {
-    if (decision === 'approve') return approveWorkflow(runId, text);
-    if (decision === 'reject') return rejectWorkflow(runId, text);
+    if (decision === 'approve') return approveWorkflow(runId, text, actor);
+    if (decision === 'reject') return rejectWorkflow(runId, text, actor);
     return respondToWorkflowWithDeclaredDecision(runId, decision, text);
   }
 

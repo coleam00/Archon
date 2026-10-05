@@ -10,6 +10,8 @@
  * SlackAdapter.start() so app.action handlers register before app.start()
  * fires the Socket Mode connection. Call detach() on shutdown.
  */
+import type { RunActor } from '@archon/core';
+import { findOrCreateUserByPlatformIdentity } from '@archon/core/db/users';
 import type { WorkflowOperations } from '@archon/core/operations/workflow-operations';
 import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import type { BlockButtonAction, ButtonAction } from '@slack/bolt';
@@ -538,6 +540,17 @@ export class SlackWorkflowBridge {
     this.actionHandlersRegistered = true;
   }
 
+  private async resolveRunActor(slackUserId: string | undefined): Promise<RunActor> {
+    if (!slackUserId) return { kind: 'unidentified' };
+    try {
+      const user = await findOrCreateUserByPlatformIdentity('slack', slackUserId);
+      return { kind: 'user', userId: user.id };
+    } catch (err) {
+      getLog().warn({ err }, 'slack.bridge_actor_resolve_failed');
+      return { kind: 'unidentified' };
+    }
+  }
+
   private async handleApprovalDecision(
     body: BlockButtonAction,
     action: ButtonAction,
@@ -559,7 +572,11 @@ export class SlackWorkflowBridge {
     try {
       try {
         if (decision === 'approved') {
-          const result = await this.operations.approveWorkflow(runId);
+          const result = await this.operations.approveWorkflow(
+            runId,
+            undefined,
+            await this.resolveRunActor(actorId)
+          );
           const resumed = await this.tryResumeWorkflow(runId, actorId);
           // Interactive-loop approves are outcome-ambiguous from here: a gate that
           // paused after a completion condition was met finalizes on resume (no re-run, #2074);
@@ -571,7 +588,11 @@ export class SlackWorkflowBridge {
               : 'workflow resumed'
             : RESUME_NOT_ACCEPTED_NOTE;
         } else {
-          const result = await this.operations.rejectWorkflow(runId, 'Rejected');
+          const result = await this.operations.rejectWorkflow(
+            runId,
+            'Rejected',
+            await this.resolveRunActor(actorId)
+          );
           outcomeNote = result.cancelled
             ? result.maxAttemptsReached
               ? 'cancelled — max reject attempts reached'
@@ -632,7 +653,10 @@ export class SlackWorkflowBridge {
 
     try {
       try {
-        const result = await this.operations.cancelWorkflow(runId);
+        const result = await this.operations.cancelWorkflow(
+          runId,
+          await this.resolveRunActor(actorId)
+        );
         getLog().info({ runId, actorId: maskUserId(actorId) }, 'slack.bridge_cancel_dispatched');
         // The eventual workflow_cancelled event repaints the status message. It carries
         // no cascade facts, so a stop that left sub-runs or a parent behind says so here.
