@@ -1,4 +1,3 @@
-import { type ProviderRegistry } from '@archon/provider-contract';
 /**
  * Workflow discovery - finds and loads workflow YAML files from disk.
  *
@@ -21,6 +20,7 @@ import { type ProviderRegistry } from '@archon/provider-contract';
  * precedence: each pack resolves its includes within itself, and only its manifest
  * entrypoints are dispatchable, as `owner/plugin:<entrypoint>`.
  */
+import { type ProviderRegistry } from '@archon/provider-contract';
 import { readFile, readdir, access, stat } from 'fs/promises';
 import { basename, join } from 'path';
 import type {

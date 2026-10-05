@@ -1,8 +1,8 @@
-import { providerRegistry } from '@archon/providers';
 /**
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
  */
+import { providerRegistry } from '@archon/providers';
 
 import { buildRunNodeStates, getTerminalRecord } from '@archon/workflows/terminal-record';
 import { nodeCostScope } from '@archon/workflows/node-record-serialization';

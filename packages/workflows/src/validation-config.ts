@@ -1,7 +1,5 @@
-import { parseClaudeSettingSources } from '@archon/paths/skills';
-
 import { z } from 'zod';
-
+import { parseClaudeSettingSources } from '@archon/paths/skills';
 import { rawAliasesConfigSchema, rawTiersConfigSchema } from './schemas/model-binding';
 import type { ValidationConfig } from './validator';
 

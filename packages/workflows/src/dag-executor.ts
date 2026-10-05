@@ -77,7 +77,6 @@ import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/provider-contra
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
-
 import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
 import { validateStructuredOutput } from './structured-output';
 import type {
@@ -10516,9 +10515,8 @@ export function collectContainerIncompatibleProviders(
 ): Set<string> {
   const incompatible = new Set<string>();
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (_node, provider) => {
-    if (!providers.get(provider)) return;
-    if (!requireProvider(providers, provider).capabilities.containerExec)
-      incompatible.add(provider);
+    const descriptor = providers.get(provider);
+    if (descriptor && !descriptor.capabilities.containerExec) incompatible.add(provider);
   });
   return incompatible;
 }

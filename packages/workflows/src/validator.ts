@@ -1,4 +1,3 @@
-import type { ProviderRegistry } from '@archon/provider-contract';
 /**
  * Workflow and command validation — Level 3 (resource resolution).
  *
@@ -9,6 +8,7 @@ import type { ProviderRegistry } from '@archon/provider-contract';
  * Lives in @archon/workflows (no @archon/core dependency) so both CLI and
  * REST API can use it.
  */
+import type { ProviderRegistry } from '@archon/provider-contract';
 
 import { join, resolve, isAbsolute } from 'path';
 import { access, readFile, stat } from 'fs/promises';

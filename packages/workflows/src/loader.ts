@@ -1,7 +1,7 @@
-import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 /**
  * Workflow loader - discovers and parses workflow YAML files
  */
+import type { ProviderRegistry } from '@archon/provider-contract';
 import type {
   WorkflowDefinition,
   WorkflowLoadError,
@@ -1662,8 +1662,10 @@ export function parseWorkflow(
       }
 
       const knownProvider = consumerProvider ?? sourceProvider;
-      if (knownProvider !== undefined && providers.get(knownProvider)) {
-        const caps = requireProvider(providers, knownProvider).capabilities;
+      const knownDescriptor =
+        knownProvider === undefined ? undefined : providers.get(knownProvider);
+      if (knownDescriptor) {
+        const caps = knownDescriptor.capabilities;
         if (!caps.sessionResume || caps.sessionFork !== true) {
           return {
             workflow: null,
@@ -1694,10 +1696,9 @@ export function parseWorkflow(
       if (!nodeUsesPersistedScope(node, workflowPersistSessions)) continue;
 
       const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
-      if (!explicitProvider || !providers.get(explicitProvider)) continue;
-      const handling = persistedSessionHandling(
-        requireProvider(providers, explicitProvider).capabilities
-      );
+      const descriptor = explicitProvider ? providers.get(explicitProvider) : undefined;
+      if (!descriptor) continue;
+      const handling = persistedSessionHandling(descriptor.capabilities);
       if (handling === 'unsupported') {
         return {
           workflow: null,

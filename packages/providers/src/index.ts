@@ -40,12 +40,7 @@ export { ClaudeProvider } from './claude/provider';
 export { CodexProvider } from './codex/provider';
 
 // Config parsers
-export {
-  parseClaudeConfig,
-  parseClaudeSettingSources,
-  type ClaudeProviderDefaults,
-  type ParsedSettingSources,
-} from './claude/config';
+export { parseClaudeConfig, type ClaudeProviderDefaults } from './claude/config';
 export { parseCodexConfig, type CodexProviderDefaults } from './codex/config';
 
 // Utilities (needed by consumers)

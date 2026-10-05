@@ -1,4 +1,3 @@
-import { type ProviderRegistry, parseProviderRunModel } from '@archon/provider-contract';
 /**
  * Model alias resolver — pure classification + lookup for workflow `model:` refs.
  *
@@ -14,6 +13,7 @@ import { type ProviderRegistry, parseProviderRunModel } from '@archon/provider-c
  * tiers → global aliases → repo aliases) and then handed to `resolveModelSpec()`
  * per call.
  */
+import { type ProviderRegistry, parseProviderRunModel } from '@archon/provider-contract';
 
 import tierDefaults from './defaults/tier-defaults.json';
 import { EFFORT_LEVELS } from './schemas/dag-node';
@@ -382,13 +382,12 @@ function resolveRunOverrideSpec(
     );
   }
   const owner = owners[0];
+  const invalid = `Model override '${targetName}' has invalid model '${spec}'. Expected <agent>/<model> or <vendor>/<model>.`;
+  if (!owner) throw new Error(invalid);
   try {
-    if (!owner) throw new Error('No provider owns unprefixed model refs');
     parseProviderRunModel(owner, spec);
-  } catch {
-    throw new Error(
-      `Model override '${targetName}' has invalid model '${spec}'. Expected <agent>/<model> or <vendor>/<model>.`
-    );
+  } catch (cause) {
+    throw new Error(invalid, { cause });
   }
   return normalizeRunOverridePreset(providers, targetName, { provider: owner.id, model: spec });
 }

@@ -3,6 +3,7 @@
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
 import { createLogger } from '@archon/paths';
+import { parseClaudeSettingSources } from '@archon/paths/skills';
 import type { ClaudeProviderDefaults } from '../types';
 import {
   assertKnownRunConfigKeys,
@@ -19,9 +20,6 @@ function getLog(): ReturnType<typeof createLogger> {
   cachedLog ??= createLogger('provider.claude.config');
   return cachedLog;
 }
-
-import { parseClaudeSettingSources } from '@archon/paths/skills';
-export { parseClaudeSettingSources, type ParsedSettingSources } from '@archon/paths/skills';
 
 /**
  * Parse raw assistantConfig into typed Claude defaults.
