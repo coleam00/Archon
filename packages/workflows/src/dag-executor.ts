@@ -7743,6 +7743,16 @@ function sumFanOutTokens(
   );
 }
 
+async function findFanOutChildRuns(
+  store: WorkflowDeps['store'],
+  parentRunId: string,
+  nodePath: string
+): Promise<WorkflowRun[]> {
+  return (await store.findChildRuns(parentRunId)).filter(
+    child => readSubrunMetadata(child.metadata).parentNodeId === nodePath
+  );
+}
+
 /**
  * Execute a fan-out `workflow:` node (#2121 slice 2, PR-C): expand the node into N
  * governed child runs over a data-driven item list, bound by a `max_parallel` sliding
@@ -7765,14 +7775,14 @@ function sumFanOutTokens(
  *     lifecycle rule), surfacing a staleness-keyed wait/abandon action;
  *   - EVERY index is spawned and every child runs to its own terminal state — no child's
  *     outcome ends another's — and only then does the join reduce: `all_success` (any
- *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal;
- *     failed/cancelled entries represented);
+ *     failed/cancelled child fails the node) / `all_done` (aggregate all terminal if a
+ *     child run exists; failed/cancelled entries represented);
  *   - aggregate `$<id>.output` = JSON array in item order; cost/tokens = Σ children.
  *
  * Execution failures return a failed NodeExecutionResult; lifecycle persistence
  * rejection escapes to the run failure boundary. `node_completed` is written ONLY when the join is
  * satisfied, so a failed fan-out node re-runs and re-inspects its children on resume
- * (resume correctness is sourced from child-run status, not the node's own events).
+ * against the durable child-run rows.
  */
 async function executeFanOutWorkflowNode(
   node: WorkflowNode,
@@ -7942,11 +7952,7 @@ async function executeFanOutWorkflowNode(
   //    on the first run; carries the ordered instance set on resume.
   const existingByIndex = new Map<number, WorkflowRun>();
   try {
-    const children = (await deps.store.findChildRuns(parentRun.id)).filter(
-      c =>
-        readSubrunMetadata(c.metadata as Record<string, unknown> | undefined).parentNodeId ===
-        stepName
-    );
+    const children = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
     for (const child of children) {
       const meta = readSubrunMetadata(child.metadata as Record<string, unknown> | undefined);
       const idx = meta.childIndex;
@@ -8153,6 +8159,13 @@ async function executeFanOutWorkflowNode(
     }
   }
 
+  if (ctx.priorCompletedNodes !== undefined && existingByIndex.size === 0) {
+    await notify(
+      `Re-driving fan_out node '${node.id}': no child run rows exist for its ${String(items.length)} children. ` +
+        'Resume uses the captured parent source; changes to that source require a fresh launch.'
+    );
+  }
+
   // 6. Execute EVERY index through a bounded sliding window. Classification per index: an
   //    existing completed child threads its recorded outcome (resume skip); an existing
   //    failed OR fan-out-cancelled (recoverable) child is re-driven; a user-cancelled child
@@ -8319,6 +8332,25 @@ async function executeFanOutWorkflowNode(
     const elements = outcomes.map((o, i) => childElement(o, i));
     const aggregate = JSON.stringify(elements);
     return writeCompleted(aggregate, totalCostUsd, totalTokens, elements);
+  }
+
+  let children: WorkflowRun[];
+  try {
+    children = await findFanOutChildRuns(deps.store, parentRun.id, stepName);
+  } catch (error) {
+    const msg = `Failed to look up settled fan-out child runs for node '${node.id}': ${(error as Error).message}`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, 'unknown', totalCostUsd, totalTokens);
+  }
+  const anyChildStarted = children.some(child => {
+    const index = readSubrunMetadata(child.metadata).childIndex;
+    return index !== undefined && index >= 0 && index < items.length;
+  });
+  if (!anyChildStarted) {
+    const reason = outcomes[0].error ?? `child ${outcomes[0].status}`;
+    const msg = `fan_out node '${node.id}' refused all ${String(items.length)} children at spawn: ${reason}`;
+    await notify(`❌ **Fan-out failed** (node \`${node.id}\`): ${msg}`);
+    return failResult(msg, 'child_failed', totalCostUsd, totalTokens);
   }
 
   // join: all_done — node succeeds once all children are terminal; a failed/cancelled
@@ -9539,6 +9571,40 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   const cachedOutput = ctx.nodeOutputs.get(node.id);
                   if (cachedOutput === undefined) {
                     throw new Error(`Cached output for node '${node.id}' was not pre-populated`);
+                  }
+                  if (node.kind === 'workflow' && node.fan_out !== undefined) {
+                    const aggregate: unknown =
+                      'structuredOutput' in cachedOutput &&
+                      cachedOutput.structuredOutput !== undefined
+                        ? cachedOutput.structuredOutput
+                        : JSON.parse(cachedOutput.output);
+                    if (!Array.isArray(aggregate)) {
+                      throw new Error(
+                        `Cached fan_out node '${node.id}' aggregate is not a JSON array`
+                      );
+                    }
+                    const children = await findFanOutChildRuns(
+                      ctx.deps.store,
+                      ctx.workflowRun.id,
+                      skipStepName
+                    );
+                    const started = new Set(
+                      children
+                        .map(child => readSubrunMetadata(child.metadata).childIndex)
+                        .filter(
+                          (index): index is number =>
+                            index !== undefined && index >= 0 && index < aggregate.length
+                        )
+                    );
+                    const refused = aggregate.length - started.size;
+                    if (refused > 0) {
+                      await safeSendMessage(
+                        ctx.platform,
+                        ctx.conversationId,
+                        `Skipping fan_out node '${node.id}': fan-out previously refused ${String(refused)} of ${String(aggregate.length)} children.`,
+                        { workflowId: ctx.workflowRun.id, nodeName: node.id }
+                      );
+                    }
                   }
                   await recordNodeState(
                     { store: ctx.deps.store, logDir: ctx.logDir },
