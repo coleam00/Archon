@@ -4,6 +4,7 @@ import type { TransactionQuery } from '../db/resource-slots';
 import { detachConversationProject } from '../db/conversations';
 import { createWorkflowRun } from '../db/workflows';
 import { admitResourceStart } from '../db/resource-starts';
+import type { ApprovalContext, WorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 
 function intercept(
   db: IDatabase,
@@ -269,13 +270,39 @@ export function conversationDetachTests(
 
     test('all paused wait metadata, environment pointer and runs are reported together', async () => {
       const runs = [];
-      for (const kind of ['approval', 'input', 'time', 'event']) {
+      const waitingSince = '2026-10-01T00:00:00.000Z';
+      const resumeAt = '2026-10-02T00:00:00.000Z';
+      const metadataVariants = [
+        { approval: { type: 'approval', nodeId: 'review', message: 'Approve this work' } },
+        { approval: { type: 'interactive_loop', nodeId: 'input', message: 'Provide input' } },
+        {
+          wait: {
+            kind: 'attention',
+            owner: 'node',
+            nodeId: 'attention',
+            waitingSince,
+            message: 'Input needed',
+          },
+        },
+        { wait: { kind: 'time', owner: 'node', nodeId: 'timer', waitingSince, resumeAt } },
+        {
+          wait: {
+            kind: 'event',
+            owner: 'node',
+            nodeId: 'event',
+            waitingSince,
+            resumeAt,
+            event: 'ready',
+          },
+        },
+      ] satisfies { approval?: ApprovalContext; wait?: WorkflowWaitContext }[];
+      for (const metadata of metadataVariants) {
         const id = crypto.randomUUID();
         runs.push({ id, status: 'paused' as const });
         await db.query(
           `INSERT INTO remote_agent_workflow_runs (id, workflow_name, user_message, conversation_id, status, metadata)
           VALUES ($1, 'test', '', $2, 'paused', $3)`,
-          [id, conversationId, JSON.stringify({ wait: { kind } })]
+          [id, conversationId, JSON.stringify(metadata)]
         );
       }
       // Even a stale environment pointer must remain reachable for explicit cleanup.
