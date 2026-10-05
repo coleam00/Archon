@@ -7,16 +7,13 @@
  */
 
 import type { RepoPath, BranchName } from '@archon/git';
+import type { ExecutionContext } from '@archon/provider-contract';
 import type {
-  ExecutionContext,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
-} from '@archon/providers/types';
+} from '@archon/workflows/container-context';
 
-// Re-exported so isolation consumers can source the execution-context contract
-// (and the write-back result shapes) from `@archon/isolation` alongside the
-// backend types that produce them, without reaching into
-// `@archon/providers/types` directly.
+// Isolation backends implement the engine-owned write-back port.
 export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary };
 
 // --- Provider Types ---

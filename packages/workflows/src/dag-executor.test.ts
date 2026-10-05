@@ -74,13 +74,13 @@ import {
   getProviderCapabilities,
 } from '@archon/providers';
 import type { ProviderFailure } from '@archon/provider-contract';
-import type { SendQueryOptions } from '@archon/providers';
+import type { SendQueryOptions } from '@archon/provider-contract';
 import {
   mergeTokenUsage,
   type MessageChunk,
   type ProviderEvent,
   type TokenUsage,
-} from '@archon/providers/types';
+} from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
@@ -5747,16 +5747,26 @@ nodes:
         prompt: "You are concise. Return JSON { summary }."
         model: haiku
         tools: [Bash, Read]
+        disallowedTools: [Write]
+        skills: [codebase-search]
+        maxTurns: 5
 `;
     const result = parseWorkflow(yaml, 'agents.yaml');
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
     const node = wf.nodes[0] as DagNode;
-    expect(node.agents).toBeDefined();
-    expect(node.agents!['brief-gen'].description).toBe('Summarises an issue');
-    expect(node.agents!['brief-gen'].model).toBe('haiku');
-    expect(node.agents!['brief-gen'].tools).toEqual(['Bash', 'Read']);
+    expect(node.agents).toEqual({
+      'brief-gen': {
+        description: 'Summarises an issue',
+        prompt: 'You are concise. Return JSON { summary }.',
+        model: 'haiku',
+        tools: ['Bash', 'Read'],
+        disallowedTools: ['Write'],
+        skills: ['codebase-search'],
+        maxTurns: 5,
+      },
+    });
   });
 
   it('rejects an agent missing description', () => {

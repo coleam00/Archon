@@ -34,8 +34,8 @@ import {
   registerBuiltinProviders,
   registerCommunityProviders,
   clearRegistry,
-  type ProviderDefaults,
 } from '@archon/providers';
+import { type ProviderDefaults } from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
 

@@ -27,7 +27,7 @@ import {
   type ProviderFailureClass,
 } from '@archon/provider-contract';
 import { failureClassOfThrown, failureResult } from '../shared/failure';
-import { clampEffort } from '@archon/paths/effort';
+import { clampEffort } from '@archon/provider-contract';
 import { CODEX_EFFORTS, parseCodexConfig } from './config';
 import { CODEX_CAPABILITIES } from './capabilities';
 import { resolveCodexBinary } from './binary-resolver';

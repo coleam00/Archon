@@ -1377,7 +1377,7 @@ describe('validateWorkflowResources — bash output-ref lint', () => {
 
 describe('validateWorkflowResources — skills search roots', () => {
   // The validator must accept skills anywhere the runtime resolver
-  // (skillSearchRoots in @archon/providers) would find them: .agents/skills/
+  // (skillSearchRoots in @archon/paths/skills) would find them: .agents/skills/
   // and .claude/skills/, at both project (cwd) and user (HOME) level.
   let originalHome: string | undefined;
   let fakeHome: string;

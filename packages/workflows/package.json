@@ -41,7 +41,9 @@
     "./node-execution": "./src/node-execution.ts",
     "./node-record-serialization": "./src/node-record-serialization.ts",
     "./node-event-write": "./src/node-event-write.ts",
-    "./logger": "./src/logger.ts"
+    "./logger": "./src/logger.ts",
+    "./container-context": "./src/container-context.ts",
+    "./structured-output": "./src/structured-output.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -54,7 +56,8 @@
     "@archon/plugin-manifest": "workspace:*",
     "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "ajv": "^8.20.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
@@ -189,6 +192,9 @@
     [
       "src/checkout-observation.test.ts",
       "src/implement-guard-conformance.test.ts"
+    ],
+    [
+      "src/structured-output.test.ts"
     ]
   ]
 }

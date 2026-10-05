@@ -1,4 +1,4 @@
-import { InvalidProviderRunConfigError } from '../errors';
+import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 
 export function assertKnownRunConfigKeys(
   raw: Record<string, unknown>,

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ProviderCapabilities, TokenUsage } from '@archon/providers/types';
+import type { ProviderCapabilities, TokenUsage } from '@archon/provider-contract';
 import type { DagNode } from './schemas/dag-node';
 import type { EffortLevel } from './schemas/effort';
 import type { TierName } from './schemas/model-binding';

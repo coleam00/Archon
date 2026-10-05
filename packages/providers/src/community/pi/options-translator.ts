@@ -22,7 +22,7 @@ import type { ThinkingLevel } from '@earendil-works/pi-ai';
 type PiTool = ReturnType<typeof createCodingTools>[number];
 
 import type { NodeConfig } from '../../types';
-import { clampEffort, type AssertNever } from '@archon/paths/effort';
+import { clampEffort, type AssertNever } from '@archon/provider-contract';
 
 // ─── Thinking level ────────────────────────────────────────────────────────
 
@@ -236,5 +236,5 @@ export function resolvePiTools(
 // Skill resolution is shared across providers. Re-export `resolvePiSkills` as
 // an alias of the shared `resolveSkillDirectories` so existing Pi callers and
 // tests keep their import path stable.
-export { resolveSkillDirectories as resolvePiSkills } from '../../shared/skills';
-export type { ResolvedSkills } from '../../shared/skills';
+export { resolveSkillDirectories as resolvePiSkills } from '@archon/paths/skills';
+export type { ResolvedSkills } from '@archon/paths/skills';

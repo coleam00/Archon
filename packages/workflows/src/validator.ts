@@ -24,14 +24,12 @@ import { isValidCommandName } from './command-validation';
 import { levenshtein, findSimilar } from './utils/fuzzy-match';
 import {
   claudeSkillSearchRoots,
-  compileOutputSchema,
   findInstalledSkillNames,
-  findStrictSchemaIssues,
-  getProviderCapabilities,
-  isRegisteredProvider,
-  isObjectSchemaNode,
   skillSearchRoots,
-} from '@archon/providers';
+} from '@archon/paths/skills';
+import { compileOutputSchema } from './structured-output';
+import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
+import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
