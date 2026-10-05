@@ -2668,20 +2668,37 @@ describe('abandon owned worktrees', () => {
     expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(['run-1']);
   });
 
-  test.each(['foreign-host', 'foreign-user', 'missing'])('retains %s owner estate', async kind => {
+  test.each(['foreign-host', 'missing'])('retains %s owner estate', async kind => {
     const run = owned();
     if (kind === 'missing') delete run.metadata.execution_owner;
-    else
-      run.metadata.execution_owner = {
-        host: kind === 'foreign-host' ? 'another-host' : hostname(),
-        pid: 4242,
-        uid: (process.getuid?.() ?? 0) + 1,
-      };
+    else run.metadata.execution_owner = { host: 'another-host', pid: 4242 };
     mockGetWorkflowRun.mockResolvedValue(run);
     const result = await operations.abandonWorkflow('run-1');
     expect(result.cancelled).toBe(true);
     expect(result.cleanupWarnings?.[0]).toContain('execution owner');
     expect(reclaim).not.toHaveBeenCalled();
+  });
+
+  // POSIX owner endpoints live under a per-uid directory, so abandon cannot reach
+  // another user's owner and keeps its checkout. Windows records no uid (process.getuid
+  // is absent) and its owner pipe is machine-wide, so the endpoint decides there.
+  test('a same-host owner under another uid is retained on POSIX; on Windows uid is not an ownership signal', async () => {
+    const run = owned();
+    run.metadata.execution_owner = {
+      host: hostname(),
+      pid: 4242,
+      uid: (process.getuid?.() ?? 0) + 1,
+    };
+    mockGetWorkflowRun.mockResolvedValue(run);
+    const result = await operations.abandonWorkflow('run-1');
+    expect(result.cancelled).toBe(true);
+    if (process.getuid) {
+      expect(result.cleanupWarnings?.[0]).toContain('execution owner belongs to uid');
+      expect(reclaim).not.toHaveBeenCalled();
+    } else {
+      expect(result.cleanupWarnings).toBeUndefined();
+      expect(reclaim).toHaveBeenCalledTimes(1);
+    }
   });
 
   test('an unaccounted inherited child prevents removing its root checkout', async () => {
