@@ -59,7 +59,7 @@ await writeFile(
 description: Commit attribution proof
 provider: claude
 worktree:
-  enabled: false
+  enabled: ${mode === 'adopted' || mode === 'worktree'}
 nodes:
   - id: commit
     bash: |
@@ -131,7 +131,6 @@ try {
     const workflow = discovery.workflows.find(entry => entry.workflow.name === 'author')?.workflow;
     if (!workflow) throw new Error(JSON.stringify(discovery.errors));
     await recordSelectedWorkflow(source.anchor.root, workflow.name);
-    if (mode === 'adopted' || mode === 'worktree') workflow.worktree = { enabled: true };
     if (mode === 'resource') {
       const admitted = await admitResourceStart({
         resource: 'author',

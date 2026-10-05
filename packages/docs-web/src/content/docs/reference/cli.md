@@ -145,7 +145,7 @@ A workflow pack installs complete at one commit. The command fetches the tag, or
 
 ### `auth github`
 
-Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits, PR comments, and pushes attribute to you instead of the bot.
+Connect the current CLI user's GitHub identity via the GitHub device flow, so workflow commits name you as author while keeping the ambient Git identity as committer. PR comments and pushes use your connected identity.
 
 ```bash
 archon auth github

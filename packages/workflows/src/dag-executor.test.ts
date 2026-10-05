@@ -16961,8 +16961,13 @@ describe('executeDagWorkflow -- env var injection', () => {
         workflowRun,
         config: {
           ...minimalConfig,
-          envVars: { MY_SECRET: 'abc123', ANTHROPIC_API_KEY: 'acting-user-secret' },
-          protectedEnvKeys: ['ANTHROPIC_API_KEY'],
+          envVars: {
+            MY_SECRET: 'abc123',
+            ANTHROPIC_API_KEY: 'acting-user-secret',
+            GIT_AUTHOR_NAME: 'connected-author',
+            GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
+          },
+          protectedEnvKeys: ['ANTHROPIC_API_KEY', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL'],
         },
       })
     );
@@ -16972,8 +16977,14 @@ describe('executeDagWorkflow -- env var injection', () => {
     expect(optionsArg?.env).toEqual({
       MY_SECRET: 'abc123',
       ANTHROPIC_API_KEY: 'acting-user-secret',
+      GIT_AUTHOR_NAME: 'connected-author',
+      GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
     });
-    expect(optionsArg?.protectedEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
+    expect(optionsArg?.protectedEnvKeys).toEqual([
+      'ANTHROPIC_API_KEY',
+      'GIT_AUTHOR_NAME',
+      'GIT_AUTHOR_EMAIL',
+    ]);
   });
 
   it('does not set env on claudeOptions when config.envVars is empty', async () => {
