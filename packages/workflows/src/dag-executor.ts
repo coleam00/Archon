@@ -2376,7 +2376,11 @@ async function executeNodeInternal(
         lastWatchdogReset = { type, at: resetAt };
         watchdogResets.observe(type, resetAt);
       },
-      () => providerEvents.liveSubtaskIds().length > 0,
+      // Only a provider that declares `reported` vouches that silent work is alive;
+      // any other provider's silence is a hung turn and must still time out.
+      () =>
+        aiClient.getCapabilities().backgroundWork === 'reported' &&
+        providerEvents.liveSubtaskIds().length > 0,
       shouldStopStream
     )) {
       const tickNow = Date.now();
@@ -5841,7 +5845,10 @@ async function executeLoopNode(
               lastWatchdogReset = { type, at: resetAt };
               watchdogResets.observe(type, resetAt);
             },
-            () => providerEvents.liveSubtaskIds().length > 0,
+            // Same rule as the agent node: only `reported` work suspends the watchdog.
+            () =>
+              aiClient.getCapabilities().backgroundWork === 'reported' &&
+              providerEvents.liveSubtaskIds().length > 0,
             shouldStopStream
           )) {
             if (await shouldStopStream()) break;

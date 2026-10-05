@@ -7541,12 +7541,116 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         await new Promise(resolve => setTimeout(resolve, 100));
         yield { type: 'subtask', taskId: 'quiet', status: 'completed' };
         yield { type: 'result', sessionId: 's', text: 'finished' };
+        yield { type: 'settled' };
       });
       const store = createMockStore();
-      await runSingleNode(store, createMockPlatform(), 'quiet-live-run', 30);
+      const platform = createMockPlatform();
+      const mockDeps = createMockDeps(store);
+      mockDeps.getAgentProvider = () => ({
+        ...mockGetAgentProviderDag('claude'),
+        getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'reported' }),
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform,
+          conversationId: 'conv-bg-tasks',
+          cwd: testDir,
+          workflow: {
+            name: 'bg-task-test',
+            nodes: [
+              {
+                id: 'step1',
+                kind: 'agent',
+                source: { kind: 'command', name: 'step1' },
+                idle_timeout: 30,
+              },
+            ],
+          },
+          workflowRun: makeWorkflowRun('quiet-live-run'),
+        })
+      );
       expect(findCompletedEvent(store)?.data.node_output).toBe('finished');
       expect(persistedEvents(store).some(event => event.event_type === 'node_failed')).toBe(false);
     });
+
+    // Only a provider that declares `reported` can vouch that a silent subtask is
+    // still alive; for any other provider a silent stream is a hung turn.
+    for (const kind of ['agent', 'loop'] as const) {
+      it(
+        `times out a silent ${kind} node whose unobserved provider left a subtask live`,
+        async () => {
+          let calls = 0;
+          let firstAttemptAborted = false;
+          mockSendQueryDag.mockImplementation(async function* (_prompt, _cwd, _session, options) {
+            calls++;
+            if (calls > 1) {
+              // A timed-out loop iteration retries (after a fixed delay); this
+              // attempt finishes so the test does not wait out every retry.
+              yield { type: 'result', sessionId: 's', text: '<promise>COMPLETE</promise>' };
+              yield { type: 'settled' };
+              return;
+            }
+            yield { type: 'subtask', taskId: 'hung', status: 'started', description: 'hung' };
+            await new Promise<void>(resolve => {
+              // Bounds the test if the watchdog never fires.
+              const bound = setTimeout(resolve, 1_000);
+              options?.abortSignal?.addEventListener(
+                'abort',
+                () => {
+                  firstAttemptAborted = true;
+                  clearTimeout(bound);
+                  resolve();
+                },
+                { once: true }
+              );
+            });
+          });
+          const store = createMockStore();
+          const deps = createMockDeps(store);
+          deps.getAgentProvider = () => ({
+            ...mockGetAgentProviderDag('claude'),
+            getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork: 'unobserved' }),
+          });
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              platform: createMockPlatform(),
+              cwd: testDir,
+              workflow: {
+                name: 'unobserved-silent-subtask',
+                nodes: [
+                  kind === 'agent'
+                    ? {
+                        id: 'step1',
+                        kind,
+                        source: { kind: 'command', name: 'step1' },
+                        idle_timeout: 30,
+                        retry: { max_attempts: 0 },
+                      }
+                    : {
+                        id: 'step1',
+                        kind,
+                        idle_timeout: 30,
+                        loop: {
+                          prompt: 'Finish the work.',
+                          fresh_context: false,
+                          until: 'COMPLETE',
+                          max_iterations: 1,
+                        },
+                      },
+                ],
+              },
+              workflowRun: makeWorkflowRun(`unobserved-silent-${kind}`),
+            })
+          );
+          expect(firstAttemptAborted).toBe(true);
+          if (kind === 'agent') expect(findCompletedEvent(store)).toBeUndefined();
+          else expect(calls).toBe(2);
+        },
+        testTimeout(10_000)
+      );
+    }
 
     it('cancels a never-ending quiet task without waiting for another provider event', async () => {
       let silent = false;
