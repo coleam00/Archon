@@ -880,6 +880,19 @@ export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | nul
   return status === 'running' || status === 'paused';
 }
 
+async function waitForNodeRetry(
+  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
+  runId: string,
+  delayMs: number
+): Promise<void> {
+  for (let remaining = delayMs; remaining > 0; ) {
+    if (!shouldContinueStreamingForStatus(await store.getWorkflowRunStatus(runId))) return;
+    const sliceMs = Math.min(remaining, CANCEL_CHECK_INTERVAL_MS);
+    await new Promise(resolve => setTimeout(resolve, sliceMs));
+    remaining -= sliceMs;
+  }
+}
+
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -998,11 +1011,12 @@ async function runNodeRetryLoop(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent'>,
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
   stepName: string,
   retryConfig: { maxRetries: number; delayMs: number; onError: 'transient' | 'all' },
   run: () => Promise<NodeExecutionResult>,
-  initialOutput: NodeExecutionResult
+  initialOutput: NodeExecutionResult,
+  iteration?: number
 ): Promise<NodeExecutionResult> {
   let output = initialOutput;
   let accumulatedCostUsd: number | undefined;
@@ -1013,6 +1027,18 @@ async function runNodeRetryLoop(
   let sawRateLimit = false;
   let attempt = 0;
   while (true) {
+    if (attempt > 0) {
+      const status = await store.getWorkflowRunStatus(workflowRun.id);
+      if (!shouldContinueStreamingForStatus(status)) {
+        output = {
+          state: 'failed',
+          output: '',
+          error: `Workflow ${status ?? 'deleted'}`,
+          failureKind: 'cancelled',
+        };
+        break;
+      }
+    }
     output = await run();
     if (output.costUsd !== undefined) {
       accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
@@ -1070,9 +1096,10 @@ async function runNodeRetryLoop(
         retry_attempt: attempt + 1,
         max_retries: effectiveMaxRetries,
         delay_ms: delayMs,
+        ...(iteration !== undefined ? { iteration } : {}),
       },
     });
-    await new Promise(resolve => setTimeout(resolve, delayMs));
+    await waitForNodeRetry(store, workflowRun.id, delayMs);
     attempt++;
   }
   output.costUsd = accumulatedCostUsd;
@@ -1094,9 +1121,10 @@ async function runDeterministicNodeWithRetry(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent'>,
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
   stepName: string,
-  run: () => Promise<NodeExecutionResult>
+  run: () => Promise<NodeExecutionResult>,
+  iteration?: number
 ): Promise<NodeExecutionResult> {
   const retryConfig = getExplicitNodeRetryConfig(node);
   // No explicit retry: preserve the single-attempt deterministic-node default.
@@ -1116,7 +1144,8 @@ async function runDeterministicNodeWithRetry(
       state: 'failed',
       output: '',
       error: 'Node did not execute',
-    }
+    },
+    iteration
   );
 }
 
@@ -5688,11 +5717,23 @@ async function executeLoopNode(
           delay_ms: delayMs,
         },
       });
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      await waitForNodeRetry(deps.store, workflowRun.id, delayMs);
       return true;
     };
 
     iterationAttempt: for (let iterRetry = 0; ; iterRetry++) {
+      if (iterRetry > 0) {
+        const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
+        if (!shouldContinueStreamingForStatus(status)) {
+          return failLoopNode(`Workflow ${status ?? 'deleted'}`, {
+            failureKind: 'cancelled',
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i - 1,
+            data: { status: status ?? 'deleted', iteration: i },
+          });
+        }
+      }
       // A failed attempt's session is not the one the iteration completed in.
       iterationSessionId = undefined;
       let iterationAbortController = new AbortController();
@@ -9802,7 +9843,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         ctx.stepNamePrefix,
                         iteration,
                         ctx.bodyLoopUserInput ?? ''
-                      )
+                      ),
+                    iteration
                   );
                   return {
                     nodeId: node.id,
@@ -9843,7 +9885,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       ctx.stepNamePrefix,
                       iteration,
                       ctx.bodyLoopUserInput ?? ''
-                    )
+                    ),
+                  iteration
                 );
                 return {
                   nodeId: node.id,
@@ -10265,7 +10308,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   attemptTypedArtifactsFile
                 );
               },
-              { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
+              { state: 'failed', output: '', error: 'Node did not execute' },
+              iteration
             );
             const output = await assertCheckoutUntouched(
               node,
