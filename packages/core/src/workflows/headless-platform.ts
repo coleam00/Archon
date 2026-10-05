@@ -4,14 +4,6 @@ import {
   type WorkflowMessageMetadata,
   type WorkflowCommandSurface,
 } from '@archon/workflows/deps';
-import { createLogger } from '@archon/paths';
-
-/** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
-let cachedLog: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  if (!cachedLog) cachedLog = createLogger('adapter.headless');
-  return cachedLog;
-}
 
 export type WorkflowMessageRecorder = (
   message: string,
@@ -33,11 +25,8 @@ export class HeadlessPlatform implements IWorkflowPlatform {
     message: string,
     metadata?: WorkflowMessageMetadata
   ): Promise<void> {
-    try {
-      await this.recorder?.(message, metadata);
-    } catch (error) {
-      getLog().warn({ err: error as Error }, 'headless_message_persist_failed');
-    }
+    // A recorder failure propagates: the workflow's send boundary logs it with run context.
+    await this.recorder?.(message, metadata);
   }
 
   getStreamingMode(): 'stream' | 'batch' {

@@ -21,10 +21,12 @@ describe('HeadlessPlatform', () => {
     expect(platform.formatWorkflowCommand('resume id')).toBe('archon workflow resume id');
   });
 
-  test('continues execution after a recorder failure', async () => {
+  // A recorder writes real conversation history, so a failed write is a failed delivery
+  // for the workflow's delivery boundary to report, not a success.
+  test('rejects when the recorder fails', async () => {
     const platform = new HeadlessPlatform(async () => {
       throw new Error('history unavailable');
     });
-    await expect(platform.sendMessage('run-1', 'hello')).resolves.toBeUndefined();
+    await expect(platform.sendMessage('run-1', 'hello')).rejects.toThrow('history unavailable');
   });
 });
