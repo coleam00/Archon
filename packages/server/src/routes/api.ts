@@ -106,7 +106,7 @@ import {
   isValidWorkflowFolderSegment,
 } from '@archon/workflows/workflow-discovery';
 import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
-import { parseWorkflow } from '@archon/workflows/loader';
+import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
@@ -162,10 +162,10 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
  * The workflow as authored: the YAML mapping before the engine's normalizing
  * transform. The builder edits this shape, and the normalized `workflow` cannot
  * be sent back (validate rejects it), so GET returns both. Parsed with the same
- * `Bun.YAML` the loader uses; undefined when the top level is not a mapping.
+ * parser the loader uses; undefined when the top level is not a mapping.
  */
 function authoredForm(content: string): Record<string, unknown> | undefined {
-  const raw: unknown = Bun.YAML.parse(content);
+  const raw = parseYaml(content);
   return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
