@@ -181,18 +181,31 @@ describe('repo-tests exit codes', () => {
   test(
     'bun run test .archon/scripts/ executes the directory tests',
     async () => {
-      const child = Bun.spawn(['bun', 'run', 'test', '.archon/scripts/'], {
-        cwd: REPO_ROOT,
-        stdout: 'ignore',
-        stderr: 'pipe',
-      });
+      // The directory argument is what routes; one named test keeps the run to that
+      // routing instead of the whole directory's subprocess suites, which outlast any
+      // fixed budget on a Windows runner.
+      const child = Bun.spawn(
+        [
+          'bun',
+          'run',
+          'test',
+          '.archon/scripts/',
+          '-t',
+          'routes on the cause classified after the CI fix',
+        ],
+        {
+          cwd: REPO_ROOT,
+          stdout: 'ignore',
+          stderr: 'pipe',
+        }
+      );
       const [exitCode, stderr] = await Promise.all([
         child.exited,
         new Response(child.stderr).text(),
       ]);
 
       expect(exitCode).toBe(0);
-      expect(stderr).toContain('(pass)');
+      expect(stderr).toContain(' 1 pass');
     },
     testTimeout(60_000)
   );
