@@ -267,7 +267,9 @@ async function main(): Promise<number> {
   if (isVersionRequest(args)) {
     try {
       refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-      const { versionCommand } = await loadRoute(() => import('./commands/version'));
+      const { versionCommand } = await loadRoute(() => import('./commands/version'), {
+        providers: false,
+      });
       await versionCommand();
       return 0;
     } finally {
