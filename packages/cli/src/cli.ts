@@ -567,7 +567,9 @@ async function main(): Promise<number> {
       }
 
       case 'version': {
-        const { versionCommand } = await loadRoute(() => import('./commands/version'));
+        const { versionCommand } = await loadRoute(() => import('./commands/version'), {
+          providers: false,
+        });
         await versionCommand();
         break;
       }
