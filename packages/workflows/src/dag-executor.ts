@@ -2364,7 +2364,6 @@ async function executeNodeInternal(
         );
         nodeAbortController.abort();
       },
-      undefined,
       (msg, resetAt) => {
         const type = msg.type;
         lastWatchdogReset = { type, at: resetAt };
@@ -5833,7 +5832,6 @@ async function executeLoopNode(
               );
               iterationAbortController.abort();
             },
-            undefined,
             (msg, resetAt) => {
               const type = msg.type;
               lastWatchdogReset = { type, at: resetAt };
