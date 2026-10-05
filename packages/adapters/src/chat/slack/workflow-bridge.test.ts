@@ -84,14 +84,19 @@ const mockGetWorkflowRun = mock<
 import { CancelRefusedError } from '@archon/core/operations/workflow-operations';
 mock.module('@archon/core', () => ({
   workflowOperations: {
-    approveWorkflow: mockApproveWorkflow,
-    rejectWorkflow: mockRejectWorkflow,
-    cancelWorkflow: mockCancelWorkflow,
     CancelRefusedError,
   },
   workflowDb: {
     getWorkflowRun: mockGetWorkflowRun,
   },
+}));
+
+mock.module('@archon/core/workflows/sql-host', () => ({
+  createSqlWorkflowOperations: () => ({
+    approveWorkflow: mockApproveWorkflow,
+    rejectWorkflow: mockRejectWorkflow,
+    cancelWorkflow: mockCancelWorkflow,
+  }),
 }));
 
 // Imports must come AFTER mock.module setup.
@@ -775,6 +780,18 @@ describe('SlackWorkflowBridge', () => {
       expect(posted[0]?.text).toContain(
         'Parent run `parent-run` was blocked on this sub-run and stays paused.'
       );
+    });
+
+    test('a stop with unreclaimed containers reports the cleanup warning', async () => {
+      mockCancelWorkflow.mockResolvedValue({
+        kind: 'stopped',
+        pid: 4242,
+        cascadeFailures: 0,
+        blockedParentRunId: null,
+        cleanupWarnings: ['Container env-a remains allocated.'],
+      });
+      const posted = await clickCancel();
+      expect(posted[0]?.text).toContain(':warning: Container env-a remains allocated.');
     });
 
     test('no owner answering posts the refusal and the abandon command', async () => {

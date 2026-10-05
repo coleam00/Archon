@@ -428,6 +428,10 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
 }));
 // Capture the real class before mock.module replaces the module.
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
+const mockReclaimContainerEnv = mock(async () => {});
+mock.module('@archon/core/services/cleanup-service', () => ({
+  reclaimContainerEnv: mockReclaimContainerEnv,
+}));
 // Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.
 const mockRequestDetachedRunStop = mock<
   typeof import('@archon/core/services/run-owner-stop').requestDetachedRunStop
@@ -2478,6 +2482,22 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot abandon');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  test('reports container cleanup failure after successful abandonment', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_RUNNING_RUN,
+      metadata: { isolation: 'container', isolation_env_id: 'env-a' },
+    });
+    mockReclaimContainerEnv.mockRejectedValueOnce(new Error('docker down'));
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { message: string };
+    expect(body.message).toContain('Could not reclaim container environment env-a');
+    expect(body.message).toContain('resources may remain allocated');
   });
 
   test('returns 200 and calls cancelWorkflowRun for running run', async () => {

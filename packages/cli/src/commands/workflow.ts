@@ -167,23 +167,16 @@ import {
   isTerminalRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import {
-  approveWorkflow,
-  rejectWorkflow,
-  respondToWorkflow,
-  resumeWorkflow as resumeWorkflowOp,
-  abandonWorkflow,
-  cancelWorkflow,
   CancelRefusedError,
   ChildRunRedirectError,
   workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
-  getWorkflowStatus,
-  resetWorkflowNodeSessions,
   assertApprovable,
   assertRejectable,
   assertRespondable,
 } from '@archon/core/operations/workflow-operations';
+import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { resolveWorkflowAdoption } from '@archon/core/operations/workflow-adoption';
 import * as conversationDb from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
@@ -1578,6 +1571,7 @@ async function resolveRunCodebase(
       : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
         (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   } catch (error) {
+    if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
     const err = error as Error;
     lookupError = err;
     getLog().warn({ err, cwd }, 'cli.codebase_lookup_failed');
@@ -1599,6 +1593,7 @@ async function resolveRunCodebase(
     try {
       codebase = await codebaseDb.getCodebase(options.codebaseId);
     } catch (error) {
+      if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
       const err = error as Error;
       getLog().warn(
         { err, errorType: err.constructor.name, codebaseId: options.codebaseId },
@@ -1618,6 +1613,7 @@ async function resolveRunCodebase(
           getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
         }
       } catch (error) {
+        if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
         const err = error as Error;
         registrationError = err;
         getLog().warn(
@@ -1637,6 +1633,7 @@ async function resolveRunCodebase(
           getLog().info({ name: result.name }, 'cli.folder_project_auto_registered');
         }
       } catch (error) {
+        if (error instanceof codebaseDb.InvalidCodebaseDefaultCwdError) throw error;
         const err = error as Error;
         registrationError = err;
         getLog().warn(
@@ -4148,6 +4145,8 @@ export async function workflowStatusCommand(
   cwd: string,
   opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
 ): Promise<void> {
+  const { getWorkflowStatus } = createSqlWorkflowOperations();
+
   let codebase = null;
   if (!opts.all) {
     try {
@@ -5543,6 +5542,8 @@ export async function workflowResumeCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { resumeWorkflow: resumeWorkflowOp } = createSqlWorkflowOperations();
+
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
   // then let a detached child re-invoke the blocking resume and own all mutation
   // + execution, so a reaped launching shell can't wedge the run mid-resume.
@@ -5648,13 +5649,16 @@ export async function workflowAbandonCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
+  const { abandonWorkflow } = createSqlWorkflowOperations();
+
   // The container reclaim (M2) and the live-owner stop both live in the shared
   // `abandonWorkflow` op, so EVERY surface does them — the CLI reports the outcome.
   // Keeps `--json` a clean one-line contract (no reclaim text before the payload).
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
+      const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+        await abandonWorkflow(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5672,6 +5676,7 @@ export async function workflowAbandonCommand(
                 recordedUid: owner.recordedOwner?.uid ?? null,
                 lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
               },
+        ...(cleanupWarnings ? { cleanupWarnings } : {}),
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
       });
@@ -5682,10 +5687,12 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const { run, cascadeFailures, blockedParentRunId, owner } = await abandonWorkflow(resolvedId);
+  const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+    await abandonWorkflow(resolvedId);
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+  for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
 }
 
@@ -5720,6 +5727,8 @@ export async function workflowCancelCommand(
   json?: boolean,
   cwd?: string
 ): Promise<void> {
+  const { cancelWorkflow } = createSqlWorkflowOperations();
+
   const cancel = async (): Promise<{ resolvedId: string; result: CancelWorkflowResult }> => {
     const resolvedId = await resolveRunIdArg(runId, cwd);
     try {
@@ -5748,6 +5757,9 @@ export async function workflowCancelCommand(
         status: 'cancelled',
         processStopped: result.kind === 'stopped',
         workflowName: result.run.workflow_name,
+        ...(result.kind === 'stopped' && result.cleanupWarnings
+          ? { cleanupWarnings: result.cleanupWarnings }
+          : {}),
         ...(result.kind === 'stopped' && result.cascadeFailures > 0
           ? { cascadeFailures: result.cascadeFailures }
           : {}),
@@ -5771,6 +5783,7 @@ export async function workflowCancelCommand(
   console.log(`Cancelled detached workflow run: ${resolvedId}`);
   console.log(`Workflow: ${result.run.workflow_name}`);
   console.log('Host process tree stopped before run state was changed.');
+  for (const warning of result.cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(result.cascadeFailures, result.blockedParentRunId);
 }
 
@@ -5793,6 +5806,8 @@ export async function workflowApproveCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { approveWorkflow } = createSqlWorkflowOperations();
+
   // --detach: hand the approve AND its inline auto-resume to a detached child
   // (same argv minus --detach/--json). Handled BEFORE any state change — the
   // parent only validates read-only, so the approval is recorded exactly once,
@@ -5922,6 +5937,8 @@ export async function workflowRejectCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { rejectWorkflow } = createSqlWorkflowOperations();
+
   // --detach: hand the reject AND its inline on_reject rework to a detached child,
   // exactly as approve does. Without it, reject hosts the executor in the calling
   // shell — a reaped shell (harness task, closed terminal) leaves the run wedged
@@ -6063,6 +6080,8 @@ export async function workflowRespondCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<void> {
+  const { respondToWorkflow } = createSqlWorkflowOperations();
+
   if (decision === 'approve') return workflowApproveCommand(runId, text, json, cwd, detach);
   if (decision === 'reject') return workflowRejectCommand(runId, text, json, cwd, detach);
 
@@ -6186,6 +6205,8 @@ export async function workflowResetSessionsCommand(
   workflowName: string,
   options: { scope?: string; node?: string; yes?: boolean; json?: boolean }
 ): Promise<void> {
+  const { resetWorkflowNodeSessions } = createSqlWorkflowOperations();
+
   if (!options.scope && !options.yes) {
     throw new Error(
       `Refusing to delete every persisted session for workflow '${workflowName}' across all scopes without confirmation.\n` +
