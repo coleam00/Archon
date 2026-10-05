@@ -70,22 +70,9 @@ import type {
 } from '@archon/workflows/store';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from '@archon/workflows/store';
 
-type StoreRunInsert = Parameters<
+export type WorkflowRunInsert = Parameters<
   import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']
 >[0];
-
-export type WorkflowRunInsert =
-  | (StoreRunInsert & {
-      conversation_id?: never;
-      parent_conversation_id?: never;
-      user_id?: never;
-    })
-  | (Omit<StoreRunInsert, 'origin'> & {
-      origin?: never;
-      conversation_id: string;
-      parent_conversation_id?: string;
-      user_id?: string;
-    });
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {
@@ -390,17 +377,7 @@ export async function insertWorkflowRun(
     metadataJson = '{}';
   }
 
-  const origin = workflowRunOriginSchema.parse(
-    data.origin === undefined
-      ? {
-          ...(data.conversation_id ? { conversationId: data.conversation_id } : {}),
-          ...(data.parent_conversation_id
-            ? { parentConversationId: data.parent_conversation_id }
-            : {}),
-          ...(data.user_id ? { userId: data.user_id } : {}),
-        }
-      : data.origin
-  );
+  const origin = workflowRunOriginSchema.parse(data.origin ?? {});
   if (origin.conversationId) assertPublicConversation(origin.conversationId);
   if (origin.parentConversationId) assertPublicConversation(origin.parentConversationId);
   const physicalConversationId = origin.conversationId ?? (await ensureWorkflowOriginAnchor(query));

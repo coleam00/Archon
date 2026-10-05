@@ -230,17 +230,16 @@ async function prepareBinding(
         : {}),
     };
     const launch: PreparedWorkflowLaunch = {
-      version: 1,
+      version: 2,
       run: {
         id: source.runId,
         workflow_name: workflow.name,
-        conversation_id: conversation.id,
+        origin: { conversationId: conversation.id, userId: intent.runAsUserId },
         codebase_id: codebase.id,
         // Provenance is `metadata.resource_start`; a trigger supplies no user message.
         user_message: '',
         metadata,
         ...(isolation.kind === 'in-place' ? { working_path: cwd } : {}),
-        user_id: intent.runAsUserId,
       },
       execution: { cwd, conversationId, isolation },
     };
@@ -348,7 +347,7 @@ async function worktreeLane(
   codebase: Codebase,
   identifier: string,
   platformType: string,
-  userId: string
+  userId: string | undefined
 ): Promise<{ cwd: string; envId: string; cutFromCommit?: string }> {
   ensureIsolationConfigured();
   const provider = getIsolationProvider();
@@ -389,7 +388,7 @@ async function worktreeLane(
     working_path: env.workingPath,
     branch_name: env.branchName,
     created_by_platform: platformType,
-    created_by_user_id: userId,
+    ...(userId ? { created_by_user_id: userId } : {}),
     metadata: {},
   });
   return {
@@ -494,7 +493,7 @@ export async function startAdmittedResourceStart(
             codebase,
             `${run.workflow_name}-${run.id.slice(0, 8)}`,
             platform.getPlatformType(),
-            launch.run.user_id
+            run.user_id ?? undefined
           )
         : { cwd: launch.execution.cwd, envId: undefined, cutFromCommit: undefined };
     if (run.conversation_id)
@@ -526,7 +525,7 @@ export async function startAdmittedResourceStart(
         resolveChildIsolation: createCodebaseChildResolver(codebase, {
           baseBranch,
           createdByPlatform: platform.getPlatformType(),
-          createdByUserId: launch.run.user_id,
+          createdByUserId: run.user_id ?? undefined,
         }),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed
