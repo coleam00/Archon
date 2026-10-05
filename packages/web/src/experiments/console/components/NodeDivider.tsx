@@ -16,6 +16,7 @@ interface NodeDividerProps {
   costUsd?: number | null;
   costScope?: CostScope | null;
   numTurns?: number | null;
+  tokens?: NodeRun['tokens'];
   /** From `node_completed` — surfaced under the System detail toggle. */
   stopReason?: string | null;
   /** Only set for `skipped` — `when_condition` / `trigger_rule`. */
@@ -25,6 +26,8 @@ interface NodeDividerProps {
   /** When true, surface skip reason / stop reason inline. */
   showDetail?: boolean;
 }
+
+const tokenCount = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 
 const STATUS_LABEL: Record<NodeDividerProps['status'], string> = {
   pending: 'pending',
@@ -59,6 +62,7 @@ export function NodeDivider({
   costUsd,
   costScope,
   numTurns,
+  tokens,
   stopReason,
   skipReason,
   skipExpr,
@@ -126,6 +130,13 @@ export function NodeDivider({
           {dur}
           {cost}
           {turns}
+          {tokens ? (
+            <span
+              title={`${tokens.input.toLocaleString('en')} input tokens / ${tokens.output.toLocaleString('en')} output tokens`}
+            >
+              {` · tokens ${tokenCount.format(tokens.input)} in / ${tokenCount.format(tokens.output)} out`}
+            </span>
+          ) : null}
         </span>
       </div>
       {hasStopDetail ? (

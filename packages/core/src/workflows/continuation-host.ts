@@ -1,7 +1,7 @@
 import * as workflowDb from '../db/workflows';
 import { getCodebase } from '../db/codebases';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
-import { createChildWorktreeResolver } from './child-isolation-resolver';
+import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { resolveRunWorkflow } from './resolve-run-workflow';
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
 import type { IWorkflowEngine, WorkflowResumeAdmission } from '@archon/workflows/engine-port';
@@ -72,17 +72,13 @@ export async function resumeWorkflowContinuation(
           codebaseId: run.codebase_id ?? undefined,
           userId,
           baseBranch: codebase?.default_branch?.trim() || undefined,
-          resolveChildIsolation:
-            codebase && codebase.kind !== 'folder'
-              ? createChildWorktreeResolver({
-                  codebaseId: codebase.id,
-                  codebaseName: codebase.name,
-                  canonicalRepoPath: codebase.default_cwd,
-                  baseBranch: codebase.default_branch?.trim() || undefined,
-                  createdByPlatform: context.platform.getPlatformType(),
-                  createdByUserId: userId,
-                })
-              : undefined,
+          resolveChildIsolation: codebase
+            ? createCodebaseChildResolver(codebase, {
+                baseBranch: codebase.default_branch?.trim() || undefined,
+                createdByPlatform: context.platform.getPlatformType(),
+                createdByUserId: userId,
+              })
+            : undefined,
         },
       });
       if (!admission.accepted) return { kind: 'not-accepted' };

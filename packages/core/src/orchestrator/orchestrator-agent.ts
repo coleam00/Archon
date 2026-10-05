@@ -85,7 +85,7 @@ import { listDecryptedUserProviderCredentials } from '../db/user-provider-key-st
 import { getUserAiPrefs, type UserAiPrefs } from '../db/user-ai-prefs-store';
 import { createWorkflowDeps } from '../workflows/store-adapter';
 import { resolveRunWorkflow } from '../workflows/resolve-run-workflow';
-import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
+import { createCodebaseChildResolver } from '../workflows/child-isolation-resolver';
 import { resolveWorkflowAdoption, WorkflowAdoptionError } from '../operations/workflow-adoption';
 import { loadConfig, loadRepoConfig } from '../config/config-loader';
 import type { MergedConfig } from '../config/config-types';
@@ -806,21 +806,12 @@ async function dispatchOrchestratorWorkflowOwned(
     );
   }
 
-  // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
-  // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
-  // codebases only — a folder project can't make worktrees, so the engine fails
-  // such a node fast (no resolver injected). Shared across every dispatch below.
-  const resolveChildIsolation =
-    codebase.kind !== 'folder'
-      ? createChildWorktreeResolver({
-          codebaseId: codebase.id,
-          codebaseName: codebase.name,
-          canonicalRepoPath: codebase.default_cwd,
-          baseBranch: codebaseBaseBranch,
-          createdByPlatform: platform.getPlatformType(),
-          createdByUserId: userId,
-        })
-      : undefined;
+  // Shared across every dispatch below.
+  const resolveChildIsolation = createCodebaseChildResolver(codebase, {
+    baseBranch: codebaseBaseBranch,
+    createdByPlatform: platform.getPlatformType(),
+    createdByUserId: userId,
+  });
 
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
   //
@@ -2466,10 +2457,6 @@ export async function handleMessage(
 
     // 5. Send to AI provider
     const aiClient = getAgentProvider(providerKey);
-    getLog().debug(
-      { assistantType: conversation.ai_assistant_type, resolvedAssistantType: providerKey },
-      'sending_to_ai'
-    );
 
     // Written by the `manage_run` tool when the agent resolves a human gate
     // during this turn, and acted on once the turn ends (#2565). Resolving a
@@ -2538,6 +2525,18 @@ export async function handleMessage(
     }
 
     const mode = platform.getStreamingMode();
+    // The one line that ties a chat turn to both conversation ids, so grepping the
+    // URL id finds the provider and model of every turn. `model` is read from the
+    // options handed to the provider, never re-resolved, so it cannot disagree.
+    getLog().info(
+      {
+        conversationId: conversation.id,
+        platformConversationId: conversationId,
+        provider: providerKey,
+        model: requestOptions.model,
+      },
+      'orchestrator.chat_dispatch_started'
+    );
     // `finally`, not straight-line code: the gate resolution is committed to the
     // DB the moment the tool call returns, so once the agent has resolved a gate
     // the continuation must run even if the rest of the turn throws — a provider
@@ -3597,7 +3596,6 @@ async function handleWorkflowRunCommand(
     return;
   }
 
-  // No project attached — apply E2 logic
   const codebases = await codebaseDb.listCodebases();
 
   if (codebases.length === 0) {
@@ -3608,100 +3606,7 @@ async function handleWorkflowRunCommand(
     return;
   }
 
-  if (codebases.length === 1) {
-    // Auto-select the only project
-    const codebase = codebases[0];
-    if (request.kind === 'resume') {
-      await dispatchOrchestratorWorkflow(
-        platform,
-        conversationId,
-        conversation,
-        codebase,
-        request,
-        isolationHints,
-        userId,
-        undefined,
-        options
-      );
-      return;
-    }
-    const workflow = request.definition;
-    const workflowCwd = conversation.cwd ?? codebase.default_cwd;
-    // Authoring root for discovery (the canonical repo when `workflowCwd` is a worktree).
-    // This THROWS when git cannot answer — the docblock that once said otherwise was
-    // corrected, and this caller had copied the old claim. Guarded rather than propagated
-    // because this branch only LISTS workflows to validate a name: degrading to the cwd
-    // shows a slightly narrower list, while failing would refuse the command outright.
-    let workflowSourceRoot: string | undefined;
-    try {
-      workflowSourceRoot = await resolveWorkflowSourceRoot(workflowCwd);
-    } catch (error) {
-      getLog().warn(
-        { err: error as Error, workflowCwd },
-        'workflow.source_root_unresolved_listing'
-      );
-    }
-
-    let discovery;
-    try {
-      discovery = await discoverWorkflowsWithConfig(
-        workflowCwd,
-        loadConfig,
-        workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
-      );
-    } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, cwd: workflowCwd }, 'workflow_discovery_failed');
-      await platform.sendMessage(
-        conversationId,
-        `Failed to load workflows: ${err.message}\n\nCheck .archon/workflows/ for YAML syntax issues.`
-      );
-      return;
-    }
-
-    const resolvedEntry =
-      discovery.workflows.find(w => w.workflow.name === workflow.name) ??
-      discovery.workflows.find(w => w.workflow.name.toLowerCase() === workflow.name.toLowerCase());
-    const resolvedWorkflow = resolvedEntry?.workflow;
-
-    if (!resolvedWorkflow) {
-      const loadError = discovery.errors.find(
-        e =>
-          e.filename.replace(/\.ya?ml$/, '') === workflow.name ||
-          e.filename === `${workflow.name}.yaml` ||
-          e.filename === `${workflow.name}.yml`
-      );
-      if (loadError) {
-        await platform.sendMessage(
-          conversationId,
-          `Workflow \`${workflow.name}\` failed to load: ${loadError.error}\n\nFix the YAML file and try again.`
-        );
-        return;
-      }
-
-      await platform.sendMessage(
-        conversationId,
-        `Workflow \`${workflow.name}\` not found.\n\nUse ${spellWorkflowCommand(platform, 'list')} to see available workflows.`
-      );
-      return;
-    }
-
-    await db.updateConversation(conversation.id, { codebase_id: codebase.id });
-    await dispatchOrchestratorWorkflow(
-      platform,
-      conversationId,
-      conversation,
-      codebase,
-      { ...request, definition: resolvedWorkflow, parseWarnings: resolvedEntry?.parseWarnings },
-      isolationHints,
-      userId,
-      resolvedEntry?.source,
-      options
-    );
-    return;
-  }
-
-  // Multiple projects — ask user to choose
+  // Never pick a project for the user, even when only one is registered.
   const projectList = codebases.map(c => `- ${c.name}`).join('\n');
   await platform.sendMessage(
     conversationId,

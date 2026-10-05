@@ -66,6 +66,7 @@ export interface NodeTransitionEvent extends RunEventBase {
   costScope: CostScope | null;
   stopReason: string | null;
   numTurns: number | null;
+  tokens: TokenUsage | null;
 }
 
 /**
@@ -113,6 +114,23 @@ export type RunEvent =
   | SystemEvent;
 
 type RawWorkflowEvent = components['schemas']['WorkflowEvent'];
+
+type Execution = NonNullable<components['schemas']['DagNodeSseEvent']['execution']>;
+type TokenUsage = Pick<
+  Extract<Execution['spend']['tokens'], { source: 'provider' }>['value'],
+  'input' | 'output'
+>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readTokens(value: unknown): TokenUsage | null {
+  if (!isRecord(value)) return null;
+  const input = readNumberOrNull(value, 'input');
+  const output = readNumberOrNull(value, 'output');
+  return input === null || output === null ? null : { input, output };
+}
 
 function readString(obj: Record<string, unknown>, key: string): string {
   const v = obj[key];
@@ -184,6 +202,7 @@ export function toRunEvent(raw: RawWorkflowEvent): RunEvent {
       costScope: raw.cost_scope ?? null,
       stopReason: readStringOrNull(data, 'stop_reason'),
       numTurns: readNumberOrNull(data, 'num_turns'),
+      tokens: readTokens(data.tokens),
     };
   }
 
@@ -401,6 +420,7 @@ export interface NodeRun {
   costUsd: number | null;
   costScope: CostScope | null;
   numTurns: number | null;
+  tokens: TokenUsage | null;
   stopReason: string | null;
   skipReason: string | null;
   skipExpr: string | null;
@@ -465,6 +485,7 @@ export function foldNodeRuns(events: RunEvent[], nodes: readonly RunNodeState[])
       costUsd: completed?.costUsd ?? null,
       costScope: completed?.costScope ?? null,
       numTurns: completed?.numTurns ?? null,
+      tokens: completed?.tokens ?? null,
       stopReason: completed?.stopReason ?? null,
       // Only a `skipped` state's own transition carries these; a replay's are not shown.
       skipReason: ended?.skipReason ?? null,

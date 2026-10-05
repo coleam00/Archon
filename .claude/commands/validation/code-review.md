@@ -1,5 +1,5 @@
 ---
-description: Technical code review for quality, bugs, and CLAUDE.md compliance
+description: Technical code review for quality, bugs, and AGENTS.md compliance
 ---
 
 # Code Review: Pre-Commit Quality Check
@@ -13,7 +13,7 @@ Perform a thorough technical code review on recently changed files, checking for
 ### 1. Gather Codebase Context
 
 Read the project conventions to understand what standards to enforce:
-- Read `CLAUDE.md` for project-wide conventions
+- Read `AGENTS.md` for project-wide conventions
 - Read any relevant `.claude/rules/` files for domain-specific patterns
 
 ### 2. Identify Changes to Review
@@ -98,7 +98,7 @@ line: 42
 issue: [one-line description]
 detail: [explanation of why this is a problem]
 suggestion: [how to fix it, with code if helpful]
-convention: [CLAUDE.md section reference if applicable]
+convention: [AGENTS.md section reference if applicable]
 ```
 
 If no issues found: "Code review passed. No technical issues detected."
@@ -109,5 +109,5 @@ If no issues found: "Code review passed. No technical issues detected."
 - Focus on real bugs, not style preferences
 - Suggest fixes, don't just complain
 - Flag security issues as CRITICAL
-- Reference CLAUDE.md conventions when applicable
+- Reference AGENTS.md conventions when applicable
 - Do NOT flag pre-existing issues in unchanged code

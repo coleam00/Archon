@@ -20,7 +20,7 @@ Wrong docs are worse than missing docs. Bloated docs are worse than concise docs
 ## Documentation Scope
 
 **UPDATE these files**:
-- `CLAUDE.md` - AI assistant instructions and project rules
+- `AGENTS.md` - AI assistant instructions and project rules
 - `README.md` - User-facing getting started guide
 - `docs/*.md` - Architecture, configuration, guides
 - `CONTRIBUTING.md` - Contributor guidelines
@@ -58,11 +58,11 @@ Wrong docs are worse than missing docs. Bloated docs are worse than concise docs
 
 Report what needs to change with specific before/after content.
 
-## CLAUDE.md Update Guidelines
+## AGENTS.md Update Guidelines
 
 ### Codebase is Source of Truth
 
-**DO NOT** write out code examples in CLAUDE.md. Instead:
+**DO NOT** write out code examples in AGENTS.md. Instead:
 
 | Don't Do This | Do This Instead |
 |---------------|-----------------|

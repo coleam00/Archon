@@ -60,6 +60,14 @@ so another PR-gating command cannot appear without a deliberate decision to leav
 `.archon/workflows/sdlc/`. Open an issue instead and describe the problem or
 change you want the maintainers to consider.
 
+### Publishing the container image
+
+The `Publish` workflow checks provenance and SBOM attestations on the pushed image
+digest. Keep `provenance: mode=max` and `sbom: true` enabled.
+Build arguments are published in the attestation; secrets must use `secrets:`, whose values are excluded.
+See [Verifying image attestations](packages/docs-web/src/content/docs/deployment/docker.md#verifying-image-attestations)
+for the consumer inspection commands.
+
 ### Commit messages
 
 Follow the repository's Conventional Commit style. Write a concise,

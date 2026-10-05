@@ -883,11 +883,9 @@ describe('bundled-defaults', () => {
         const group = parsed.workflow.nodes.find(node => node.id === groupId);
         if (group?.kind !== 'loop_group') throw new Error(`${groupId} is not a loop group`);
         expect(group.loop_group.max_iterations).toBe(13);
-        // Completion reads the probe's own certified field. It shelled out to `gh`
-        // while a resumed wait was believed unable to see the iteration's outputs;
-        // that was a quoting error in this predicate, not an engine limit, so the
-        // reference is bare and the probe owns the answer.
-        expect(group.loop_group.until_bash).toBe(`test $${probeId}.output.state != "pending"`);
+        expect(group.loop_group.until_bash?.trim()).toBe(
+          `value=$${probeId}.output.state\ntest "$value" != "pending"`
+        );
 
         const probeIndex = group.loop_group.nodes.findIndex(node => node.id === probeId);
         const pauseIndex = group.loop_group.nodes.findIndex(node => node.id === pauseId);

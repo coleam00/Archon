@@ -80,10 +80,13 @@ const mockReadFile = mock(
   (_path?: unknown): Promise<string> => Promise.reject(new Error('ENOENT'))
 );
 const mockRm = mock((_path?: unknown): Promise<void> => Promise.resolve());
+// create() requires the registered project path to be a directory.
+const mockStat = mock((_path?: unknown) => Promise.resolve({ isDirectory: () => true }));
 mock.module('node:fs/promises', () => ({
   access: mockAccess,
   readFile: mockReadFile,
   rm: mockRm,
+  stat: mockStat,
 }));
 
 import { WorktreeProvider } from './worktree';

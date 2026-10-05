@@ -130,7 +130,7 @@ During the current run, downstream interpolation and `when:` conditions see the 
 
 ### Shell Quoting in `bash:` vs `script:`
 
-`$nodeId.output` values are **auto shell-quoted** when substituted into `bash:` scripts, so the value is always safe to embed in a shell command. For small outputs, values are single-quoted inline. For outputs exceeding 32 KB, Archon writes an engine-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead — the unquoted assignment form is correct in both cases. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
+`$nodeId.output` and `$LOOP_PREV.nodeId.output` references, including their field forms, use two substitution regimes in `bash:` and `until_bash:`. Small string outputs are single-quoted inline. For outputs exceeding 32 KB, Archon writes an engine-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead. A bare argument works with the inline form, but the unquoted command substitution splits words and expands globs. **Assign, then quote the variable** to handle both regimes safely. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). They are **not** shell-quoted when substituted into `script:` bodies — the raw value is embedded as-is. For script nodes, treat substituted values as untrusted input and parse them with language features (e.g. `JSON.parse`), not by interpolating into shell syntax.
 
 User-controlled variables (`$ARGUMENTS`, `$USER_MESSAGE`, `$LOOP_USER_INPUT`, `$LOOP_PREV_OUTPUT`, `$REJECTION_REASON`, `$CONTEXT` and its aliases) are delivered to `bash:` and `script:` nodes as subprocess **environment variables** (`ARGUMENTS`, `USER_MESSAGE`, `LOOP_USER_INPUT`, `LOOP_PREV_OUTPUT`, `REJECTION_REASON`, `CONTEXT`/`EXTERNAL_CONTEXT`/`ISSUE_CONTEXT`), never spliced as raw text into executable code — so attacker-influenced input can't inject. In `bash:` read them as `"$ARGUMENTS"`; in `script:` read them via `process.env.ARGUMENTS` (bun) or `os.environ['ARGUMENTS']` (uv/python). A literal `$ARGUMENTS`/`$USER_MESSAGE`/`$CONTEXT` left in a `script:` body no longer resolves and logs a one-release migration warning.
 
@@ -138,20 +138,19 @@ At load time, Archon scans inline and named exec sources for static environment 
 
 This is a deliberately lexical check, not a language parser. Computed keys, aliases, destructuring, `os.getenv`, and ordinary non-`INPUTS_*` bash variables are outside the supported detection boundary. An exact supported accessor spelling inside a comment or string literal can still be reported.
 
-Because `bash:` substitutions arrive pre-quoted, wrapping them in double quotes is a silent footgun for small (inline) values:
+Keep the reference as the whole, unquoted assignment value, then quote the shell variable wherever you use it:
 
 ```bash
-# WRONG — for a small value, $emit.output.status is injected as 'ok' (single-quoted),
-# so status="$emit.output.status" becomes status="'ok'" — the quotes become data.
-status="$emit.output.status"
-[ "$status" = "ok" ] && echo pass   # → silently fails ($status is 'ok', not ok)
+value=$emit.output
+printf '%s' "$value"
 
-# CORRECT — leave the substitution unquoted; Archon's quoting is the quoting.
-status=$emit.output.status          # → status='ok' → bash assigns: ok
-[ "$status" = "ok" ] && echo pass   # → passes
+status=$emit.output.status
+[ "$status" = "ok" ] && echo pass
 ```
 
-For **large** outputs (>32 KB) the substitution is `$(cat '/path')`, where `var="$(cat ...)"` is correct bash — but you can't know the size at author time, so the rule is unconditional. Numeric and boolean **fields** are injected raw (no quotes), so double-quoting accidentally "works" for them — which makes the bug intermittent. Always use `var=$node.output.field`, never `var="$node.output.field"`.
+Assignments suppress word splitting and glob expansion in both regimes. `export value=$emit.output` and `local value=$emit.output` are also safe. Wrapping the reference in double quotes breaks small string values: `status="$emit.output.status"` becomes `status="'ok'"`, preserving the single quotes as data. Single quotes around a reference also produce the wrong value. Numeric and boolean fields are injected raw, but use the same assign-then-quote idiom so a change to a string value remains safe.
+
+`archon validate workflows` warns about quoted references and bare references outside complete assignments in `bash:` and `until_bash:`. Heredoc bodies remain outside this check.
 
 ### Example
 

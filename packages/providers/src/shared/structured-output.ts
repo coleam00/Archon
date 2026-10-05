@@ -144,7 +144,7 @@ function tryJsonParseObject(text: string): unknown {
  * `properties` map. OpenAI strict-mode requires `additionalProperties: false`
  * on exactly these nodes.
  */
-function isObjectSchemaNode(node: Record<string, unknown>): boolean {
+export function isObjectSchemaNode(node: Record<string, unknown>): boolean {
   const typeIncludesObject =
     node.type === 'object' || (Array.isArray(node.type) && node.type.includes('object'));
   return typeIncludesObject || 'properties' in node;

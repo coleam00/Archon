@@ -1,5 +1,5 @@
 /** Approval variant: defaults + sparse fromDag/toDag conversion. */
-import type { ApprovalNodeData, ApprovalOnReject, WireDagNode } from '../types';
+import type { ApprovalNodeData, WireDagNode } from '../types';
 import { ifDefined } from './if-defined';
 
 /** Default approval config for a freshly-created approval node. */
@@ -19,29 +19,22 @@ export function approvalFromDag(variantSpecific: Partial<WireDagNode>): Approval
       "approvalFromDag: wire node has no 'approval' field — use defaultApprovalData() for new nodes"
     );
   }
-  return {
-    message: approval.message,
-    ...ifDefined('capture_response', approval.capture_response),
-    ...ifDefined('on_reject', onRejectFragment(approval.on_reject)),
-  };
+  return copyApproval(approval);
 }
 
-/** Rebuild a sparse `on_reject` sub-object, or undefined when absent. */
-function onRejectFragment(onReject: ApprovalOnReject | undefined): ApprovalOnReject | undefined {
-  if (onReject === undefined) return undefined;
+/**
+ * A copy of the approval object and of its `on_reject`, so the builder never
+ * shares an object with the definition it was read from. Copied whole rather
+ * than key by key: an approval field this file does not name still survives.
+ */
+function copyApproval(approval: ApprovalNodeData): ApprovalNodeData {
   return {
-    prompt: onReject.prompt,
-    ...ifDefined('max_attempts', onReject.max_attempts),
+    ...approval,
+    ...ifDefined('on_reject', approval.on_reject && { ...approval.on_reject }),
   };
 }
 
 /** Serialize `ApprovalNodeData` to the sparse `{ approval: … }` wire fragment. */
 export function approvalToDag(data: ApprovalNodeData): Partial<WireDagNode> {
-  return {
-    approval: {
-      message: data.message,
-      ...ifDefined('capture_response', data.capture_response),
-      ...ifDefined('on_reject', onRejectFragment(data.on_reject)),
-    },
-  };
+  return { approval: copyApproval(data) };
 }

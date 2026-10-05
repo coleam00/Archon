@@ -13,7 +13,12 @@ DAG workflow nodes support a `hooks` field that attaches Claude Agent SDK hooks
 to individual nodes. Hooks fire during the node's AI execution and can control
 tool behavior, inject context, modify inputs, and more.
 
-**Claude only** — Codex nodes will warn and ignore hooks.
+**Claude only** — other providers warn and ignore `hooks:` (see the
+[capability matrix](/reference/provider-capabilities/)).
+
+These YAML hooks are one of three places hook-like logic can live. See
+[Choosing where hook logic lives](#choosing-where-hook-logic-lives) before
+reaching for them.
 
 ## Quick Start
 
@@ -50,6 +55,97 @@ No custom DSL — `response` IS the SDK type, passed through unchanged.
 field that matches the event key (e.g., `hookEventName: PreToolUse` inside a
 `PreToolUse` hook). This is an SDK requirement — it uses this field to determine
 which event-specific fields to process.
+
+## Choosing where hook logic lives
+
+| You need | Use | Owned by |
+|----------|-----|----------|
+| A fixed response the workflow author can read in the YAML: deny `Bash`, add a reminder after every `Read` | YAML `hooks:` on the node | The workflow |
+| Logic that inspects the hook input at runtime: allow `git status` but block `git push`, lint the file a `Write` just touched | A native Claude hook in `.claude/settings.json` or `~/.claude/settings.json` | Claude configuration |
+| A deterministic step in the workflow: run tests, parse JSON, decide whether a later node runs | A `bash:` or `script:` node, gated with `when:` on its output | The workflow |
+
+YAML `hooks:` are deliberately static. Each `response` is returned unchanged
+every time its matcher fires, so the engine and anyone reading the workflow can
+see exactly what the node will do. Workflow YAML has no executable hook types
+(`command:`, `http:`, `prompt:`, `agent:`) by design: computation
+belongs in a node body, not in the YAML. The
+[workflow language constitution](https://github.com/coleam00/Archon/blob/dev/.archon/workflow-language-constitution.md)
+explains that boundary.
+
+When a hook has to compute something from its input, write it as a native Claude
+hook. Claude Code runs it inside the node's session, and Archon decides which
+settings files that session reads.
+
+### Native Claude hooks and `settingSources`
+
+The node's `settingSources` controls which Claude settings files load, and so
+which native hooks run:
+
+| `settingSources` | Settings file loaded | Native hooks that run |
+|------------------|----------------------|------------------------|
+| `['project', 'user']` (default) | `<cwd>/.claude/settings.json` and `~/.claude/settings.json` | Project and user hooks |
+| `['project']` | `<cwd>/.claude/settings.json` | Project hooks only |
+| `['user']` | `~/.claude/settings.json` | User hooks only |
+| `[]` | Neither | None |
+
+`<cwd>` is the node's working directory, the run's worktree when it has one, so
+project hooks come from the checked-out branch. Archon never loads
+`.claude/settings.local.json`. `settingSources` also controls CLAUDE.md, skills,
+commands, and agents discovery; see
+[`settingSources`](/guides/authoring-workflows/#claude-sdk-advanced-options).
+
+A project hook that inspects every `Bash` command, in `.claude/settings.json`:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-bash.sh" }
+        ]
+      }
+    ]
+  }
+}
+```
+
+A workflow that runs the project hook in one node, keeps the operator's user
+hooks out, and runs another node with no native hooks at all:
+
+```yaml
+name: guarded-fix
+description: Fix a bug with the project's Bash guard active
+provider: claude
+nodes:
+  - id: fix
+    prompt: "Fix the bug described in $ARGUMENTS"
+    settingSources: ['project']   # project hooks run; ~/.claude hooks do not
+
+  - id: test
+    bash: "bun run test"
+    depends_on: [fix]
+
+  - id: summarize
+    prompt: "Summarize the fix and the test result: $test.output"
+    depends_on: [test]
+    settingSources: []            # no settings files, so no native hooks
+    hooks:                        # YAML hooks still apply
+      PreToolUse:
+        - matcher: "Write|Edit"
+          response:
+            hookSpecificOutput:
+              hookEventName: PreToolUse
+              permissionDecision: deny
+              permissionDecisionReason: "Summary node is read-only"
+```
+
+Omitting `settingSources` inherits `assistants.claude.settingSources` from
+`.archon/config.yaml`, and then the `['project', 'user']` default. YAML `hooks:`
+run whatever `settingSources` says, alongside any native hooks that load. See
+[Claude Code hooks](https://docs.anthropic.com/en/docs/claude-code/hooks) for the
+native hook format.
 
 ## Supported Hook Events
 
@@ -302,13 +398,29 @@ nodes:
 Use `allowed_tools`/`denied_tools` for simple include/exclude. Use `hooks` when you
 need context injection, input modification, or post-tool-use reactions.
 
+## Hook events in the run record
+
+When a native Claude hook runs (a `command`, `http`, or MCP-tool hook from a
+settings file), Archon records a `hook` provider event when it starts and another
+when it ends. The end event carries the hook's name, the event that fired it
+(such as `PreToolUse`), a status of `succeeded`, `failed`, or `cancelled`, and the
+exit code when there is one. Like other provider events, they are saved with the
+node, streamed live, served by `GET /api/workflows/runs/{runId}/provider-events`,
+and written by `archon workflow logs`, whose `--format text` view prints only
+failed and cancelled hooks. The console's run view does not display them.
+
+YAML `hooks:` record no `hook` events. They are in-process SDK callbacks, and the
+Claude Agent SDK emits lifecycle events only for hooks it executes itself.
+
+Archon does not record `hook_progress` output, which Claude emits only for async
+native hooks.
+
 ## Limitations
 
 - **Static responses only in YAML** — hooks return the same response every time.
-  For conditional logic, use `when:` conditions on downstream nodes or gate execution with upstream bash nodes that emit structured output.
-- **Claude only** — Codex nodes warn and ignore hooks.
-- **No hook event streaming** — hook lifecycle events (`hook_started`, `hook_progress`)
-  are not forwarded to the Web UI.
+  For input-aware hook logic, use a [native Claude hook](#native-claude-hooks-and-settingsources).
+  For workflow logic, use a `bash:` or `script:` node and gate downstream nodes with `when:`.
+- **Claude only** — other providers warn and ignore `hooks:`.
 
 ## SDK Reference
 

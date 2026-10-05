@@ -7404,7 +7404,7 @@ nodes:
       expect(pw.some(w => w.includes('unknown key'))).toBe(false);
       expect(pw).toEqual([
         "Node 'refine': node-level loop 'interactive:' is deprecated. A future release re-expresses the interactive loop as a gate + loop_group composition (#2707 step 3). Continue using it for now.",
-        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'test $body-node.output.field = \"true\"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
+        "Node 'refine': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'value=$body-node.output.field; test \"$value\" = \"true\"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
         "Node 'gate': 'approval.on_reject' is deprecated. Declare 'approval.decisions' and wire a rework node with \"when: \\\"$gate.output.decision == 'reject'\\\"\" instead (loop it with loop_group if it should iterate). This gate keeps running via the legacy mechanism until migrated.",
       ]);
     });

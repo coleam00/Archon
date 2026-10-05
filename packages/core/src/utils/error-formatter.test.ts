@@ -3,8 +3,20 @@ import { classifyAndFormatError, formatProviderFailure } from './error-formatter
 import { WorkflowAdoptionError } from '../operations/workflow-adoption';
 import { TerminalStatusWriteError } from '@archon/workflows/terminal-status-write';
 import { buildAiProfile, resolveTierWithFallback } from '@archon/workflows/model-validation';
+import { MissingProjectDirectoryError } from '@archon/isolation';
 
 describe('classifyAndFormatError', () => {
+  test('delivers missing project directory guidance verbatim', () => {
+    const path = '/home/operator/.archon/workspaces/acme/session-timeout/source';
+    const error = new MissingProjectDirectoryError(path, 'acme/session-timeout');
+    const result = classifyAndFormatError(error);
+    expect(result).toBe(`⚠️ ${error.message}`);
+    expect(result).toContain(path);
+    expect(result).toContain('acme/session-timeout');
+    expect(result).not.toContain('/reset');
+    expect(result).not.toContain('network');
+  });
+
   describe('rate limit errors', () => {
     test('detects lowercase "rate limit"', () => {
       const result = classifyAndFormatError(new Error('rate limit exceeded'));

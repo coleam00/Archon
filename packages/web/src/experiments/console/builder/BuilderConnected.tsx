@@ -4,7 +4,8 @@
  * loads a real workflow via the `loadWorkflow` skill verb, renders the
  * controlled `BuilderPage`, and persists edits through `saveWorkflow` with full
  * create / rename / delete. Bundled workflows open read-only and Save-as writes
- * a project override.
+ * a project override. An installed-pack workflow has no authored form to edit, so
+ * it gets a read-only notice instead of the editor.
  *
  * Nav guard: the app is a non-data `<BrowserRouter>`, so `useBlocker` is
  * unavailable. We use `beforeunload` (reload/close) plus a
@@ -52,7 +53,8 @@ import {
   deleteWorkflow,
   validateWorkflow,
   listWorkflows,
-  type LoadedWorkflow,
+  isInstalledPackWorkflow,
+  type WorkflowLoad,
 } from '../skills/workflows';
 import { listProjects, type WorkflowListResult } from '../skills';
 import { useEntity, invalidate } from '../store/cache';
@@ -122,11 +124,14 @@ export function BuilderConnected(): ReactElement {
   const idle = name === undefined || cwd === undefined || isCreateMode;
   const loadKey =
     idle || cwd === undefined || name === undefined ? 'builder:idle' : K.workflow(cwd, name);
-  const loadView = useEntity<LoadedWorkflow | null>(loadKey, () =>
+  const loadView = useEntity<WorkflowLoad | null>(loadKey, () =>
     idle || cwd === undefined || name === undefined
-      ? Promise.resolve<LoadedWorkflow | null>(null)
+      ? Promise.resolve<WorkflowLoad | null>(null)
       : loadWorkflow(name, cwd)
   );
+  const loaded = loadView.data ?? null;
+  const installedPack = loaded !== null && isInstalledPackWorkflow(loaded);
+  const loadedDefinition = loaded !== null && !isInstalledPackWorkflow(loaded) ? loaded : null;
 
   // Resolve the workflow under edit (seed in create mode, else the server load).
   // Memoized on stable inputs (location-state seed, cache object) so it does NOT
@@ -136,15 +141,13 @@ export function BuilderConnected(): ReactElement {
   // `saveTargetFor` helpers) without a cast at this seam.
   const loadedSource: Workflow['source'] = isCreateMode
     ? 'project'
-    : (loadView.data?.source ?? 'project');
+    : (loadedDefinition?.source ?? 'project');
 
   const imported = useMemo<{ workflow: BuilderWorkflow; issues: Issue[] } | null>(() => {
     if (isCreateMode && createSeed !== undefined) return { workflow: createSeed, issues: [] };
-    if (loadView.data?.definition !== undefined) {
-      return fromWorkflowDefinition(loadView.data.definition);
-    }
+    if (loadedDefinition !== null) return fromWorkflowDefinition(loadedDefinition.definition);
     return null;
-  }, [isCreateMode, createSeed, loadView.data]);
+  }, [isCreateMode, createSeed, loadedDefinition]);
 
   // Editing state — reset whenever the imported workflow changes (workflow switch).
   const [currentWorkflow, setCurrentWorkflow] = useState<BuilderWorkflow | null>(null);
@@ -604,6 +607,17 @@ export function BuilderConnected(): ReactElement {
               start editing, or create a new one.
             </EmptyState>
           )
+        ) : installedPack ? (
+          <EmptyState>
+            <p>
+              <span className="font-mono">{name}</span> is installed from a pack — read-only.
+            </p>
+            <p className="mt-2">
+              The builder cannot edit it. Update the pack with{' '}
+              <span className="font-mono">archon plugin update</span>, or make an editable project
+              copy with <span className="font-mono">archon plugin copy</span>.
+            </p>
+          </EmptyState>
         ) : imported !== null && currentWorkflow !== null ? (
           <BuilderPage
             key={editorKey}

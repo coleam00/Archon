@@ -607,7 +607,7 @@ function collectGateAndLoopDeprecationWarnings(
     const message =
       `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
       "Declare 'loop_group.until_bash' instead — it can read a body node's structured " +
-      'output (e.g. \'test $body-node.output.field = "true"\') (#2707 step 3). While ' +
+      'output (e.g. \'value=$body-node.output.field; test "$value" = "true"\') (#2707 step 3). While ' +
       "supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone " +
       'signal line.';
     warnings.push(message);

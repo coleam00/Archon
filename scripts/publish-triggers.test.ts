@@ -40,6 +40,6 @@ test('publish workflow preserves docker metadata tag definitions and flavor', ()
 
 test('publish workflow targets multi-platform build on ubuntu-latest', () => {
   expect(workflow).toMatch(/runs-on:\s*ubuntu-latest/);
-  expect(workflow).toContain('platforms: linux/amd64,linux/arm64');
+  expect(workflow).toContain('platforms: &publish-platforms linux/amd64,linux/arm64');
   expect(workflow).toContain('push: true');
 });

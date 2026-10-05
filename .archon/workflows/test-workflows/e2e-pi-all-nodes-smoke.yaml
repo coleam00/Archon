@@ -60,7 +60,9 @@ nodes:
 
   # 7. depends_on + $nodeId.output substitution
   - id: downstream
-    bash: "echo downstream got: $prompt-node.output"
+    bash: |
+      value=$prompt-node.output
+      echo "downstream got: $value"
     depends_on: [prompt-node]
 
   # 8. when: conditional (JSON dot-access on upstream output)
@@ -89,15 +91,24 @@ nodes:
           fail=1
         fi
       }
-      check prompt-node "$prompt-node.output"
-      check command-node "$command-node.output"
-      check loop-node "$loop-node.output"
-      check bash-json-node "$bash-json-node.output"
-      check script-bun-node "$script-bun-node.output"
-      check script-python-node "$script-python-node.output"
-      check downstream "$downstream.output"
-      check gated "$gated.output"
-      check merge "$merge.output"
+      value=$prompt-node.output
+      check prompt-node "$value"
+      value=$command-node.output
+      check command-node "$value"
+      value=$loop-node.output
+      check loop-node "$value"
+      value=$bash-json-node.output
+      check bash-json-node "$value"
+      value=$script-bun-node.output
+      check script-bun-node "$value"
+      value=$script-python-node.output
+      check script-python-node "$value"
+      value=$downstream.output
+      check downstream "$value"
+      value=$gated.output
+      check gated "$value"
+      value=$merge.output
+      check merge "$value"
       if [ "$fail" -eq 1 ]; then exit 1; fi
       echo "PASS: all 9 node types produced output"
     depends_on: [merge, loop-node, command-node]

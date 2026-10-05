@@ -27,7 +27,7 @@ export interface Run {
   /** DB id of the conversation this run belongs to. */
   conversationId: string | null;
   /**
-   * Platform-level conversation id (e.g. `cli-1776237248436-q61o4h`). This is
+   * Platform-level conversation id (e.g. `cli-1776237248436-9f86d081884c7d659a2feaa0c55ad015`). This is
    * the id the `/api/conversations/:id/messages` route accepts in its URL
    * path — the server looks conversations up by platform id, not DB id, on
    * that endpoint. Use this when fetching the run's messages.

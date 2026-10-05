@@ -15,6 +15,7 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { IsolationResolver } from './resolver';
+import { MissingProjectDirectoryError } from './errors';
 import type { IsolationResolverDeps } from './resolver';
 import type { IIsolationStore } from './store';
 import type { IsolationEnvironmentRow, IsolatedEnvironment, IsolationRequest } from './types';
@@ -454,6 +455,35 @@ describe('IsolationResolver', () => {
     if (result.status === 'blocked') {
       expect(result.reason).toBe('creation_failed');
       expect(result.userMessage).toContain('Permission denied');
+    }
+  });
+
+  test('missing project directory — returns blocked with recovery guidance', async () => {
+    const failure = new MissingProjectDirectoryError('/repos/gone', 'acme/widgets');
+    const resolver = createResolver({
+      provider: {
+        ...makeMockProvider(),
+        create: async () => {
+          throw failure;
+        },
+      },
+    });
+
+    const result = await resolver.resolve({
+      existingEnvId: null,
+      codebase: { ...defaultCodebase, defaultCwd: '/repos/gone', name: 'acme/widgets' },
+      hints: { workflowType: 'issue', workflowId: '400' },
+      platformType: 'web',
+    });
+
+    expect(result.status).toBe('blocked');
+    if (result.status === 'blocked') {
+      expect(result.reason).toBe('creation_failed');
+      expect(result.userMessage).toContain(failure.message);
+      expect(result.userMessage).toContain('/repos/gone');
+      expect(result.userMessage).toContain('acme/widgets');
+      expect(result.userMessage).toContain('Restore');
+      expect(result.userMessage).toContain('re-register');
     }
   });
 

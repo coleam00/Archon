@@ -5,10 +5,11 @@
  * Full integration tests would require mocking the database and commands.
  */
 import { SqliteAdapter } from '@archon/core/db/adapters/sqlite';
-import { describe, it, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, it, expect, beforeAll, afterAll, spyOn } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
+import { generateConversationId } from './utils/conversation-id';
 import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -1000,13 +1001,6 @@ describe('CLI argument parsing', () => {
 });
 
 describe('Conversation ID generation', () => {
-  // Test the generateConversationId pattern
-  const generateConversationId = (): string => {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8);
-    return `cli-${String(timestamp)}-${random}`;
-  };
-
   it('should generate ID with cli- prefix', () => {
     const id = generateConversationId();
     expect(id.startsWith('cli-')).toBe(true);
@@ -1028,19 +1022,22 @@ describe('Conversation ID generation', () => {
     const id = generateConversationId();
     const parts = id.split('-');
 
-    // Random part should be alphanumeric, 6 chars
-    expect(parts[2]).toMatch(/^[a-z0-9]+$/);
-    expect(parts[2].length).toBeGreaterThanOrEqual(1);
-    expect(parts[2].length).toBeLessThanOrEqual(6);
+    expect(parts[2]).toMatch(/^[a-f0-9]{32}$/);
   });
 
-  it('should generate unique IDs', () => {
-    const ids = new Set<string>();
-    for (let i = 0; i < 100; i++) {
-      ids.add(generateConversationId());
+  it('should generate 100 unique IDs in the same millisecond even with repeated Math.random values', () => {
+    const clock = spyOn(Date, 'now').mockReturnValue(123);
+    const random = spyOn(Math, 'random').mockReturnValue(0.5);
+    try {
+      const ids = new Set<string>();
+      for (let i = 0; i < 100; i++) {
+        ids.add(generateConversationId());
+      }
+      expect(ids.size).toBe(100);
+    } finally {
+      clock.mockRestore();
+      random.mockRestore();
     }
-    // All 100 IDs should be unique
-    expect(ids.size).toBe(100);
   });
 });
 

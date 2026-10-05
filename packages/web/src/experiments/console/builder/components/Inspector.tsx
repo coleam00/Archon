@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 import { NODE_ID_PATTERN } from '@/lib/node-ref';
-import { VARIANT_REGISTRY } from '../variants';
+import { nodeCapabilities, nodeLabel } from '../variants';
 import type { BaseFields, BuilderNode } from '../types';
 import { CheckboxField, Field, SelectField, TextField } from './inspector/fields';
 import { PromptFields } from './inspector/PromptFields';
@@ -117,6 +117,14 @@ function VariantFields({
           }}
         />
       );
+    case 'opaque':
+      return (
+        <Field label="Read-only — saved unchanged">
+          <pre className="max-h-[320px] overflow-auto rounded-[8px] border border-border bg-surface-inset p-2 font-mono text-[11px] text-text-secondary">
+            {JSON.stringify(node.data.fields, null, 2)}
+          </pre>
+        </Field>
+      );
   }
 }
 
@@ -146,7 +154,8 @@ export function Inspector({
     );
   }
 
-  const registry = VARIANT_REGISTRY[node.variant];
+  const label = nodeLabel(node);
+  const capabilities = nodeCapabilities(node);
   const patchBase = (patch: Partial<BaseFields>): void => {
     onPatch({ ...node, base: { ...node.base, ...patch } });
   };
@@ -181,8 +190,8 @@ export function Inspector({
           className="h-5 w-[3px] shrink-0 rounded-sm"
           style={{ background: `var(--node-${node.variant})` }}
         />
-        <span className="text-[13px] font-semibold text-text-primary">{registry.label}</span>
-        {registry.capabilities.requiresInteractive === true ? (
+        <span className="text-[13px] font-semibold text-text-primary">{label}</span>
+        {capabilities.requiresInteractive === true ? (
           <span className="rounded-full border border-border px-1.5 py-px font-mono text-[9px] uppercase tracking-widest text-text-tertiary">
             interactive
           </span>
@@ -244,7 +253,7 @@ export function Inspector({
         }}
       />
 
-      {registry.capabilities.honorsAiFields ? (
+      {capabilities.honorsAiFields ? (
         <>
           <TextField
             label="Provider"

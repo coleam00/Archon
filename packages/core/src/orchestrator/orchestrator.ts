@@ -68,7 +68,7 @@ import type { ResolvedWorkflow, WorkflowSource } from '@archon/workflows/schemas
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import { createWorkflowDeps } from '../workflows/store-adapter';
-import { createChildWorktreeResolver } from '../workflows/child-isolation-resolver';
+import { createCodebaseChildResolver } from '../workflows/child-isolation-resolver';
 import {
   cleanupToMakeRoom,
   getWorktreeStatusBreakdown,
@@ -397,10 +397,7 @@ async function dispatchBackgroundWorkflowOwned(
   let workerCwd: string;
   let workerCutFromCommit: string | undefined;
   let codebaseBaseBranch: string | undefined;
-  // Per-child isolation resolver (#2121 slice 2, PR-A): a `workflow:` node with
-  // `isolation: 'worktree'` gets its own worktree per child. Built for git-repo
-  // codebases only; undefined otherwise → the engine fails such a node fast.
-  let resolveChildIsolation: ReturnType<typeof createChildWorktreeResolver> | undefined;
+  let resolveChildIsolation: ReturnType<typeof createCodebaseChildResolver>;
   if (ctx.codebaseId) {
     const codebase = await getCodebase(ctx.codebaseId);
     if (!codebase) {
@@ -409,16 +406,11 @@ async function dispatchBackgroundWorkflowOwned(
       );
     }
     codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
-    if (codebase.kind !== 'folder') {
-      resolveChildIsolation = createChildWorktreeResolver({
-        codebaseId: codebase.id,
-        codebaseName: codebase.name,
-        canonicalRepoPath: codebase.default_cwd,
-        baseBranch: codebaseBaseBranch,
-        createdByPlatform: ctx.platform.getPlatformType(),
-        createdByUserId: ctx.userId,
-      });
-    }
+    resolveChildIsolation = createCodebaseChildResolver(codebase, {
+      baseBranch: codebaseBaseBranch,
+      createdByPlatform: ctx.platform.getPlatformType(),
+      createdByUserId: ctx.userId,
+    });
     if (workflow.worktree?.enabled === false) {
       // Respect an explicit worktree opt-out: skip isolation and run in the parent's cwd.
       getLog().info(

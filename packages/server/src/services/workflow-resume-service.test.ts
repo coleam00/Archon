@@ -61,7 +61,7 @@ class MockWorkflowNotResumableError extends Error {
 }
 
 mock.module('@archon/core', () => ({
-  createChildWorktreeResolver: mock(() => undefined),
+  createCodebaseChildResolver: mock(() => undefined),
   createWorkflowDeps: mock(() => mockWorkflowDeps),
 }));
 

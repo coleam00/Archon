@@ -6,6 +6,7 @@ import { mergeTokenUsage, type TokenUsage } from '@archon/providers/types';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { NODE_STATE_EVENT_TYPES, type NodeStateEventType } from '@archon/workflows/store';
+import { inMemoryDagResumeSnapshot } from '@archon/workflows/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1352,6 +1353,63 @@ describe('workflow-events', () => {
         expect(snapshot.costUsd).toBe(2);
       }
     );
+
+    test('selects the same reusable outputs and usage as the workflows in-memory store double', async () => {
+      // Typed rows carry the scope in `accounting`, not the legacy `aggregate` marker.
+      const typedUsage = (accounting: 'node' | 'aggregate', input: number, cost_usd: number) => ({
+        node: { id: 'worker', kind: 'exec', runtime: 'sh' },
+        invocation: {
+          id: `${accounting}-invocation`,
+          startedAt: '2026-09-22T10:00:00Z',
+          loopPath: [],
+        },
+        attempt: { id: `${accounting}-attempt`, startedAt: '2026-09-22T10:00:00Z' },
+        binding: {},
+        timing: { startedAt: '2026-09-22T10:00:00Z' },
+        spend: {
+          tokens: { source: 'unavailable', reason: 'not_applicable' },
+          costUsd: { source: 'unavailable', reason: 'not_applicable' },
+          stopReason: { source: 'unavailable', reason: 'not_applicable' },
+          numTurns: { source: 'unavailable', reason: 'not_applicable' },
+        },
+        accounting,
+        tokens: { input, output: 1 },
+        cost_usd,
+      });
+      const rows = [
+        { step_name: 'text', event_type: 'node_completed', data: { node_output: 'kept' } },
+        { step_name: 'number', event_type: 'node_completed', data: { node_output: 42 } },
+        { step_name: 'object', event_type: 'node_completed', data: { node_output: { a: 1 } } },
+        { step_name: 'null', event_type: 'node_completed', data: { node_output: null } },
+        { step_name: 'missing', event_type: 'node_completed', data: {} },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'superseded', event_type: 'node_completed', data: { node_output: 7 } },
+        { step_name: 'restarted', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'restarted', event_type: 'node_started', data: {} },
+        { step_name: 'failed', event_type: 'node_completed', data: { node_output: 'old' } },
+        { step_name: 'failed', event_type: 'node_failed', data: { error: 'boom' } },
+        { step_name: 'own', event_type: 'node_completed', data: typedUsage('node', 3, 0.5) },
+        {
+          step_name: 'rollup',
+          event_type: 'node_completed',
+          data: typedUsage('aggregate', 30, 5),
+        },
+      ];
+      mockQuery.mockResolvedValueOnce(createQueryResult(rows));
+
+      const production = await getDagResumeSnapshot('run-double');
+      const double = inMemoryDagResumeSnapshot(
+        rows.map(row => ({ workflow_run_id: 'run-double', ...row })),
+        'run-double'
+      );
+
+      expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
+      expect(double.completedNodeOutputs).toEqual(production.completedNodeOutputs);
+      expect(production.tokens).toEqual({ input: 3, output: 1 });
+      expect(production.costUsd).toBe(0.5);
+      expect(double.tokens).toEqual(production.tokens);
+      expect(double.costUsd).toBe(production.costUsd);
+    });
 
     test('returns an empty snapshot when no events exist', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));

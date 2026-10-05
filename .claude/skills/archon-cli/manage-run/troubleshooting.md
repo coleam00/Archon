@@ -101,7 +101,7 @@ See [archon.diy/getting-started/installation/](https://archon.diy/getting-starte
 Three possibilities:
 
 1. **The AI is actually working.** Check `~/.archon/workspaces/<owner>/<repo>/logs/<run-id>.jsonl` — if you see recent `tool` or `assistant` events in the tail, it's fine. Wait.
-2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "No Autonomous Lifecycle Mutation" rule — `CLAUDE.md`). Transition it manually:
+2. **The server crashed and left an orphan row.** Server startup no longer auto-fails orphaned `running` rows (per the "Do not guess lifecycle ownership" rule — `AGENTS.md`). Transition it manually:
    - Any cancel (Web UI Cancel, `archon workflow cancel <run-id>`, chat `/workflow cancel [id]`) stops a live owner process before marking the row cancelled, and refuses when no owner answers — an orphan row gets that refusal, with the host and pid it recorded
    - Verified orphan: `archon workflow abandon <run-id>` (or Abandon in the Web UI after the refused Cancel, or `/workflow abandon <id>` in chat) — marks the row cancelled
 3. **A node is past its `idle_timeout`.** The default is 30 minutes of complete silence (the timer resets on every streamed message — it's a deadlock detector, not a work limiter). Override with per-node `idle_timeout` (ms) if a node legitimately goes quiet for longer.

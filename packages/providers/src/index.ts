@@ -48,6 +48,7 @@ export {
   validateStructuredOutput,
   formatSchemaErrors,
   findStrictSchemaIssues,
+  isObjectSchemaNode,
   type StrictSchemaIssue,
   type StructuredValidationResult,
 } from './shared/structured-output';

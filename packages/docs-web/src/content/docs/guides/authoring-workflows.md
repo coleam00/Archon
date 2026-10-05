@@ -612,25 +612,41 @@ substitution instead of splicing in the failed producer's leftover output; a `ba
 `prompt:`/`command:` body must not assume a dependency succeeded just because it was
 allowed to run (`trigger_rule: all_done`).
 
-:::caution[Double-quoting `$node.output` in `bash:` nodes is a silent footgun]
-In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected pre-quoted by Archon. For small outputs, values are **single-quoted inline** — the quoting is already provided by the substitution. For outputs exceeding 32 KB, Archon spills to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). Wrapping the substitution in double quotes breaks the **small (inline) case**: `var="$n.output"` becomes `var="'value'"`, embedding the literal single-quotes as part of the value. (For the large `$(cat ...)` case, double-quoting is harmless — `var="$(cat ...)"` is correct bash — but you can't know the output's size at author time, so the rule is unconditional: never double-quote.)
+:::caution[Assign output references, then quote the variable in shell bodies]
+In `bash:` and `until_bash:`, Archon injects `$nodeId.output`, `$nodeId.output.field`, and `$LOOP_PREV.nodeId.output[.field]` using two forms:
+
+- Small string outputs are single-quoted inline, such as `'a b   c *'`.
+- Outputs exceeding 32 KB spill to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and become `$(cat '<path>')`. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon).
+
+A bare argument such as `printf '%s' $emit.output` works with the inline form, but the unquoted command substitution in the spill form splits words and expands globs. Wrapping the reference in double quotes breaks the inline form instead: `value="$emit.output"` becomes `value="'a b   c *'"`, preserving the single quotes as data. Single quotes around a reference also produce the wrong value.
+
+**Rule: assign, then quote the variable.** Keep the reference as the whole, unquoted assignment value; quote the shell variable wherever you use it:
 
 ```bash
-# WRONG — produces status="'ok'" (single quotes become part of the value)
-status="$emit.output.status"
-[ "$status" = "ok" ]   # → always false
+value=$emit.output
+printf '%s' "$value"
 
-# CORRECT — leave unquoted; bash assigns: status=ok
 status=$emit.output.status
-[ "$status" = "ok" ]   # → true
+[ "$status" = "ok" ]
 ```
 
-**Rule:** use `var=$node.output.field`, never `var="$node.output.field"`. This applies whether the output is small (single-quoted inline) or large (`$(cat ...)`). Numeric and boolean fields are injected raw (without quotes), so double-quoting accidentally "works" for them — making the bug intermittent and hard to spot.
+Assignments suppress word splitting and glob expansion in both regimes. `export value=$emit.output` and `local value=$emit.output` are also safe. Numeric and boolean fields are injected raw, but use the same idiom so a change to a string value remains safe.
+
+`archon validate workflows` warns about quoted references and bare references outside complete assignments. Heredoc bodies remain outside this check.
 :::
 
 ### `output_format` for Structured JSON
 
 Use `output_format` to enforce JSON output from an AI node. For Claude, the schema is passed via the SDK's `outputFormat` option and `structured_output` is used directly. For Codex, the schema is sent as the turn's `outputSchema` and the agent's final JSON message is used. Both ensure clean JSON for `when:` conditions and `$nodeId.output` substitution:
+
+`archon validate workflows` warns when an enforced object schema declares `properties`
+but has neither a non-empty `required` array nor `additionalProperties: false`. Such a
+schema can accept missing fields or a schema-echo response, leaving downstream field
+references empty and skipping gated work. Require the fields downstream nodes need;
+use `additionalProperties: false` to reject undeclared fields, and string `enum` values
+to constrain decisions. The warning leaves runtime semantics unchanged: intentionally
+optional fields and open-record maps remain supported. Codex strict-mode errors take
+precedence over this warning.
 
 > **Codex strict-mode normalization.** OpenAI's Structured Outputs validator rejects any object schema that doesn't set `additionalProperties: false`. Archon normalizes Codex schemas before sending them, injecting `additionalProperties: false` on every object node automatically — so write portable schemas and you won't notice. One caveat: an open-record `additionalProperties: { type: 'string' }` (or `additionalProperties: true`) is **replaced** with `false`, closing the object. OpenAI would reject the open form regardless, but the rewrite is logged (`codex.output_format_open_record_closed`) so it isn't silent. Open-record maps aren't supported for Codex structured output.
 >

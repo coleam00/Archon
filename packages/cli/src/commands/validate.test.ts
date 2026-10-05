@@ -123,6 +123,38 @@ describe('validateWorkflowsCommand', () => {
     );
   });
 
+  test('loose output schema warns and exits successfully', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+      workflows: [
+        makeTestWorkflowWithSource(
+          {
+            name: 'loose-output',
+            provider: 'claude',
+            nodes: [
+              {
+                id: 'classify',
+                prompt: 'decide',
+                output_format: {
+                  type: 'object',
+                  properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+                },
+              },
+            ],
+          },
+          'project'
+        ),
+      ],
+      errors: [],
+    });
+
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(0);
+    const output = JSON.stringify(mockConsoleLog.mock.calls);
+    expect(output).toContain("Node 'classify'");
+    expect(output).toContain('required');
+    expect(output).toContain('additionalProperties: false');
+    expect(output).toContain('1 valid, 0 with errors');
+  });
+
   test('rejects bundled @custom model refs via discovered source', async () => {
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [
