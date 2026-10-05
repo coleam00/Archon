@@ -22,8 +22,8 @@ archon user role <id> member
 Use the database configured for the install you want to manage (`DATABASE_URL` for PostgreSQL, or `ARCHON_HOME` for SQLite). For Docker:
 
 ```bash
-docker compose exec app bun run cli user list
-docker compose exec app bun run cli user role <id> admin
+docker compose exec -u appuser app bun run cli user list
+docker compose exec -u appuser app bun run cli user role <id> admin
 ```
 
 Upgrading preserves existing roles, which defaulted to `admin`. The database default remains `admin` so older binaries can still insert users without a role. To prepare an existing multi-user install, keep intended admins and deliberately demote other users with `archon user role <id> member`.

@@ -27,8 +27,6 @@ export const userRoleSchema = z.enum(['admin', 'member']);
 
 export type UserRole = z.infer<typeof userRoleSchema>;
 
-export const DEFAULT_NEW_USER_ROLE: UserRole = 'member';
-
 export const userRowSchema = z.object({
   id: z.string(),
   display_name: z.string().nullable(),

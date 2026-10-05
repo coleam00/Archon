@@ -11,7 +11,7 @@
  * — the UNIQUE constraint causes the second writer to throw, and we recover
  * by re-SELECTing the winner's identity row.
  */
-import { DEFAULT_NEW_USER_ROLE, identityPlatformSchema, userRoleSchema } from '../schemas/user';
+import { identityPlatformSchema, userRoleSchema } from '../schemas/user';
 import { pool, getDatabase, getDialect } from './connection';
 import type { IdentityPlatform, User, UserIdentity, UserRole } from '../types';
 import { createLogger } from '@archon/paths';
@@ -99,7 +99,7 @@ export async function findOrCreateUserByPlatformIdentity(
     return await db.withTransaction(async q => {
       const userResult = await q<User>(
         'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
-        [displayName ?? null, DEFAULT_NEW_USER_ROLE]
+        [displayName ?? null, userRoleSchema.enum.member]
       );
       const user = userResult.rows[0];
       if (!user) {
@@ -182,7 +182,7 @@ async function repairOrphanedIdentity(
     return await db.withTransaction(async q => {
       const userResult = await q<User>(
         'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
-        [displayName ?? null, DEFAULT_NEW_USER_ROLE]
+        [displayName ?? null, userRoleSchema.enum.member]
       );
       const user = userResult.rows[0];
       if (!user) {

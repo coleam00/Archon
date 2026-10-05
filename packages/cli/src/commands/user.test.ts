@@ -52,7 +52,9 @@ test('role changes persist, including demoting every admin', async () => {
     expect(result.stdout).toContain(`${id}\tmember`);
   }
   expect((await run('list')).stdout).toContain('operator-user\tmember');
-  expect((await run('role', 'operator-user', 'admin')).code).toBe(0);
+  const promotion = await run('role', 'operator-user', 'admin');
+  expect(promotion.code).toBe(0);
+  expect(promotion.stdout).toContain('operator-user\tadmin');
 });
 
 test('unknown ids, invalid roles and missing arguments fail clearly', async () => {
