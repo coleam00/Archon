@@ -80,7 +80,7 @@ import { applyWorkflowRunConfigLayer } from '@archon/workflows/run-config';
 import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 'node:fs';
 import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createCliWorkflowDeps } from '../utils/workflow-deps';
 import { toHydratedTimestamp } from '@archon/core/db/timestamps';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -1701,7 +1701,7 @@ async function runWorkflowWithOwnedSource(
 
   let continuation: ResolvedContinuation | undefined;
   if (continuationRun !== undefined) {
-    continuation = await resolveContinuationWorkflow(createWorkflowDeps(), continuationRun, cwd);
+    continuation = await resolveContinuationWorkflow(createCliWorkflowDeps(), continuationRun, cwd);
   }
 
   // A continuation never captures. With a record it reads that record (above); without
@@ -1783,7 +1783,7 @@ async function runWorkflowWithOwnedSource(
   let originalStagedRoot: string | undefined;
   if (!isContinuation && !options.dryRun && !options.stubsInitPath) {
     try {
-      preparedSource = await prepareWorkflowSource(createWorkflowDeps(), {
+      preparedSource = await prepareWorkflowSource(createCliWorkflowDeps(), {
         sourceRoot: effectiveDiscoveryCwd,
         // Keep the capture filed under the run it belongs to when the row already exists.
         ...(detachedPreCreatedRun ? { runId: detachedPreCreatedRun.id } : {}),
@@ -1839,7 +1839,7 @@ async function runWorkflowWithOwnedSource(
   // adoption changes only its execution target. The caller recaptures only the default.
   const recaptureForLane = async (sourceRoot: string): Promise<void> => {
     try {
-      const replacement = await prepareWorkflowSource(createWorkflowDeps(), {
+      const replacement = await prepareWorkflowSource(createCliWorkflowDeps(), {
         sourceRoot,
         ...(detachedPreCreatedRun ? { runId: detachedPreCreatedRun.id } : {}),
       });
@@ -2237,7 +2237,7 @@ async function runWorkflowWithOwnedSource(
     codebaseId?: string
   ): Promise<PreparedRunAiConfiguration> => {
     if (!workflow) throw new Error('Workflow disappeared before credential preflight');
-    const prepared = await prepareRunAiConfiguration(createWorkflowDeps(), workflow, configCwd, {
+    const prepared = await prepareRunAiConfiguration(createCliWorkflowDeps(), workflow, configCwd, {
       codebaseId,
       userId: detachedPreCreatedRun ? (detachedPreCreatedRun.user_id ?? undefined) : cliUserId,
       ...(isContinuation && continuationRun
@@ -2249,7 +2249,7 @@ async function runWorkflowWithOwnedSource(
               : {}),
           }),
     });
-    await assertRunCredentials(createWorkflowDeps(), prepared);
+    await assertRunCredentials(createCliWorkflowDeps(), prepared);
     return prepared;
   };
 
@@ -2925,7 +2925,7 @@ async function runWorkflowWithOwnedSource(
           // be at its final path. Move it there now; executeWorkflow recomputes the same
           // destination and skips its own move.
           if (preparedSource) {
-            preparedSource = await finalizeWorkflowSource(createWorkflowDeps(), preparedSource, {
+            preparedSource = await finalizeWorkflowSource(createCliWorkflowDeps(), preparedSource, {
               cwd: folderCodebase.defaultCwd,
               codebaseId: folderCodebase.id,
             });
@@ -2940,7 +2940,7 @@ async function runWorkflowWithOwnedSource(
           let mounts: { sourceMount: string; artifactsMount: string } | undefined;
           if (preparedSource) {
             const { artifactsDir } = await resolveProjectPaths(
-              createWorkflowDeps(),
+              createCliWorkflowDeps(),
               folderCodebase.defaultCwd,
               preparedSource.runId,
               folderCodebase.id
@@ -3266,7 +3266,7 @@ async function runWorkflowWithOwnedSource(
 
   // The lookup-by-(workflowName, cwd) was already done above for worktree-path
   // resolution; reuse that result rather than querying twice.
-  const deps = createWorkflowDeps();
+  const deps = createCliWorkflowDeps();
   const engine = new InProcessWorkflowEngine(deps);
   let result: Awaited<ReturnType<InProcessWorkflowEngine['submit']>> | undefined;
   // A genuine container-teardown failure captured in the finally, rethrown AFTER
@@ -3755,6 +3755,7 @@ export async function workflowRunCommand(
       // Inside the try so a refused process-group claim still records the `pending` row
       // the launcher handed over (#2872) instead of stranding it.
       if (detachedProcessOwner) assertDetachedRunProcessOwner();
+      createCliWorkflowDeps();
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource(
           owner,
@@ -5439,6 +5440,7 @@ async function runDetachedControlCommand(
   precheck: () => Promise<WorkflowRun>
 ): Promise<void> {
   try {
+    createCliWorkflowDeps();
     const run = await spelledForCli(precheck);
     // The caller's --cwd, already resolved by cli.ts — NOT process.cwd(). The
     // appended --cwd is last-wins on the child's argv, so discarding it here

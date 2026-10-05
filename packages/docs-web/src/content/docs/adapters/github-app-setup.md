@@ -98,6 +98,12 @@ WEBHOOK_SECRET=<same value as on the GitHub side>
 #                                    # repo after a restart.
 ```
 
+CLI workflow run, `--detach`, resume, wake, and signal use `GITHUB_APP_ID` plus either private-key setting. They do not require `WEBHOOK_SECRET`; that setting is required for the server's webhook adapter. Each detached child initializes its own provider from the inherited configuration.
+
+Incomplete App settings, invalid App or installation IDs, an unusable RSA private key, and a malformed per-user encryption key fail before workflow execution. With no App settings, CLI behavior is unchanged. CLI runs follow the same per-user policy as server runs: connected user credentials override the bot, and unconnected users have GitHub credentials scrubbed unless org fallback is explicitly enabled.
+
+Each workflow execution, including a resumed segment, resolves the codebase repository's installation token. The provider caches fresh tokens in memory and refreshes them near expiry; tokens are not cached on disk. A node's environment stays fixed during one execution, so this does not rotate tokens inside a workflow that runs longer than the token lifetime.
+
 ### Inline private key (alternative)
 
 If you can't write a file (e.g. a managed PaaS), set the PEM contents inline:

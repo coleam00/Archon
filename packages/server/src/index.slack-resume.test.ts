@@ -197,15 +197,12 @@ mock.module('@archon/core', () => ({
   },
   logConfig: (): void => undefined,
   getPort: async (): Promise<number> => 12345,
-  createGitHubAppAuthProvider: (): never => {
-    throw new Error('unexpected GitHub App initialization');
+  initializeWorkflowGitHubAppAuth: (): never => {
+    throw new Error('Unexpected App bootstrap');
   },
-  loadAppPrivateKey: (): string => 'unused',
-  registerGitHubAppAuthProvider: (): void => undefined,
   isPerUserGitHubEnabled: (): boolean => false,
   isPerUserProviderKeysEnabled: (): boolean => false,
   getDatabaseType: (): string => 'sqlite',
-  assertEncryptionKeyAtBoot: (): void => undefined,
   assertProviderKeysKeyAtBoot: (): void => undefined,
   getDecryptedAccessToken: async (): Promise<undefined> => undefined,
 }));
