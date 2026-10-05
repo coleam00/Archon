@@ -405,3 +405,20 @@ Archon refuses the turn instead of passing the missing path to the AI provider. 
 2. **`/worktree remove`** is offered *only* when the conversation is still bound to an isolation environment. It detaches and returns you to the project root. When the environment reference has already been cleared, this command reports `This conversation is not using a worktree.`, which is why it is not suggested in that state.
 
 The refusal writes nothing and changes no state, so a transient cause (a mount blip, a directory mid-move) costs one refused message and nothing else — the next turn re-evaluates from scratch. Operators can find these events in the logs under `orchestrator.conversation_cwd_missing`, which records the conversation id, the path, and the isolation environment id.
+
+## Stored project path is relative
+
+Workflow runs and isolation cleanup reject a registration whose stored `default_cwd`
+is not absolute before using that path for Git or removing environments. The error
+names the project and gives a recovery command. Changing the invocation directory
+does not repair the registration.
+
+In Archon chat, supply the project's actual absolute path:
+
+```text
+/register-project "my-project" /absolute/path/to/project
+```
+
+For a legacy relative path, this updates the existing registration and preserves its
+ID, kind, settings, and history. Archon does not guess a replacement or rewrite
+legacy rows automatically.

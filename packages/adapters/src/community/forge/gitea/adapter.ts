@@ -646,7 +646,7 @@ export class GiteaAdapter implements IPlatformAdapter {
       const looksLikeWorktreePath = existing.default_cwd.includes('/worktrees/');
       if (looksLikeWorktreePath || (await isWorktreePath(existing.default_cwd))) {
         getLog().info({ codebaseName: existing.name, canonicalPath }, 'stale_worktree_path_fixed');
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
+        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
       }
 

@@ -183,6 +183,7 @@ const mockCreateCodebase = mock<typeof CodebaseDb.createCodebase>(() =>
   })
 );
 const mockUpdateCodebase = mock<typeof CodebaseDb.updateCodebase>(() => Promise.resolve());
+const mockDeleteCodebase = mock<typeof CodebaseDb.deleteCodebase>(() => Promise.resolve());
 class MockCodebaseNotFoundError extends Error {
   constructor(public codebaseId: string) {
     super(`Codebase ${codebaseId} not found`);
@@ -192,8 +193,15 @@ class MockCodebaseNotFoundError extends Error {
 mock.module('../db/codebases', () => ({
   getCodebase: mockGetCodebase,
   listCodebases: mockListCodebases,
+  listCodebaseRegistrations: async () =>
+    (await mockListCodebases()).map(row => ({
+      id: row.id,
+      name: row.name,
+      stored_default_cwd: row.default_cwd,
+    })),
   createCodebase: mockCreateCodebase,
   updateCodebase: mockUpdateCodebase,
+  deleteCodebase: mockDeleteCodebase,
   CodebaseNotFoundError: MockCodebaseNotFoundError,
 }));
 
@@ -5594,9 +5602,12 @@ describe('handleMessage — /update-project dispatch', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/update-project my-app /');
 
-    expect(mockUpdateCodebase).toHaveBeenCalledWith('id-my-app', {
-      default_cwd: await canonicalizeProjectPath('/'),
-    });
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
+      {
+        default_cwd: await canonicalizeProjectPath('/'),
+      }
+    );
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('updated');
     expect(msg).toContain('/repos/my-app');
@@ -6814,5 +6825,67 @@ describe('continueResolvedGateRun — chat gate continuation source (#2646)', ()
       );
       expectSlackSpelling(messages);
     });
+  });
+});
+
+describe('handleMessage — legacy registration recovery', () => {
+  beforeEach(() => {
+    mockGetOrCreateConversation.mockReset();
+    mockGetOrCreateConversation.mockImplementation(() => Promise.resolve(makeConversation()));
+    mockUpdateCodebase.mockReset();
+    mockUpdateCodebase.mockImplementation(() => Promise.resolve());
+    mockCreateCodebase.mockClear();
+    mockListCodebases.mockReset();
+    mockParseCommand.mockReset();
+    mockParseCommand.mockReturnValue({ command: 'register-project', args: ['My-App', '/'] });
+  });
+
+  test('explicit re-registration repairs the existing ID despite another invalid registration', async () => {
+    mockListCodebases.mockResolvedValue([
+      { ...makeNamedCodebase('other'), default_cwd: 'other/path' },
+      { ...makeNamedCodebase('my-app'), default_cwd: 'projects/repo' },
+    ]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/register-project My-App /');
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
+      {
+        default_cwd: await canonicalizeProjectPath('/'),
+      }
+    );
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+    expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
+      're-registered'
+    );
+  });
+
+  test('update and removal remain available for legacy registrations', async () => {
+    mockListCodebases.mockResolvedValue([
+      { ...makeNamedCodebase('my-app'), default_cwd: 'projects/repo' },
+    ]);
+    mockParseCommand.mockReturnValue({ command: 'update-project', args: ['my-app', '/'] });
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
+      {
+        default_cwd: await canonicalizeProjectPath('/'),
+      }
+    );
+    mockDeleteCodebase.mockClear();
+    mockParseCommand.mockReturnValue({ command: 'remove-project', args: ['my-app'] });
+    await handleMessage(platform, 'conv-1', '/remove-project my-app');
+    expect(mockDeleteCodebase).toHaveBeenCalledWith('id-my-app');
+  });
+
+  test('an absolute duplicate remains unchanged', async () => {
+    mockListCodebases.mockResolvedValue([makeNamedCodebase('my-app')]);
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '/register-project My-App /');
+    expect(mockUpdateCodebase).not.toHaveBeenCalled();
+    expect(mockCreateCodebase).not.toHaveBeenCalled();
+    expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
+      'already registered'
+    );
   });
 });

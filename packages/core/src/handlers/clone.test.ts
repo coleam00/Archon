@@ -1525,7 +1525,7 @@ describe('name-based deduplication', () => {
 
     const result = await registerRepository('/home/user/repo');
 
-    expect(mockUpdateCodebase).toHaveBeenCalledWith('existing-id', { default_branch: 'trunk' });
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(existingCodebase, { default_branch: 'trunk' });
     expect(result.defaultBranch).toBe('trunk');
   });
 
@@ -1548,8 +1548,8 @@ describe('name-based deduplication', () => {
     expect(result.defaultCwd).toBe('/home/user/repo');
     // updateCodebase should NOT be called with default_cwd (no downgrade)
     if (mockUpdateCodebase.mock.calls.length > 0) {
-      const updateArgs = mockUpdateCodebase.mock.calls[0] as [string, { default_cwd?: string }];
-      expect(updateArgs[1].default_cwd).toBeUndefined();
+      const updateArgs = mockUpdateCodebase.mock.calls[0];
+      expect(updateArgs?.[1].default_cwd).toBeUndefined();
     }
   });
 
@@ -1574,11 +1574,8 @@ describe('name-based deduplication', () => {
 
     // updateCodebase should be called with repository_url
     expect(mockUpdateCodebase.mock.calls.length).toBe(1);
-    const updateArgs = mockUpdateCodebase.mock.calls[0] as [
-      string,
-      { repository_url?: string | null },
-    ];
-    expect(updateArgs[1].repository_url).toBe('https://github.com/owner/repo');
+    const updateArgs = mockUpdateCodebase.mock.calls[0];
+    expect(updateArgs?.[1].repository_url).toBe('https://github.com/owner/repo');
   });
 });
 

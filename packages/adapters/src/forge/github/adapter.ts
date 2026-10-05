@@ -887,7 +887,7 @@ export class GitHubAdapter implements IPlatformAdapter {
           { codebaseName: existing.name, canonicalPath },
           'github.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
+        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
       }
 

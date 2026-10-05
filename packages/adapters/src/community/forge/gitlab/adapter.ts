@@ -566,7 +566,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
           { codebaseName: existing.name, canonicalPath },
           'gitlab.stale_worktree_path_fixed'
         );
-        await codebaseDb.updateCodebase(existing.id, { default_cwd: canonicalPath });
+        await codebaseDb.updateCodebase(existing, { default_cwd: canonicalPath });
         existing.default_cwd = canonicalPath;
       }
 
