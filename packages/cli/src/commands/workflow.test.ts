@@ -577,16 +577,21 @@ mock.module('@archon/core/db/messages', () => ({
  * The row a `--detach` parent writes before forking (#2872). Only `id` is read by the
  * launch path; the child hands the whole row to `executeWorkflow` as `preCreatedRun`.
  */
-const mockCreateWorkflowRun = mock((data: { workflow_name: string; conversation_id: string }) =>
-  Promise.resolve({
-    id: 'run-detached-created',
-    workflow_name: data.workflow_name,
-    conversation_id: data.conversation_id,
-    status: 'pending',
-    working_path: null,
-    started_at: new Date(),
-    metadata: {},
-  })
+const mockCreateWorkflowRun = mock(
+  (data: {
+    workflow_name: string;
+    origin?: import('@archon/workflows/schemas/workflow-run').WorkflowRunOrigin;
+  }) =>
+    Promise.resolve({
+      origin: data.origin ?? null,
+      id: 'run-detached-created',
+      workflow_name: data.workflow_name,
+      conversation_id: data.origin?.conversationId ?? null,
+      status: 'pending',
+      working_path: null,
+      started_at: new Date(),
+      metadata: {},
+    })
 );
 
 const EMPTY_STATUS_COUNTS = {
@@ -6504,6 +6509,7 @@ describe('workflowLogsCommand', () => {
   let previousHome: string | undefined;
 
   const run = (status: 'pending' | 'running' | 'paused' | 'completed' | 'failed') => ({
+    origin: { conversationId: 'conv-1' },
     id: '11111111-2222-3333-4444-555555555555',
     workflow_name: 'transcript-test',
     conversation_id: 'conv-1',
@@ -7129,6 +7135,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       { id: FULL_ID },
     ]);
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: FULL_ID,
       workflow_name: 'implement',
       status: 'paused',
@@ -7156,6 +7163,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       { id: FULL_ID },
     ]);
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: FULL_ID,
       workflow_name: 'implement',
       status: 'paused',
@@ -7815,6 +7823,7 @@ describe('write command --json output', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const discovery = await import('@archon/workflows/workflow-discovery');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: 'run-ap',
       workflow_name: 'implement',
       status: 'paused',
@@ -7845,6 +7854,7 @@ describe('write command --json output', () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const discovery = await import('@archon/workflows/workflow-discovery');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'conv' },
       id: 'run-rj',
       workflow_name: 'implement',
       status: 'paused',
@@ -8728,6 +8738,7 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
   let consoleSpy: ReturnType<typeof spyOn>;
 
   const preCreatedRow = {
+    origin: { conversationId: 'conv-1' },
     id: 'run-precreated',
     workflow_name: 'plan',
     conversation_id: 'conv-1',
@@ -9101,6 +9112,7 @@ describe('workflowApproveCommand / workflowRejectCommand / workflowResumeCommand
   // the PARENT's cwd (it re-resolves by run-id), because a container run's
   // working_path is unreachable on the host and would ENOENT the spawn.
   const pausedRun = {
+    origin: { conversationId: 'conv-123' },
     id: 'run-123',
     status: 'paused',
     workflow_name: 'assist',
@@ -10242,6 +10254,7 @@ describe('workflowApproveCommand', () => {
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
 
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      origin: { conversationId: 'db-uuid-original' },
       id: 'run-approve-conv',
       workflow_name: 'implement',
       status: 'paused',
@@ -11089,6 +11102,7 @@ describe('workflowRejectCommand', () => {
     const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
 
     const runData = {
+      origin: { conversationId: 'db-uuid-reject' },
       id: 'run-reject-conv',
       workflow_name: 'my-wf',
       status: 'paused',
@@ -13501,11 +13515,15 @@ describe('workflowRunCommand — supersedes run-id prefix resolution (#2990)', (
     );
     mockCreateWorkflowRun.mockReset();
     mockCreateWorkflowRun.mockImplementation(
-      (data: { workflow_name: string; conversation_id: string }) =>
+      (data: {
+        workflow_name: string;
+        origin?: import('@archon/workflows/schemas/workflow-run').WorkflowRunOrigin;
+      }) =>
         Promise.resolve({
+          origin: data.origin ?? null,
           id: 'run-detached-created',
           workflow_name: data.workflow_name,
-          conversation_id: data.conversation_id,
+          conversation_id: data.origin?.conversationId ?? null,
           status: 'pending',
           working_path: null,
           started_at: new Date(),

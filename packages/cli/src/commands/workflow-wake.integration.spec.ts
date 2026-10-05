@@ -117,9 +117,9 @@ await recordSelectedWorkflow(source.anchor.root, workflow.name);
 const owner = await startRunLiveOwner(source.runId);
 try {
  const result = await new InProcessWorkflowEngine(deps).submit({
-  platform: new HeadlessPlatform(conversation.id), conversationId: conversation.id,
-  conversationDbId: conversation.id, cwd, workflow, userMessage: 'original request',
-  options: { codebaseId: codebase.id, preparedSource: source, userId: user.id, inputs: { proof: 'original-input' },
+  platform: new HeadlessPlatform(), conversationId: conversation.id,
+  origin: { conversationId: conversation.id, userId: user.id }, cwd, workflow, userMessage: 'original request',
+  options: { codebaseId: codebase.id, preparedSource: source, inputs: { proof: 'original-input' },
     runConfig: { layer: { envVars: { WAKE_CONFIG_PROOF: 'original-config' } }, source: { kind: 'cli', label: 'cold-fixture' } } }
  });
  if (!('paused' in result)) throw new Error(JSON.stringify(result));

@@ -214,3 +214,22 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 | `023_add_default_branch_to_codebases.sql` | Detected default branch on codebases |
 
 > The `remote_agent_codebases.kind` column (project `'repo'` | `'folder'` discriminator, commented "From migration 024"), the `remote_agent_users.role` column, and the four `remote_agent_auth_*` Better Auth tables (opt-in web login) are applied inline in `000_combined.sql` rather than as numbered migrations, and converge on startup via the idempotent schema apply.
+
+### Workflow origin compatibility
+
+Runs may have no conversation or user. New writers persist an `origin` object;
+`{}` means no origin, while SQL NULL identifies legacy writers whose conversation,
+parent and user columns supply the origin on read. The public run's `origin` and
+conversation projections are nullable.
+
+The SQL adapter reserves one hidden conversation, UUID
+`00000000-0000-4000-8000-000000003640`, with platform `archon` and platform ID
+`workflow-store-originless`, to satisfy the shipped conversation foreign key.
+It is storage infrastructure: no message history, title, user or isolation state
+belongs to it. Application conversation edits, deletion and history operations
+reject this identity. Do not edit or delete it directly with SQL: deleting the
+row would cascade to its runs.
+
+Schema upgrades preserve shipped columns and older writers. Older binaries can
+open and write the upgraded database, but may display the compatibility anchor
+when reading an origin-free run.

@@ -383,7 +383,7 @@ describe('server resource-start host', () => {
       requestId: admitted[0],
       hostId: HOST_ID,
       engine,
-      createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+      createPlatform: () => new HeadlessPlatform(),
     });
     expect(result.success).toBe(false);
     if (result.success) throw new Error('Expected credential refusal');
@@ -424,7 +424,7 @@ describe('server resource-start host', () => {
         requestId,
         hostId: HOST_ID,
         engine,
-        createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+        createPlatform: () => new HeadlessPlatform(),
       });
 
     await Promise.allSettled([start(), start()]);
@@ -450,7 +450,7 @@ describe('server resource-start host', () => {
         requestId,
         hostId: HOST_ID,
         engine: target,
-        createPlatform: ({ conversationDbId }) => new HeadlessPlatform(conversationDbId),
+        createPlatform: () => new HeadlessPlatform(),
       });
 
     await expect(start(failing)).rejects.toThrow('engine unavailable');

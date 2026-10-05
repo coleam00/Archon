@@ -24,7 +24,17 @@ import {
 import { insertWorkflowEvent, listActiveWorkflowNodeIds } from './workflow-events';
 import { insertTerminalWorkflowEvent } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
-import { normalizeWorkflowRun } from './workflow-run-normalization';
+import {
+  normalizeWorkflowRun,
+  readWorkflowRunOrigin,
+  type WorkflowRunSqlRow,
+} from './workflow-run-normalization';
+import { workflowRunOriginSchema } from '@archon/workflows/schemas/workflow-run';
+import {
+  assertPublicConversation,
+  ensureWorkflowOriginAnchor,
+  WORKFLOW_ORIGIN_ANCHOR_ID,
+} from './workflow-origin-anchor';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
   WorkflowRun,
@@ -60,19 +70,22 @@ import type {
 } from '@archon/workflows/store';
 import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from '@archon/workflows/store';
 
-export interface WorkflowRunInsert {
-  id?: string;
-  workflow_name: string;
-  conversation_id: string;
-  codebase_id?: string;
-  user_message: string;
-  metadata?: Record<string, unknown>;
-  working_path?: string;
-  parent_conversation_id?: string;
-  user_id?: string;
-  parent_run_id?: string;
-  adopted_from_run_id?: string;
-}
+type StoreRunInsert = Parameters<
+  import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']
+>[0];
+
+export type WorkflowRunInsert =
+  | (StoreRunInsert & {
+      conversation_id?: never;
+      parent_conversation_id?: never;
+      user_id?: never;
+    })
+  | (Omit<StoreRunInsert, 'origin'> & {
+      origin?: never;
+      conversation_id: string;
+      parent_conversation_id?: string;
+      user_id?: string;
+    });
 
 /** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
 function rollback(): Promise<void> {
@@ -377,28 +390,43 @@ export async function insertWorkflowRun(
     metadataJson = '{}';
   }
 
+  const origin = workflowRunOriginSchema.parse(
+    data.origin === undefined
+      ? {
+          ...(data.conversation_id ? { conversationId: data.conversation_id } : {}),
+          ...(data.parent_conversation_id
+            ? { parentConversationId: data.parent_conversation_id }
+            : {}),
+          ...(data.user_id ? { userId: data.user_id } : {}),
+        }
+      : data.origin
+  );
+  if (origin.conversationId) assertPublicConversation(origin.conversationId);
+  if (origin.parentConversationId) assertPublicConversation(origin.parentConversationId);
+  const physicalConversationId = origin.conversationId ?? (await ensureWorkflowOriginAnchor(query));
   try {
-    const result = await query<WorkflowRun>(
+    const result = await query<WorkflowRunSqlRow>(
       data.id === undefined
         ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       RETURNING *`
-        : `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, id)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-       RETURNING *`,
+       RETURNING *, CAST(origin AS TEXT) AS origin`
+        : `INSERT INTO remote_agent_workflow_runs
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING *, CAST(origin AS TEXT) AS origin`,
       [
         data.workflow_name,
-        data.conversation_id,
+        physicalConversationId,
         data.codebase_id ?? null,
         data.user_message,
         metadataJson,
         data.working_path ?? null,
-        data.parent_conversation_id ?? null,
-        data.user_id ?? null,
+        origin.parentConversationId ?? null,
+        origin.userId ?? null,
         data.parent_run_id ?? null,
         data.adopted_from_run_id ?? null,
+        JSON.stringify(origin),
         ...(data.id === undefined ? [] : [data.id]),
       ]
     );
@@ -416,7 +444,7 @@ export async function insertWorkflowRun(
 
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
   try {
-    return await insertWorkflowRun((sql, params) => pool.query(sql, params), data);
+    return await getDatabase().withTransaction(query => insertWorkflowRun(query, data));
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_create_failed');
@@ -443,8 +471,8 @@ export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun |
       [id]
     );
     if (claimed.rowCount !== 1) return null;
-    const selected = await query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+    const selected = await query<WorkflowRunSqlRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     return selected.rows[0] ? normalizeWorkflowRun(selected.rows[0]) : null;
@@ -475,8 +503,8 @@ export async function recordWorkflowRunCheckoutBaseline(
 
 export async function getWorkflowRun(id: string): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+    const result = await pool.query<WorkflowRunSqlRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
     const row = result.rows[0];
@@ -501,8 +529,8 @@ export async function getRunByIsolationEnvId(envId: string): Promise<WorkflowRun
       ? "metadata->>'isolation_env_id'"
       : "json_extract(metadata, '$.isolation_env_id')";
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE ${extract} = $1
        ORDER BY started_at DESC LIMIT 1`,
       [envId]
@@ -529,8 +557,8 @@ export async function findWorkflowRunsByIdPrefix(
 ): Promise<WorkflowRun[]> {
   if (idPrefix.length === 0 || !/^[0-9a-fA-F-]+$/.test(idPrefix)) return [];
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
+    const result = await pool.query<WorkflowRunSqlRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE codebase_id = $1 AND id LIKE $2 LIMIT 2',
       [codebaseId, `${idPrefix}%`]
     );
     return result.rows.map(normalizeWorkflowRun);
@@ -557,8 +585,8 @@ export async function getWorkflowRunStatus(id: string): Promise<string | null> {
 
 export async function getActiveWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'running'
        ORDER BY started_at DESC LIMIT 1`,
       [conversationId, conversationId]
@@ -580,8 +608,8 @@ export async function getActiveWorkflowRun(conversationId: string): Promise<Work
  */
 export async function getPausedWorkflowRun(conversationId: string): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (conversation_id = $1 OR parent_conversation_id = $2) AND status = 'paused'
        ORDER BY started_at DESC LIMIT 1`,
       [conversationId, conversationId]
@@ -629,8 +657,8 @@ export async function cancelResumableRunsForConversation(
   let cancelledRuns: WorkflowRun[];
   try {
     cancelledRuns = await getDatabase().withTransaction(async query => {
-      const snapshot = await query<WorkflowRun>(
-        `SELECT * FROM remote_agent_workflow_runs
+      const snapshot = await query<WorkflowRunSqlRow>(
+        `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
          WHERE conversation_id = $1 OR parent_conversation_id = $2
          ORDER BY started_at DESC${rowLockClause()}`,
         [conversationId, conversationId]
@@ -758,8 +786,8 @@ export async function getActiveWorkflowRunByPath(
   }
 
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE ${clauses.join(' AND ')}
        ORDER BY started_at ASC, id ASC LIMIT 1`,
       params
@@ -781,8 +809,8 @@ export async function getActiveWorkflowRunByPath(
  */
 export async function findChildRuns(parentRunId: string): Promise<WorkflowRun[]> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at ASC',
+    const result = await pool.query<WorkflowRunSqlRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at ASC',
       [parentRunId]
     );
     return result.rows.map(row => normalizeWorkflowRun(row));
@@ -826,19 +854,27 @@ export async function getRunAncestry(runId: string): Promise<WorkflowRun[]> {
 }
 
 export async function getRunningWorkflows(): Promise<
-  { id: string; conversation_id: string; workflow_name: string; started_at: string }[]
+  { id: string; conversation_id: string | null; workflow_name: string; started_at: string }[]
 > {
   try {
     const result = await pool.query<{
       id: string;
-      conversation_id: string;
+      conversation_id: string | null;
+      parent_conversation_id: string | null;
+      user_id: string | null;
+      origin: unknown;
       workflow_name: string;
       started_at: string;
     }>(
-      "SELECT id, conversation_id, workflow_name, started_at FROM remote_agent_workflow_runs WHERE status = 'running' ORDER BY started_at ASC LIMIT 100",
+      "SELECT id, conversation_id, parent_conversation_id, user_id, CAST(origin AS TEXT) AS origin, workflow_name, started_at FROM remote_agent_workflow_runs WHERE status = 'running' ORDER BY started_at ASC LIMIT 100",
       []
     );
-    return [...result.rows];
+    return result.rows.map(row => ({
+      id: row.id,
+      workflow_name: row.workflow_name,
+      started_at: row.started_at,
+      conversation_id: readWorkflowRunOrigin(row)?.conversationId ?? null,
+    }));
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_runs_get_running_failed');
@@ -852,8 +888,8 @@ export async function findResumableRun(
 ): Promise<WorkflowRun | null> {
   const dialect = getDialect();
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND working_path = $2
          AND ${resumableStatusClause(dialect, 3)}
@@ -901,8 +937,8 @@ export async function findResumableRunByParentConversation(
   codebaseId: string
 ): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE workflow_name = $1
          AND parent_conversation_id = $2
          AND codebase_id = $3
@@ -1111,10 +1147,10 @@ export async function resumeWorkflowRun(
     throw new WorkflowNotResumableError(id, currentStatus);
   }
 
-  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRun>>>;
+  let selectResult: Awaited<ReturnType<typeof pool.query<WorkflowRunSqlRow>>>;
   try {
-    selectResult = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+    selectResult = await pool.query<WorkflowRunSqlRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
       [id]
     );
   } catch (error) {
@@ -1168,8 +1204,8 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
            AND ${eventReason} IN ($2, $3, $4)`,
         [id, ...FAN_OUT_CANCEL_REASONS]
       );
-      const recovered = await query<WorkflowRun>(
-        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+      const recovered = await query<WorkflowRunSqlRow>(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
         [id]
       );
       const row = recovered.rows[0];
@@ -1192,8 +1228,8 @@ export async function getWorkflowRunByWorkerPlatformId(
   platformConversationId: string
 ): Promise<WorkflowRun | null> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT r.* FROM remote_agent_workflow_runs r
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
        JOIN remote_agent_conversations c ON r.conversation_id = c.id
        WHERE c.platform_conversation_id = $1
        ORDER BY r.started_at DESC LIMIT 1`,
@@ -1734,8 +1770,8 @@ export async function listDueWorkflowContinuations(
       ? "metadata->>'continuation_retry_at'"
       : "json_extract(metadata, '$.continuation_retry_at')";
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE (${retryAt} IS NULL OR ${retryAt} <= $1)
          AND ((status = 'paused' AND ${waitKind} IN ('time', 'event')
                AND (${signaledAt} IS NOT NULL OR ${resumeAt} <= $1))
@@ -2116,10 +2152,10 @@ export async function listDashboardRuns(
       pool.query<
         Omit<
           DashboardWorkflowRun,
-          'active_nodes' | 'current_step_name' | 'current_step_status' | 'total_steps'
-        >
+          'active_nodes' | 'current_step_name' | 'current_step_status' | 'total_steps' | 'origin'
+        > & { origin?: unknown }
       >(
-        `SELECT r.*,
+        `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
                 c.platform_type,
                 c.platform_conversation_id AS worker_platform_id,
                 pc.platform_conversation_id AS parent_platform_id,
@@ -2133,7 +2169,7 @@ export async function listDashboardRuns(
                  WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_started'
                  ORDER BY e.created_at DESC LIMIT 1) AS agents_total
          FROM remote_agent_workflow_runs r
-         LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id
+         LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND c.id != '${WORKFLOW_ORIGIN_ANCHOR_ID}'
          LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
          LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
          ${whereStr}
@@ -2239,8 +2275,8 @@ export async function listWorkflowRuns(options?: {
   const whereStr = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
 
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs ${whereStr} ORDER BY started_at DESC LIMIT ${limitParam}`,
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs ${whereStr} ORDER BY started_at DESC LIMIT ${limitParam}`,
       values
     );
     return result.rows.map(normalizeWorkflowRun);
@@ -2274,8 +2310,8 @@ export async function findOpenWorkRuns(options?: {
   const limitParam = `$${String(values.length)}`;
 
   try {
-    const result = await pool.query<WorkflowRun>(
-      `SELECT * FROM remote_agent_workflow_runs r
+    const result = await pool.query<WorkflowRunSqlRow>(
+      `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
        WHERE r.status = 'failed'
          ${codebaseClause}
          AND NOT EXISTS (
@@ -2300,8 +2336,8 @@ export async function findOpenWorkRuns(options?: {
  */
 export async function findAdoptingRuns(runId: string): Promise<WorkflowRun[]> {
   try {
-    const result = await pool.query<WorkflowRun>(
-      'SELECT * FROM remote_agent_workflow_runs WHERE adopted_from_run_id = $1 ORDER BY started_at DESC',
+    const result = await pool.query<WorkflowRunSqlRow>(
+      'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE adopted_from_run_id = $1 ORDER BY started_at DESC',
       [runId]
     );
     return result.rows.map(normalizeWorkflowRun);

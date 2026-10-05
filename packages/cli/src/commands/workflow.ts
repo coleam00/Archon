@@ -502,9 +502,12 @@ async function resolveRunConversationId(
 ): Promise<string> {
   if (options.conversationId !== undefined) return options.conversationId;
   if (continuationRun !== undefined) {
+    const storedConversationId =
+      continuationRun.conversation_id ?? continuationRun.parent_conversation_id;
+    if (storedConversationId === null) return continuationRun.id;
     let conversation;
     try {
-      conversation = await conversationDb.getConversationById(continuationRun.conversation_id);
+      conversation = await conversationDb.getConversationById(storedConversationId);
     } catch (error) {
       getLog().error(
         {
@@ -2430,7 +2433,14 @@ async function runWorkflowWithOwnedSource(
         // about to reclaim. The row's generated id is what the child files under.
         const created = await workflowDb.createWorkflowRun({
           workflow_name: workflow.name,
-          conversation_id: detachedConversation.id,
+          origin: {
+            conversationId: detachedConversation.id,
+            userId: detachedUserId,
+            platform: {
+              type: 'cli',
+              conversationId: detachedConversation.platform_conversation_id,
+            },
+          },
           ...(detachCodebase ? { codebase_id: detachCodebase.id } : {}),
           user_message: userMessage,
           metadata: {
@@ -2443,7 +2453,6 @@ async function runWorkflowWithOwnedSource(
               ? { [CONTINUATION_METADATA_KEY]: { mode: continuationDeclaration.mode } }
               : {}),
           },
-          ...(detachedUserId ? { user_id: detachedUserId } : {}),
           ...(continuationDeclaration
             ? { adopted_from_run_id: continuationDeclaration.runId }
             : {}),
@@ -3300,7 +3309,6 @@ async function runWorkflowWithOwnedSource(
       codebaseId: codebase?.id,
       source: workflowSource,
       parseWarnings: workflowEntry?.parseWarnings,
-      userId: cliUserId,
       baseBranch: codebaseDefaultBranch,
       baseOverride: flagBase,
       execContext,
@@ -3316,7 +3324,11 @@ async function runWorkflowWithOwnedSource(
           cwd: workingCwd,
           legacyWorkflow: workflow,
           userMessage,
-          conversationDbId: conversation.id,
+          origin: {
+            conversationId: conversation.id,
+            userId: cliUserId,
+            platform: { type: 'cli', conversationId },
+          },
           run: resumable,
           options: commonOptions,
         });
@@ -3391,7 +3403,11 @@ async function runWorkflowWithOwnedSource(
         cwd: workingCwd,
         workflow,
         userMessage,
-        conversationDbId: conversation.id,
+        origin: {
+          conversationId: conversation.id,
+          userId: cliUserId,
+          platform: { type: 'cli', conversationId },
+        },
         options: opts,
       });
     }
@@ -5877,7 +5893,9 @@ export async function workflowApproveCommand(
   // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;
   try {
-    const originalConversation = await conversationDb.getConversationById(result.conversationId);
+    const originalConversation = result.conversationId
+      ? await conversationDb.getConversationById(result.conversationId)
+      : null;
     platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
     if (!originalConversation) {
       getLog().info(
@@ -6017,7 +6035,9 @@ export async function workflowRejectCommand(
   // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;
   try {
-    const originalConversation = await conversationDb.getConversationById(result.conversationId);
+    const originalConversation = result.conversationId
+      ? await conversationDb.getConversationById(result.conversationId)
+      : null;
     platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
     if (!originalConversation) {
       getLog().info(
@@ -6145,7 +6165,9 @@ export async function workflowRespondCommand(
   // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;
   try {
-    const originalConversation = await conversationDb.getConversationById(result.conversationId);
+    const originalConversation = result.conversationId
+      ? await conversationDb.getConversationById(result.conversationId)
+      : null;
     platformConversationId = originalConversation?.platform_conversation_id ?? undefined;
     if (!originalConversation) {
       getLog().info(

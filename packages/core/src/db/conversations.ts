@@ -5,6 +5,10 @@ import { pool, getDialect } from './connection';
 import type { Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
+import {
+  assertPublicConversation,
+  assertPublicConversationIdentity,
+} from './workflow-origin-anchor';
 import { loadConfig } from '../config/config-loader';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -18,6 +22,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * Get a conversation by its database ID
  */
 export async function getConversationById(id: string): Promise<Conversation | null> {
+  assertPublicConversation(id);
   const result = await pool.query<Conversation>(
     'SELECT * FROM remote_agent_conversations WHERE id = $1',
     [id]
@@ -37,7 +42,9 @@ export async function findConversationByPlatformId(
     'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
     [platformId]
   );
-  return result.rows[0] ?? null;
+  const conversation = result.rows[0];
+  if (conversation) assertPublicConversation(conversation.id);
+  return conversation ?? null;
 }
 
 /**
@@ -52,7 +59,9 @@ export async function getConversationByPlatformId(
     'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
     [platformType, platformId]
   );
-  return result.rows[0] ?? null;
+  const conversation = result.rows[0];
+  if (conversation) assertPublicConversation(conversation.id);
+  return conversation ?? null;
 }
 
 export async function getOrCreateConversation(
@@ -62,6 +71,7 @@ export async function getOrCreateConversation(
   parentConversationId?: string,
   userId?: string
 ): Promise<Conversation> {
+  assertPublicConversationIdentity(platformType, platformId);
   const existing = await pool.query<Conversation>(
     'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
     [platformType, platformId]
@@ -147,6 +157,7 @@ export async function updateConversation(
     hidden?: boolean;
   }
 ): Promise<void> {
+  assertPublicConversation(id);
   const fields: string[] = [];
   const values: (string | number | null)[] = [];
   let i = 1;
@@ -262,6 +273,7 @@ export async function listConversations(
  * Update last_activity_at for staleness tracking
  */
 export async function touchConversation(id: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   await pool.query(
     `UPDATE remote_agent_conversations SET last_activity_at = ${dialect.now()} WHERE id = $1`,
@@ -273,6 +285,7 @@ export async function touchConversation(id: string): Promise<void> {
  * Update conversation title
  */
 export async function updateConversationTitle(id: string, title: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET title = $1, updated_at = ${dialect.now()} WHERE id = $2`,
@@ -287,6 +300,7 @@ export async function updateConversationTitle(id: string, title: string): Promis
  * Soft delete a conversation (sets deleted_at timestamp)
  */
 export async function softDeleteConversation(id: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET deleted_at = ${dialect.now()}, updated_at = ${dialect.now()} WHERE id = $1`,

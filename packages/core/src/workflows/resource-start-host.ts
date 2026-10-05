@@ -404,7 +404,7 @@ export interface StartAdmittedResourceStartInput {
   /** Builds the host's platform for this run's conversation. */
   createPlatform: (conversation: {
     conversationId: string;
-    conversationDbId: string;
+    conversationDbId: string | null;
   }) => IWorkflowPlatform;
   /**
    * Called once this process holds the run's exact live-owner lock, before the engine
@@ -493,11 +493,12 @@ export async function startAdmittedResourceStart(
             launch.run.user_id
           )
         : { cwd: launch.execution.cwd, envId: undefined, cutFromCommit: undefined };
-    await conversationDb.updateConversation(run.conversation_id, {
-      cwd: execution.cwd,
-      codebase_id: codebase.id,
-      isolation_env_id: execution.envId ?? null,
-    });
+    if (run.conversation_id)
+      await conversationDb.updateConversation(run.conversation_id, {
+        cwd: execution.cwd,
+        codebase_id: codebase.id,
+        isolation_env_id: execution.envId ?? null,
+      });
 
     const baseBranch = codebase.default_branch?.trim() || undefined;
     return await input.engine.submit({
@@ -506,12 +507,11 @@ export async function startAdmittedResourceStart(
       cwd: execution.cwd,
       workflow: frozen.workflow,
       userMessage: run.user_message ?? '',
-      conversationDbId: run.conversation_id,
+      origin: run.origin ?? undefined,
       options: {
         preCreatedRun: run,
         preparedAiConfiguration,
         codebaseId: codebase.id,
-        userId: launch.run.user_id,
         baseBranch,
         ...(execution.cutFromCommit !== undefined
           ? { cutFromCommit: execution.cutFromCommit }

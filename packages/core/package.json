@@ -280,6 +280,12 @@
     ],
     [
       "src/workflows/commit-author.integration.test.ts"
+    ],
+    [
+      "src/db/workflows.origin.integration.test.ts"
+    ],
+    [
+      "src/db/workflows.origin.postgres.integration.test.ts"
     ]
   ]
 }

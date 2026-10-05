@@ -61,6 +61,7 @@ describe('workflows database', () => {
   });
 
   const mockWorkflowRun: WorkflowRun = {
+    origin: { conversationId: 'conv-456' },
     id: 'workflow-run-123',
     workflow_name: 'feature-development',
     conversation_id: 'conv-456',
@@ -97,7 +98,7 @@ describe('workflows database', () => {
 
       const result = await createWorkflowRun({
         workflow_name: 'feature-development',
-        conversation_id: 'conv-456',
+        origin: { conversationId: 'conv-456' },
         codebase_id: 'codebase-789',
         user_message: 'Add dark mode support',
       });
@@ -116,6 +117,7 @@ describe('workflows database', () => {
           null,
           null,
           null, // adopted_from_run_id (#2747)
+          JSON.stringify({ conversationId: 'conv-456' }),
         ]
       );
     });
@@ -129,7 +131,7 @@ describe('workflows database', () => {
 
       const result = await createWorkflowRun({
         workflow_name: 'feature-development',
-        conversation_id: 'conv-456',
+        origin: { conversationId: 'conv-456' },
         codebase_id: 'codebase-789',
         user_message: 'Add dark mode support',
         metadata: { github_context: 'Issue #42 context' },
@@ -149,6 +151,7 @@ describe('workflows database', () => {
           null,
           null,
           null, // adopted_from_run_id (#2747)
+          JSON.stringify({ conversationId: 'conv-456' }),
         ]
       );
     });
@@ -159,7 +162,7 @@ describe('workflows database', () => {
 
       const result = await createWorkflowRun({
         workflow_name: 'feature-development',
-        conversation_id: 'conv-456',
+        origin: { conversationId: 'conv-456' },
         user_message: 'Add dark mode support',
       });
 
@@ -177,6 +180,7 @@ describe('workflows database', () => {
           null,
           null,
           null, // adopted_from_run_id (#2747)
+          JSON.stringify({ conversationId: 'conv-456' }),
         ]
       );
     });
@@ -190,7 +194,7 @@ describe('workflows database', () => {
 
       expect(result).toEqual(mockWorkflowRun);
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_workflow_runs WHERE id = $1',
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
         ['workflow-run-123']
       );
     });
@@ -1256,7 +1260,7 @@ describe('workflows database', () => {
       await expect(
         createWorkflowRun({
           workflow_name: 'test',
-          conversation_id: 'conv',
+          origin: { conversationId: 'conv' },
           user_message: 'test',
         })
       ).rejects.toThrow('Failed to create workflow run: Connection refused');
@@ -1312,7 +1316,7 @@ describe('workflows database', () => {
       await expect(
         createWorkflowRun({
           workflow_name: 'test',
-          conversation_id: 'conv',
+          origin: { conversationId: 'conv' },
           user_message: 'test',
           metadata: circularObj,
         })
@@ -1328,7 +1332,7 @@ describe('workflows database', () => {
 
       const result = await createWorkflowRun({
         workflow_name: 'test',
-        conversation_id: 'conv',
+        origin: { conversationId: 'conv' },
         user_message: 'test',
         metadata: circularObj,
       });
@@ -1348,7 +1352,7 @@ describe('workflows database', () => {
 
       const result = await createWorkflowRun({
         workflow_name: 'test',
-        conversation_id: 'conv',
+        origin: { conversationId: 'conv' },
         user_message: 'test',
         metadata: { github_context: 'Issue #99: Fix bug' },
       });
@@ -1517,7 +1521,9 @@ describe('workflows database', () => {
       expect(result).toEqual([paused, failed]);
       expect(mockQuery).toHaveBeenCalledTimes(8);
       const [selectSql, selectParams] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(selectSql).toContain('SELECT * FROM remote_agent_workflow_runs');
+      expect(selectSql).toContain(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs'
+      );
       expect(selectSql).toContain('conversation_id = $1 OR parent_conversation_id = $2');
       expect(selectSql).toContain('FOR UPDATE');
       expect(selectParams).toEqual(['conv-1', 'conv-1']);

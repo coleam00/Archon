@@ -1,10 +1,15 @@
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { workflowRunOriginSchema, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { WORKFLOW_ORIGIN_ANCHOR_ID } from './workflow-origin-anchor';
+
 import {
   checkoutObservationSchema,
   type CheckoutObservation,
 } from '@archon/workflows/schemas/checkout-observation';
 import { createLogger } from '@archon/paths';
 import { toHydratedTimestamp } from './timestamps';
+
+// Select origin as text: PostgreSQL otherwise decodes JSONB null and SQL NULL identically.
+export type WorkflowRunSqlRow = Omit<WorkflowRun, 'origin'> & { origin?: unknown };
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -20,7 +25,9 @@ function getLog(): ReturnType<typeof createLogger> {
  * remains null. Timestamp hydration prevents raw SQLite strings reaching Date readers
  * such as resolveWorkflowAdoption (#2845).
  */
-export function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
+export function normalizeWorkflowRun<T extends WorkflowRunSqlRow>(
+  row: T
+): Omit<T, 'origin'> & WorkflowRun {
   if (typeof row.metadata === 'string') {
     try {
       row.metadata = JSON.parse(row.metadata) as Record<string, unknown>;
@@ -39,7 +46,42 @@ export function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
     row.completed_at = toHydratedTimestamp(row.completed_at);
   if (typeof row.last_activity_at === 'string')
     row.last_activity_at = toHydratedTimestamp(row.last_activity_at);
-  return row;
+  const origin = readWorkflowRunOrigin(row);
+  return {
+    ...row,
+    origin,
+    conversation_id: origin?.conversationId ?? null,
+    parent_conversation_id: origin?.parentConversationId ?? null,
+    user_id: origin?.userId ?? null,
+  };
+}
+
+export function readWorkflowRunOrigin(
+  row: Pick<WorkflowRunSqlRow, 'origin' | 'conversation_id' | 'parent_conversation_id' | 'user_id'>
+): WorkflowRun['origin'] {
+  const rawOrigin = row.origin;
+  const origin = workflowRunOriginSchema.parse(
+    rawOrigin === null || rawOrigin === undefined
+      ? {
+          ...(row.conversation_id && row.conversation_id !== WORKFLOW_ORIGIN_ANCHOR_ID
+            ? { conversationId: row.conversation_id }
+            : {}),
+          ...(row.parent_conversation_id
+            ? { parentConversationId: row.parent_conversation_id }
+            : {}),
+          ...(row.user_id ? { userId: row.user_id } : {}),
+        }
+      : typeof rawOrigin === 'string'
+        ? JSON.parse(rawOrigin)
+        : rawOrigin
+  );
+  if (
+    origin.conversationId === WORKFLOW_ORIGIN_ANCHOR_ID ||
+    origin.parentConversationId === WORKFLOW_ORIGIN_ANCHOR_ID
+  ) {
+    throw new Error('Workflow origin references the reserved compatibility anchor');
+  }
+  return Object.keys(origin).length === 0 ? null : origin;
 }
 
 /**
@@ -47,7 +89,7 @@ export function normalizeWorkflowRun<T extends WorkflowRun>(row: T): T {
  * cannot parse (corrupt, or written by a newer shape) reads as not recorded and is logged,
  * rather than reaching readers as an untyped object.
  */
-function readCheckoutBaseline(row: WorkflowRun): CheckoutObservation | null {
+function readCheckoutBaseline(row: WorkflowRunSqlRow): CheckoutObservation | null {
   const raw: unknown = row.checkout_baseline;
   if (raw === null || raw === undefined) return null;
   let value: unknown = raw;

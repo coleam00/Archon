@@ -205,6 +205,7 @@ function makeWorkflow(overrides: Partial<WorkflowDefinition> = {}): ResolvedWork
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-123',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
@@ -293,7 +294,7 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id'
+        { conversationId: 'db-conv-id' }
       );
 
       expect(result.success).toBe(false);
@@ -334,7 +335,7 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'new workflow',
-        'db-conv-123'
+        { conversationId: 'db-conv-123' }
       );
 
       expect(
@@ -357,7 +358,7 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-456',
+        { conversationId: 'db-conv-456' },
         { codebaseId: 'codebase-789' }
       );
 
@@ -384,7 +385,7 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'test message',
-        'db-conv-123'
+        { conversationId: 'db-conv-123' }
       );
 
       expect(result.success).toBe(false);
@@ -427,7 +428,7 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id',
+        { conversationId: 'db-conv-id' },
         { preCreatedRun: resumedRun, priorCompletedNodes }
       );
 
@@ -458,7 +459,7 @@ describe('executeWorkflow preamble', () => {
         '/tmp',
         makeWorkflow(),
         'User message',
-        'db-conv-id',
+        { conversationId: 'db-conv-id' },
         { preCreatedRun: resumedRun, priorCompletedNodes }
       );
 
@@ -472,15 +473,9 @@ describe('executeWorkflow preamble', () => {
       const deps = makeDeps(store);
       const platform = makePlatform();
 
-      await executeWorkflow(
-        deps,
-        platform,
-        'conv-123',
-        '/tmp',
-        makeWorkflow(),
-        'User message',
-        'db-conv-id'
-      );
+      await executeWorkflow(deps, platform, 'conv-123', '/tmp', makeWorkflow(), 'User message', {
+        conversationId: 'db-conv-id',
+      });
 
       // Fresh runs must not trigger the resume copy.
       const resumeMsg = findMessage(platform, 'Resuming');

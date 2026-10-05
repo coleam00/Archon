@@ -203,6 +203,7 @@ type MockWorkflowStore = {
 
 function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-mock' },
     id,
     workflow_name: 'mock',
     conversation_id: 'conv-mock',
@@ -675,6 +676,7 @@ async function readAllArtifacts(artifactsDir: string) {
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-dag' },
     id,
     workflow_name: 'dag-test',
     conversation_id: 'conv-dag',
@@ -30083,7 +30085,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30213,7 +30215,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30299,7 +30301,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30359,7 +30361,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30419,7 +30421,7 @@ describe('subprocess credential redaction', () => {
       dagOptions({
         deps: createMockDeps(store),
         platform,
-        conversationId: workflowRun.conversation_id,
+        conversationId: workflowRun.conversation_id ?? workflowRun.id,
         cwd: testDir,
         workflow: {
           name: workflowRun.workflow_name,

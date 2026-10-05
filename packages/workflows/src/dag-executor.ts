@@ -724,8 +724,6 @@ export interface RunChildWorkflowArgs {
   cwd: string;
   /** Platform conversation id (shared with the parent). */
   conversationId: string;
-  /** DB conversation UUID (shared with the parent — satisfies the child's NOT-NULL FK). */
-  conversationDbId: string;
   userId?: string;
   /** Codebase id inherited from the parent (env vars + attribution). */
   codebaseId?: string;
@@ -7476,7 +7474,6 @@ async function executeWorkflowNode(
     input,
     cwd,
     conversationId,
-    conversationDbId: parentRun.conversation_id,
     userId: parentRun.user_id ?? undefined,
     codebaseId: parentRun.codebase_id ?? undefined,
     isolation: node.isolation,
@@ -8213,7 +8210,6 @@ async function executeFanOutWorkflowNode(
         input,
         cwd,
         conversationId,
-        conversationDbId: parentRun.conversation_id,
         userId: parentRun.user_id ?? undefined,
         codebaseId: parentRun.codebase_id ?? undefined,
         isolation: node.isolation,

@@ -30,7 +30,7 @@ interface WorkflowStartedEvent {
   type: 'workflow_started';
   runId: string;
   workflowName: string;
-  conversationId: string;
+  conversationId: string | null;
   transcriptPath: string;
 }
 

@@ -63,7 +63,7 @@ export interface ApprovalOperationResult {
   userMessage: string | null;
   codebaseId: string | null;
   /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
-  conversationId: string;
+  conversationId: string | null;
   type: 'interactive_loop' | 'approval_gate';
 }
 
@@ -73,7 +73,7 @@ export interface RejectionOperationResult {
   userMessage: string | null;
   codebaseId: string | null;
   /** Internal DB UUID — resolve via getConversationById() to get platform_conversation_id. */
-  conversationId: string;
+  conversationId: string | null;
   /**
    * true = run cancelled; false = staying paused/resumable for one of two
    * reasons distinguished by `newMode` below — a legacy `on_reject` rework

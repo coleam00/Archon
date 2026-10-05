@@ -80,19 +80,22 @@ test('persisted typed node rows retain public execution metadata through dashboa
   expect(JSON.stringify(payload)).not.toContain('sessionId');
 });
 
-test('workflow start projection does not expose the host transcript path', () => {
-  const event: WorkflowEmitterEvent = {
-    type: 'workflow_started',
-    runId: 'run-1',
-    workflowName: 'implement',
-    conversationId: 'conv-1',
-    transcriptPath: '/host/.archon/workspaces/acme/widget/logs/run-1.jsonl',
-  };
+test.each(['conv-1', null])(
+  'workflow start projection accepts optional provenance and hides the host transcript path',
+  conversationId => {
+    const event: WorkflowEmitterEvent = {
+      type: 'workflow_started',
+      runId: 'run-1',
+      workflowName: 'implement',
+      conversationId,
+      transcriptPath: '/host/.archon/workspaces/acme/widget/logs/run-1.jsonl',
+    };
 
-  const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
-  expect(payload).toMatchObject({ type: 'workflow_status', runId: 'run-1', status: 'running' });
-  expect(payload).not.toHaveProperty('transcriptPath');
-});
+    const payload = JSON.parse(mapWorkflowEvent(event) ?? '{}') as Record<string, unknown>;
+    expect(payload).toMatchObject({ type: 'workflow_status', runId: 'run-1', status: 'running' });
+    expect(payload).not.toHaveProperty('transcriptPath');
+  }
+);
 
 test('node skip projection preserves the live skip cause', () => {
   const event: WorkflowEmitterEvent = {

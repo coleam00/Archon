@@ -146,10 +146,9 @@ mock.module('@archon/core/db/isolation-environments', () => ({
   updateStatus: mock(async () => {}),
 }));
 
-const mockGetRunningWorkflows = mock(
-  async () =>
-    [] as { id: string; conversation_id: string; workflow_name: string; started_at: string }[]
-);
+const mockGetRunningWorkflows = mock<
+  (typeof import('@archon/core/db/workflows'))['getRunningWorkflows']
+>(async () => []);
 
 mock.module('@archon/core/db/workflows', () => ({
   listWorkflowRuns: mock(async () => []),
@@ -337,6 +336,7 @@ describe('GET /api/health', () => {
     mockGetRunningWorkflows.mockImplementationOnce(async () => [
       { id: 'run-1', conversation_id: 'conv-1', workflow_name: 'assist', started_at: '2026-01-01' },
       { id: 'run-2', conversation_id: 'conv-2', workflow_name: 'plan', started_at: '2026-01-01' },
+      { id: 'run-local', conversation_id: null, workflow_name: 'local', started_at: '2026-01-01' },
     ]);
 
     const app = makeApp();
@@ -349,7 +349,7 @@ describe('GET /api/health', () => {
     };
     expect(body.concurrency.active).toBe(2);
     expect(body.concurrency.activeConversationIds).toEqual(['conv-1', 'conv-2']);
-    expect(body.runningWorkflows).toBe(2);
+    expect(body.runningWorkflows).toBe(3);
   });
 
   test('deduplicates conversation IDs tracked by both lock manager and DB', async () => {

@@ -334,14 +334,11 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     id?: string;
     workflow_name: string;
-    conversation_id: string;
+    origin?: import('./schemas/workflow-run').WorkflowRunOrigin;
     codebase_id?: string;
     user_message: string;
     metadata?: Record<string, unknown>;
     working_path?: string;
-    parent_conversation_id?: string;
-    /** Archon user UUID; populated via ExecuteWorkflowOptions.userId. */
-    user_id?: string;
     /**
      * Run-tree parent (#2121 Phase 2). Set for a `workflow:` sub-run so its row
      * links back to the spawning parent run; omitted for top-level runs.

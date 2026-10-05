@@ -266,13 +266,28 @@ export type NodeOutput = z.infer<typeof nodeOutputSchema>;
 // WorkflowRun
 // ---------------------------------------------------------------------------
 
-/**
- * Runtime workflow run state stored in database.
- */
+export const workflowRunOriginSchema = z
+  .object({
+    conversationId: z.string().optional(),
+    parentConversationId: z.string().optional(),
+    userId: z.string().optional(),
+    platform: z
+      .object({
+        type: z.string(),
+        conversationId: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
+
 export const workflowRunSchema = z.object({
+  origin: workflowRunOriginSchema.nullable(),
   id: z.string(),
   workflow_name: z.string(),
-  conversation_id: z.string(),
+  conversation_id: z.string().nullable(),
   parent_conversation_id: z.string().nullable(),
   codebase_id: z.string().nullable(),
   status: workflowRunStatusSchema,
