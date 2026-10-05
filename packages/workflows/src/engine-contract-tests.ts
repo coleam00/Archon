@@ -122,7 +122,7 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
         step_name: completion.stepName,
       },
     }),
-    rewriteApprovalContext: async () => ({ resolved: true }),
+    failPausedApproval: async () => ({ failed: true }),
     claimWriteback: async () => ({ claimed: true }),
     releaseWritebackClaim: noop,
     cancelWorkflowRun: async () => ({ cancelled: false }),

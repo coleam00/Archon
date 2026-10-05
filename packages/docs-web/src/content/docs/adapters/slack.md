@@ -11,6 +11,8 @@ sidebar:
 
 Connect Archon to Slack so you can interact with your AI coding assistant from any Slack workspace.
 
+New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); run-action enforcement ships separately.
+
 ## Prerequisites
 
 - Archon server running (see [Getting Started](/getting-started/overview/))

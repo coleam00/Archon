@@ -11,9 +11,9 @@
  * — the UNIQUE constraint causes the second writer to throw, and we recover
  * by re-SELECTing the winner's identity row.
  */
-import { identityPlatformSchema } from '../schemas/user';
+import { identityPlatformSchema, userRoleSchema } from '../schemas/user';
 import { pool, getDatabase, getDialect } from './connection';
-import type { IdentityPlatform, User, UserIdentity } from '../types';
+import type { IdentityPlatform, User, UserIdentity, UserRole } from '../types';
 import { createLogger } from '@archon/paths';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -98,8 +98,8 @@ export async function findOrCreateUserByPlatformIdentity(
   try {
     return await db.withTransaction(async q => {
       const userResult = await q<User>(
-        'INSERT INTO remote_agent_users (display_name) VALUES ($1) RETURNING *',
-        [displayName ?? null]
+        'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
+        [displayName ?? null, userRoleSchema.enum.member]
       );
       const user = userResult.rows[0];
       if (!user) {
@@ -181,8 +181,8 @@ async function repairOrphanedIdentity(
   try {
     return await db.withTransaction(async q => {
       const userResult = await q<User>(
-        'INSERT INTO remote_agent_users (display_name) VALUES ($1) RETURNING *',
-        [displayName ?? null]
+        'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
+        [displayName ?? null, userRoleSchema.enum.member]
       );
       const user = userResult.rows[0];
       if (!user) {
@@ -287,4 +287,29 @@ export async function linkGithubIdentity(userId: string, login: string): Promise
     }
     getLog().info({ userId, login }, 'user.github_identity_link_race_recovered');
   }
+}
+
+export async function listUsersWithIdentities(): Promise<
+  (User & { identities: UserIdentity[] })[]
+> {
+  const users = await pool.query<User>('SELECT * FROM remote_agent_users ORDER BY created_at, id');
+  const identities = await pool.query<UserIdentity>(
+    'SELECT * FROM remote_agent_user_identities ORDER BY platform, platform_user_id'
+  );
+  const byUser = new Map<string, UserIdentity[]>();
+  for (const identity of identities.rows) {
+    const group = byUser.get(identity.user_id) ?? [];
+    group.push(identity);
+    byUser.set(identity.user_id, group);
+  }
+  return users.rows.map(user => ({ ...user, identities: byUser.get(user.id) ?? [] }));
+}
+
+export async function setUserRole(userId: string, role: UserRole): Promise<void> {
+  const validatedRole = userRoleSchema.parse(role);
+  const result = await pool.query(
+    `UPDATE remote_agent_users SET role = $1, updated_at = ${getDialect().now()} WHERE id = $2`,
+    [validatedRole, userId]
+  );
+  if (result.rowCount === 0) throw new Error(`Unknown user id: ${userId}`);
 }

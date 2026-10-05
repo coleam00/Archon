@@ -66,6 +66,13 @@ to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On th
      repeats until the user approves or `on_reject.max_attempts` is reached, at
      which point the workflow is cancelled.
 
+When gates run concurrently in one DAG layer, only one gate per run pauses and
+prompts. The others stay unfinished without prompting; resolving the active gate
+resumes the run and re-runs the remaining gates. This also applies to interactive
+loop gates. Each child workflow has its own run ID and presents its own gate
+independently. Approve or reject the child by its run ID; the parent re-checks its
+children as they finish.
+
 ## YAML Schema
 
 ```yaml
