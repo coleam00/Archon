@@ -27,8 +27,8 @@ function argsSummary(input: InlineToolCall['input']): string {
 
 /**
  * Tool-call row, design v3 (.log-row.tool): offset gutter · purple TOOL tag ·
- * name + args preview · duration · chevron. Clicking toggles the expanded
- * args/result detail below the row.
+ * name + args preview · duration · chevron. When there is detail to show, the
+ * row is a button that toggles the args/result detail below it.
  */
 export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactElement {
   const [expanded, setExpanded] = useState(false);
@@ -39,75 +39,81 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
   const hasInput = summary.length > 0;
   const hasDetails = hasInput || (call.output !== undefined && call.output.length > 0);
 
-  return (
-    <div
-      onClick={
-        hasDetails
-          ? (): void => {
-              setExpanded(v => !v);
-            }
-          : undefined
-      }
-      className={`flex flex-col border-b border-border/60 py-[11px] ${
-        hasDetails ? 'cursor-pointer transition-colors hover:bg-surface-hover/50' : ''
-      }`}
-    >
-      <div className="flex items-center gap-4">
-        <time
-          dateTime={timestamp}
-          title={wallClock}
-          className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
-        >
-          {displayed}
-        </time>
+  const row = (
+    <>
+      <time
+        dateTime={timestamp}
+        title={wallClock}
+        className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
+      >
+        {displayed}
+      </time>
+      <span
+        className="shrink-0 rounded-[5px] border px-[7px] py-[2px] font-mono text-[10px] font-bold uppercase tracking-[0.08em]"
+        // Inline because the console scope's wildcard border-color rule
+        // repaints Tailwind border utilities (see theme.css).
+        style={{
+          color: 'var(--brand-violet)',
+          background: 'color-mix(in oklch, var(--brand-violet), transparent 86%)',
+          borderColor: 'color-mix(in oklch, var(--brand-violet), transparent 70%)',
+        }}
+      >
+        Tool
+      </span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
+        <span className="shrink-0 font-mono text-[12.5px] font-bold text-text-primary">
+          {call.name}
+        </span>
+        {summary.length > 0 ? (
+          <span className="min-w-0 truncate font-mono text-[12px] text-text-tertiary">
+            {summary}
+          </span>
+        ) : null}
+      </span>
+      {call.status === 'failed' || call.status === 'cancelled' ? (
+        <span className="shrink-0 font-mono text-[11.5px] text-error">
+          {call.status}
+          {call.exitCode !== undefined ? ` (exit ${call.exitCode.toString()})` : ''}
+        </span>
+      ) : null}
+      {call.outcomeUnrecorded === true ? (
+        <span className="shrink-0 font-mono text-[11.5px] text-text-tertiary">
+          no result recorded
+        </span>
+      ) : null}
+      {call.durationMs !== undefined ? (
+        <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary">
+          {call.durationMs.toString()}ms
+        </span>
+      ) : null}
+      {hasDetails ? (
         <span
-          className="shrink-0 rounded-[5px] border px-[7px] py-[2px] font-mono text-[10px] font-bold uppercase tracking-[0.08em]"
-          // Inline because the console scope's wildcard border-color rule
-          // repaints Tailwind border utilities (see theme.css).
-          style={{
-            color: 'var(--brand-violet)',
-            background: 'color-mix(in oklch, var(--brand-violet), transparent 86%)',
-            borderColor: 'color-mix(in oklch, var(--brand-violet), transparent 70%)',
-          }}
+          aria-hidden
+          className="shrink-0 font-mono text-[11px] text-text-tertiary transition-transform"
+          style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
         >
-          Tool
+          ▸
         </span>
-        <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
-          <span className="shrink-0 font-mono text-[12.5px] font-bold text-text-primary">
-            {call.name}
-          </span>
-          {summary.length > 0 ? (
-            <span className="min-w-0 truncate font-mono text-[12px] text-text-tertiary">
-              {summary}
-            </span>
-          ) : null}
-        </span>
-        {call.status === 'failed' || call.status === 'cancelled' ? (
-          <span className="shrink-0 font-mono text-[11.5px] text-error">
-            {call.status}
-            {call.exitCode !== undefined ? ` (exit ${call.exitCode.toString()})` : ''}
-          </span>
-        ) : null}
-        {call.outcomeUnrecorded === true ? (
-          <span className="shrink-0 font-mono text-[11.5px] text-text-tertiary">
-            no result recorded
-          </span>
-        ) : null}
-        {call.durationMs !== undefined ? (
-          <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary">
-            {call.durationMs.toString()}ms
-          </span>
-        ) : null}
-        {hasDetails ? (
-          <span
-            aria-hidden
-            className="shrink-0 font-mono text-[11px] text-text-tertiary transition-transform"
-            style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
-          >
-            ▸
-          </span>
-        ) : null}
-      </div>
+      ) : null}
+    </>
+  );
+
+  return (
+    <div className="flex flex-col border-b border-border/60 py-[11px]">
+      {hasDetails ? (
+        <button
+          type="button"
+          aria-expanded={expanded}
+          onClick={() => {
+            setExpanded(v => !v);
+          }}
+          className="flex w-full items-center gap-4 text-left transition-colors hover:bg-surface-hover/50"
+        >
+          {row}
+        </button>
+      ) : (
+        <div className="flex items-center gap-4">{row}</div>
+      )}
       {expanded && hasDetails ? (
         <div className="ml-[72px] mt-2 space-y-1.5">
           {hasInput ? (
