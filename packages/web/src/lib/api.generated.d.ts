@@ -1935,7 +1935,7 @@ export interface paths {
             'application/json': components['schemas']['Error'];
           };
         };
-        /** @description A live owner answered but could not be stopped; the run was not changed */
+        /** @description Abandonment or worktree release refused; inspect the reported reason */
         409: {
           headers: {
             [name: string]: unknown;

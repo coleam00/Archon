@@ -106,6 +106,7 @@ const operationDeps = {
   requestDetachedRunStop,
   isRunOwnedByThisProcess,
   isRunOwnerAnswering,
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: async () => {
     throw new Error('Unexpected container cleanup');
   },

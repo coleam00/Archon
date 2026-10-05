@@ -34,6 +34,8 @@ import {
   CancelRefusedError,
   workflowOperationErrorMessage,
   describeAbandonOwner,
+  describeReleasedWorktrees,
+  type AbandonConversationRunsResult,
 } from '../operations/workflow-operations';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { safeDeactivateSession } from '../state/session-transitions';
@@ -917,9 +919,19 @@ async function handleWorkflowCommand(
       }
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-          await operations.abandonWorkflow(runId);
-        let message = `${describeAbandonOwner(owner).join('\n')}\nAbandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        const {
+          run,
+          cascadeFailures,
+          cleanupWarnings,
+          releasedWorktrees,
+          blockedParentRunId,
+          owner,
+        } = await operations.abandonWorkflow(runId);
+        let message = [
+          ...describeAbandonOwner(owner),
+          `Abandoned workflow run \`${run.workflow_name}\` (${runId})`,
+          ...describeReleasedWorktrees(releasedWorktrees),
+        ].join('\n');
         for (const warning of cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
         if (cascadeFailures > 0) {
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
@@ -1425,12 +1437,14 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // user most needs to know that N runs were already cancelled.
       let abandoned = 0;
       let cleanupWarnings: string[] | undefined;
+      let releasedWorktrees: AbandonConversationRunsResult['releasedWorktrees'];
       let abandonBlockedParentRunId: string | null = null;
       let abandonError: string | null = null;
       try {
         ({
           abandoned,
           cleanupWarnings,
+          releasedWorktrees,
           blockedParentRunId: abandonBlockedParentRunId,
         } = await operations.abandonResumableRunsForConversation(conversation.id));
       } catch (error) {
@@ -1464,6 +1478,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       );
       for (const warning of cleanupWarnings ?? []) parts.push(`⚠️ ${warning}`);
       if (abandoned > 0) parts.push(`Abandoned ${String(abandoned)} resumable run(s).`);
+      parts.push(...describeReleasedWorktrees(releasedWorktrees));
       if (abandonBlockedParentRunId !== null) {
         parts.push(
           `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`

@@ -305,6 +305,9 @@
     ],
     [
       "src/db/users.sqlite.integration.test.ts"
+    ],
+    [
+      "src/services/cleanup-worktree.integration.test.ts"
     ]
   ]
 }

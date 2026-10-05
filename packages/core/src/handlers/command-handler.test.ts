@@ -19,7 +19,7 @@ import {
   MissingProjectDirectoryError,
   type IsolationEnvironmentRow,
   type IsolationRequest,
-  type IsolatedEnvironment,
+  type WorktreeCreationEnvironment,
 } from '@archon/isolation';
 import { join } from 'path';
 import * as fsPromises from 'fs/promises';
@@ -362,7 +362,9 @@ mock.module('../db/isolation-environments', () => ({
 }));
 
 // Mock isolation provider
-const mockIsolationCreate = mock<(request: IsolationRequest) => Promise<IsolatedEnvironment>>(() =>
+const mockIsolationCreate = mock<
+  (request: IsolationRequest) => Promise<WorktreeCreationEnvironment>
+>(() =>
   Promise.resolve({
     id: '/workspace/my-repo/worktrees/task-feat-auth',
     provider: 'worktree',
@@ -370,7 +372,11 @@ const mockIsolationCreate = mock<(request: IsolationRequest) => Promise<Isolated
     branchName: gitUtils.toBranchName('task-feat-auth'),
     status: 'active',
     createdAt: new Date(),
-    metadata: { adopted: false },
+    metadata: {
+      provenance: 'created',
+      adopted: false,
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    },
   })
 );
 const mockIsolationDestroy = mock(() => Promise.resolve());
@@ -431,6 +437,7 @@ mock.module('../services/run-owner-stop', () => ({
 
 const mockReclaimContainerEnv = mock(async () => {});
 mock.module('../services/cleanup-service', () => ({
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
   cleanupMergedWorktrees: mockCleanupMergedWorktrees,
   cleanupStaleWorktrees: mockCleanupStaleWorktrees,

@@ -1,4 +1,4 @@
-import type { WorkflowRunOrigin } from './schemas/workflow-run';
+import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -579,6 +579,7 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  ownedWorktree?: OwnedWorktree;
   preparedAiConfiguration?: PreparedRunAiConfiguration;
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
@@ -1524,6 +1525,9 @@ async function runChildWorkflow(
             ...(childIsolationEnv
               ? {
                   isolation_env_id: childIsolationEnv.envId,
+                  ...(childIsolationEnv.ownedWorktree
+                    ? { owned_worktree: childIsolationEnv.ownedWorktree }
+                    : {}),
                   branch_name: childIsolationEnv.branchName,
                 }
               : {}),
@@ -2171,6 +2175,7 @@ export async function executeWorkflow(
           ...(issueContext ? { github_context: issueContext } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
           ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+          ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
           // Declared inputs supplied by a direct top-level invocation (#2554), already
           // validated by the invocation gate. Written here — inside `if (!workflowRun)` —
           // so a resume, which arrives with `preCreatedRun` set and never enters this
@@ -2218,7 +2223,7 @@ export async function executeWorkflow(
     const pendingRun = workflowRun;
     let claimed: WorkflowRun | null;
     try {
-      claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id);
+      claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
     } catch (error) {
       getLog().error(
         { err: error, workflowRunId: workflowRun.id },
@@ -2242,7 +2247,8 @@ export async function executeWorkflow(
       return {
         success: false,
         workflowRunId: workflowRun.id,
-        error: 'Workflow run is no longer pending or no longer owns its admitted resource',
+        error:
+          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
       };
     }
     pendingRun.status = claimed.status;
@@ -2272,6 +2278,7 @@ export async function executeWorkflow(
             ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
             ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
             ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+            ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
           }),
       [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
     };

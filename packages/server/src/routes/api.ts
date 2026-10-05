@@ -310,6 +310,8 @@ import {
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
   describeAbandonOwner,
+  describeReleasedWorktrees,
+  AbandonRefusedError,
   assertRespondable,
 } from '@archon/core/operations/workflow-operations';
 import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
@@ -1090,7 +1092,7 @@ const abandonWorkflowRunRoute = createRoute({
     },
     400: jsonError('Bad request'),
     404: jsonError('Not found'),
-    409: jsonError('A live owner answered but could not be stopped; the run was not changed'),
+    409: jsonError('Abandonment or worktree release refused; inspect the reported reason'),
     500: jsonError('Server error'),
   },
 });
@@ -3896,23 +3898,13 @@ export function registerApiRoutes(
       if (!run) {
         return apiError(c, 404, 'Workflow run not found');
       }
-      // A `failed` run is terminal per TERMINAL_WORKFLOW_STATUSES but remains
-      // resumable, so the user must be able to discard it — only the two
-      // non-resumable terminal states are blocked (the 400 mapping lives here;
-      // abandonWorkflow re-validates).
-      if (run.status === 'completed' || run.status === 'cancelled') {
-        return apiError(
-          c,
-          400,
-          `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
-        );
-      }
-      // Delegate to the SHARED op — a raw cancelWorkflowRun here previously skipped
-      // the sub-run cascade cancel AND the container reclaim (M2), so a web abandon
-      // orphaned children that CLI/chat abandons cleaned up.
-      const { cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+      const { cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
         await abandonWorkflow(runId);
-      let message = `${describeAbandonOwner(owner).join(' ')} Abandoned workflow: ${run.workflow_name}`;
+      let message = [
+        ...describeAbandonOwner(owner),
+        `Abandoned workflow: ${run.workflow_name}`,
+        ...describeReleasedWorktrees(releasedWorktrees),
+      ].join(' ');
       for (const warning of cleanupWarnings ?? []) message += ` — warning: ${warning}`;
       if (cascadeFailures > 0) {
         message += ` — warning: ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running`;
@@ -3922,7 +3914,7 @@ export function registerApiRoutes(
       }
       return c.json({ success: true, message });
     } catch (error) {
-      if (error instanceof AbandonOwnerNotStoppedError) {
+      if (error instanceof AbandonOwnerNotStoppedError || error instanceof AbandonRefusedError) {
         return apiError(c, 409, error.message);
       }
       getLog().error({ err: error, runId }, 'api.workflow_run_abandon_failed');

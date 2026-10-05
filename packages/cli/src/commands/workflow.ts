@@ -57,12 +57,13 @@ import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
+  worktreeRegistrationMetadata,
 } from '@archon/isolation';
 import type {
   ExecutionContext,
   ContainerBackend,
   ContainerBackendConfig,
-  IsolatedEnvironment,
+  WorktreeCreationEnvironment,
 } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import {
@@ -174,6 +175,7 @@ import {
   workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
+  describeReleasedWorktrees,
   assertApprovable,
   assertRejectable,
   assertRespondable,
@@ -2706,6 +2708,7 @@ async function runWorkflowWithOwnedSource(
   let isolationEnvId: string | undefined;
   // Set only when this invocation created the run's branch (#3305).
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   // Execution context for the run. Repo/worktree and folder-in-place both run on
   // the host; the folder-backend seam sets this and is where `--container` flips
   // it to a container context.
@@ -3138,7 +3141,7 @@ async function runWorkflowWithOwnedSource(
         'worktree_creating'
       );
 
-      let isolatedEnv: IsolatedEnvironment;
+      let isolatedEnv: WorktreeCreationEnvironment;
       try {
         isolatedEnv = await provider.create({
           workflowType: 'task',
@@ -3183,11 +3186,13 @@ async function runWorkflowWithOwnedSource(
         working_path: isolatedEnv.workingPath,
         branch_name: isolatedEnv.branchName,
         created_by_platform: 'cli',
-        metadata: {},
+        metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
       });
 
       workingCwd = isolatedEnv.workingPath;
       isolationEnvId = envRecord.id;
+      if (isolatedEnv.metadata.provenance === 'created')
+        ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
       if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
       getLog().info({ path: workingCwd }, 'worktree_created');
     }
@@ -3469,6 +3474,7 @@ async function runWorkflowWithOwnedSource(
         // when IT creates the row, and this row already carries them.
         ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
         ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+        ownedWorktree,
       };
       result = await engine.submit({
         platform: adapter,
@@ -5758,8 +5764,14 @@ export async function workflowAbandonCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(runId, cwd);
-      const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-        await abandonWorkflow(resolvedId);
+      const {
+        run,
+        cascadeFailures,
+        cleanupWarnings,
+        releasedWorktrees,
+        blockedParentRunId,
+        owner,
+      } = await abandonWorkflow(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5777,6 +5789,7 @@ export async function workflowAbandonCommand(
                 recordedUid: owner.recordedOwner?.uid ?? null,
                 lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
               },
+        ...(releasedWorktrees ? { releasedWorktrees } : {}),
         ...(cleanupWarnings ? { cleanupWarnings } : {}),
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
@@ -5788,11 +5801,12 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(runId, cwd);
-  const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+  const { run, cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
     await abandonWorkflow(resolvedId);
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+  for (const line of describeReleasedWorktrees(releasedWorktrees)) console.log(line);
   for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
 }

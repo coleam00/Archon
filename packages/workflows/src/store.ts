@@ -362,8 +362,12 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
-  /** Fresh execution must win this pending-to-running CAS before doing any work. */
-  claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /**
+   * Fresh execution must win this pending-to-running CAS before doing any work.
+   * `workingPath` is the checkout the run will use; the claim stamps it on a row
+   * created without one.
+   */
+  claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
    * Record the run's checkout baseline (#3305). Write-once in the store: the first value
    * sticks and a later call returns it unchanged. Returns the persisted baseline.

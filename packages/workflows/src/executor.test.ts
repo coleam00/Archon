@@ -1,3 +1,4 @@
+import type { ExecuteWorkflowOptions } from './executor';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
  * Covers concurrent-run guards, model/provider resolution, and resume logic
@@ -354,6 +355,54 @@ describe('executeWorkflow', () => {
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
   });
 
+  it.each(['fresh', 'precreated', 'resume'] as const)(
+    'persists creation proof only on %s invocation',
+    async mode => {
+      const store = makeStore();
+      const updatesSpy = spyOn(store, 'updateWorkflowRun');
+      const original = {
+        envId: 'env-original',
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+      };
+      const incoming = { envId: 'env-new', creationId: 'c226ac7a-33cb-4ae0-aa9f-f07df1141dde' };
+      const prior = makeRun({
+        status: mode === 'precreated' ? 'pending' : 'running',
+        metadata: { owned_worktree: original },
+      });
+      const options: ExecuteWorkflowOptions =
+        mode === 'fresh'
+          ? { ownedWorktree: incoming }
+          : mode === 'resume'
+            ? { ownedWorktree: incoming, preCreatedRun: prior, priorCompletedNodes: new Map() }
+            : { ownedWorktree: incoming, preCreatedRun: prior };
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/repo',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        options
+      );
+      if (mode === 'fresh') {
+        expect(store.createWorkflowRun).toHaveBeenCalledWith(
+          expect.objectContaining({
+            metadata: expect.objectContaining({ owned_worktree: incoming }),
+          })
+        );
+      } else {
+        const updates = updatesSpy.mock.calls;
+        const proofWrites = updates.filter(
+          ([, update]) => update.metadata?.owned_worktree !== undefined
+        );
+        expect(proofWrites.length).toBe(mode === 'resume' ? 0 : 1);
+        if (mode === 'precreated')
+          expect(proofWrites[0]?.[1].metadata?.owned_worktree).toEqual(incoming);
+        expect(prior.metadata.owned_worktree).toEqual(original);
+      }
+    }
+  );
   it.each([false, true])('persists loaded graph before DAG execution (resume=%s)', async resume => {
     const store = makeStore();
     const workflow = makeWorkflow({ returns: 'node1' });
@@ -5462,6 +5511,8 @@ describe('run checkout baseline (#3305)', () => {
     );
 
     expect(order).toEqual(['claim', 'baseline', 'first node']);
+    // The claim carries the checkout so a pre-created row without a path is fenced by it.
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalledWith('run-123', repo);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledTimes(1);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledWith(
       'run-123',

@@ -207,8 +207,10 @@ mock.module('@archon/core/services/run-live-owner', () => ({
 mock.module(
   '@archon/core/services/cleanup-service',
   (): {
+    reclaimRunWorktree: () => Promise<{ warnings: string[] }>;
     reclaimContainerEnv: typeof mockReclaimContainerEnv;
   } => ({
+    reclaimRunWorktree: async () => ({ warnings: [] }),
     reclaimContainerEnv: mockReclaimContainerEnv,
   })
 );
@@ -279,7 +281,9 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
   configureIsolation: mock(() => undefined),
   // Marked rather than reimplemented: these tests prove a failure path routes
   // through the classifier, while what the real one produces is the isolation
@@ -294,7 +298,11 @@ mock.module('@archon/isolation', () => ({
         branchName: 'test-branch',
         status: 'active',
         createdAt: new Date(),
-        metadata: { adopted: false },
+        metadata: {
+          provenance: 'created',
+          adopted: false,
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        },
       })
     ),
     healthCheck: mock(() => Promise.resolve(true)),
@@ -616,17 +624,24 @@ function statusRuns(runs: unknown[]): {
   return { runs, total: runs.length, counts: EMPTY_STATUS_COUNTS };
 }
 
+const mockLookupWorkflowRun = mock<typeof import('@archon/core/db/workflows').getWorkflowRun>(
+  async () => null
+);
+const mockCancelWorkflowRunCommand = mock<
+  typeof import('@archon/core/db/workflows').cancelWorkflowRun
+>(async () => ({ cancelled: true }));
+
 mock.module('@archon/core/db/workflows', () => ({
   createWorkflowRun: mockCreateWorkflowRun,
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRunStatus: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
-  cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
+  cancelWorkflowRun: mockCancelWorkflowRunCommand,
   findChildRuns: mock(() => Promise.resolve([])),
   getRunAncestry: mock(() => Promise.resolve([])),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
-  getWorkflowRun: mock(() => Promise.resolve(null)),
+  getWorkflowRun: mockLookupWorkflowRun,
   findAdoptingRuns: mock(() => Promise.resolve([])),
   findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   updateWorkflowRun: mock(() => Promise.resolve()),
@@ -798,6 +813,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
       requestDetachedRunStop: mockRequestDetachedRunStop,
       isRunOwnedByThisProcess: () => false,
       isRunOwnerAnswering: mockIsRunOwnerAnswering,
+      reclaimRunWorktree: async () => ({ warnings: [] }),
       reclaimContainerEnv: mockReclaimContainerEnv,
     }),
 }));
@@ -7836,6 +7852,8 @@ describe('write command --json output', () => {
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     stdoutSpy = spyOnJsonStdout();
+    mockCancelWorkflowRunCommand.mockReset();
+    mockCancelWorkflowRunCommand.mockResolvedValue({ cancelled: true });
     mockRequestDetachedRunStop.mockReset();
     mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
   });
@@ -7843,6 +7861,36 @@ describe('write command --json output', () => {
   afterEach(() => {
     consoleSpy.mockRestore();
     stdoutSpy.mockRestore();
+  });
+
+  it('JSON reports failure when abandonment loses cancellation', async () => {
+    mockLookupWorkflowRun.mockResolvedValueOnce({
+      id: 'run-1',
+      workflow_name: 'test',
+      conversation_id: 'conv',
+      parent_conversation_id: null,
+      codebase_id: null,
+      status: 'running',
+      outcome: null,
+      user_message: '',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: null,
+      user_id: null,
+      parent_run_id: null,
+      adopted_from_run_id: null,
+      output_root: null,
+      checkout_baseline: null,
+      origin: null,
+    });
+    mockCancelWorkflowRunCommand.mockResolvedValueOnce({ cancelled: false });
+    await workflowAbandonCommand('run-1', true);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('changed before abandonment'),
+    });
   });
 
   it('abandon --json emits a structured cancelled result', async () => {
@@ -13408,7 +13456,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         branchName: 'feature/live-pr',
         status: 'active' as const,
         createdAt: new Date(),
-        metadata: { adopted: true },
+        metadata: { provenance: 'adopted', adopted: true },
       })
     );
     (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
@@ -13446,7 +13494,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
           branchName: 'feature/live-pr',
           status: 'active' as const,
           createdAt: new Date(),
-          metadata: { adopted: true },
+          metadata: { provenance: 'adopted', adopted: true },
         })
       ),
       healthCheck: mock(() => Promise.resolve(true)),

@@ -85,10 +85,13 @@ import { loadRepoConfig } from '../config/config-loader';
 import { toBranchName } from '@archon/git';
 import { startRunLiveOwner } from '../services/run-live-owner';
 
+import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
+
 type IsolationResolution =
   | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow }
   | {
       status: 'new';
+      ownedWorktree?: OwnedWorktree;
       cwd: string;
       env: IsolationEnvironmentRow;
       /** The commit a branch created by this resolution was cut from. */
@@ -215,6 +218,9 @@ export async function validateAndResolveIsolation(
       }
       return {
         status: 'new',
+        ...(result.method.type === 'created'
+          ? { ownedWorktree: { envId: result.env.id, creationId: result.method.creationId } }
+          : {}),
         cwd: result.cwd,
         env: result.env,
         ...(result.method.type === 'created' && result.method.cutFromCommit !== undefined
@@ -480,6 +486,7 @@ async function dispatchBackgroundWorkflowOwned(
   // is then fatal (never fall back to running in a shared/parent worktree).
   let workerCwd: string;
   let workerCutFromCommit: string | undefined;
+  let workerOwnedWorktree: OwnedWorktree | undefined;
   let codebaseBaseBranch: string | undefined;
   let resolveChildIsolation: ReturnType<typeof createCodebaseChildResolver>;
   if (ctx.codebaseId) {
@@ -555,7 +562,10 @@ async function dispatchBackgroundWorkflowOwned(
         ctx.userId
       );
       workerCwd = result.cwd;
-      if (result.status === 'new') workerCutFromCommit = result.cutFromCommit;
+      if (result.status === 'new') {
+        workerCutFromCommit = result.cutFromCommit;
+        workerOwnedWorktree = result.ownedWorktree;
+      }
       await db.updateConversation(workerConv.id, { cwd: workerCwd }).catch((e: unknown) => {
         getLog().warn(
           { err: toError(e), workerPlatformId },
@@ -682,6 +692,7 @@ async function dispatchBackgroundWorkflowOwned(
             preparedAiConfiguration,
             capturedSourceOwner: backgroundOwner,
             ...(workerCutFromCommit !== undefined ? { cutFromCommit: workerCutFromCommit } : {}),
+            ownedWorktree: workerOwnedWorktree,
             // Only consumed when `preCreatedRun` is undefined (pre-creation failed and
             // the executor creates the row itself); otherwise the row above already
             // carries them.
