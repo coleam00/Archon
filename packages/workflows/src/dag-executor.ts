@@ -4171,7 +4171,14 @@ async function executeLoopGroupNode(
     };
   } else if (result.state === 'running') {
     const suspensionPoint = result.suspensionPoint;
-    if (suspensionPoint === undefined) return serializeNodeOutput(execution);
+    // A deferred body or loop gate leaves the group running; keep the spend its
+    // iterations already made.
+    if (suspensionPoint === undefined)
+      return {
+        ...serializeNodeOutput(execution),
+        ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
+        ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
+      };
     lifecycle = { status: 'suspended', point: suspensionPoint };
   } else {
     lifecycle = { status: 'completed' };
@@ -5090,7 +5097,14 @@ async function executeLoopGroupBody(
           ),
           { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
         );
-        if (!failed) return { state: 'running', output: lastIterationOutput };
+        if (!failed)
+          return {
+            state: 'running',
+            output: lastIterationOutput,
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i,
+          };
         getLog().error(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_group_node.gate_message_send_failed'
@@ -6579,13 +6593,20 @@ async function executeLoopNode(
         // snapshotting both forms preserves resume determinism after source deletion.
         commandSnapshot: loopPromptTemplate,
       };
+      // A deferred gate leaves the node running, but its iterations were paid for:
+      // carry the spend so the run totals keep it.
+      const deferredLoopOutput = (): NodeExecutionResult => ({
+        ...serializeNodeOutput(execution),
+        ...(loopTotalCostUsd !== undefined ? { costUsd: loopTotalCostUsd } : {}),
+        ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+      });
       const paused = await pauseGateRespectingExternalTransition(
         deps,
         workflowRun.id,
         approvalContext,
         { suspension: serializeNodeStateRecord(suspended) }
       );
-      if (!paused) return serializeNodeOutput(execution);
+      if (!paused) return deferredLoopOutput();
       await recordDerivedExecution({ logDir }, suspended);
       const gateMsg =
         `\u23f8 **Input required** (loop \`${node.id}\`, iteration ${String(i)}): ${honestMessage}\n\n` +
@@ -6605,7 +6626,7 @@ async function executeLoopNode(
           ),
           { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
         );
-        if (!failed) return serializeNodeOutput(execution);
+        if (!failed) return deferredLoopOutput();
         getLog().error(
           { nodeId: node.id, workflowRunId: workflowRun.id, iteration: i },
           'loop_node.gate_message_send_failed'

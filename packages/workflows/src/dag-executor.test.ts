@@ -30717,7 +30717,7 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     it(`defers the second same-run ${kind} gate without prompting or terminalizing`, async () => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'agent_message_chunk', text: 'COMPLETE' };
-        yield { type: 'result', sessionId: 'loop-session' };
+        yield { type: 'result', sessionId: 'loop-session', cost: 0.25 };
       });
       const workflow = {
         name: 'concurrent-gates',
@@ -30797,6 +30797,8 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
         )
       ).toBe(false);
       expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      // The deferred node already paid for its iteration; the run total keeps it.
+      expect(runUsageWrites(store).at(-1)?.total_cost_usd).toBe(0.5);
       const resumedStore = createEscalationStore(runId);
       await executeDagWorkflow(
         dagOptions({
