@@ -37,6 +37,7 @@ deliver__review__publish:
   findings_summary: "stub: no open findings"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
 ci-probe: '{"state":"concluded","detail":"all checks green"}'
+deliver__review-policy: { risks: "fixture-owned-policy" }
 deliver__classify:
   tier: full
   errors: false
@@ -59,7 +60,8 @@ deliver__flip-ready: { pr_url: "https://github.com/example/repo/pull/4" }
 deliver__outcome: { pr_url: "https://github.com/example/repo/pull/4", summary: "https://github.com/example/repo/pull/4" }
 deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 4, url: "https://github.com/example/repo/pull/4", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"deliver__review__mode","invocation":{"loopPath":[]}}}'
+deliver__review__coverage: { full: true }
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false

@@ -43,7 +43,6 @@ import {
   signalWorkflowWait,
   type WorkflowEventSignalCandidate,
 } from '@archon/core/db/workflows';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { createLogger } from '@archon/paths';
 import { parseAllowedUsers as parseGitHubAllowedUsers, isGitHubUserAuthorized } from './auth';
 import { splitIntoParagraphChunks } from '../../utils/message-splitting';
@@ -555,7 +554,10 @@ export class GitHubAdapter implements IPlatformAdapter {
    * Does NOT handle:
    * - issues.opened / pull_request.opened → returns null (see #96)
    */
-  private parseEvent(event: WebhookEvent): {
+  private parseEvent(
+    event: WebhookEvent,
+    githubEvent?: string
+  ): {
     owner: string;
     repo: string;
     number: number;
@@ -566,8 +568,13 @@ export class GitHubAdapter implements IPlatformAdapter {
     isCloseEvent?: boolean;
     isMerged?: boolean;
   } | null {
-    const owner = event.repository.owner.login;
-    const repo = event.repository.name;
+    const repository = event.repository;
+    if (!repository?.owner) {
+      getLog().debug({ githubEvent }, 'github.repositoryless_webhook_ignored');
+      return null;
+    }
+    const owner = repository.owner.login;
+    const repo = repository.name;
 
     // Detect issue closed
     if (event.issue && event.action === 'closed') {
@@ -905,7 +912,6 @@ export class GitHubAdapter implements IPlatformAdapter {
       name: `${owner}/${repo}`,
       repository_url: repoUrlNoGit, // Store without .git for consistency
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'github.codebase_created');
@@ -1099,7 +1105,7 @@ ${userComment}`;
       return; // Silent rejection - no error response
     }
 
-    const parsed = this.parseEvent(event);
+    const parsed = this.parseEvent(event, githubEvent);
     if (!parsed) return;
 
     const { owner, repo, number, comment, eventType, issue, pullRequest, isCloseEvent, isMerged } =
@@ -1202,36 +1208,12 @@ ${userComment}`;
       this.actorByConversation.set(conversationId, archonUserId);
     }
 
-    // 5. Check if new conversation
-    const existingConv = await db.getOrCreateConversation('github', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
-
     // 6. Get/create codebase (checks for existing first!)
     const {
       codebase,
       repoPath,
       isNew: isNewCodebase,
     } = await this.getOrCreateCodebaseForRepo(owner, repo);
-
-    // 6b. Link conversation to codebase (fixes #97)
-    if (isNewConversation) {
-      try {
-        await db.updateConversation(existingConv.id, {
-          codebase_id: codebase.id,
-          cwd: repoPath,
-        });
-      } catch (updateError) {
-        if (updateError instanceof ConversationNotFoundError) {
-          getLog().error(
-            { conversationId: existingConv.id, codebaseId: codebase.id },
-            'github.conversation_codebase_link_failed'
-          );
-          // Re-throw as this is a critical setup step
-          throw new Error('Failed to set up GitHub conversation - please try again');
-        }
-        throw updateError;
-      }
-    }
 
     // 7. Get default branch
     let defaultBranch: string;
@@ -1257,6 +1239,28 @@ ${userComment}`;
 
     // 8. Ensure repo ready (clone if needed, sync if new conversation)
     await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewCodebase);
+
+    const existingConv = await db.getOrCreateConversation('github', conversationId, codebase.id);
+    const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+    if (needsProjectContext) {
+      try {
+        await db.updateConversation(existingConv.id, {
+          codebase_id: codebase.id,
+          cwd: repoPath,
+        });
+      } catch (updateError) {
+        if (updateError instanceof ConversationNotFoundError) {
+          getLog().error(
+            { conversationId: existingConv.id, codebaseId: codebase.id },
+            'github.conversation_codebase_link_failed'
+          );
+          // Re-throw as this is a critical setup step
+          throw new Error('Failed to set up GitHub conversation - please try again');
+        }
+        throw updateError;
+      }
+    }
 
     // 9. Auto-load commands if new codebase (defaults loaded at runtime, not copied)
     if (isNewCodebase) {
