@@ -15,6 +15,8 @@ Discord is a **community adapter** — contributed and maintained by the communi
 
 Connect Archon to Discord so you can interact with your AI coding assistant from any Discord server or DM.
 
+New identities are created as members. The operator can designate admins with [`archon user role <id> admin`](/reference/security/#users-and-roles); run-action enforcement ships separately.
+
 ## Prerequisites
 
 - Archon server running (see [Getting Started](/getting-started/overview/))

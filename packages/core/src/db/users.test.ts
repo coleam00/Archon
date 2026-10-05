@@ -99,7 +99,7 @@ describe('users', () => {
       expect(mockWithTransaction).not.toHaveBeenCalled();
     });
 
-    test('returns the role from the user row (identity seam, defaults admin)', async () => {
+    test('returns the role from the user row (existing admin)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'admin' })]));
 
@@ -176,7 +176,7 @@ describe('users', () => {
 
     test('creates new user + identity when first seen', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      const newUser = userRow({ id: 'user-new', display_name: 'Bob' });
+      const newUser = userRow({ id: 'user-new', display_name: 'Bob', role: 'member' });
       mockQuery.mockResolvedValueOnce(createQueryResult([newUser]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
@@ -186,8 +186,8 @@ describe('users', () => {
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'INSERT INTO remote_agent_users (display_name) VALUES ($1) RETURNING *',
-        ['Bob']
+        'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
+        ['Bob', 'member']
       );
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
@@ -198,7 +198,7 @@ describe('users', () => {
 
     test('creates a new identity for an unregistered adapter', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      const newUser = userRow({ id: 'user-new', display_name: 'Bob' });
+      const newUser = userRow({ id: 'user-new', display_name: 'Bob', role: 'member' });
       mockQuery.mockResolvedValueOnce(createQueryResult([newUser]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
@@ -208,8 +208,8 @@ describe('users', () => {
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'INSERT INTO remote_agent_users (display_name) VALUES ($1) RETURNING *',
-        ['Bob']
+        'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
+        ['Bob', 'member']
       );
       expect(mockQuery).toHaveBeenNthCalledWith(
         3,
@@ -284,7 +284,7 @@ describe('users', () => {
     test('repairs orphaned identity (user_id points to deleted user)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      const repaired = userRow({ id: 'user-repaired', display_name: 'Carol' });
+      const repaired = userRow({ id: 'user-repaired', display_name: 'Carol', role: 'member' });
       mockQuery.mockResolvedValueOnce(createQueryResult([repaired]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
@@ -292,6 +292,11 @@ describe('users', () => {
 
       expect(result).toEqual(repaired);
       expect(mockWithTransaction).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenNthCalledWith(
+        3,
+        'INSERT INTO remote_agent_users (display_name, role) VALUES ($1, $2) RETURNING *',
+        ['Carol', 'member']
+      );
     });
   });
 

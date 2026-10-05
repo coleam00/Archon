@@ -236,14 +236,15 @@ export class AppServerConnection {
    * exited within `graceMs`. Never SIGKILL: SIGTERM lets Codex stop the commands it
    * started, while SIGKILL orphans them.
    */
-  async shutdown(graceMs: number): Promise<void> {
-    if (this.endedWith) return;
+  async shutdown(graceMs: number): Promise<ConnectionEnd | undefined> {
+    if (this.endedWith) return this.endedWith;
     this.child.stdin.end();
-    if (await this.exitsWithin(graceMs)) return;
+    if (await this.exitsWithin(graceMs)) return this.endedWith;
     this.child.kill('SIGTERM');
     if (!(await this.exitsWithin(graceMs))) {
       getLog().warn({ pid: this.child.pid }, 'codex.app_server_ignored_sigterm');
     }
+    return this.endedWith;
   }
 
   private exitsWithin(ms: number): Promise<boolean> {
