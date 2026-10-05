@@ -65,7 +65,7 @@ import {
 import { createLogger } from '@archon/paths';
 import {
   validateDagStructure,
-  validateNodeOutputFormats,
+  validateLoopGroupProseCompletion,
   validateWorkflowOutcomeDeclaration,
 } from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
@@ -1309,9 +1309,9 @@ export function expandWorkflowIncludes(
     if (structureError) {
       throw new IncludeExpansionError(structureError);
     }
-    const outputFormatError = validateNodeOutputFormats(expanded.nodes);
-    if (outputFormatError) {
-      throw new IncludeExpansionError(outputFormatError);
+    const proseCompletionError = validateLoopGroupProseCompletion(expanded.nodes);
+    if (proseCompletionError) {
+      throw new IncludeExpansionError(proseCompletionError);
     }
 
     const dedupedRequires = [...new Set(requires)];
