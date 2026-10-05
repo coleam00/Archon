@@ -1901,6 +1901,20 @@ export async function handleMessage(
   try {
     getLog().debug({ conversationId, userId }, 'orchestrator_message_received');
 
+    const parsed = trimmedMessage.startsWith('/')
+      ? commandHandler.parseCommand(message)
+      : undefined;
+    if (parsed?.command === 'detach-project') {
+      const reply = await handleDetachProject(
+        platform,
+        conversationId,
+        parsed.args,
+        parentConversationId
+      );
+      await platform.sendMessage(conversationId, reply);
+      return;
+    }
+
     // 1. Get/create conversation and inherit thread context.
     // userId is recorded on the conversation row only on first creation —
     // first-user-wins. The row's user_id is provenance plus a fallback for
@@ -1922,8 +1936,8 @@ export async function handleMessage(
     );
 
     // 2. Check for deterministic commands
-    if (trimmedMessage.startsWith('/')) {
-      const { command } = commandHandler.parseCommand(message);
+    if (parsed) {
+      const { command } = parsed;
       const deterministicCommands = [
         'help',
         'status',
@@ -3623,4 +3637,54 @@ async function handleWorkflowRunCommand(
       ? `Choose a project for this conversation, then retry \`${spellWorkflowCommand(platform, `resume ${request.run.id}`)}\`.\n\n${projectList}`
       : `Which project should this workflow run on?\n\n${projectList}\n\nReply with the project name, or use: ${spellWorkflowCommand(platform, `run ${request.definition.name} --project <name> "${request.args}"`)}`
   );
+}
+
+async function handleDetachProject(
+  platform: IPlatformAdapter,
+  platformId: string,
+  args: string[],
+  parentPlatformId?: string
+): Promise<string> {
+  if (args.length !== 1 || !args[0].trim()) {
+    return 'Usage: /detach-project "<current-project-name>". Supply the exact project name; quote names containing spaces.';
+  }
+  switch (platform.capabilities.projectBinding) {
+    case 'repository':
+      return 'Cannot detach this repository conversation: the next repository event would reattach its project.';
+    case 'ephemeral':
+      return 'Cannot detach this conversation: it does not survive this invocation.';
+    case 'durable':
+      break;
+    default:
+      return 'Project detachment is not supported on this conversation surface.';
+  }
+  const conversation = await db.getConversationByPlatformId(platform.getPlatformType(), platformId);
+  if (!conversation) return 'Cannot detach: this conversation does not exist.';
+  const result = await db.detachConversationProject({
+    conversationId: conversation.id,
+    projectName: args[0],
+    platformType: platform.getPlatformType(),
+    parentPlatformId,
+  });
+  switch (result.status) {
+    case 'detached':
+      return `This conversation is now neutral. Project "${result.projectName}" remains registered and available to other conversations.`;
+    case 'blocked': {
+      const blockers = result.runs.map(run => `- Run ${run.id}: ${run.status}`);
+      if (result.environmentId !== null)
+        blockers.push(`- Attached environment: ${result.environmentId}`);
+      return `Cannot detach while this conversation owns work or an environment:\n${blockers.join('\n')}\nResolve runs through manage_run, CLI or Web run controls, and clean the environment through the existing isolation controls before retrying. Nothing was cancelled or removed.`;
+    }
+    case 'refused':
+      switch (result.reason) {
+        case 'parent-bound':
+          return 'Cannot detach this child conversation: it would inherit its bound parent project on the next message.';
+        case 'parent-changed':
+          return 'Cannot detach: the parent conversation changed during validation. Retry the command.';
+        case 'neutral':
+          return 'This conversation is already neutral.';
+        case 'name':
+          return 'Cannot detach: supply the exact, unambiguous name of the project currently bound to this conversation.';
+      }
+  }
 }

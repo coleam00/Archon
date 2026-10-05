@@ -55,6 +55,12 @@
   },
   "testGroups": [
     [
+      "src/db/conversation-detach.integration.test.ts"
+    ],
+    [
+      "src/db/conversation-detach.postgres.integration.test.ts"
+    ],
+    [
       "src/db/resource-starts.integration.test.ts"
     ],
     [

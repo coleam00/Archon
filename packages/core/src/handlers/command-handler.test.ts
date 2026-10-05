@@ -584,6 +584,13 @@ describe('CommandHandler', () => {
   });
 
   describe('parseCommand', () => {
+    test('parses the exact multiword detach name as one argument', () => {
+      expect(parseCommand('/detach-project "My App"')).toEqual({
+        command: 'detach-project',
+        args: ['My App'],
+      });
+    });
+
     test('should extract command and args from /clone command', () => {
       const result = parseCommand('/clone https://github.com/user/repo');
       expect(result.command).toBe('clone');

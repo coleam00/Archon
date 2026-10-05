@@ -40,6 +40,7 @@ const MAX_TRACKED_TRIGGERS = 1000;
 
 export class SlackAdapter implements IPlatformAdapter {
   readonly capabilities = {
+    projectBinding: 'durable' as const,
     messagePersistence: 'core',
     defaultWorkflowDispatch: 'foreground',
   } as const;

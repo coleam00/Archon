@@ -121,6 +121,7 @@ export { toPersistedMessageMetadata } from './message-metadata';
 export interface IPlatformAdapter {
   readonly capabilities: {
     readonly messagePersistence: 'core' | 'adapter';
+    readonly projectBinding?: 'durable' | 'repository' | 'ephemeral';
     readonly defaultWorkflowDispatch: 'foreground' | 'background';
   };
 

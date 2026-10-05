@@ -1257,6 +1257,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
 - \`/update-project <name> <new-path>\` — Update a project's path
 - \`/remove-project <name>\` — Remove a registered project
 - \`/setproject <name>\` — Bind this conversation to a registered project
+- \`/detach-project "<current-project-name>"\` — Make this conversation neutral after resolving its runs and attached environment; keep the project registered
 
 **Session**
 - \`/status\` — Show current session and project info
@@ -1399,7 +1400,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // `codebase_id` is deliberately PRESERVED. The resulting row —
       // {codebase_id: <kept>, cwd: null, isolation_env_id: null} — is byte-for-
       // byte what /setproject already writes, so this is a well-trodden state,
-      // not a novel one. Detaching the project is /setproject none's job.
+      // not a novel one. Detaching the project is /detach-project's job.
       let hadActiveSession = false;
       let sessionError: string | null = null;
       try {
