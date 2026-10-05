@@ -64,6 +64,7 @@ export interface Run {
    */
   approval?: {
     nodeId: string;
+    pauseId?: WorkflowApproval['pauseId'];
     message: string;
     completionSignaled: boolean;
     decisions: NonNullable<WorkflowApproval['decisions']>;
@@ -200,6 +201,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     approval !== undefined && gateResolved === null
       ? {
           nodeId: approval.nodeId,
+          pauseId: approval.pauseId,
           message: approval.message,
           completionSignaled: approval.completionSignaled === true,
           decisions: approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }],

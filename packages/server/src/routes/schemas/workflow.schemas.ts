@@ -262,7 +262,11 @@ export const rejectWorkflowRunBodySchema = z
  * outcome the dedicated routes above produce.
  */
 export const respondWorkflowRunBodySchema = z
-  .object({ decision: z.string().min(1), text: z.string().optional() })
+  .object({
+    decision: z.string().min(1),
+    text: z.string().optional(),
+    expectedGate: approvalContextSchema.pick({ nodeId: true, pauseId: true }).required().optional(),
+  })
   .openapi('RespondWorkflowRunBody');
 
 /** DELETE /api/workflows/:name/node-sessions path params. */

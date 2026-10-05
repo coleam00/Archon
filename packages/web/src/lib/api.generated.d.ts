@@ -5034,6 +5034,10 @@ export interface components {
     RespondWorkflowRunBody: {
       decision: string;
       text?: string;
+      expectedGate?: {
+        nodeId: string;
+        pauseId: string;
+      };
     };
     ResetWorkflowNodeSessionsResponse: {
       success: boolean;
