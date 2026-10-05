@@ -3189,11 +3189,9 @@ export function registerApiRoutes(
     try {
       return c.json(await inspectProjectBaseBranch(body), 200);
     } catch (error) {
-      return apiError(
-        c,
-        error instanceof ProjectRegistrationError ? 400 : 500,
-        (error as Error).message
-      );
+      if (error instanceof ProjectRegistrationError) return apiError(c, 400, error.message);
+      getLog().error({ err: error }, 'inspect_base_branch_failed');
+      return apiError(c, 500, `Failed to inspect base branch: ${(error as Error).message}`);
     }
   });
 

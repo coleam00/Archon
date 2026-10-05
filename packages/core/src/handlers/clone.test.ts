@@ -372,6 +372,26 @@ describe('cloneRepository', () => {
     delete process.env.GITEA_TOKEN;
   });
 
+  test('a failed remote lookup after cloning removes the new clone', async () => {
+    const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
+    const remote = spyOn(gitUtils, 'getDefaultRemote').mockRejectedValue(
+      new Error('git remote failed')
+    );
+    try {
+      await expect(
+        cloneRepository('https://github.com/owner/repo', { baseBranch: 'dev' })
+      ).rejects.toThrow('git remote failed');
+      const target = getGitCloneCall()?.[1];
+      expect(target).toBeDefined();
+      // The first rm clears the empty source directory before cloning; the second removes the clone.
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
+      expect(mockCreateCodebase).not.toHaveBeenCalled();
+    } finally {
+      syntax.mockRestore();
+      remote.mockRestore();
+    }
+  });
+
   test('an unknown explicit branch removes only the new clone and leaves registration retryable', async () => {
     const syntax = spyOn(gitUtils, 'validateBranchName').mockResolvedValue(undefined);
     const remote = spyOn(gitUtils, 'getDefaultRemote').mockResolvedValue('origin');
@@ -386,7 +406,7 @@ describe('cloneRepository', () => {
       ).rejects.toThrow("Configured base branch 'unknown' not found on remote 'origin'");
       const target = getGitCloneCall()?.[1];
       expect(target).toBeDefined();
-      expect(spyFsRm).toHaveBeenLastCalledWith(target, { recursive: true });
+      expect(spyFsRm.mock.calls.filter((call: unknown[]) => call[0] === target)).toHaveLength(2);
       expect(mockCreateCodebase).not.toHaveBeenCalled();
     } finally {
       syntax.mockRestore();

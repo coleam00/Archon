@@ -531,9 +531,8 @@ export async function cloneRepository(
   try {
     await validateRegistrationChoice(targetPath, options);
   } catch (error) {
-    if (error instanceof ConfiguredBaseBranchNotFoundError) {
-      await rm(targetPath, { recursive: true });
-    }
+    // Any failure here leaves a clone with no registration, which would block a retry.
+    await rm(targetPath, { recursive: true });
     throw error;
   }
 
