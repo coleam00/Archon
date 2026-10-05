@@ -1,3 +1,4 @@
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
 /**
@@ -10,6 +11,7 @@ import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflo
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'fs';
+import { isAbsolute } from 'node:path';
 import { createLogger, captureChatTurn, canonicalizeProjectPath } from '@archon/paths';
 import type {
   IPlatformAdapter,
@@ -2520,6 +2522,7 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and
@@ -3382,11 +3385,16 @@ async function handleRegisterProject(
   }
 
   // Check if codebase already exists with this name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
+  if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
+    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath });
+    return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
+  }
+
   if (alreadyExists) {
-    return `Project "${projectName}" is already registered (path: ${alreadyExists.default_cwd}).`;
+    return `Project "${projectName}" is already registered (path: ${alreadyExists.stored_default_cwd}).`;
   }
 
   // Use config default provider instead of hardcoding 'claude'
@@ -3457,7 +3465,7 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3465,7 +3473,7 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   try {
-    await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
+    await codebaseDb.updateCodebase(codebase, { default_cwd: newPath });
   } catch (err) {
     getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
     // Row gone (deleted between the fetch above and the UPDATE) is the only
@@ -3477,10 +3485,10 @@ async function handleUpdateProject(message: string): Promise<string> {
     return `Project "${projectName}" could not be updated — database error. Please try again.`;
   }
   getLog().info(
-    { name: projectName, oldPath: codebase.default_cwd, newPath, id: codebase.id },
+    { name: projectName, oldPath: codebase.stored_default_cwd, newPath, id: codebase.id },
     'project.update_completed'
   );
-  return `Project "${projectName}" updated.\nOld path: ${codebase.default_cwd}\nNew path: ${newPath}`;
+  return `Project "${projectName}" updated.\nOld path: ${codebase.stored_default_cwd}\nNew path: ${newPath}`;
 }
 
 /**
@@ -3496,7 +3504,7 @@ async function handleRemoveProject(message: string): Promise<string> {
   const projectName = args[0];
 
   // Find existing codebase by name
-  const existing = await codebaseDb.listCodebases();
+  const existing = await codebaseDb.listCodebaseRegistrations();
   const codebase = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (!codebase) {
@@ -3505,7 +3513,7 @@ async function handleRemoveProject(message: string): Promise<string> {
 
   await codebaseDb.deleteCodebase(codebase.id);
   getLog().info({ name: projectName, id: codebase.id }, 'project.remove_completed');
-  return `Project "${projectName}" removed.\nPath was: ${codebase.default_cwd}`;
+  return `Project "${projectName}" removed.\nPath was: ${codebase.stored_default_cwd}`;
 }
 
 /**

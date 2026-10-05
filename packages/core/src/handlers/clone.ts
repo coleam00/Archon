@@ -312,7 +312,7 @@ async function registerRepoAtPath(
       updates.repository_url = repositoryUrl;
     }
     if (Object.keys(updates).length > 0) {
-      await codebaseDb.updateCodebase(existing.id, updates);
+      await codebaseDb.updateCodebase(existing, updates);
     }
 
     // Still reload commands for the existing codebase

@@ -1,7 +1,8 @@
 import { afterEach, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
+import { z } from '@hono/zod-openapi';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
@@ -127,3 +128,106 @@ test('nested repo registers independently and its worktree retains the child own
     db.close();
   }
 }, 120_000);
+
+test('legacy relative registration fails with recovery guidance', () => {
+  const root = mkdtempSync(join(tmpdir(), 'archon-legacy-cwd-'));
+  roots.push(root);
+  const home = join(root, 'home');
+  const repo = join(root, 'legacy-project');
+  initRepo(repo, join(root, 'remote.git'), 'probe.txt');
+  const gitLog = join(root, 'git.jsonl');
+  const recordingEntry = join(import.meta.dir, 'fixtures', 'workflow-cli-with-git-recording.ts');
+  const run = (args: string[], cwd = repo): SpawnSyncReturns<string> =>
+    spawnSync(process.execPath, [recordingEntry, ...args], {
+      cwd,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: {
+        ...process.env,
+        ARCHON_HOME: home,
+        DATABASE_URL: '',
+        ARCHON_TELEMETRY_DISABLED: '1',
+        ARCHON_TEST_GIT_LOG: gitLog,
+      },
+    });
+  const initial = run(['workflow', 'run', 'probe', '--branch', 'legacy-probe', '--from', 'main']);
+  expect(initial.status, initial.stdout + initial.stderr).toBe(0);
+  const db = new Database(join(home, 'archon.db'));
+  try {
+    const project = db
+      .query<{ id: string; name: string }, []>('SELECT id, name FROM remote_agent_codebases')
+      .get();
+    if (!project) throw new Error('Missing registration');
+    const env = db
+      .query<
+        { id: string; working_path: string; branch_name: string },
+        []
+      >('SELECT id, working_path, branch_name FROM remote_agent_isolation_environments')
+      .get();
+    if (!env) throw new Error('Missing isolation environment');
+    const gitCallSchema = z.object({ command: z.string(), args: z.array(z.string()) });
+    const recorded = (): z.infer<typeof gitCallSchema>[] =>
+      readFileSync(gitLog, 'utf8')
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .map(line => gitCallSchema.parse(JSON.parse(line)));
+    expect(recorded().some(call => call.command === 'git' && call.args.at(-1) === 'remote')).toBe(
+      true
+    );
+    db.run("UPDATE remote_agent_isolation_environments SET created_at = '2000-01-01 00:00:00'");
+    const missingPath = join(root, 'missing-worktree');
+    const ghostId = crypto.randomUUID();
+    db.run(
+      `INSERT INTO remote_agent_isolation_environments
+       (id, codebase_id, workflow_type, workflow_id, provider, working_path, branch_name,
+        created_by_platform, created_at)
+       VALUES (?, ?, 'task', 'missing', 'worktree', ?, 'missing', 'cli', '2000-01-01 00:00:00')`,
+      [ghostId, project.id, missingPath]
+    );
+    db.run("UPDATE remote_agent_codebases SET default_cwd = 'projects/some-repo'");
+    writeFileSync(gitLog, '');
+    for (const args of [
+      ['workflow', 'run', 'probe'],
+      ['workflow', 'run', 'probe', '--no-worktree'],
+      ['workflow', 'run', 'probe', '--detach'],
+      ['isolation', 'cleanup', '7'],
+    ]) {
+      const legacy = run(args);
+      expect(legacy.status, legacy.stdout + legacy.stderr).not.toBe(0);
+      expect(legacy.stdout + legacy.stderr).toContain(project.name);
+      expect(legacy.stdout + legacy.stderr).toContain('/register-project');
+    }
+    const folder = join(root, 'folder');
+    mkdirSync(folder);
+    const folderResult = run(['workflow', 'run', 'probe', '--folder', '--json'], folder);
+    expect(folderResult.status).not.toBe(0);
+    expect(JSON.parse(folderResult.stdout)).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('/register-project'),
+    });
+    expect(
+      recorded().filter(
+        call =>
+          call.command === 'git' &&
+          call.args.some(
+            (arg, index) => arg === '-C' && call.args[index + 1] === 'projects/some-repo'
+          )
+      )
+    ).toEqual([]);
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(git(repo, ['branch', '--list', env.branch_name])).toContain(env.branch_name);
+    expect(
+      db
+        .query<{ status: string }, []>('SELECT status FROM remote_agent_isolation_environments')
+        .all()
+        .every(row => row.status === 'active')
+    ).toBe(true);
+    expect(
+      db.query<{ default_cwd: string }, []>('SELECT default_cwd FROM remote_agent_codebases').get()
+        ?.default_cwd
+    ).toBe('projects/some-repo');
+  } finally {
+    db.close();
+  }
+}, 60_000);

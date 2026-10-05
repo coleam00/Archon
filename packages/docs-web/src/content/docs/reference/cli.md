@@ -927,6 +927,18 @@ After termination is confirmed, `cancel` records cancellation through the same r
 operation as `abandon`. Cancelling a parent therefore cancels every non-terminal
 descendant and can report the same cascade failures or blocked parent described below.
 
+For a detached container run, cancel must also confirm container teardown after stopping
+the owner and before recording cancellation. If that teardown fails, cancel fails and
+leaves the run's state unchanged, even though the owner process has stopped. With
+`--json`, this returns `ok: false` and an error, without `cleanupWarnings`.
+
+Once cancellation is recorded, further managed container reclamation is best-effort. If it fails,
+the run stays `cancelled`, but container resources may remain allocated. Every cancel
+surface reports a warning identifying the run and environment; inspect the managed
+containers before retrying cleanup. Successful `--json` responses include an optional
+`cleanupWarnings` array of warning strings when reclamation fails; the field is omitted
+when there are no cleanup warnings. A cleanup warning does not change `ok: true`.
+
 ### `workflow abandon`
 
 Discard a workflow run by marking it `cancelled`. `cancelled` releases the run's
@@ -955,6 +967,13 @@ archon workflow abandon <run-id> --json
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
+
+Managed container reclamation is best-effort here too. A failure leaves the run
+`cancelled` and reports a warning on every abandon surface because container resources
+may remain allocated. Inspect the managed containers before retrying cleanup.
+Successful `--json` responses include an optional `cleanupWarnings` array of warning
+strings when reclamation fails; the field is omitted when there are no cleanup
+warnings. A cleanup warning does not change `ok: true`.
 
 **Sub-run trees (#2121 Phase 2):** abandoning a parent that spawned `workflow:` sub-runs cascade-cancels every non-terminal descendant (children and grandchildren; already-terminal runs are left alone). These are database transitions, not process termination; an in-flight host command can continue until it returns. If part of the tree could not be reached, the command reports the count so you know descendants may still be alive. Conversely, abandoning a **child** that its parent is paused-and-blocked on strands that parent (nothing re-fires the auto-resume hook); the command surfaces the blocked parent's run id so you can `resume` it (which fails the sub-run node cleanly) or abandon it too.
 
@@ -1326,6 +1345,12 @@ Running from a subdirectory (e.g., `/repo/packages/cli`) automatically resolves 
 When using `--branch`, workflows run inside the worktree directory.
 
 > **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, so it picks up uncommitted changes immediately. This is different from the server (Telegram/Slack/GitHub), which reads from the workspace clone at `~/.archon/workspaces/` -- that clone only syncs from the remote before worktree creation, so changes must be pushed to take effect there.
+
+Legacy registrations with a relative stored project path fail with a project-named
+error. Repair them in Archon chat with
+`/register-project "project-name" /absolute/path/to/project`; changing the CLI's
+working directory does not repair the stored path. Re-registration preserves the
+existing project's identity and history.
 
 ## Environment
 

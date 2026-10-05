@@ -5,6 +5,7 @@ import { toBranchName } from '@archon/git';
 import type {
   ContainerBackend,
   IIsolationProvider,
+  IIsolationStore,
   IsolationEnvironmentRow,
 } from '@archon/isolation';
 import type { Codebase, Conversation, Session } from '../types';
@@ -99,19 +100,16 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
+type EnvironmentWithCodebase = Awaited<
+  ReturnType<typeof IsolationEnvironmentDb.listAllActiveWithCodebase>
+>[number];
+
 function makeEnvironmentWithCodebase(
-  overrides: Partial<
-    IsolationEnvironmentRow & {
-      codebase_default_cwd: string;
-      codebase_repository_url: string | null;
-    }
-  > = {}
-): IsolationEnvironmentRow & {
-  codebase_default_cwd: string;
-  codebase_repository_url: string | null;
-} {
+  overrides: Partial<EnvironmentWithCodebase> = {}
+): EnvironmentWithCodebase {
   return {
     ...makeEnvironment(),
+    codebase_name: 'test-project',
     codebase_default_cwd: '/workspace/repo',
     codebase_repository_url: 'https://github.com/test/repo.git',
     ...overrides,
@@ -196,7 +194,13 @@ mock.module('../isolation', () => ({
 }));
 const mockGetPrState = mock<typeof Isolation.getPrState>(() => Promise.resolve(NO_PR));
 const mockContainerDestroy = mock<ContainerBackend['destroy']>(() => Promise.resolve());
+const mockContainerOptions = mock(
+  (options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) => options
+);
 class MockContainerBackend {
+  constructor(options: ConstructorParameters<typeof Isolation.ContainerBackend>[0]) {
+    mockContainerOptions(options);
+  }
   destroy = mockContainerDestroy;
 }
 mock.module('@archon/isolation', () => ({
@@ -297,8 +301,28 @@ import {
   removeEnvironment,
   onConversationClosed,
   cleanupContainerEnvironments,
+  reclaimContainerEnv,
   SESSION_RETENTION_DAYS,
 } from './cleanup-service';
+
+describe('reclaimContainerEnv', () => {
+  test('uses the supplied isolation store and preserves destroy failures', async () => {
+    const store: IIsolationStore = {
+      getById: async () => null,
+      findActiveByWorkflow: async () => null,
+      create: async () => {
+        throw new Error('Unexpected create');
+      },
+      updateStatus: async () => {},
+      countActiveByCodebase: async () => 0,
+    };
+    await reclaimContainerEnv('supplied-env', store);
+    expect(mockContainerOptions.mock.calls.at(-1)?.[0].store).toBe(store);
+    expect(mockContainerDestroy).toHaveBeenLastCalledWith('supplied-env');
+    mockContainerDestroy.mockRejectedValueOnce(new Error('Docker unavailable'));
+    await expect(reclaimContainerEnv('supplied-env', store)).rejects.toThrow('Docker unavailable');
+  });
+});
 
 describe('cleanupContainerEnvironments — H3 fail-closed on lookup error', () => {
   const oldRow = makeContainerEnvironment({
@@ -821,6 +845,7 @@ describe('runScheduledCleanup', () => {
           status: 'active',
           created_by_platform: platformId,
           created_at: new Date(),
+          codebase_name: 'test-project',
           codebase_default_cwd: '/workspace/repo',
           codebase_id: 'codebase-1',
           workflow_type: 'issue',
@@ -875,6 +900,7 @@ describe('runScheduledCleanup', () => {
           status: 'active',
           created_by_platform: platformId,
           created_at: new Date(),
+          codebase_name: 'test-project',
           codebase_default_cwd: '/workspace/repo',
           codebase_id: 'codebase-1',
           workflow_type: 'pr',
@@ -923,6 +949,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'pr',
@@ -978,6 +1005,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1012,6 +1040,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1043,6 +1072,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days old
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1076,6 +1106,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1107,6 +1138,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'retain-test',
         created_at: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), // 30 days ago
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'thread',
@@ -1176,6 +1208,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -1190,6 +1223,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'pr',
@@ -1283,6 +1317,7 @@ describe('runScheduledCleanup', () => {
         status: 'active',
         created_by_platform: 'github',
         created_at: new Date(),
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_id: 'codebase-1',
         workflow_type: 'issue',
@@ -2479,6 +2514,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/foo',
         working_path: '/workspace/.archon/worktrees/feature-foo',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/myrepo',
         codebase_repository_url: null,
         workflow_type: 'task',
@@ -2515,6 +2551,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/baz',
         working_path: '/workspace/.archon/worktrees/feature-baz',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo',
         codebase_repository_url: null,
         workflow_type: 'task',
@@ -2548,6 +2585,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/bar',
         working_path: '/workspace/.archon/worktrees/feature-bar',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/mainrepo',
         codebase_repository_url: null,
         workflow_type: 'task',
@@ -2580,6 +2618,7 @@ describe('resolveBaseBranch via runScheduledCleanup (issue #1419)', () => {
         status: 'active',
         branch_name: 'feature/qux',
         working_path: '/workspace/.archon/worktrees/feature-qux',
+        codebase_name: 'test-project',
         codebase_default_cwd: '/workspace/repo3',
         codebase_repository_url: null,
         workflow_type: 'task',

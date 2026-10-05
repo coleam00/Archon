@@ -409,3 +409,20 @@ outranks the project choice, and `--base` overrides the base for a single dispat
 `--base-branch` is for initial CLI registration, not editing an existing project.
 No database migration is needed: older binaries already accept `NULL` as auto-detection,
 although they retain their older cached remote-HEAD behavior.
+
+## Stored project path is relative
+
+Workflow runs and isolation cleanup reject a registration whose stored `default_cwd`
+is not absolute before using that path for Git or removing environments. The error
+names the project and gives a recovery command. Changing the invocation directory
+does not repair the registration.
+
+In Archon chat, supply the project's actual absolute path:
+
+```text
+/register-project "my-project" /absolute/path/to/project
+```
+
+For a legacy relative path, this updates the existing registration and preserves its
+ID, kind, settings, and history. Archon does not guess a replacement or rewrite
+legacy rows automatically.
