@@ -301,7 +301,9 @@ describe('WorktreeProvider against real git', () => {
   test.each([false, true])('preserves a pre-existing directory (empty: %s)', async empty => {
     await mkdir(worktreePath, { recursive: true });
     if (!empty) await writeFile(join(worktreePath, 'user-work'), 'keep me');
-    await expect(provider.create(request)).rejects.toThrow('the directory already exists');
+    await expect(provider.create(request)).rejects.toThrow(
+      'a pre-existing directory occupies this path'
+    );
     expect(existsSync(worktreePath)).toBe(true);
     if (!empty) expect(await readFile(join(worktreePath, 'user-work'), 'utf-8')).toBe('keep me');
   });

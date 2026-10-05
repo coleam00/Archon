@@ -844,7 +844,9 @@ export class WorktreeProvider implements IIsolationProvider {
   ): Promise<WorktreeCreationResult> {
     const repoPath = request.canonicalRepoPath;
     if (await this.directoryExists(worktreePath)) {
-      throw new Error(`Cannot create worktree at ${worktreePath}: the directory already exists.`);
+      throw new Error(
+        `Cannot create worktree at ${worktreePath}: a pre-existing directory occupies this path.`
+      );
     }
     const setupLockReason = `${SETUP_LOCK_PREFIX}: ${randomUUID()}`;
 

@@ -3235,7 +3235,7 @@ describe('WorktreeProvider', () => {
           workflowType: 'issue',
           identifier: '999',
         })
-      ).rejects.toThrow('the directory already exists');
+      ).rejects.toThrow('a pre-existing directory occupies this path');
       expect(rmSpy).not.toHaveBeenCalled();
       expect(execSpy.mock.calls.some(([, args]) => args.includes('add'))).toBe(false);
     });
