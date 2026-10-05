@@ -32,8 +32,7 @@ inputs:
 
 # `delivered:false` is a valid completion: an honest "no work is owed" is a
 # successful run that shipped nothing, and lifecycle status and work outcome are
-# separate facts. Both were reported as `outcome: null` before the terminal
-# script could certify its own result.
+# separate facts.
 returns: outcome
 outcome_field: delivered
 
@@ -109,10 +108,8 @@ nodes:
   # none_failed_min_one_success needs one completed dependency, and on the no_action
   # route `deliver` is the skipped one.
   #
-  # The gates' outputs used to be bound here to tell "delivery started and died
-  # mid-flight" apart from an advisory stop. A failed delivery now cascades an
-  # `upstream_failed` skip that blocks this join outright, so that case never
-  # reaches this node and the run's terminal record names the node that failed.
+  # A failed delivery cascades an `upstream_failed` skip that blocks this join,
+  # so the run's terminal record names the node that failed.
   - id: outcome
     script: outcome
     runtime: bun
