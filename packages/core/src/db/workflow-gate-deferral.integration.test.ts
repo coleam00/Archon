@@ -3,7 +3,7 @@ import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import { getProviderCapabilities, registerBuiltinProviders } from '@archon/providers';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import { createWorkflowStore } from '../workflows/store-adapter';
-import { approveWorkflow, rejectWorkflow } from '../operations/workflow-operations';
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { beforeEach, afterEach, describe, expect, test } from 'bun:test';
 import { mkdtemp, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -19,6 +19,8 @@ import {
   resumeWorkflowRun,
   cancelWorkflowRun,
 } from './workflows';
+
+const { approveWorkflow, rejectWorkflow } = createSqlWorkflowOperations();
 
 const originalHome = process.env.ARCHON_HOME;
 const originalDatabaseUrl = process.env.DATABASE_URL;

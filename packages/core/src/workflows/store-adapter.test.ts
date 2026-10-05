@@ -59,6 +59,7 @@ mock.module('../db/workflows', () => ({
   pauseWorkflowRunForWait: mockPauseWorkflowRunForWait,
   failPausedAttentionWait: mockFailPausedAttentionWait,
   clearWorkflowWaitContext: mockClearWorkflowWaitContext,
+  resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
   failPausedApproval: mockFailPausedApproval,
   claimWriteback: mock(() => Promise.resolve({ claimed: true })),
   releaseWritebackClaim: mock(() => Promise.resolve()),
