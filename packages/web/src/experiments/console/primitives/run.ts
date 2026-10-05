@@ -43,7 +43,7 @@ export interface Run {
   origin: RunOrigin;
   status: RunStatus;
   outcome: RunOutcome;
-  terminalRecord?: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
+  terminalRecord: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
   startedAt: string;
   finishedAt: string | null;
   /** workflow_runs.working_path — used to join against worktrees. */
