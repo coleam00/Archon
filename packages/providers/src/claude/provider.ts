@@ -940,22 +940,22 @@ function buildBaseClaudeOptions(
   const isJsExecutable = shouldPassNoEnvFile(cliPath);
   getLog().debug({ cliPath: cliPath ?? null, isJsExecutable }, 'claude.subprocess_env_file_flag');
 
-  // Container execution: the SDK runs Claude via our `docker exec` spawn hook
-  // instead of a local process. When the hook is set the SDK bypasses ALL disk
-  // resolution, so `pathToClaudeCodeExecutable` and the host-only
-  // `--no-env-file` executableArg are intentionally omitted — the in-container
-  // binary is resolved from the runner image's PATH.
+  // The SDK resolves a native host binary before calling the spawn hook unless
+  // an executable path is supplied. This placeholder is never executed: the
+  // container hook ignores the SDK command and uses the runner image's Claude.
   const containerExecContext =
     requestOptions?.execContext?.kind === 'container' ? requestOptions.execContext : undefined;
   const spawnOverride = containerExecContext
-    ? { spawnClaudeCodeProcess: buildContainerSpawn(containerExecContext) }
+    ? {
+        pathToClaudeCodeExecutable: 'claude',
+        spawnClaudeCodeProcess: buildContainerSpawn(containerExecContext),
+      }
     : {};
 
   return {
     cwd,
     // In compiled binaries, the resolver supplies an absolute executable path;
     // in dev mode it returns undefined and the SDK resolves from node_modules.
-    // Both are skipped for container runs (spawn hook bypasses disk resolution).
     ...(cliPath !== undefined && containerExecContext === undefined
       ? { pathToClaudeCodeExecutable: cliPath }
       : {}),
@@ -1660,12 +1660,7 @@ export class ClaudeProvider implements IAgentProvider {
       }
       const assistantDefaults = parseClaudeConfig(requestOptions?.assistantConfig ?? {});
 
-      // In binary mode this throws if neither env nor config supplies a valid path.
-      // SKIP entirely for container runs: the SDK bypasses disk resolution when
-      // `spawnClaudeCodeProcess` is set (buildBaseClaudeOptions omits
-      // pathToClaudeCodeExecutable), and Claude is baked into the runner image — a
-      // compiled Archon binary has no host Claude, so resolving it here would throw
-      // and kill an otherwise-valid container run.
+      // Container runs use the runner image's Claude, so never resolve a host binary.
       const resolvedCliPath = isContainerRun
         ? undefined
         : await resolveClaudeBinaryPath(assistantDefaults.claudeBinaryPath);

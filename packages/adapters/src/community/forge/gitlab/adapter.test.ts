@@ -70,7 +70,7 @@ mock.module('@archon/core/db/users', () => ({
 }));
 const mockGetOrCreateConversation = mock(
   async (): Promise<
-    Pick<Conversation, 'id' | 'codebase_id' | 'platform_type' | 'platform_conversation_id'>
+    Pick<Conversation, 'id' | 'codebase_id' | 'cwd' | 'platform_type' | 'platform_conversation_id'>
   > => {
     throw new Error('DB not mocked in tests');
   }
@@ -215,6 +215,7 @@ function createNotePayload(overrides?: {
 
 describe('GitLabAdapter', () => {
   beforeEach(() => {
+    mockGetOrCreateConversation.mockClear();
     mockHandleMessage.mockClear();
     mockOnConversationClosed.mockClear();
     mockFetch.mockClear();
@@ -688,6 +689,7 @@ describe('GitLabAdapter', () => {
       mockGetOrCreateConversation.mockImplementation(async () => ({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitlab',
         platform_conversation_id: 'mygroup/myproject#1',
       }));
@@ -703,6 +705,11 @@ describe('GitLabAdapter', () => {
 
       await adapter.handleWebhook(payload, 'test-secret');
 
+      expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+        'gitlab',
+        expect.any(String),
+        'codebase-test-uuid'
+      );
       expect(mockHandleMessage).toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),
@@ -716,6 +723,7 @@ describe('GitLabAdapter', () => {
       mockGetOrCreateConversation.mockImplementation(async () => ({
         id: 'conv-test-uuid',
         codebase_id: 'codebase-test-uuid',
+        cwd: '/tmp/project',
         platform_type: 'gitlab',
         platform_conversation_id: 'mygroup/myproject#1',
       }));

@@ -11571,7 +11571,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed[0][0].data).not.toHaveProperty('tokens');
     });
 
-    it('a finalize from an old approval cursor persists the path contract and its legacy root fields', async () => {
+    it('a finalize from a metadata-less paused loop gate persists the path contract and its legacy root fields', async () => {
       const mockDeps = createMockDeps();
       await executeDagWorkflow(
         dagOptions({
@@ -35575,6 +35575,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       moved: true,
       fork: true,
       continuation: false,
+      full: true,
       state: 'red',
     };
     const inheritedRouteText = JSON.stringify(inheritedRoute);
