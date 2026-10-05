@@ -14249,6 +14249,34 @@ describe('run codebase resolution', () => {
     ).toMatchObject({ codebaseId: 'cb-folder' });
   });
 
+  it('preserves a legacy path error during registration without falling back', async () => {
+    const error = new codebases.InvalidCodebaseDefaultCwdError('legacy', 'projects/repo');
+    (core.registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+    await expect(
+      workflowRunCommand(childRoot, 'probe', 'go', { noWorktree: true })
+    ).rejects.toThrow(error.message);
+    expect(executor.executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  for (const options of [{ noWorktree: true }, { detach: true }, { codebaseId: 'legacy' }]) {
+    it(`treats an invalid stored path as terminal with ${JSON.stringify(options)}`, async () => {
+      const error = new codebases.InvalidCodebaseDefaultCwdError('legacy', 'projects/repo');
+      if ('codebaseId' in options) {
+        (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(null);
+        (codebases.getCodebase as ReturnType<typeof mock>).mockRejectedValueOnce(error);
+      } else {
+        (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockRejectedValueOnce(
+          error
+        );
+      }
+      await expect(workflowRunCommand(childRoot, 'probe', 'go', options)).rejects.toThrow(
+        error.message
+      );
+      expect(core.registerRepository).not.toHaveBeenCalled();
+      expect(executor.executeWorkflow).not.toHaveBeenCalled();
+    });
+  }
+
   it('surfaces checkout identity errors without parent fallback or registration', async () => {
     (git.getCanonicalRepoPath as ReturnType<typeof mock>).mockRejectedValueOnce(
       new Error('checkout identity unavailable')

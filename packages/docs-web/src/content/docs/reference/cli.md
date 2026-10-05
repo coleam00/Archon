@@ -1340,6 +1340,12 @@ When using `--branch`, workflows run inside the worktree directory.
 
 > **Commands and workflows are loaded from the working directory at runtime.** The CLI reads directly from disk, so it picks up uncommitted changes immediately. This is different from the server (Telegram/Slack/GitHub), which reads from the workspace clone at `~/.archon/workspaces/` -- that clone only syncs from the remote before worktree creation, so changes must be pushed to take effect there.
 
+Legacy registrations with a relative stored project path fail with a project-named
+error. Repair them in Archon chat with
+`/register-project "project-name" /absolute/path/to/project`; changing the CLI's
+working directory does not repair the stored path. Re-registration preserves the
+existing project's identity and history.
+
 ## Environment
 
 At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads two archon-owned env files with `override: true`. Keys in archon-owned files pass through to AI subprocesses — no allowlist filtering.
