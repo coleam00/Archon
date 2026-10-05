@@ -188,7 +188,8 @@
       "src/shared/resumed.test.ts"
     ],
     [
-      "src/shared/tool-calls.test.ts"
+      "src/shared/tool-calls.test.ts",
+      "src/shared/provider-event-schema.test.ts"
     ],
     [
       "src/mcp/config.test.ts"

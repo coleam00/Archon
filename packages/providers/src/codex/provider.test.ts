@@ -551,6 +551,27 @@ describe('CodexProvider', () => {
       ]);
     });
 
+    test.each(['patch text', 0, false, null, ['a', 1]].map(value => [value] as const))(
+      'MCP tool calls preserve JSON arguments %j',
+      async args => {
+        const chunks = await streamOf({
+          notifications: [
+            itemStarted({
+              ...mcpToolCall('mcp-1', 'server', 'tool', 'inProgress', {}),
+              arguments: args,
+            }),
+          ],
+        });
+        expect(chunks[0]).toEqual({
+          type: 'tool_call',
+          toolCallId: 'mcp-1',
+          name: 'tool',
+          title: 'server/tool',
+          rawInput: args,
+        });
+      }
+    );
+
     test('reasoning streams its summary as a thought; items with nothing to show stream nothing', async () => {
       const chunks = await streamOf({
         notifications: [

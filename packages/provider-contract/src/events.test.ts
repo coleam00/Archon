@@ -82,6 +82,20 @@ describe('provider event vocabulary', () => {
     }
   );
 
+  test.each([NaN, Infinity, 1n, () => {}, { nested: undefined }].map(value => [value] as const))(
+    'rejects non-JSON tool input %#',
+    rawInput => {
+      expect(
+        providerEventSchema.safeParse({
+          type: 'tool_call',
+          toolCallId: 't1',
+          name: 'tool',
+          rawInput,
+        }).success
+      ).toBe(false);
+    }
+  );
+
   test('the chunk union also carries result and settled', () => {
     expect(providerChunkSchema.parse({ type: 'result', sessionId: 's' })).toEqual({
       type: 'result',

@@ -40,7 +40,14 @@ export const toolCallSchema = z.object({
   /** ACP `title` (required there), a human-readable label such as the command a shell tool runs. */
   title: z.string().optional(),
   /** ACP `rawInput`: providers may send any JSON value, including scalar tool arguments. */
-  rawInput: z.unknown().optional(),
+  rawInput: z
+    .json()
+    // The OpenAPI exporter cannot traverse Zod's recursive JSON schema.
+    .meta({
+      type: ['string', 'number', 'boolean', 'object', 'array', 'null'],
+      additionalProperties: true,
+    })
+    .optional(),
 });
 
 /**

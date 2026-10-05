@@ -332,7 +332,18 @@
             "title": {
               "type": "string"
             },
-            "rawInput": {}
+            "rawInput": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "object",
+                "array",
+                "null"
+              ],
+              "additionalProperties": true,
+              "$ref": "#/$defs/schema0"
+            }
           },
           "required": [
             "type",
@@ -756,6 +767,37 @@
             "state",
             "source"
           ]
+        }
+      ]
+    },
+    "schema0": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema0"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema0"
+          }
         }
       ]
     }
