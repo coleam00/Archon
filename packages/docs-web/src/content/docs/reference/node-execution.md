@@ -117,9 +117,10 @@ Presence is relative to the containing object: a required child of an optional p
 | `node`             | `object`                     | required | `node.kind = "wait"`                                |
 | `node.id`          | `string`                     | required | `node.kind = "wait"`                                |
 | `node.kind`        | `"wait"`                     | required | `node.kind = "wait"`                                |
-| `node`             | `object`                     | required | `node.kind = "workflow"`                            |
-| `node.id`          | `string`                     | required | `node.kind = "workflow"`                            |
-| `node.kind`        | `"workflow"`                 | required | `node.kind = "workflow"`                            |
+| `node`             | `object`                     | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.id`          | `string`                     | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.kind`        | `"workflow"`                 | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.fanOut`      | `true`                       | optional | `node.kind = "workflow", node.fanOut = true`        |
 | `node`             | `object`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.id`          | `string`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.kind`        | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
@@ -409,9 +410,10 @@ Presence is relative to the containing object: a required child of an optional p
 | `node`             | `object`                     | required | `node.kind = "wait"`                                |
 | `node.id`          | `string`                     | required | `node.kind = "wait"`                                |
 | `node.kind`        | `"wait"`                     | required | `node.kind = "wait"`                                |
-| `node`             | `object`                     | required | `node.kind = "workflow"`                            |
-| `node.id`          | `string`                     | required | `node.kind = "workflow"`                            |
-| `node.kind`        | `"workflow"`                 | required | `node.kind = "workflow"`                            |
+| `node`             | `object`                     | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.id`          | `string`                     | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.kind`        | `"workflow"`                 | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.fanOut`      | `true`                       | optional | `node.kind = "workflow", node.fanOut = true`        |
 | `node`             | `object`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.id`          | `string`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.kind`        | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
@@ -643,9 +645,10 @@ Presence is relative to the containing object: a required child of an optional p
 | `node`                                 | `object`                     | required | `node.kind = "wait"`                                |
 | `node.id`                              | `string`                     | required | `node.kind = "wait"`                                |
 | `node.kind`                            | `"wait"`                     | required | `node.kind = "wait"`                                |
-| `node`                                 | `object`                     | required | `node.kind = "workflow"`                            |
-| `node.id`                              | `string`                     | required | `node.kind = "workflow"`                            |
-| `node.kind`                            | `"workflow"`                 | required | `node.kind = "workflow"`                            |
+| `node`                                 | `object`                     | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.id`                              | `string`                     | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.kind`                            | `"workflow"`                 | required | `node.kind = "workflow", node.fanOut = true`        |
+| `node.fanOut`                          | `true`                       | optional | `node.kind = "workflow", node.fanOut = true`        |
 | `node`                                 | `object`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.id`                              | `string`                     | required | `node.kind = "compose_fan_out"`                     |
 | `node.kind`                            | `"compose_fan_out"`          | required | `node.kind = "compose_fan_out"`                     |
@@ -726,9 +729,10 @@ Presence is relative to the containing object: a required child of an optional p
 | `node`                                                      | `object`                                                                                                                                                                    | optional | `node.kind = "wait"`                                                                        |
 | `node.id`                                                   | `string`                                                                                                                                                                    | required | `node.kind = "wait"`                                                                        |
 | `node.kind`                                                 | `"wait"`                                                                                                                                                                    | required | `node.kind = "wait"`                                                                        |
-| `node`                                                      | `object`                                                                                                                                                                    | optional | `node.kind = "workflow"`                                                                    |
-| `node.id`                                                   | `string`                                                                                                                                                                    | required | `node.kind = "workflow"`                                                                    |
-| `node.kind`                                                 | `"workflow"`                                                                                                                                                                | required | `node.kind = "workflow"`                                                                    |
+| `node`                                                      | `object`                                                                                                                                                                    | optional | `node.kind = "workflow", node.fanOut = true`                                                |
+| `node.id`                                                   | `string`                                                                                                                                                                    | required | `node.kind = "workflow", node.fanOut = true`                                                |
+| `node.kind`                                                 | `"workflow"`                                                                                                                                                                | required | `node.kind = "workflow", node.fanOut = true`                                                |
+| `node.fanOut`                                               | `true`                                                                                                                                                                      | optional | `node.kind = "workflow", node.fanOut = true`                                                |
 | `node`                                                      | `object`                                                                                                                                                                    | optional | `node.kind = "compose_fan_out"`                                                             |
 | `node.id`                                                   | `string`                                                                                                                                                                    | required | `node.kind = "compose_fan_out"`                                                             |
 | `node.kind`                                                 | `"compose_fan_out"`                                                                                                                                                         | required | `node.kind = "compose_fan_out"`                                                             |
