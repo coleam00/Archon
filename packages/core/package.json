@@ -67,6 +67,9 @@
       "src/db/resource-starts.integration.test.ts"
     ],
     [
+      "src/db/workflows.sqlite-busy.integration.test.ts"
+    ],
+    [
       "src/services/provider-admission.integration.test.ts"
     ],
     [

@@ -8824,7 +8824,7 @@ async function executeComposeFanOutNode(
               diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
             }
           );
-          await persistNodeEvent(deps.store, serializeNodeStateRecord(failedRecord));
+          await deps.store.persistWorkflowEvent(serializeNodeStateRecord(failedRecord));
           await deriveInstanceSinks(failedRecord);
         } catch (err) {
           return {
@@ -8873,7 +8873,7 @@ async function executeComposeFanOutNode(
             diagnostics: { identity: snapshot.identity, ordinal: snapshot.ordinal },
           }
         );
-        await persistNodeEvent(deps.store, serializeNodeStateRecord(completedRecord));
+        await deps.store.persistWorkflowEvent(serializeNodeStateRecord(completedRecord));
         await deriveInstanceSinks(completedRecord);
       } catch (err) {
         return {

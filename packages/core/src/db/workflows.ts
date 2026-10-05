@@ -118,8 +118,9 @@ function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): stri
  * `FOR UPDATE` on Postgres, empty on SQLite (which has no such syntax and does
  * not need it — the adapter serializes transactions on one connection, and a
  * cross-process writer that commits between our read and our write makes the
- * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY rather than let a
- * stale snapshot through). Used to pin rows across a read-then-write pair so
+ * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY, which the adapter
+ * answers by rerunning the whole transaction, rather than let a stale snapshot
+ * through). Used to pin rows across a read-then-write pair so
  * the values read are the values the mutation acts on. Dialect-branched here
  * rather than in SqlDialect because this lock is local DB policy.
  */

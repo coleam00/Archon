@@ -1,7 +1,7 @@
 /**
  * SQLite adapter using bun:sqlite
  */
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database, SQLiteError, type SQLQueryBindings } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
 import type { IDatabase, QueryResult, SqlDialect } from './types';
@@ -16,6 +16,48 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.sqlite');
   return cachedLog;
+}
+
+/**
+ * SQLITE_BUSY and its extended codes (BUSY_SNAPSHOT, BUSY_RECOVERY, BUSY_TIMEOUT):
+ * another connection holds the lock. SQLITE_LOCKED (6) is a same-connection conflict
+ * that waiting cannot clear, so it is not included.
+ */
+function isSqliteBusy(error: unknown): error is SQLiteError {
+  return error instanceof SQLiteError && (error.errno & 0xff) === 5;
+}
+
+const BUSY_RETRY_MAX_DELAY_MS = 2000;
+const BUSY_WARN_INTERVAL_MS = 30_000;
+
+/**
+ * Run `attempt` until it stops failing with SQLITE_BUSY. Each attempt already waits
+ * up to busy_timeout inside SQLite; between attempts this backs off without blocking
+ * the event loop. There is deliberately no deadline: the lock belongs to another live
+ * process, and a timer that gives up would end a run whose work is not lost, only
+ * waiting. A lock that never clears shows up as a repeating warning, not a failure.
+ */
+async function retryWhileBusy<T>(
+  operation: 'statement' | 'transaction',
+  attempt: () => Promise<T>
+): Promise<T> {
+  const startedAt = Date.now();
+  let delayMs = 50;
+  let nextWarnAtMs = 0;
+  for (;;) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const waitedMs = Date.now() - startedAt;
+      if (waitedMs >= nextWarnAtMs) {
+        getLog().warn({ operation, code: error.code, waitedMs }, 'db.sqlite_busy_waiting');
+        nextWarnAtMs = waitedMs + BUSY_WARN_INTERVAL_MS;
+      }
+      await Bun.sleep(delayMs);
+      delayMs = Math.min(delayMs * 2, BUSY_RETRY_MAX_DELAY_MS);
+    }
+  }
 }
 
 /**
@@ -74,6 +116,14 @@ export class SqliteAdapter implements IDatabase {
   }
 
   async query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
+    // Inside a transaction a busy statement cannot be retried alone: under
+    // SQLITE_BUSY_SNAPSHOT its read snapshot is stale for good. withTransaction
+    // reruns the whole block instead.
+    if (this.db.inTransaction) return this.execute<T>(sql, params);
+    return retryWhileBusy('statement', () => this.execute<T>(sql, params));
+  }
+
+  private async execute<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> {
     // Convert $1, $2, etc. to ? placeholders and reorder params to match
     const { sql: convertedSql, params: reorderedParams } = this.convertPlaceholders(
       sql,
@@ -117,8 +167,13 @@ export class SqliteAdapter implements IDatabase {
         return { rows: [], rowCount };
       }
     } catch (error) {
-      const err = error as Error;
-      getLog().error({ err, sql: convertedSql, params }, 'db.sqlite_query_failed');
+      // A busy statement is retried by the caller of execute(), which logs the wait.
+      if (!isSqliteBusy(error)) {
+        getLog().error(
+          { err: error as Error, sql: convertedSql, params },
+          'db.sqlite_query_failed'
+        );
+      }
       throw error;
     }
   }
@@ -126,7 +181,7 @@ export class SqliteAdapter implements IDatabase {
   async withTransaction<T>(
     fn: (query: <U>(sql: string, params?: unknown[]) => Promise<QueryResult<U>>) => Promise<T>
   ): Promise<T> {
-    const run = async (): Promise<T> => {
+    const runOnce = async (): Promise<T> => {
       await this.query('BEGIN');
       try {
         const result = await fn(this.query.bind(this));
@@ -141,6 +196,10 @@ export class SqliteAdapter implements IDatabase {
         throw e;
       }
     };
+    // A busy failure anywhere in the block, COMMIT included, has already rolled back,
+    // so the block reruns from BEGIN against fresh state. Callers' blocks only issue
+    // queries and compute a return value, which makes rerunning them safe.
+    const run = (): Promise<T> => retryWhileBusy('transaction', runOnce);
     // Serialize against any in-flight transaction (see `txTail`). The stored tail
     // is made non-rejecting so one transaction's failure never blocks the next.
     const result = this.txTail.then(run, run);

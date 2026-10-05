@@ -37906,7 +37906,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     expect(events.some(e => String(e.data.error ?? '').length > 0)).toBe(false);
   });
 
-  it('charges each model call once even when composed instance completion writes are busy', async () => {
+  it('charges each model call once: leaf node_complete costs sum to the run total (#3508)', async () => {
     await writeBlock(
       [
         'name: compose-blk',
@@ -37935,20 +37935,6 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
       };
     });
     const store = createMockStore();
-    const completionAttempts = new Map<string, number>();
-    const persist = store.persistWorkflowEvent;
-    store.persistWorkflowEvent = mock(async event => {
-      if (
-        event.event_type === 'node_completed' &&
-        event.data?.type === 'compose_fan_out_instance'
-      ) {
-        const path = event.step_name ?? '';
-        const attempts = (completionAttempts.get(path) ?? 0) + 1;
-        completionAttempts.set(path, attempts);
-        if (attempts <= 2) throw Object.assign(new Error('contention'), { code: 'SQLITE_BUSY' });
-      }
-      await persist(event);
-    });
     const mockDeps = createMockDeps(store);
     const workflowRun = makeWorkflowRun('compose-cost-run');
 
@@ -37981,8 +37967,6 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     );
 
     expect(calls).toBe(2);
-    expect([...completionAttempts.values()]).toEqual([3, 3]);
-    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     const rows = await readTranscript(join(testDir, 'logs'), workflowRun.id);
     const completed = rows.filter(row => row.type === 'node_complete');
     const leaves = completed.filter(
@@ -38484,46 +38468,6 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     });
     await run(store, createMockPlatform(), [okNode], []);
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-  });
-
-  it('retries a busy completion insert without rerunning finished agent work', async () => {
-    const store = createMockStore();
-    const committed: string[] = [];
-    let completionAttempts = 0;
-    store.persistWorkflowEvent = mock(async event => {
-      if (event.event_type === 'node_completed' && ++completionAttempts <= 3) {
-        throw Object.assign(new Error('contention'), { code: 'SQLITE_BUSY', errno: 5 });
-      }
-      committed.push(event.event_type);
-      await store.createWorkflowEvent(event);
-    });
-    store.completeWorkflowRun = mock(async () => {
-      expect(committed).toEqual(['node_started', 'node_completed']);
-    });
-    mockSendQueryDag.mockClear();
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'done' };
-      yield { type: 'result', sessionId: 'busy-completion-test' };
-    });
-    mockGetAgentProviderDag.mockImplementation(() => ({
-      sendQuery: mockSendQueryDag,
-      checkCredential: async () => ({ state: 'not_checked' as const, source: 'native' as const }),
-      getType: () => 'claude',
-      getCapabilities: mockClaudeCapabilities,
-    }));
-    const emitted: string[] = [];
-    await run(
-      store,
-      createMockPlatform(),
-      [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'finish once' } }],
-      emitted
-    );
-
-    expect(completionAttempts).toBe(4);
-    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
-    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(store.failWorkflowRun).not.toHaveBeenCalled();
-    expect(emitted.filter(type => type === 'node_completed')).toHaveLength(1);
   });
 
   it('does not retry or report success when node completion cannot be stored', async () => {

@@ -27,12 +27,14 @@ Simply **omit the `DATABASE_URL` variable** from your `.env` file. The app will 
 - Not suitable for multi-container deployments
 - No network access (CLI and server can't share database across different hosts)
 
-Correctness-critical node-state event writes wait and retry when SQLite reports
-`SQLITE_BUSY` (code `SQLITE_BUSY` or errno 5), even after the connection's 5000 ms busy
-timeout. There is no retry deadline: finished node work remains in memory while the
-write waits, and execution proceeds only after persistence succeeds. Other storage
-errors still fail the run. A process exiting while waiting can still lose the
-unpersisted result. Retry warnings use `workflow.node_event_write_busy_retrying`.
+Every Archon process on a machine shares one SQLite file, and SQLite lets one writer at a
+time hold its lock. When another process holds the lock past the 5-second busy timeout,
+Archon keeps waiting instead of failing: a single statement retries, and a transaction
+rolls back and reruns from the start, with a growing pause of up to 2 seconds between
+attempts. There is no deadline, so a run whose write is waiting stays alive until the lock
+clears. While it waits, Archon logs `db.sqlite_busy_waiting` at warn level every 30
+seconds. A repeating warning points at a process that is holding the lock. Other SQLite
+errors still fail right away.
 
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 

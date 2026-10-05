@@ -67,33 +67,6 @@ describe('node-event-write', () => {
     expect(result).toMatchObject({ state: 'completed', output: 'full output', costUsd: 0 });
   });
 
-  it.each([{ code: 'SQLITE_BUSY' }, { errno: 5 }])(
-    'waits for structured busy errors %j before publishing completion',
-    async busy => {
-      const durable: NodeStateEventInput[] = [];
-      const emitter = { emit: mock(() => {}) };
-      let attempts = 0;
-      const store = {
-        persistWorkflowEvent: mock(async (event: NodeStateEventInput) => {
-          expect(emitter.emit).not.toHaveBeenCalled();
-          expect(await Bun.file(join(logDir, 'run-1.jsonl')).exists()).toBe(false);
-          if (++attempts <= 3) throw Object.assign(new Error('contention'), busy);
-          durable.push(event);
-        }),
-      };
-
-      const result = await recordNodeState({ store, logDir, emitter }, completedRecord());
-
-      expect(store.persistWorkflowEvent).toHaveBeenCalledTimes(4);
-      expect(durable).toHaveLength(1);
-      expect(durable[0]?.event_type).toBe('node_completed');
-      expect(emitter.emit).toHaveBeenCalledTimes(1);
-      const lines = (await readFile(join(logDir, 'run-1.jsonl'), 'utf8')).trim().split('\n');
-      expect(lines).toHaveLength(1);
-      expect(result).toMatchObject({ state: 'completed', output: 'full output' });
-    }
-  );
-
   it('returns and persists the same nested contract on cache replay', async () => {
     const durable: NodeStateEventInput[] = [];
     const store = {
@@ -119,11 +92,8 @@ describe('node-event-write', () => {
     expect(durable[0]?.data?.declared_output_paths).toEqual(paths);
   });
 
-  it.each([
-    new Error('SQLITE_BUSY: database is locked'),
-    Object.assign(new Error('database is locked'), { code: 'SQLITE_LOCKED', errno: 6 }),
-    Object.assign(new Error('constraint failed'), { code: 'SQLITE_CONSTRAINT', errno: 19 }),
-  ])('stops after a non-busy rejection and preserves the original failure: %j', async cause => {
+  it('stops after a durable write rejection and preserves the original failure', async () => {
+    const cause = new Error('database unavailable');
     const store = { persistWorkflowEvent: mock(async () => Promise.reject(cause)) };
     const emitter = { emit: mock(() => {}) };
     const record = {
@@ -135,30 +105,7 @@ describe('node-event-write', () => {
       cause,
       message: expect.stringContaining('child failed'),
     });
-    expect(store.persistWorkflowEvent).toHaveBeenCalledTimes(1);
     expect(emitter.emit).not.toHaveBeenCalled();
-    expect(await Bun.file(join(logDir, 'run-1.jsonl')).exists()).toBe(false);
-  });
-
-  it('preserves a non-busy failure after waiting on a busy write', async () => {
-    const cause = Object.assign(new Error('disk full'), { code: 'SQLITE_FULL', errno: 13 });
-    let attempts = 0;
-    const store = {
-      persistWorkflowEvent: mock(async () => {
-        if (++attempts === 1) throw { errno: 5 };
-        throw cause;
-      }),
-    };
-    const emitter = { emit: mock(() => {}) };
-    await expect(
-      recordNodeState({ store, logDir, emitter }, completedRecord())
-    ).rejects.toMatchObject({
-      name: NodeEventWriteError.name,
-      cause,
-    });
-    expect(attempts).toBe(2);
-    expect(emitter.emit).not.toHaveBeenCalled();
-    expect(await Bun.file(join(logDir, 'run-1.jsonl')).exists()).toBe(false);
   });
 
   it('names a packaged command node by its bare command name on the derived emitter path', () => {

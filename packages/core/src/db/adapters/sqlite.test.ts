@@ -1145,3 +1145,107 @@ describe('SqliteAdapter native-resource finalization (#2875)', () => {
     unlinkSync(currentDbPath);
   });
 });
+
+describe('SqliteAdapter busy locks', () => {
+  let adapter: SqliteAdapter;
+  let holder: Database;
+
+  /** An adapter plus a second connection that holds the write lock until `release`. */
+  async function lockedAdapter(): Promise<void> {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-core-sqlite-busy-')));
+    const path = join(root, 'archon.db');
+    adapter = new SqliteAdapter(path);
+    // The adapter's own 5 s busy_timeout would make these tests slow, not different.
+    await adapter.query('PRAGMA busy_timeout = 20');
+    holder = new Database(path);
+    holder.run('BEGIN IMMEDIATE');
+  }
+
+  afterEach(async () => {
+    if (holder.inTransaction) holder.run('ROLLBACK');
+    holder.close();
+    await adapter.close();
+  });
+
+  async function codebaseCount(): Promise<number> {
+    const result = await adapter.query<{ cnt: number }>(
+      'SELECT COUNT(*) AS cnt FROM remote_agent_codebases'
+    );
+    return Number(result.rows[0]?.cnt);
+  }
+
+  test('a statement waits past busy_timeout and writes once', async () => {
+    await lockedAdapter();
+    // Several 20 ms busy timeouts elapse before the holder lets go.
+    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
+
+    await insertCodebase(adapter, 'cb-busy');
+    await released;
+
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('a transaction rolls back and reruns from BEGIN until the lock clears', async () => {
+    await lockedAdapter();
+    const released = Bun.sleep(150).then(() => holder.run('COMMIT'));
+    let attempts = 0;
+
+    await adapter.withTransaction(async query => {
+      attempts++;
+      await query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-tx', 'cb-tx', '/tmp/test-cwd']
+      );
+    });
+    await released;
+
+    expect(attempts).toBeGreaterThan(1);
+    expect(await codebaseCount()).toBe(1);
+  });
+
+  test('a stale snapshot reruns the transaction instead of retrying the statement', async () => {
+    await lockedAdapter();
+    holder.run(
+      "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('cb-holder', 'cb-holder', '/tmp')"
+    );
+    const seen: number[] = [];
+
+    await adapter.withTransaction(async query => {
+      const before = await query<{ cnt: number }>(
+        'SELECT COUNT(*) AS cnt FROM remote_agent_codebases'
+      );
+      seen.push(Number(before.rows[0]?.cnt));
+      // The holder commits after this transaction took its read snapshot, so the
+      // first write fails with SQLITE_BUSY_SNAPSHOT however long it waits.
+      if (holder.inTransaction) holder.run('COMMIT');
+      await query(
+        `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+        ['cb-snapshot', 'cb-snapshot', '/tmp/test-cwd']
+      );
+    });
+
+    expect(seen).toEqual([0, 1]);
+    expect(await codebaseCount()).toBe(2);
+  });
+
+  test('a non-busy error still fails on the first attempt', async () => {
+    await lockedAdapter();
+    holder.run('COMMIT');
+    await insertCodebase(adapter, 'cb-dup');
+    let attempts = 0;
+
+    await expect(insertCodebase(adapter, 'cb-dup')).rejects.toMatchObject({
+      code: 'SQLITE_CONSTRAINT_PRIMARYKEY',
+    });
+    await expect(
+      adapter.withTransaction(async query => {
+        attempts++;
+        await query(
+          `INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, $2, $3)`,
+          ['cb-dup', 'cb-dup', '/tmp/test-cwd']
+        );
+      })
+    ).rejects.toMatchObject({ code: 'SQLITE_CONSTRAINT_PRIMARYKEY' });
+    expect(attempts).toBe(1);
+  });
+});

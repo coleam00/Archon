@@ -449,6 +449,10 @@ export async function resolveProjectPaths(
     // `metadata.identity_unresolved = true` so "unregistered" and "we could not tell"
     // are distinguishable after the fact. See the persistence block in `executeWorkflow`
     // and `ResolvedProjectPaths.identityResolution`.
+    //
+    // The retry is for Postgres: a stale or broken pooled connection is exactly the
+    // fault an immediate retry clears by drawing a fresh one, so zero delay is correct.
+    // SQLite never surfaces SQLITE_BUSY here: its adapter waits out busy locks itself.
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const codebase = await deps.store.getCodebase(codebaseId);
