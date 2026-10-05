@@ -293,6 +293,9 @@
     ],
     [
       "src/workflows/commit-author.integration.test.ts"
+    ],
+    [
+      "src/db/users.sqlite.integration.test.ts"
     ]
   ]
 }

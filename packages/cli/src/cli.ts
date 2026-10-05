@@ -71,7 +71,6 @@ installPipeSafeConsole();
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
 import { shouldReportCliStart } from './utils/cli-start-telemetry';
-import { renderHelp } from './help';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { stat } from 'fs/promises';
@@ -192,7 +191,8 @@ async function fail(json: boolean | undefined, message: string): Promise<1> {
   return 1;
 }
 
-function printUsageFor(command?: string, subcommand?: string): void {
+async function printUsageFor(command?: string, subcommand?: string): Promise<void> {
+  const { renderHelp } = await import('./help');
   console.log(renderHelp(command, subcommand));
 }
 
@@ -257,7 +257,7 @@ async function main(): Promise<number> {
   // Handle no arguments - show help and exit successfully
   if (args.length === 0) {
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
-    printUsageFor();
+    await printUsageFor();
     await shutdownTelemetry();
     return 0;
   }
@@ -298,7 +298,7 @@ async function main(): Promise<number> {
     if (json) setLogLevel('silent');
     refreshCompiledInstallManifest(BUNDLED_IS_BINARY, process.execPath, BUNDLED_VERSION);
     await fail(json, `Error parsing arguments: ${err.message}`);
-    if (!json) printUsageFor();
+    if (!json) await printUsageFor();
     await shutdownTelemetry();
     return 1;
   }
@@ -363,7 +363,7 @@ async function main(): Promise<number> {
   // parsed positionals so `archon <command> [--subcommand] --help` shows only
   // the matching slice instead of the full index.
   if (values.help) {
-    printUsageFor(command, subcommand);
+    await printUsageFor(command, subcommand);
     await shutdownTelemetry();
     return 0;
   }
@@ -381,6 +381,7 @@ async function main(): Promise<number> {
     'doctor',
     'telemetry',
     'auth',
+    'user',
     'ai',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
@@ -596,7 +597,7 @@ async function main(): Promise<number> {
         // Mirror `archon <command> [--subcommand] --help`: bare `archon help`
         // is the global index; `archon help <cmd>` scopes to one command;
         // `archon help <cmd> <subcmd>` scopes further to one subcommand.
-        printUsageFor(positionals[1], positionals[2]);
+        await printUsageFor(positionals[1], positionals[2]);
         break;
       }
 
@@ -1136,6 +1137,32 @@ async function main(): Promise<number> {
         break;
       }
 
+      case 'user': {
+        const { userListCommand, userRoleCommand } = await loadRoute(
+          () => import('./commands/user'),
+          { database: true }
+        );
+        switch (subcommand) {
+          case 'list':
+            if (positionals.length !== 2) return await fail(jsonFlag, 'Usage: archon user list');
+            await userListCommand();
+            break;
+          case 'role':
+            if (positionals.length !== 4) {
+              const { userRoleSchema } = await import('@archon/core/schemas/user');
+              return await fail(
+                jsonFlag,
+                `Usage: archon user role <id> <${userRoleSchema.options.join('|')}>`
+              );
+            }
+            await userRoleCommand(positionals[2] ?? '', positionals[3] ?? '');
+            break;
+          default:
+            return await fail(jsonFlag, 'Usage: archon user <list|role>');
+        }
+        break;
+      }
+
       case 'isolation': {
         const { isolationListCommand, isolationCleanupCommand, isolationCleanupMergedCommand } =
           await loadRoute(() => import('./commands/isolation'), { database: true });
@@ -1396,7 +1423,7 @@ async function main(): Promise<number> {
           return await fail(true, problem);
         }
         console.error(problem);
-        printUsageFor();
+        await printUsageFor();
         return 1;
       }
     }

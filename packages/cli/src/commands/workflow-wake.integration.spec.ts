@@ -317,7 +317,9 @@ describe('cold CLI continuation host', () => {
   }, 30_000);
 
   test('watch wakes a later deadline and SIGTERM exits during idle sleep', async () => {
-    const f = await seed('      duration_ms: 3000');
+    // The deadline must still be ahead at the watch's first pass. A short duration races
+    // the seed process, so wait out the first pass and only then make the deadline due.
+    const f = await seed('      duration_ms: 3600000');
     const child = Bun.spawn([process.execPath, cli, 'workflow', 'wake', '--watch', '--json'], {
       cwd: f.root,
       env: f.env,
@@ -325,8 +327,25 @@ describe('cold CLI continuation host', () => {
       stderr: 'pipe',
     });
     children.add(child);
-    const stdout = new Response(child.stdout).text();
     const stderr = new Response(child.stderr).text();
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    let stdout = '';
+    while (!stdout.includes('\n')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      stdout += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(JSON.parse(stdout.split('\n')[0] ?? '')).toMatchObject({ accepted: 0 });
+    const db = new Database(join(f.home, 'archon.db'));
+    try {
+      db.run(
+        "UPDATE remote_agent_workflow_runs SET metadata = json_set(metadata, '$.wait.resumeAt', ?)",
+        [new Date(Date.now() - 1000).toISOString()]
+      );
+    } finally {
+      db.close();
+    }
     const deadline = Date.now() + 15_000;
     while (row(f).status !== 'completed' && Date.now() < deadline) await Bun.sleep(25);
     expect(row(f).status).toBe('completed');
@@ -336,7 +355,9 @@ describe('cold CLI continuation host', () => {
     // POSIX can prove the handler drains and exits cleanly.
     if (process.platform !== 'win32') expect(exitCode).toBe(0);
     children.delete(child);
-    const passes = (await stdout)
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())
+      stdout += decoder.decode(chunk.value, { stream: true });
+    const passes = stdout
       .trim()
       .split('\n')
       .map(line => JSON.parse(line) as { accepted: number });

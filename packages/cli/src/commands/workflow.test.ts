@@ -6788,6 +6788,12 @@ describe('workflowLogsCommand', () => {
         name: 'Bash',
         rawInput: { command: 'git status' },
       }),
+      event('plan', 'a1', {
+        type: 'tool_call',
+        toolCallId: 'c2',
+        name: 'flag',
+        rawInput: false,
+      }),
       // The other node reuses the call id; its outcome must not take plan's tool name.
       event('lint', 'a2', {
         type: 'tool_call',
@@ -6875,6 +6881,7 @@ describe('workflowLogsCommand', () => {
         '',
         '  Then planning.',
         '  tool: Bash git status',
+        '  tool: flag false',
         '[lint]',
         '  tool: /bin/zsh -lc "bun run lint"',
         '[plan]',

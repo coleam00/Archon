@@ -23,6 +23,7 @@ import type {
 } from '../types';
 import {
   sessionPreview,
+  toolCallSchema,
   truncateToolOutput,
   type ProviderFailureClass,
 } from '@archon/provider-contract';
@@ -392,8 +393,8 @@ function toolCallOf(item: ToolItem): ToolCallEvent {
         name: item.tool,
         title: `${item.server}/${item.tool}`,
       };
-      if (typeof item.arguments === 'object' && item.arguments !== null) {
-        call.rawInput = item.arguments as Record<string, unknown>;
+      if (item.arguments !== undefined) {
+        call.rawInput = toolCallSchema.shape.rawInput.parse(item.arguments);
       }
       return call;
     }
