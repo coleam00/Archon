@@ -1573,10 +1573,10 @@ describe('ClaudeProvider', () => {
       spy.mockRestore();
     });
 
-    test('container run SKIPS host binary resolution (works when host Claude is absent)', async () => {
+    test('container run skips host binary resolution even with a configured host path', async () => {
       // Simulate a compiled binary with no host Claude — resolveClaudeBinaryPath
       // would throw. A container run must NOT call it (Claude is baked into the
-      // runner image; the SDK bypasses disk resolution via spawnClaudeCodeProcess).
+      // runner image).
       const spy = spyOn(binaryResolver, 'resolveClaudeBinaryPath').mockRejectedValue(
         new Error('Claude Code not found — set CLAUDE_BIN_PATH')
       );
@@ -1587,6 +1587,7 @@ describe('ClaudeProvider', () => {
       // Must not throw at resolution time.
       for await (const _ of client.sendQuery('test', '/workspace', undefined, {
         execContext: { kind: 'container', containerId: 'c-1' },
+        assistantConfig: { claudeBinaryPath: '/missing-host-claude' },
       })) {
         // consume
       }
@@ -1595,9 +1596,9 @@ describe('ClaudeProvider', () => {
       const callArgs = mockQuery.mock.calls[0][0] as {
         options: { pathToClaudeCodeExecutable?: string; spawnClaudeCodeProcess?: unknown };
       };
-      // SDK spawn hook is set; host disk path is omitted.
+      // The placeholder prevents SDK host resolution before the hook runs.
       expect(typeof callArgs.options.spawnClaudeCodeProcess).toBe('function');
-      expect(callArgs.options.pathToClaudeCodeExecutable).toBeUndefined();
+      expect(callArgs.options.pathToClaudeCodeExecutable).toBe('claude');
 
       spy.mockRestore();
     });
