@@ -1,5 +1,5 @@
 import { InProcessWorkflowEngine } from './in-process-engine';
-import { isApprovalContext } from './schemas/workflow-run';
+import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
@@ -711,15 +711,12 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     else process.env.ARCHON_HOME = originalArchonHome;
   });
 
-  it.each([
+  const origins = [
     undefined,
-    {
-      conversationId: 'chat-db',
-      parentConversationId: 'parent-chat-db',
-      userId: 'creator',
-      platform: { type: 'custom', conversationId: 'opaque-thread' },
-    },
-  ])('inherits optional origin through real child execution', async origin => {
+    { conversationId: 'chat-db', parentConversationId: 'parent-chat-db', userId: 'creator' },
+  ] satisfies (WorkflowRunOrigin | undefined)[];
+
+  it.each(origins)('inherits optional origin through real child execution', async origin => {
     await writeWorkflow(
       'origin-child',
       `
