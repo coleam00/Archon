@@ -158,6 +158,25 @@ describe('optional workflow origin', () => {
     ).rejects.toThrow('reserved');
   });
 
+  // The anchor's platform ID is fixed and public, so every lookup by a caller-supplied
+  // platform ID must treat it as absent rather than expose origin-free runs.
+  test('the anchor platform ID resolves to no run and no conversation', async () => {
+    const run = await workflows.createWorkflowRun({
+      workflow_name: 'private',
+      user_message: 'not for platform lookups',
+    });
+    expect(run.origin).toBeNull();
+    expect(
+      await workflows.getWorkflowRunByWorkerPlatformId('workflow-store-originless')
+    ).toBeNull();
+    expect(
+      await conversations.findConversationByPlatformId('workflow-store-originless')
+    ).toBeNull();
+    expect(
+      await conversations.getConversationByPlatformId('archon', 'workflow-store-originless')
+    ).toBeNull();
+  });
+
   test('a conflicting reserved identity is rejected and failed insertion rolls back the anchor', async () => {
     await db.close();
     db = new SqliteAdapter(':memory:');

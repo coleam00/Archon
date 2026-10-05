@@ -4,6 +4,15 @@ export const WORKFLOW_ORIGIN_ANCHOR_ID = '00000000-0000-4000-8000-000000003640';
 const PLATFORM_TYPE = 'archon';
 const PLATFORM_ID = 'workflow-store-originless';
 
+/**
+ * SQL predicate excluding the anchor from a conversation lookup. Its platform ID is fixed
+ * and public, so every lookup by a caller-supplied platform ID must treat it as absent.
+ * The ID is a constant UUID, so inlining it is safe.
+ */
+export function notOriginAnchor(idColumn: string): string {
+  return `${idColumn} <> '${WORKFLOW_ORIGIN_ANCHOR_ID}'`;
+}
+
 export function assertPublicConversation(id: string): void {
   if (id === WORKFLOW_ORIGIN_ANCHOR_ID) {
     throw new Error('The workflow origin compatibility anchor is reserved');

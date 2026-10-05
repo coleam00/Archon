@@ -10,6 +10,7 @@ import { createLogger } from '@archon/paths';
 import {
   assertPublicConversation,
   assertPublicConversationIdentity,
+  notOriginAnchor,
 } from './workflow-origin-anchor';
 import { loadConfig } from '../config/config-loader';
 import { resolveProjectAssistant } from '../config/project-assistant';
@@ -42,12 +43,10 @@ export async function findConversationByPlatformId(
   platformId: string
 ): Promise<Conversation | null> {
   const result = await pool.query<Conversation>(
-    'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
+    `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND ${notOriginAnchor('id')}`,
     [platformId]
   );
-  const conversation = result.rows[0];
-  if (conversation) assertPublicConversation(conversation.id);
-  return conversation ?? null;
+  return result.rows[0] ?? null;
 }
 
 /**
@@ -59,12 +58,10 @@ export async function getConversationByPlatformId(
   platformId: string
 ): Promise<Conversation | null> {
   const result = await pool.query<Conversation>(
-    'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+    `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
     [platformType, platformId]
   );
-  const conversation = result.rows[0];
-  if (conversation) assertPublicConversation(conversation.id);
-  return conversation ?? null;
+  return result.rows[0] ?? null;
 }
 
 export async function getOrCreateConversation(
@@ -94,7 +91,7 @@ export async function getOrCreateConversation(
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(
-      'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+      `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
       [platformType, parentConversationId]
     );
     if (parent.rows[0]) {
@@ -323,7 +320,7 @@ export async function detachConversationProject(input: {
     const findParent = async (): Promise<Conversation | undefined> => {
       if (!input.parentPlatformId) return undefined;
       const result = await query<Conversation>(
-        'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+        `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
         [input.platformType, input.parentPlatformId]
       );
       return result.rows[0];

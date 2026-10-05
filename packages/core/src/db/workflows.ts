@@ -34,7 +34,7 @@ import { workflowRunOriginSchema } from '@archon/workflows/schemas/workflow-run'
 import {
   assertPublicConversation,
   ensureWorkflowOriginAnchor,
-  WORKFLOW_ORIGIN_ANCHOR_ID,
+  notOriginAnchor,
 } from './workflow-origin-anchor';
 import type { IDatabase, SqlDialect } from './adapters/types';
 import type {
@@ -1217,7 +1217,7 @@ export async function getWorkflowRunByWorkerPlatformId(
     const result = await pool.query<WorkflowRunRow>(
       `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
        JOIN remote_agent_conversations c ON r.conversation_id = c.id
-       WHERE c.platform_conversation_id = $1
+       WHERE c.platform_conversation_id = $1 AND ${notOriginAnchor('c.id')}
        ORDER BY r.started_at DESC LIMIT 1`,
       [platformConversationId]
     );
@@ -2166,7 +2166,7 @@ export async function listDashboardRuns(
                  WHERE e.workflow_run_id = r.id AND e.event_type = 'parallel_agent_started'
                  ORDER BY e.created_at DESC LIMIT 1) AS agents_total
          FROM remote_agent_workflow_runs r
-         LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND c.id != '${WORKFLOW_ORIGIN_ANCHOR_ID}'
+         LEFT JOIN remote_agent_conversations c ON r.conversation_id = c.id AND ${notOriginAnchor('c.id')}
          LEFT JOIN remote_agent_conversations pc ON r.parent_conversation_id = pc.id
          LEFT JOIN remote_agent_codebases cb ON r.codebase_id = cb.id
          ${whereStr}
