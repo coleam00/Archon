@@ -1,3 +1,4 @@
+import { getProviderCapabilities } from '@archon/providers';
 import { describe, expect, it } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -165,7 +166,10 @@ function makeDeps(
   return {
     store,
     loadConfig: async () => defaultConfig(),
-    getAgentProvider: () => ({ run: async (): Promise<void> => undefined }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+      run: async (): Promise<void> => undefined,
+    }),
     ...overrides,
   } as WorkflowDeps;
 }
@@ -314,8 +318,18 @@ export function runWorkflowEngineContractTests(
         const result = await makeEngine(
           makeDeps(store, {
             getAgentProvider: () => {
-              executions += 1;
-              throw new Error('must not execute');
+              return {
+                getType: (): 'claude' => 'claude',
+                getCapabilities: (): ReturnType<typeof getProviderCapabilities> =>
+                  getProviderCapabilities('claude'),
+                checkCredential: async (): Promise<
+                  import('@archon/provider-contract').CredentialStatus
+                > => ({ state: 'not_checked', source: 'native' }),
+                sendQuery: (): never => {
+                  executions += 1;
+                  throw new Error('must not execute');
+                },
+              };
             },
           })
         ).submit({
@@ -553,6 +567,7 @@ nodes:
     });
 
     it.each([
+      ['preparedAiConfiguration', { preparedAiConfiguration: {} }],
       ['runConfig', { runConfig: { layer: {}, source: 'cli' } }],
       ['modelOverrideLayer', { modelOverrideLayer: { kind: 'raw', overrides: {} } }],
     ])('rejects resume option %s before hydration or claim', async (_field, options) => {
@@ -584,10 +599,12 @@ nodes:
       const config = deferred<WorkflowConfig>();
       const resumed = makeRun({ id: 'failed-run', status: 'running' });
       const failures: { id: string; message: string }[] = [];
+      let durableStatus: import('./schemas').WorkflowRunStatus = 'running';
       const store = resumableStore({
         resumeWorkflowRun: async () => resumed,
-        getWorkflowRunStatus: async () => 'running',
+        getWorkflowRunStatus: async () => durableStatus,
         failWorkflowRun: async (id, message) => {
+          durableStatus = 'failed';
           failures.push({ id, message });
         },
       });
