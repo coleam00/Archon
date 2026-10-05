@@ -224,6 +224,21 @@ class InMemoryStore implements IWorkflowStore {
   deleteWorkflowNodeSessions: IWorkflowStore['deleteWorkflowNodeSessions'] = () => {
     throw new Error('Unexpected deleteWorkflowNodeSessions');
   };
+  findOpenWorkRuns: IWorkflowStore['findOpenWorkRuns'] = async () => {
+    throw new Error('Not used by this test');
+  };
+  findAdoptingRuns: IWorkflowStore['findAdoptingRuns'] = async () => {
+    throw new Error('Not used by this test');
+  };
+  deleteOldWorkflowRuns: IWorkflowStore['deleteOldWorkflowRuns'] = async () => {
+    throw new Error('Not used by this test');
+  };
+  listWorkflowEvents: IWorkflowStore['listWorkflowEvents'] = async () => {
+    throw new Error('Not used by this test');
+  };
+  listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async () => {
+    throw new Error('Not used by this test');
+  };
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
     throw new Error('Unexpected listWorkflowRuns');

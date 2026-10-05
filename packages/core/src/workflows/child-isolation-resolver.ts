@@ -30,7 +30,7 @@ import {
 import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
-import * as isolationDb from '../db/isolation-environments';
+import type { IIsolationStore } from '@archon/isolation';
 import type { Codebase } from '../schemas/codebase';
 
 /**
@@ -110,6 +110,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * returns the shared checkout as a fallback.
  */
 export function createCodebaseChildResolver(
+  isolation: IIsolationStore,
   codebase: Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'kind'>,
   surface: {
     /**
@@ -190,7 +191,7 @@ export function createCodebaseChildResolver(
         });
 
         // Register the env so `isolation list`/`cleanup`/`complete <branch>` see it.
-        const envRecord = await isolationDb.create({
+        const envRecord = await isolation.create({
           codebase_id: codebase.id,
           workflow_type: 'task',
           workflow_id: identifier,
@@ -224,7 +225,7 @@ export function createCodebaseChildResolver(
         //     childIndex), so re-spawning the SAME slot recomputes the SAME path.
         //     Nothing else computes this identifier, so whatever is sitting there is
         //     this slot's own from an earlier attempt — never a sibling's live checkout.
-        //  2. `isolationDb.create()` is an UPSERT (`ON CONFLICT (codebase_id,
+        //  2. `isolation.create()` is an UPSERT (`ON CONFLICT (codebase_id,
         //     workflow_type, workflow_id) WHERE status = 'active' DO UPDATE`, see
         //     `db/isolation-environments.ts`), so the re-spawn refreshes the existing
         //     env row rather than failing on the unique index. "Simplifying" that to a

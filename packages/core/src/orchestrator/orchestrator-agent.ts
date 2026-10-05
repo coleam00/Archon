@@ -1,3 +1,5 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
+import * as sqlWorkflow from '@archon/core/db/workflows';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
@@ -785,6 +787,11 @@ async function dispatchOrchestratorWorkflowOwned(
   const adoptionLane = options?.adoptRunId
     ? (
         await resolveWorkflowAdoption({
+          deps: {
+            getRun: sqlWorkflow.getWorkflowRun,
+            getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+            findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
+          },
           adoptedRunId: options.adoptRunId,
           codebaseId: codebase.id,
           codebasePath: codebase.default_cwd,
@@ -810,11 +817,15 @@ async function dispatchOrchestratorWorkflowOwned(
   }
 
   // Shared across every dispatch below.
-  const resolveChildIsolation = createCodebaseChildResolver(codebase, {
-    baseBranch: codebaseBaseBranch,
-    createdByPlatform: platform.getPlatformType(),
-    createdByUserId: userId,
-  });
+  const resolveChildIsolation = createCodebaseChildResolver(
+    sqlIsolation.createIsolationStore(),
+    codebase,
+    {
+      baseBranch: codebaseBaseBranch,
+      createdByPlatform: platform.getPlatformType(),
+      createdByUserId: userId,
+    }
+  );
 
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
   //

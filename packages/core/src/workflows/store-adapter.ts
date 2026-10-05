@@ -1,3 +1,4 @@
+import { toHydratedTimestamp } from '../db/timestamps';
 import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
@@ -86,6 +87,24 @@ export function createWorkflowStore(): IWorkflowStore {
     cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,
     deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRuns: workflowDb.listDashboardRuns,
+    findOpenWorkRuns: workflowDb.findOpenWorkRuns,
+    findAdoptingRuns: workflowDb.findAdoptingRuns,
+    deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
+    listWorkflowEvents: async (...args) =>
+      (await workflowEventDb.listWorkflowEvents(...args)).map(row => ({
+        ...row,
+        created_at: toHydratedTimestamp(row.created_at).toISOString(),
+      })),
+    listEventsForRuns: async (...args) =>
+      new Map(
+        [...(await workflowEventDb.listEventsForRuns(...args))].map(([id, rows]) => [
+          id,
+          rows.map(row => ({
+            ...row,
+            created_at: toHydratedTimestamp(row.created_at).toISOString(),
+          })),
+        ])
+      ),
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
@@ -162,7 +181,9 @@ export function registerGitHubAppAuthProvider(provider: IGitHubAppAuthProvider |
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
  */
-export function createWorkflowDeps(): WorkflowDeps {
+export function createWorkflowDeps(): Omit<WorkflowDeps, 'loadConfig'> & {
+  loadConfig: typeof loadMergedConfig;
+} {
   const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),

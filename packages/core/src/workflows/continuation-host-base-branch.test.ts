@@ -43,7 +43,7 @@ mock.module('@archon/isolation', () => ({
   getIsolationProvider: () => ({ create: providerCreate }),
 }));
 mock.module('../db/isolation-environments', () => ({
-  create: async () => ({ id: 'child-env' }),
+  createIsolationStore: () => ({ create: async () => ({ id: 'child-env' }) }),
 }));
 mock.module('../db/workflows', () => ({
   getWorkflowRun: async () => run,

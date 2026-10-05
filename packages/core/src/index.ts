@@ -112,7 +112,7 @@ export {
   ProjectRegistrationError,
   type RegistrationOptions,
   type ProjectBaseBranchInspection,
-} from './handlers/clone';
+} from './handlers/sql-registration';
 
 // =============================================================================
 // Config

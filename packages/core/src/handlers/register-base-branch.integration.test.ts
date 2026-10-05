@@ -28,7 +28,8 @@ mock.module('../db/connection', () => ({
   getDialect: () => sqliteDialect,
   getDatabaseType: () => 'sqlite',
 }));
-const { registerRepository, registerFolder, inspectProjectBaseBranch } = await import('./clone');
+const { registerRepository, registerFolder, inspectProjectBaseBranch } =
+  await import('./sql-registration');
 const { getCodebase, updateCodebase, listCodebases } = await import('../db/codebases');
 const originalHome = process.env.ARCHON_HOME;
 afterEach(() => {

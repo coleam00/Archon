@@ -23,7 +23,7 @@ export type { MessageRow } from '../schemas/message';
  */
 export async function addMessage(
   conversationId: string,
-  role: 'user' | 'assistant',
+  role: MessageRow['role'],
   content: string,
   metadata?: Record<string, unknown>,
   userId?: string

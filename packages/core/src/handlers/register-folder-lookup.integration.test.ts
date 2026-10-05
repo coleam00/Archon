@@ -36,7 +36,7 @@ mock.module('../db/connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { registerFolder } = await import('./clone');
+const { registerFolder } = await import('./sql-registration');
 const { findCodebaseByDefaultCwd, findCodebaseByPathPrefix } = await import('../db/codebases');
 const { canonicalizeProjectPath } = await import('@archon/paths');
 

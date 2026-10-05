@@ -156,8 +156,8 @@ describe('workflow run API wait metadata', () => {
 // resumeRunHeadless (#2008) — stubbed so a future change to it or its
 // neighbors can't silently start touching the real workflow store or the
 // real isolation provider (see #2240 for what an un-stubbed export costs).
-const mockCreateCodebaseChildResolver = mock((_codebase: unknown, _surface: unknown) =>
-  mock(async () => ({}) as unknown)
+const mockCreateCodebaseChildResolver = mock(
+  (_store: unknown, _codebase: unknown, _surface: unknown) => mock(async () => ({}) as unknown)
 );
 
 mock.module('@archon/core', () => ({
@@ -3555,6 +3555,7 @@ describe('approve/reject auto-resume', () => {
     // wired into the resumed execution, same as CLI/chat resume, so a
     // downstream `workflow:` node with isolation:worktree doesn't fail.
     expect(mockCreateCodebaseChildResolver).toHaveBeenCalledWith(
+      expect.objectContaining({ getById: expect.any(Function), create: expect.any(Function) }),
       expect.objectContaining({ id: 'cb-uuid-1', name: 'owner/repo' }),
       expect.objectContaining({ baseBranch: 'main' })
     );

@@ -36,7 +36,7 @@ mock.module('./connection', () => ({
 const { setPlatformPolicies } = await import('../platforms/registry');
 setPlatformPolicies([]);
 const { updateGlobalConfig } = await import('../config/config-loader');
-const { registerFolder, registerRepository } = await import('../handlers/clone');
+const { registerFolder, registerRepository } = await import('../handlers/sql-registration');
 const { getCodebase } = await import('./codebases');
 const { getOrCreateConversation } = await import('./conversations');
 const { formatProjectSection, buildOrchestratorSystemAppend } =
