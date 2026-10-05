@@ -4752,8 +4752,6 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       const pushed = join(testDir, 'pushed');
       const client = join(testDir, 'forge-client.ts');
       const preload = join(testDir, 'gh-preload.ts');
-      const release = join(testDir, 'release');
-      const finished = join(testDir, 'finished');
       const clientPid = join(testDir, 'client-pid');
       const intentPath = join(testDir, 'intent.json');
       const repo = { host: 'github.com', path: 'example/repo' };
@@ -4807,6 +4805,24 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
             : original(argv, settings)
         });`
       );
+      let releaseWrite: () => void = () => {};
+      const released = new Promise<void>(resolve => {
+        releaseWrite = resolve;
+      });
+      let finished = false;
+      // The forge owns a submitted write independently of the client process,
+      // which Windows terminates along with the timed-out script's process tree.
+      const server = Bun.serve({
+        hostname: '127.0.0.1',
+        port: 0,
+        async fetch() {
+          if (!delayed) await writeFile(created, 'created');
+          await released;
+          await writeFile(created, 'created');
+          finished = true;
+          return new Response(pr.url);
+        },
+      });
       await writeFile(
         client,
         `
@@ -4817,10 +4833,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         const respond = value => console.log(JSON.stringify({ operationId: 'fake', ok: true, result: { op, value } }));
         if (op === 'pr.create') {
           writeFileSync(${JSON.stringify(clientPid)}, String(process.pid));
-          if (!${String(delayed)}) writeFileSync(${JSON.stringify(created)}, 'created');
-          while (!existsSync(${JSON.stringify(release)})) await Bun.sleep(10);
-          writeFileSync(${JSON.stringify(created)}, 'created');
-          writeFileSync(${JSON.stringify(finished)}, 'finished');
+          await fetch(${JSON.stringify(server.url.toString())});
           if (${JSON.stringify(source)} === 'forge') respond({ pr: ${JSON.stringify(pr)} });
           else console.log(${JSON.stringify(pr.url)});
         } else if (op === 'pr.view') {
@@ -4859,13 +4872,16 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
           publishNode,
         ]));
       } finally {
-        // Release the in-flight fake write even if the workflow assertion fails.
-        await writeFile(release, 'release');
-        for (let attempt = 0; attempt < 500 && !existsSync(finished); attempt++) {
-          await Bun.sleep(10);
+        releaseWrite();
+        try {
+          for (let attempt = 0; attempt < 500 && !finished; attempt++) {
+            await Bun.sleep(10);
+          }
+        } finally {
+          await server.stop(true);
         }
       }
-      expect(existsSync(finished)).toBe(true);
+      expect(finished).toBe(true);
       const pid = Number(await readFile(clientPid, 'utf8'));
       const clientAlive = (): boolean => {
         try {
