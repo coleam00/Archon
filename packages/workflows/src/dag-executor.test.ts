@@ -31082,6 +31082,68 @@ describe('executeDagWorkflow -- gate pause vs external transition (#1123)', () =
     });
   }
 
+  it('defers a loop-group terminal wait that loses the paused slot to a sibling gate', async () => {
+    const runId = 'deferred-body-wait';
+    const store = createEscalationStore(runId);
+    let gatePaused = () => {};
+    const paused = new Promise<void>(resolve => {
+      gatePaused = resolve;
+    });
+    const pause = store.pauseWorkflowRun;
+    store.pauseWorkflowRun = mock(async (id, context, extra, suspension) => {
+      await pause(id, context, extra, suspension);
+      gatePaused();
+    });
+    // The real store only pauses a running run for a wait.
+    const pauseForWait = store.pauseWorkflowRunForWait;
+    store.pauseWorkflowRunForWait = mock(async (id, context, event) => {
+      if (store.getState().status !== 'running') {
+        throw new Error(`Workflow run not found or not in running state (id: ${id})`);
+      }
+      await pauseForWait(id, context, event);
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      await paused;
+      yield { type: 'agent_message_chunk', text: 'not yet' };
+      yield { type: 'result', sessionId: 'body-session' };
+    });
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(runId),
+        workflow: {
+          name: 'deferred-body-wait',
+          nodes: [
+            dagNodeSchema.parse({ id: 'review', approval: { message: 'Review' } }),
+            dagNodeSchema.parse({
+              id: 'group',
+              loop_group: {
+                until: 'DONE',
+                max_iterations: 3,
+                nodes: [
+                  { id: 'work', prompt: 'Work' },
+                  { id: 'hold', depends_on: ['work'], wait: { duration_ms: 60_000 } },
+                ],
+              },
+            }),
+          ],
+        },
+      })
+    );
+    // The group stops at its deferred wait instead of re-running the paid body.
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(store.getState().metadata.approval).toMatchObject({ nodeId: 'review' });
+    expect(
+      persistedEvents(store).some(
+        event =>
+          event.step_name === 'group' &&
+          ['node_completed', 'node_failed', 'node_suspended'].includes(event.event_type)
+      )
+    ).toBe(false);
+  });
+
   /** Store whose pauseWorkflowRun loses the CAS: the run was externally
    *  transitioned (e.g. a killed CLI's signal cleanup marked it failed) in the
    *  window between gate raise and pause commit. getWorkflowRunStatus reports

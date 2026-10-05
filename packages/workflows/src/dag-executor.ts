@@ -4177,7 +4177,7 @@ async function executeLoopGroupNode(
     };
   } else if (result.state === 'running') {
     const suspensionPoint = result.suspensionPoint;
-    // A deferred body or loop gate leaves the group running; keep the spend its
+    // A deferred body gate or terminal wait leaves the group running; keep the spend its
     // iterations already made.
     if (suspensionPoint === undefined)
       return {
@@ -4781,40 +4781,36 @@ async function executeLoopGroupBody(
     }
 
     if (terminalSuspendNode && postBodyStatus === 'paused') {
-      const bodyGateOutput = scopedNodeOutputs.get(terminalSuspendNode.id);
-      if (
-        isGateNode(terminalSuspendNode) &&
-        (bodyGateOutput === undefined || bodyGateOutput.state === 'running')
-      ) {
+      const suspendOutput = scopedNodeOutputs.get(terminalSuspendNode.id);
+      // Still running means the terminal gate or wait either suspended this group or was
+      // deferred behind a sibling that holds the paused slot. Either way the iteration
+      // stops here; only a suspension this group owns is marked as one.
+      if (suspendOutput === undefined || suspendOutput.state === 'running') {
+        let suspensionPoint: 'approval' | 'wait' | undefined;
+        if (isGateNode(terminalSuspendNode)) {
+          if (suspendOutput?.execution?.lifecycle.status === 'suspended') {
+            suspensionPoint = 'approval';
+          }
+        } else {
+          const freshRun = await deps.store.getWorkflowRun(workflowRun.id);
+          const freshWait = freshRun?.metadata?.wait;
+          if (
+            isWorkflowWaitContext(freshWait) &&
+            freshWait.owner === 'loop_group' &&
+            freshWait.nodeId === node.id &&
+            freshWait.bodyWaitId === terminalSuspendNode.id &&
+            freshWait.iteration === i
+          ) {
+            suspensionPoint = 'wait';
+          }
+        }
         return {
           state: 'running',
           output: lastIterationOutput,
           costUsd: loopTotalCostUsd,
           ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
           loopIterations: i,
-          ...(bodyGateOutput?.execution?.lifecycle.status === 'suspended'
-            ? { suspensionPoint: 'approval' as const }
-            : {}),
-        };
-      }
-      const freshRun = await deps.store.getWorkflowRun(workflowRun.id);
-      const freshWait = isWorkflowWaitContext(freshRun?.metadata?.wait)
-        ? freshRun.metadata.wait
-        : undefined;
-      if (
-        terminalSuspendNode.kind === 'wait' &&
-        freshWait?.owner === 'loop_group' &&
-        freshWait.nodeId === node.id &&
-        freshWait.bodyWaitId === terminalSuspendNode.id &&
-        freshWait.iteration === i
-      ) {
-        return {
-          state: 'running',
-          output: lastIterationOutput,
-          costUsd: loopTotalCostUsd,
-          ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
-          loopIterations: i,
-          suspensionPoint: 'wait',
+          ...(suspensionPoint !== undefined ? { suspensionPoint } : {}),
         };
       }
     }
