@@ -1,3 +1,4 @@
+import { createLogger } from '@archon/paths';
 import type { NodeStateRecord } from './schemas/node-execution';
 import {
   serializeNodeStateRecord,
@@ -17,7 +18,7 @@ import { getWorkflowEventEmitter } from './event-emitter';
 import type { NodeStateEventInput } from './store';
 import { readNodeRecordEvent, type ReadNodeRecordEvent } from './node-record-reader';
 
-/** Storage rejection must leave node retry policy and reach the run failure boundary. */
+/** Non-busy storage rejection must leave node retry policy and reach the run failure boundary. */
 export class NodeEventWriteError extends Error {
   constructor(event: NodeStateEventInput, cause: unknown) {
     const originalFailure = event.event_type === 'node_failed' ? event.data?.error : undefined;
@@ -33,10 +34,28 @@ export async function persistNodeEvent(
   store: Pick<WorkflowDeps['store'], 'persistWorkflowEvent'>,
   event: NodeStateEventInput
 ): Promise<void> {
-  try {
-    await store.persistWorkflowEvent(event);
-  } catch (error) {
-    throw new NodeEventWriteError(event, error);
+  for (;;) {
+    try {
+      await store.persistWorkflowEvent(event);
+      return;
+    } catch (error) {
+      const busy =
+        typeof error === 'object' &&
+        error !== null &&
+        (('code' in error && error.code === 'SQLITE_BUSY') ||
+          ('errno' in error && error.errno === 5));
+      if (!busy) throw new NodeEventWriteError(event, error);
+      createLogger('workflow.node-event-write').warn(
+        {
+          workflowRunId: event.workflow_run_id,
+          stepName: event.step_name,
+          eventType: event.event_type,
+        },
+        'workflow.node_event_write_busy_retrying'
+      );
+      // No retry deadline: finished node work must survive a lock outlasting busy_timeout.
+      await Bun.sleep(250);
+    }
   }
 }
 
@@ -227,8 +246,8 @@ export async function recordDerivedExecution(
 
 /**
  * Write one node-state fact to every sink. The durable row goes first and is awaited:
- * its rejection is a NodeEventWriteError that must reach the run failure boundary. The
- * transcript and the emitter then derive from the same value.
+ * busy locks are retried, and other rejections must reach the run failure boundary as
+ * NodeEventWriteError. The transcript and the emitter then derive from the same value.
  */
 export async function recordNodeState(
   sinks: NodeStateSinks,

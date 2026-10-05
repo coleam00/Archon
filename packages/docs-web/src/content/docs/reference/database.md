@@ -27,6 +27,13 @@ Simply **omit the `DATABASE_URL` variable** from your `.env` file. The app will 
 - Not suitable for multi-container deployments
 - No network access (CLI and server can't share database across different hosts)
 
+Correctness-critical node-state event writes wait and retry when SQLite reports
+`SQLITE_BUSY` (code `SQLITE_BUSY` or errno 5), even after the connection's 5000 ms busy
+timeout. There is no retry deadline: finished node work remains in memory while the
+write waits, and execution proceeds only after persistence succeeds. Other storage
+errors still fail the run. A process exiting while waiting can still lose the
+unpersisted result. Retry warnings use `workflow.node_event_write_busy_retrying`.
+
 ## Remote PostgreSQL (Supabase, Neon, etc.)
 
 Set your remote connection string in `.env`:
