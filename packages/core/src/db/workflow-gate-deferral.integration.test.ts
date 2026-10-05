@@ -159,6 +159,7 @@ describe('per-run gate deferral — real SQLite', () => {
   }
 
   test('an early loop-group body approval retains its own identity and decision', async () => {
+    let providerQueries = 0;
     const platform: IWorkflowPlatform = {
       sendMessage: async () => {},
       getPlatformType: () => 'test',
@@ -167,9 +168,15 @@ describe('per-run gate deferral — real SQLite', () => {
     const store = createWorkflowStore();
     const result = await new InProcessWorkflowEngine({
       store,
-      getAgentProvider: () => {
-        throw new Error('Work cannot start before the early gate resolves');
-      },
+      getAgentProvider: () => ({
+        getType: () => 'claude',
+        getCapabilities: () => getProviderCapabilities('claude'),
+        checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+        sendQuery: () => {
+          providerQueries++;
+          throw new Error('Work cannot start before the early gate resolves');
+        },
+      }),
       loadConfig: async () => ({
         assistant: 'claude',
         baseBranch: 'main',
@@ -202,6 +209,7 @@ describe('per-run gate deferral — real SQLite', () => {
       }),
     });
     const id = result.workflowRunId!;
+    expect(providerQueries).toBe(0);
     const approval = (await getWorkflowRun(id))?.metadata.approval;
     if (!isApprovalContext(approval)) throw new Error('Missing early gate');
     expect(approval.nodeId).toBe('start');
