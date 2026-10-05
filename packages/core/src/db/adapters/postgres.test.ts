@@ -581,7 +581,7 @@ describe('postgresDialect', () => {
 
   describe('jsonMerge()', () => {
     // Behavior (null removes the key) is proven against a real server in
-    // workflows.metadata-merge.postgres.integration.test.ts.
+    // workflows.postgres.integration.test.ts.
     test('merges the bound patch into the given column', () => {
       const sql = postgresDialect.jsonMerge('extra_fields', 3);
       expect(sql).toStartWith('(extra_fields || $3::jsonb)');
