@@ -2,6 +2,7 @@
  * Command handler for slash commands
  * Handles deterministic operations without AI
  */
+import { providerRegistry } from '@archon/providers';
 import type { WorkflowOperations } from '../operations/workflow-operations';
 import { writeFile, access } from 'fs/promises';
 import { join, relative } from 'path';
@@ -716,7 +717,7 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let errors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         workflowEntries = result.workflows;
         errors = result.errors;
       } catch (error) {
@@ -769,7 +770,7 @@ async function handleWorkflowCommand(
     case 'reload': {
       try {
         const { workflows: reloadedWorkflows, errors: reloadErrors } =
-          await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+          await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         let msg = `Discovered ${String(reloadedWorkflows.length)} workflow(s).`;
         if (reloadErrors.length > 0) {
           msg += `\n\n**${String(reloadErrors.length)} failed to load:**\n`;
@@ -1120,7 +1121,7 @@ async function handleWorkflowCommand(
       let workflowEntries: readonly WorkflowWithSource[];
       let loadErrors: readonly WorkflowLoadError[];
       try {
-        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+        const result = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
         workflowEntries = result.workflows;
         loadErrors = result.errors;
       } catch (error) {

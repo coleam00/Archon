@@ -8,6 +8,7 @@
  * Instead, we use spyOn for internal modules, which allows spying on specific functions
  * without replacing the entire module in the global cache.
  */
+import { providerRegistry } from '@archon/providers';
 import { describe, test, expect, mock, beforeEach, afterAll, spyOn } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
@@ -1748,7 +1749,7 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('and 5 more');
       });
 
-      test('should pass loadConfig as second argument to discoverWorkflowsWithConfig', async () => {
+      test('passes config loading and the host registry to discovery', async () => {
         spyDiscoverWorkflows.mockResolvedValueOnce({
           workflows: [makeTestWorkflowWithSource({ name: 'test-wf', description: 'Test' })],
           errors: [],
@@ -1756,8 +1757,11 @@ describe('CommandHandler', () => {
 
         await handleCommand(conversationWithCodebase, '/workflow list');
 
-        // Verify loadConfig function is passed as the second argument
-        expect(spyDiscoverWorkflows).toHaveBeenCalledWith(expect.any(String), expect.any(Function));
+        expect(spyDiscoverWorkflows).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.any(Function),
+          providerRegistry
+        );
       });
 
       // #2213 — chat is the surface most non-CLI authors use; a silently

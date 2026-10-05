@@ -1,4 +1,3 @@
-import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
  *
@@ -6,6 +5,8 @@ import { settlingProvider } from './test-settling-provider';
  * without actually running uv/bun, and are isolated from dag-executor.test.ts
  * to avoid mock.module() pollution.
  */
+import { providerRegistry } from '@archon/providers';
+import { settlingProvider } from './test-settling-provider';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdir, rm } from 'fs/promises';
@@ -215,6 +216,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
 
 function createMockDeps(): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: createMockStore(),
     getAgentProvider: provider => settlingProvider(mockGetAgentProvider(provider)),
     loadConfig: mock(() =>

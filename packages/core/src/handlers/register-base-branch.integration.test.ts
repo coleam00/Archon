@@ -6,6 +6,7 @@ import { mkdtemp, readFile, realpath, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { registerBuiltinProviders } from '@archon/providers';
 import { WorktreeProvider } from '@archon/isolation';
 import { getDefaultBranch, syncWorkspace, toRepoPath, toBranchName } from '@archon/git';
 import { SqliteAdapter, sqliteDialect } from '../db/adapters/sqlite';
@@ -30,6 +31,8 @@ mock.module('../db/connection', () => ({
 }));
 const { registerRepository, registerFolder, inspectProjectBaseBranch } = await import('./clone');
 const { getCodebase, updateCodebase, listCodebases } = await import('../db/codebases');
+// This test hosts a workflow run, so it registers providers the way CLI and server do.
+registerBuiltinProviders();
 const originalHome = process.env.ARCHON_HOME;
 afterEach(() => {
   if (originalHome === undefined) delete process.env.ARCHON_HOME;

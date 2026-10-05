@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
@@ -1242,7 +1243,7 @@ async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically —
     // no option needed since the discovery helper reads them unconditionally.
-    return await discoverWorkflowsWithConfig(cwd, loadConfig);
+    return await discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry);
   } catch (error) {
     const err = error as Error;
     throw new Error(
@@ -1851,7 +1852,7 @@ async function runWorkflowWithOwnedSource(
   let { workflows: workflowEntries, errors } = continuation
     ? { workflows: continuation.workflows, errors: continuation.errors }
     : preparedSource
-      ? await discoverWorkflowsWithConfig(cwd, loadConfig, preparedSource.roots)
+      ? await discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry, preparedSource.roots)
       : await loadWorkflows(effectiveDiscoveryCwd);
   const sourceCounts = countWorkflowSources(workflowEntries);
 
@@ -1906,6 +1907,7 @@ async function runWorkflowWithOwnedSource(
     const rediscovered = await discoverWorkflowsWithConfig(
       sourceRoot,
       loadConfig,
+      providerRegistry,
       preparedSource.roots
     );
     workflowEntries = rediscovered.workflows;
@@ -2110,7 +2112,11 @@ async function runWorkflowWithOwnedSource(
       };
       dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
     }
-    const dryRunModelOverrides = resolveRunModelOverrides(dryRunBaseProfile, modelOverrides);
+    const dryRunModelOverrides = resolveRunModelOverrides(
+      providerRegistry,
+      dryRunBaseProfile,
+      modelOverrides
+    );
     const result = await dryRunWorkflow({
       workflow,
       userMessage,

@@ -116,10 +116,12 @@ mock.module('@archon/paths/env-loader', () => ({ loadArchonEnv: (): void => unde
 mock.module('@archon/paths/cli-command', () => ({
   publishArchonCliCommand: (): void => undefined,
 }));
+const mockRegisterBuiltinProviders = mock((): void => undefined);
+const mockRegisterCommunityProviders = mock((): void => undefined);
 mock.module('@archon/providers', () => ({
   claimPiExtensionProcessError: (): boolean => false,
-  registerBuiltinProviders: (): void => undefined,
-  registerCommunityProviders: (): void => undefined,
+  registerBuiltinProviders: mockRegisterBuiltinProviders,
+  registerCommunityProviders: mockRegisterCommunityProviders,
 }));
 
 interface TestLogger {
@@ -381,6 +383,8 @@ describe('Slack workflow resume composition', () => {
     try {
       const { startServer } = await import('./index');
       await startServer({ port: 12345, skipPlatformAdapters: true });
+      expect(mockRegisterBuiltinProviders).toHaveBeenCalledTimes(1);
+      expect(mockRegisterCommunityProviders).toHaveBeenCalledTimes(1);
       expect(retainsWorkspace('telegram')).toBe(true);
     } finally {
       serveSpy.mockRestore();

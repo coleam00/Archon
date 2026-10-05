@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 mock.module('@archon/core/services/provider-admission', () => ({
   getAgentProvider: () => ({
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
@@ -1267,7 +1268,11 @@ describe('workflowListCommand', () => {
 
     // After the globalSearchPath refactor, discovery reads ~/.archon/workflows/
     // on every call with no option — every caller inherits home-scope for free.
-    expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith('/test/path', expect.any(Function));
+    expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith(
+      '/test/path',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should throw error when discoverWorkflows fails', async () => {
@@ -2752,6 +2757,7 @@ describe('workflowRunCommand', () => {
     expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/path',
       expect.any(Function),
+      providerRegistry,
       expect.objectContaining({ project: '/test/capture/project' })
     );
     expect(consoleSpy).toHaveBeenCalledWith(
@@ -10001,7 +10007,11 @@ describe('workflowResumeCommand', () => {
       expect.objectContaining({ codebaseId: 'cb-bad' }),
       'cli.workflow_resume_codebase_lookup_failed'
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('fails loudly when codebase row is missing during resume', async () => {
@@ -10025,7 +10035,11 @@ describe('workflowResumeCommand', () => {
     await expect(workflowResumeCommand('run-missing-codebase')).rejects.toThrow(
       "references codebase 'cb-missing', but that codebase no longer exists"
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should discover workflows from codebase.default_cwd, not working_path', async () => {
@@ -10065,7 +10079,8 @@ describe('workflowResumeCommand', () => {
     // path directly — #1663's guarantee, unchanged.
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -10093,7 +10108,11 @@ describe('workflowResumeCommand', () => {
     }
 
     // No codebase → falls back to working_path (preserves existing behavior)
-    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/tmp/old-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('resolves a resumed worktree through its Git-proven source checkout (#2127)', async () => {
@@ -10268,7 +10287,11 @@ describe('workflowApproveCommand', () => {
     await expect(workflowApproveCommand('run-approve-missing-codebase')).rejects.toThrow(
       "Approved but failed to resume workflow 'implement': Workflow run 'run-approve-missing-codebase' references codebase 'cb-missing', but that codebase no longer exists"
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('fails with recorded-approval recovery when getCodebase throws during approve auto-resume', async () => {
@@ -10311,7 +10334,11 @@ describe('workflowApproveCommand', () => {
       expect.objectContaining({ runId: 'run-approve-codebase-error' }),
       'cli.workflow_approve_resume_failed'
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should pass original platform conversation ID through to workflowRunCommand', async () => {
@@ -10411,7 +10438,8 @@ describe('workflowApproveCommand', () => {
 
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 });
@@ -11351,7 +11379,8 @@ describe('workflowRejectCommand', () => {
     // path directly — #1663's guarantee, unchanged.
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11400,7 +11429,8 @@ describe('workflowRejectCommand', () => {
     );
     expect(discoverSpy).not.toHaveBeenCalledWith(
       '/tmp/worktree-without-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11450,7 +11480,8 @@ describe('workflowRejectCommand', () => {
     );
     expect(discoverSpy).not.toHaveBeenCalledWith(
       '/tmp/worktree-without-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11490,7 +11521,11 @@ describe('workflowRejectCommand', () => {
     }
 
     // No codebase → falls back to working_path (preserves existing behavior)
-    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/tmp/old-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 });
 
@@ -12943,7 +12978,8 @@ describe('workflowTestCommand', () => {
     expect(gitModule.findRepoRoot).toHaveBeenCalledWith('/test/repository/tools');
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/repository',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/test/repository', targetCwd: '/test/repository/tools' })

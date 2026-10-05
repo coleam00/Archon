@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -129,7 +130,12 @@ async function prepareBinding(
     let source = await prepareWorkflowSource(createWorkflowDeps(), { sourceRoot });
     owner.hold(source);
 
-    const discovered = await discoverWorkflowsWithConfig(cwd, loadConfig, source.roots);
+    const discovered = await discoverWorkflowsWithConfig(
+      cwd,
+      loadConfig,
+      providerRegistry,
+      source.roots
+    );
     const workflow = resolveWorkflowName(
       intent.launch.workflowName,
       discovered.workflows.map(entry => entry.workflow)

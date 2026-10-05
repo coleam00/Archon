@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
     _repo: string,
@@ -372,7 +373,22 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   requiresAllPropertiesRequired: false,
 };
 
+const mockGetProviderCapabilities = mock(() => ({ ...DEFAULT_PROVIDER_CAPS }));
+
+const providerRegistry: ProviderRegistry = {
+  get: id => ({
+    id,
+    displayName: id,
+    builtIn: true,
+    capabilities: mockGetProviderCapabilities(),
+    parseConfig: raw => raw,
+    credentials: { kind: 'static', specs: [], vendorFor: () => 'anthropic' },
+  }),
+  list: () => [],
+};
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
   getRegistration: () => ({
     parseConfig: (raw: Record<string, unknown>) => raw,
     credentials: { vendorFor: () => 'anthropic' },
@@ -382,11 +398,7 @@ mock.module('@archon/providers', () => ({
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
-  // `effortControl` decides whether a tier's `effort` reaches the provider, and
-  // `isRegisteredProvider` gates that lookup — both read by
-  // `validEffortsForProvider` (@archon/workflows/model-validation, #2556).
-  // Omitting either lets the REAL implementation run against an empty registry.
-  getProviderCapabilities: mock(() => ({ ...DEFAULT_PROVIDER_CAPS })),
+  getProviderCapabilities: mockGetProviderCapabilities,
   isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
@@ -416,6 +428,7 @@ mock.module('../utils/error', () => ({
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
+    providers: providerRegistry,
     store: { getCodebaseEnvVars: async () => ({}) },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,

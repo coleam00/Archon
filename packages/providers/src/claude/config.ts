@@ -3,6 +3,7 @@
  * Validates and narrows the opaque assistantConfig to typed fields.
  */
 import { createLogger } from '@archon/paths';
+import { parseClaudeSettingSources } from '@archon/paths/skills';
 import type { ClaudeProviderDefaults } from '../types';
 import {
   assertKnownRunConfigKeys,
@@ -18,38 +19,6 @@ let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   cachedLog ??= createLogger('provider.claude.config');
   return cachedLog;
-}
-
-export interface ParsedSettingSources {
-  /** Recognized entries, in the order given. Undefined when raw was not an array. */
-  value?: ('project' | 'user')[];
-  /** Entries dropped because they name no known setting source. */
-  invalid: string[];
-}
-
-/**
- * Normalize a raw `settingSources` value to the entries Claude actually honours.
- *
- * Shared by the provider and by workflow resource validation so the two can
- * never disagree about a node's effective sources — a divergence here means
- * `archon workflow validate` fails a workflow that runs, or passes one that
- * cannot (see the PR #2535 review).
- *
- * Unrecognized entries are dropped rather than widening the result. Dropping
- * narrows, which is the safe direction; keeping the old "leave it unset"
- * behaviour let a single typo fall back to the permissive `['project','user']`
- * default, silently granting the ambient access the author was excluding.
- */
-export function parseClaudeSettingSources(raw: unknown): ParsedSettingSources {
-  if (!Array.isArray(raw)) return { invalid: [] };
-
-  const value: ('project' | 'user')[] = [];
-  const invalid: string[] = [];
-  for (const entry of raw) {
-    if (entry === 'project' || entry === 'user') value.push(entry);
-    else invalid.push(typeof entry === 'string' ? entry : JSON.stringify(entry));
-  }
-  return { value, invalid };
 }
 
 /**

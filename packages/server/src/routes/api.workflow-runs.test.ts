@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import {
   RUN_GRAPH_METADATA_KEY,
   terminalRecordSchema,
@@ -161,6 +162,7 @@ const mockCreateCodebaseChildResolver = mock((_codebase: unknown, _surface: unkn
 );
 
 mock.module('@archon/core', () => ({
+  providers: providerRegistry,
   handleMessage: mockHandleMessage,
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),

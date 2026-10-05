@@ -3,6 +3,7 @@
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
+import { providerRegistry } from '@archon/providers';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
@@ -286,6 +287,7 @@ function makePlatform(): IWorkflowPlatform {
 
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: store ?? makeStore(),
     getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
     loadConfig: mock(
@@ -2709,6 +2711,7 @@ describe('executeWorkflow', () => {
     it('passes configured docsPath when set', async () => {
       const store = makeStore();
       const deps = {
+        providers: providerRegistry,
         store,
         loadConfig: mock(
           async (): Promise<WorkflowConfig> => ({

@@ -3,6 +3,7 @@
  * detection, and resume logic.  These run before DAG dispatch and are exercised
  * with minimal DAG workflow fixtures.
  */
+import { providerRegistry } from '@archon/providers';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { mkdtemp, rm } from 'fs/promises';
@@ -179,6 +180,7 @@ function makePlatform(): IWorkflowPlatform & { sendMessage: ReturnType<typeof mo
 
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: store ?? makeStore(),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({

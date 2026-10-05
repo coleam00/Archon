@@ -1,6 +1,10 @@
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
-import { getProviderCapabilities, registerBuiltinProviders } from '@archon/providers';
+import {
+  getProviderCapabilities,
+  providerRegistry,
+  registerBuiltinProviders,
+} from '@archon/providers';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import { createWorkflowStore } from '../workflows/store-adapter';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
@@ -81,6 +85,7 @@ describe('per-run gate deferral — real SQLite', () => {
         };
         const deps: WorkflowDeps = {
           store,
+          providers: providerRegistry,
           getAgentProvider: () => ({
             getType: () => 'claude',
             getCapabilities: () => getProviderCapabilities('claude'),
@@ -170,6 +175,7 @@ describe('per-run gate deferral — real SQLite', () => {
     const store = createWorkflowStore();
     const result = await new InProcessWorkflowEngine({
       store,
+      providers: providerRegistry,
       getAgentProvider: () => ({
         getType: () => 'claude',
         getCapabilities: () => getProviderCapabilities('claude'),
@@ -249,6 +255,7 @@ describe('per-run gate deferral — real SQLite', () => {
     };
     const deps: WorkflowDeps = {
       store,
+      providers: providerRegistry,
       getAgentProvider: () => {
         throw new Error('Unexpected provider');
       },
@@ -321,6 +328,7 @@ describe('per-run gate deferral — real SQLite', () => {
       };
       const deps: WorkflowDeps = {
         store: createWorkflowStore(),
+        providers: providerRegistry,
         getAgentProvider: () => {
           throw new Error('An approval must not start a provider');
         },
@@ -483,6 +491,7 @@ describe('per-run gate deferral — real SQLite', () => {
     const store = createWorkflowStore();
     const result = await new InProcessWorkflowEngine({
       store,
+      providers: providerRegistry,
       getAgentProvider: () => {
         throw new Error('Unexpected provider');
       },
@@ -518,6 +527,7 @@ describe('per-run gate deferral — real SQLite', () => {
     };
     const result = await new InProcessWorkflowEngine({
       store: createWorkflowStore(),
+      providers: providerRegistry,
       getAgentProvider: () => {
         throw new Error('Unexpected provider');
       },

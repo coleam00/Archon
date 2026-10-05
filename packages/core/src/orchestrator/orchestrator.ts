@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import {
   prepareRunAiConfiguration,
@@ -402,6 +403,7 @@ async function dispatchBackgroundWorkflowOwned(
         const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
           preflightCwd,
           loadConfig,
+          providerRegistry,
           preparedSource.roots
         );
         const reResolved = resolveWorkflowName(
