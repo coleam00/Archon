@@ -1,3 +1,4 @@
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
   prepareRunAiConfiguration,
@@ -4976,6 +4977,19 @@ export async function workflowGetCommand(
     console.log(
       `  Gate:   awaiting approval — completion condition met: ${completionMet} (iteration ${String(gateMeta.iteration ?? '?')})`
     );
+  }
+  if (
+    run.status === 'paused' &&
+    !isWorkflowWaitContext(waitMeta) &&
+    isApprovalContext(gateMeta) &&
+    gateMeta.type !== 'child_workflow' &&
+    !gateMeta.resolved
+  ) {
+    console.log(`  Choices: ${gateMeta.message}`);
+    for (const decision of getApprovalDecisions(gateMeta)) {
+      const display = decision.label ? `${decision.label} (${decision.id})` : decision.id;
+      console.log(`    ${display}: archon workflow respond ${run.id} ${decision.id} [text]`);
+    }
   }
   if (run.status === 'paused' && isWorkflowWaitContext(waitMeta)) {
     console.log(

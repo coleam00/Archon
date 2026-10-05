@@ -6712,6 +6712,7 @@ async function pauseGateRespectingExternalTransition(
     runId,
     nodeId: approvalContext.nodeId,
     message: approvalContext.message,
+    decisions: approvalContext.decisions,
   });
   return true;
 }
@@ -7119,11 +7120,21 @@ async function executeApprovalNode(
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
   const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs);
+  const choices = node.decisions.map(decision => {
+    const label =
+      decision.label ??
+      (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
+    const display = decision.label ? `${label} (${decision.id})` : label;
+    const command =
+      decision.id === 'approve' || decision.id === 'reject'
+        ? `${decision.id} ${workflowRun.id}`
+        : `respond ${workflowRun.id} ${decision.id} [text]`;
+    return `${display}: \`${spellWorkflowCommand(platform, command)}\``;
+  });
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
-    `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
-    `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+    choices.join(' | ');
   if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
     getLog().error(
       { nodeId: node.id, workflowRunId: workflowRun.id },

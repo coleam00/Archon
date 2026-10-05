@@ -57,6 +57,30 @@ describe('formatCostFooter', () => {
 });
 
 describe('buildApprovalBlocks', () => {
+  test('renders every declared choice and actionable fallback with exact IDs', () => {
+    const { blocks, fallbackText } = buildApprovalBlocks({
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions: [
+        { id: 'approve', label: 'Ship it' },
+        { id: 'revise', label: 'Try again' },
+        { id: 'cancel' },
+      ],
+    });
+    const actions = blocks.find(block => block.type === 'actions');
+    expect(actions).toMatchObject({
+      elements: [
+        { text: { text: 'Ship it' }, action_id: 'approve:r1:review' },
+        { text: { text: 'Try again' }, action_id: 'respond:r1:review:revise' },
+        { text: { text: 'cancel' }, action_id: 'respond:r1:review:cancel' },
+      ],
+    });
+    expect(fallbackText).toContain('/archon-workflow respond r1 revise [text]');
+    expect(fallbackText).toContain('Try again (revise)');
+    expect(fallbackText).not.toContain('reject');
+  });
+
   test('produces section + actions block with both buttons', () => {
     const { blocks, fallbackText } = buildApprovalBlocks({
       runId: 'a1b2c3d4-deadbeef',
@@ -64,7 +88,7 @@ describe('buildApprovalBlocks', () => {
       message: 'Approve the migration?',
     });
 
-    expect(fallbackText).toBe('Approval needed for run a1b2c3d4');
+    expect(fallbackText).toContain('Approval needed for run a1b2c3d4');
     expect(blocks).toHaveLength(2);
     expect(blocks[0]).toMatchObject({
       type: 'section',
@@ -95,7 +119,7 @@ describe('buildApprovalResolutionBlocks', () => {
     const { blocks } = buildApprovalResolutionBlocks({
       runId: 'a1b2c3d4-x',
       nodeId: 'review',
-      decision: 'approved',
+      decision: 'approve',
       actorUserId: 'U123ALICE',
       originalMessage: 'Approve the migration?',
       outcomeNote: 'workflow resumed',
@@ -113,7 +137,7 @@ describe('buildApprovalResolutionBlocks', () => {
     const { blocks } = buildApprovalResolutionBlocks({
       runId: 'a1b2c3d4-x',
       nodeId: 'review',
-      decision: 'rejected',
+      decision: 'reject',
       actorUserId: 'U123BOB',
       originalMessage: 'Approve?',
     });

@@ -14,6 +14,7 @@ import type { WorkflowEmitterEvent } from '@archon/workflows/event-emitter';
 import type {
   ApprovalOperationResult,
   RejectionOperationResult,
+  WorkflowOperations,
 } from '@archon/core/operations/workflow-operations';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────
@@ -71,6 +72,14 @@ const mockApproveWorkflow = mock<
 const mockRejectWorkflow = mock<
   (runId: string, reason?: string) => Promise<RejectionOperationResult>
 >(async () => rejectionResult());
+const mockRespondToWorkflow = mock<WorkflowOperations['respondToWorkflow']>(
+  async (runId, decision, text) => {
+    if (decision === 'approve')
+      return text === undefined ? mockApproveWorkflow(runId) : mockApproveWorkflow(runId, text);
+    if (decision === 'reject') return mockRejectWorkflow(runId, text ?? 'Rejected');
+    return approvalResult('approval_gate');
+  }
+);
 const mockCancelWorkflow = mock<(runId: string) => Promise<unknown>>(async () => ({}));
 const mockGetWorkflowRun = mock<
   (runId: string) => Promise<{
@@ -93,8 +102,7 @@ mock.module('@archon/core', () => ({
 
 mock.module('@archon/core/workflows/sql-host', () => ({
   createSqlWorkflowOperations: () => ({
-    approveWorkflow: mockApproveWorkflow,
-    rejectWorkflow: mockRejectWorkflow,
+    respondToWorkflow: mockRespondToWorkflow,
     cancelWorkflow: mockCancelWorkflow,
   }),
 }));
@@ -241,6 +249,7 @@ describe('SlackWorkflowBridge', () => {
   beforeEach(() => {
     mockGetConversationId.mockReset();
     mockSubscribe.mockClear();
+    mockRespondToWorkflow.mockClear();
     mockApproveWorkflow.mockReset();
     mockApproveWorkflow.mockResolvedValue(approvalResult('approval_gate'));
     mockRejectWorkflow.mockReset();
@@ -458,7 +467,68 @@ describe('SlackWorkflowBridge', () => {
     }
   );
 
-  test('approve button calls approveWorkflow and edits the message', async () => {
+  test('custom button responds with the declared ID and gate identity', async () => {
+    const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+    const resumeWorkflow = mock(async () => true);
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
+    });
+    await dispatchEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions: [{ id: 'approve' }, { id: 'revise', label: 'Try again' }, { id: 'cancel' }],
+    });
+    expect(posted.at(-1)?.text).toContain('Try again (revise)');
+    await dispatchAction('respond:r1:review:revise', {
+      user: { id: 'U123' },
+      channel: { id: 'C1' },
+      message: { ts: '2.000' },
+    });
+    expect(mockRespondToWorkflow).toHaveBeenCalledWith('r1', 'revise', undefined, 'review');
+    expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
+    expect(updated.find(message => message.ts === '2.000')?.text).toContain('Selected revise');
+  });
+
+  test('a failed response leaves the gate actionable and does not report success or resume', async () => {
+    const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
+    const resumeWorkflow = mock(async () => true);
+    triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
+    mockGetConversationId.mockReturnValue('C1:111.0');
+    new SlackWorkflowBridge(adapter as never, resumeWorkflow).attach();
+    await dispatchEvent({
+      type: 'workflow_started',
+      runId: 'r1',
+      workflowName: 'assist',
+      conversationId: 'conv-db-uuid',
+      transcriptPath: '/logs/r1.jsonl',
+    });
+    await dispatchEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions: [{ id: 'approve' }, { id: 'revise' }],
+    });
+    mockRespondToWorkflow.mockRejectedValueOnce(new Error('Stale gate action'));
+    const body = { user: { id: 'U123' }, channel: { id: 'C1' }, message: { ts: '2.000' } };
+    await dispatchAction('respond:r1:review:revise', body);
+    expect(resumeWorkflow).not.toHaveBeenCalled();
+    expect(updated.filter(message => message.ts === '2.000')).toHaveLength(0);
+    expect(posted.at(-1)?.text).toContain('Could not record the gate response');
+    await dispatchAction('respond:r1:review:revise', body);
+    expect(resumeWorkflow).toHaveBeenCalledTimes(1);
+  });
+
+  test('approve button responds and edits the message', async () => {
     const { adapter, posted, updated, triggerMap, dispatchAction } = makeFakeAdapter();
     const resumeWorkflow = mock(async () => true);
     triggerMap.set('C1:111.0', { channel: 'C1', ts: '111.0' });
@@ -490,6 +560,7 @@ describe('SlackWorkflowBridge', () => {
 
     expect(mockApproveWorkflow).toHaveBeenCalledTimes(1);
     expect(mockApproveWorkflow).toHaveBeenCalledWith('r1');
+    expect(mockRespondToWorkflow).toHaveBeenCalledWith('r1', 'approve', undefined, 'review');
     expect(resumeWorkflow).toHaveBeenCalledWith('r1', 'U123');
     const resolution = updated.find(message => message.ts === '2.000');
     expect(resolution?.channel).toBe('C1');

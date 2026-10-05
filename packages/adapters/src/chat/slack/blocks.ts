@@ -4,10 +4,12 @@
  * workflow bridge, both of which feed the output into `chat.postMessage`
  * / `chat.update`.
  */
+import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import type { types } from '@slack/bolt';
 import type { TokenUsage } from '@archon/providers/types';
 import {
   isTerminalRunStatus,
+  type ApprovalContext,
   type RunTerminalStatus,
   type WorkflowRunOutcome,
   type WorkflowRunStatus,
@@ -100,14 +102,16 @@ function formatTokenCount(n: number): string {
   return String(n);
 }
 
-/**
- * Block Kit message for an approval gate. Includes Approve / Reject buttons
- * whose action_ids encode the run + node so handlers stay stateless.
- */
-export function buildApprovalBlocks(input: { runId: string; nodeId: string; message: string }): {
+export function buildApprovalBlocks(input: {
+  runId: string;
+  nodeId: string;
+  message: string;
+  decisions?: ApprovalContext['decisions'];
+}): {
   blocks: KnownBlock[];
   fallbackText: string;
 } {
+  const decisions = getApprovalDecisions(input);
   const blocks: KnownBlock[] = [
     {
       type: 'section',
@@ -116,28 +120,46 @@ export function buildApprovalBlocks(input: { runId: string; nodeId: string; mess
         text: `:pause_button: *Approval needed* — run \`${shortRunId(input.runId)}\`\n\n${input.message}`,
       },
     },
-    {
-      type: 'actions',
-      block_id: `approval:${input.runId}:${input.nodeId}`,
-      elements: [
-        {
-          type: 'button',
-          style: 'primary',
-          text: { type: 'plain_text', text: 'Approve', emoji: true },
-          action_id: `approve:${input.runId}:${input.nodeId}`,
-        },
-        {
-          type: 'button',
-          style: 'danger',
-          text: { type: 'plain_text', text: 'Reject', emoji: true },
-          action_id: `reject:${input.runId}:${input.nodeId}`,
-        },
-      ],
-    },
   ];
+  // Slack permits at most 25 elements in an actions block and 75 characters in a button label.
+  for (let offset = 0; offset < decisions.length; offset += 25) {
+    blocks.push({
+      type: 'actions',
+      block_id: `approval:${input.runId}:${input.nodeId}${offset ? `:${String(offset)}` : ''}`,
+      elements: decisions.slice(offset, offset + 25).map(decision => ({
+        type: 'button',
+        ...(decision.id === 'approve'
+          ? { style: 'primary' as const }
+          : decision.id === 'reject'
+            ? { style: 'danger' as const }
+            : {}),
+        text: {
+          type: 'plain_text',
+          text: truncate(
+            decision.label ??
+              (decision.id === 'approve'
+                ? 'Approve'
+                : decision.id === 'reject'
+                  ? 'Reject'
+                  : decision.id),
+            75
+          ),
+          emoji: true,
+        },
+        action_id:
+          decision.id === 'approve' || decision.id === 'reject'
+            ? `${decision.id}:${input.runId}:${input.nodeId}`
+            : `respond:${input.runId}:${input.nodeId}:${decision.id}`,
+      })),
+    });
+  }
+  const choices = decisions.map(decision => {
+    const display = decision.label ? `${decision.label} (${decision.id})` : decision.id;
+    return `${display}: /archon-workflow respond ${input.runId} ${decision.id} [text]`;
+  });
   return {
     blocks,
-    fallbackText: `Approval needed for run ${shortRunId(input.runId)}`,
+    fallbackText: `Approval needed for run ${shortRunId(input.runId)}\n${input.message}\n${choices.join('\n')}`,
   };
 }
 
@@ -148,13 +170,18 @@ export function buildApprovalBlocks(input: { runId: string; nodeId: string; mess
 export function buildApprovalResolutionBlocks(input: {
   runId: string;
   nodeId: string;
-  decision: 'approved' | 'rejected';
+  decision: string;
   actorUserId: string;
   originalMessage: string;
   outcomeNote?: string;
 }): { blocks: KnownBlock[]; fallbackText: string } {
-  const icon = input.decision === 'approved' ? ':white_check_mark:' : ':x:';
-  const verb = input.decision === 'approved' ? 'Approved' : 'Rejected';
+  const icon = input.decision === 'reject' ? ':x:' : ':white_check_mark:';
+  const verb =
+    input.decision === 'approve'
+      ? 'Approved'
+      : input.decision === 'reject'
+        ? 'Rejected'
+        : `Selected ${input.decision}`;
   const lines: string[] = [
     `${icon} *${verb}* by <@${input.actorUserId}> — run \`${shortRunId(input.runId)}\``,
     '',

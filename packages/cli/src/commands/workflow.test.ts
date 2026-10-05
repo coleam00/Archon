@@ -6270,6 +6270,58 @@ describe('workflowGetCommand', () => {
     expect(code).toBe(0);
   });
 
+  it('prints declared decisions and exact respond commands for a paused gate', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-choices',
+      checkout_baseline: null,
+      workflow_name: 'review',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {
+        approval: {
+          nodeId: 'review',
+          type: 'approval',
+          message: 'Choose',
+          decisions: [
+            { id: 'approve', label: 'Ship it' },
+            { id: 'revise', label: 'Try again' },
+            { id: 'cancel' },
+          ],
+        },
+      },
+    });
+    await workflowGetCommand('run-choices');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    Try again (revise): archon workflow respond run-choices revise [text]'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    cancel: archon workflow respond run-choices cancel [text]'
+    );
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('respond run-choices reject');
+  });
+
+  it('lists the default vocabulary for a legacy paused gate', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-legacy',
+      checkout_baseline: null,
+      workflow_name: 'review',
+      status: 'paused',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: { approval: { nodeId: 'review', message: 'Choose' } },
+    });
+    await workflowGetCommand('run-legacy');
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    approve: archon workflow respond run-legacy approve [text]'
+    );
+    expect(consoleSpy).toHaveBeenCalledWith(
+      '    reject: archon workflow respond run-legacy reject [text]'
+    );
+  });
+
   it('prints aggregate completion-condition state for a paused interactive_loop run (#2074 E)', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({

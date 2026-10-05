@@ -1370,6 +1370,29 @@ describe('respondToWorkflow', () => {
     expect(approvalReceived).toMatchObject({ step_name: 'grp' });
   });
 
+  test.each(['approve', 'reject', 'revise'])(
+    'rejects a stale %s button against the persisted gate',
+    async decision => {
+      mockGetWorkflowRun.mockResolvedValue(
+        makePausedRun({
+          metadata: {
+            approval: {
+              nodeId: 'later',
+              message: 'Choose',
+              type: 'approval',
+              decisionsAuthored: true,
+              decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+            },
+          },
+        })
+      );
+      await expect(respondToWorkflow('run-1', decision, undefined, 'earlier')).rejects.toThrow(
+        'Stale gate action'
+      );
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+    }
+  );
+
   test('delegates approve/reject to the dedicated functions unchanged', async () => {
     mockGetWorkflowRun.mockResolvedValue(makePausedRun());
     await respondToWorkflow('run-1', 'approve', 'looks good');

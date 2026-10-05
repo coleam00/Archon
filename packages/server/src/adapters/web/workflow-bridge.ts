@@ -147,6 +147,7 @@ export function mapWorkflowEvent(event: WorkflowEmitterEvent): string | null {
         approval: {
           nodeId: event.nodeId,
           message: event.message,
+          decisions: event.decisions,
         },
       });
 
@@ -226,7 +227,10 @@ interface WorkflowStatusSsePayload {
   workflowName: string;
   status: 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
   error?: string;
-  approval?: { nodeId: string; message: string };
+  approval?: Pick<
+    Extract<WorkflowEmitterEvent, { type: 'approval_pending' }>,
+    'nodeId' | 'message' | 'decisions'
+  >;
   timestamp: number;
 }
 

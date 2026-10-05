@@ -250,3 +250,25 @@ describe('mapWorkflowEvent — container_lifecycle (Phase B)', () => {
     expect(payload).not.toHaveProperty('containerId');
   });
 });
+
+test('live approval frames retain the exact declared vocabulary', () => {
+  const decisions = [
+    { id: 'approve', label: 'Ship it' },
+    { id: 'revise', label: 'Try again' },
+    { id: 'cancel' },
+  ];
+  const payload: unknown = JSON.parse(
+    mapWorkflowEvent({
+      type: 'approval_pending',
+      runId: 'r1',
+      nodeId: 'review',
+      message: 'Choose',
+      decisions,
+    }) ?? '{}'
+  );
+  expect(payload).toMatchObject({
+    type: 'workflow_status',
+    status: 'paused',
+    approval: { nodeId: 'review', message: 'Choose', decisions },
+  });
+});

@@ -17294,6 +17294,55 @@ describe('executeDagWorkflow -- approval node', () => {
       expectSlackSpelling(text);
     });
 
+    it('renders declared choices and emits the persisted vocabulary', async () => {
+      const platform = slackPlatform();
+      const deps = createMockDeps();
+      const decisions = [
+        { id: 'approve', label: 'Ship it' },
+        { id: 'revise', label: 'Try again' },
+        { id: 'cancel' },
+      ];
+      const emitted: WorkflowEmitterEvent[] = [];
+      const unsubscribe = getWorkflowEventEmitter().subscribe(event => emitted.push(event));
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('gate-run'),
+            workflow: {
+              name: 'declared-choices',
+              nodes: [
+                {
+                  id: 'review',
+                  kind: 'gate',
+                  message: 'Choose',
+                  decisions,
+                  decisionsAuthored: true,
+                  captureResponse: false,
+                },
+              ],
+            },
+          })
+        );
+      } finally {
+        unsubscribe();
+      }
+      const text = sentText(platform);
+      expect(text).toContain('Ship it');
+      expect(text).toContain(
+        'Try again (revise): `/archon-workflow respond gate-run revise [text]`'
+      );
+      expect(text).toContain('cancel: `/archon-workflow respond gate-run cancel [text]`');
+      expect(text).not.toContain('reject gate-run');
+      const pause = deps.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(emitted.find(event => event.type === 'approval_pending')).toMatchObject({
+        decisions: pause?.decisions,
+      });
+      expect(pause?.decisions).toEqual(decisions);
+    });
+
     it('interactive loop gate prompt', async () => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'agent_message_chunk', text: 'Plan.' };

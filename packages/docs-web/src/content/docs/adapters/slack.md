@@ -80,7 +80,7 @@ Archon uses **Socket Mode** for Slack integration, which means:
 
 ## Step 4b: Enable Interactivity
 
-Interactive buttons (Approve / Reject / Cancel on workflow runs) ride the same
+Interactive buttons (gate decisions and Cancel on workflow runs) ride the same
 Socket Mode connection -- no public URL needed.
 
 1. In the left sidebar, click **Interactivity & Shortcuts**
@@ -95,7 +95,7 @@ Two slash commands give the team an alternative to @mention:
 | Command | What it does |
 | --- | --- |
 | `/archon <message>` | Talks to Archon in the current channel. Equivalent to `@archon <message>`. |
-| `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `abandon <id>`, `resume <id>`. |
+| `/archon-workflow <subcommand>` | Direct workflow control. Supports `list`, `status`, `run <name> <args>`, `approve <id> [comment]`, `reject <id> [reason]`, `respond <id> <decision> [text]`, `abandon <id>`, `resume <id>`. |
 
 For each command:
 
@@ -193,8 +193,10 @@ When a workflow runs in a Slack thread, Archon now:
   authored outcome disagrees, it also adds the outcome reaction, so both facts remain visible
 - Posts a single status message in the thread that's edited in place as DAG
   nodes start, complete, fail, or get skipped
-- Renders approval gates as interactive **Approve** / **Reject** buttons
-  in-thread -- no need to leave Slack to resume a paused run
+- Renders each gate's declared decisions as buttons, using labels when supplied
+  and sending the exact decision ID. Legacy gates keep **Approve** / **Reject**.
+  The fallback text lists `/archon-workflow respond <id> <decision> [text]` commands;
+  use these to include optional text with a decision
 - Adds a **Cancel** button on the status message while the run is
   non-terminal, so anyone on the allowed user list can abandon a runaway run
   with a click
@@ -206,7 +208,7 @@ When a workflow runs in a Slack thread, Archon now:
 - Annotates long responses split across multiple Slack messages with
   `_part i/n_` footers so it's clear they belong together
 
-All clicks on Approve / Reject / Cancel run through the same
+All gate-decision and Cancel clicks run through the same
 `SLACK_ALLOWED_USER_IDS` whitelist as inbound messages -- unauthorized
 clicks are silently dropped and logged.
 

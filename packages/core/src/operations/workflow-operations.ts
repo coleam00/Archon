@@ -663,6 +663,15 @@ export interface WorkflowOperationsDeps {
   reclaimContainerEnv: (envId: string, store: IIsolationStore) => Promise<void>;
 }
 
+function assertExpectedGate(
+  approval: ApprovalContext | undefined,
+  expectedNodeId: string | undefined
+): void {
+  if (expectedNodeId !== undefined && approval?.nodeId !== expectedNodeId) {
+    throw new Error(`Stale gate action: run is no longer paused at node '${expectedNodeId}'`);
+  }
+}
+
 export interface WorkflowOperations {
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'];
@@ -680,7 +689,8 @@ export interface WorkflowOperations {
   respondToWorkflow: (
     runId: string,
     decision: string,
-    text?: string
+    text?: string,
+    expectedNodeId?: string
   ) => Promise<ApprovalOperationResult | RejectionOperationResult>;
   resetWorkflowNodeSessions: (
     filter: Parameters<IWorkflowStore['deleteWorkflowNodeSessions']>[0]
@@ -1114,10 +1124,12 @@ export function createWorkflowOperations({
    */
   async function approveWorkflow(
     runId: string,
-    comment?: string
+    comment?: string,
+    expectedNodeId?: string
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
     const approval = assertApprovable(run);
+    assertExpectedGate(approval, expectedNodeId);
 
     // Whitespace-only comments count as absent (mirrors feedbackProvided below):
     // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would
@@ -1274,9 +1286,14 @@ export function createWorkflowOperations({
    * #2075) — the resume machinery picks it up and runs the on_reject rework.
    * Otherwise, cancels the run.
    */
-  async function rejectWorkflow(runId: string, reason?: string): Promise<RejectionOperationResult> {
+  async function rejectWorkflow(
+    runId: string,
+    reason?: string,
+    expectedNodeId?: string
+  ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
     const approval = assertRejectable(run);
+    assertExpectedGate(approval, expectedNodeId);
 
     // Exhaustively switched on the suspend reason (#2489) so a future reason value
     // fails loudly here instead of silently taking the generic rework/cancel path
@@ -1468,10 +1485,12 @@ export function createWorkflowOperations({
   async function respondToWorkflowWithDeclaredDecision(
     runId: string,
     decision: string,
-    text?: string
+    text?: string,
+    expectedNodeId?: string
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
     const approval = assertRespondable(run, decision);
+    assertExpectedGate(approval, expectedNodeId);
 
     const structuredOutput = { decision, text: text ?? '' };
     const events: GateResolutionEvent[] = [
@@ -1523,16 +1542,18 @@ export function createWorkflowOperations({
    * `interactive_loop`, `writeback`, and step-1's new-mode 2-decision gates)
    * keeps its exact prior behavior byte-for-byte. Any other decision resolves
    * through `respondToWorkflowWithDeclaredDecision`, which only accepts a
-   * decision the gate actually declared.
+   * decision the gate actually declared. Button actions also supply the expected
+   * node ID, checked against the same persisted context used for resolution.
    */
   async function respondToWorkflow(
     runId: string,
     decision: string,
-    text?: string
+    text?: string,
+    expectedNodeId?: string
   ): Promise<ApprovalOperationResult | RejectionOperationResult> {
-    if (decision === 'approve') return approveWorkflow(runId, text);
-    if (decision === 'reject') return rejectWorkflow(runId, text);
-    return respondToWorkflowWithDeclaredDecision(runId, decision, text);
+    if (decision === 'approve') return approveWorkflow(runId, text, expectedNodeId);
+    if (decision === 'reject') return rejectWorkflow(runId, text, expectedNodeId);
+    return respondToWorkflowWithDeclaredDecision(runId, decision, text, expectedNodeId);
   }
 
   /**
