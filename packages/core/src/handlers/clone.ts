@@ -2,7 +2,11 @@
  * Standalone repository clone/register logic.
  * Extracted from command-handler.ts for reuse by REST endpoints.
  */
-import type { ProjectBaseBranchInspection } from '../schemas/codebase';
+import {
+  codebaseSourceSchema,
+  type CodebaseSource,
+  type ProjectBaseBranchInspection,
+} from '../schemas/codebase';
 import { loadRepoConfig } from '../config/config-loader';
 import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
@@ -240,10 +244,11 @@ async function validateRegistrationChoice(
 export type { ProjectBaseBranchInspection } from '../schemas/codebase';
 
 export async function inspectProjectBaseBranch(
-  source: { url: string } | { path: string }
+  source: CodebaseSource
 ): Promise<ProjectBaseBranchInspection> {
+  source = codebaseSourceSchema.parse(source);
   let result;
-  if ('url' in source) {
+  if (source.url !== undefined) {
     const validated = validateCloneUrl(source.url);
     if (!validated.ok) throw new ProjectRegistrationError(validated.error);
     if (

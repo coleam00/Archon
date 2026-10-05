@@ -3165,12 +3165,7 @@ export function registerApiRoutes(
   registerOpenApiRoute(inspectBaseBranchRoute, async c => {
     const body = getValidatedBody(c, inspectBaseBranchBodySchema);
     try {
-      return c.json(
-        await inspectProjectBaseBranch(
-          body.url !== undefined ? { url: body.url } : { path: body.path ?? '' }
-        ),
-        200
-      );
+      return c.json(await inspectProjectBaseBranch(body), 200);
     } catch (error) {
       return apiError(
         c,
@@ -3185,16 +3180,15 @@ export function registerApiRoutes(
     const body = getValidatedBody(c, addCodebaseBodySchema);
 
     try {
-      // .refine() guarantees exactly one of url/path is present.
       // For a local path, detect git-ness: a non-git directory registers as a
       // folder project (kind: 'folder') instead of being rejected. Folder-ness
       // is detected here, not declared in the request body, so the web form
       // needs no new field.
       let result;
-      if (body.url) {
+      if ('url' in body) {
         result = await cloneRepository(body.url, { baseBranch: body.base_branch ?? undefined });
       } else {
-        const localPath = await canonicalizeProjectPath(body.path ?? '');
+        const localPath = await canonicalizeProjectPath(body.path);
         // Detect git-ness. A resolvable repo root → register as a repo project;
         // a definitive null ("not a git repository") → folder project. A THROW
         // is ambiguous: findRepoRoot throws both for a nonexistent path (benign

@@ -3963,15 +3963,22 @@ export interface components {
           /** @enum {string|null} */
           reason: 'no_remote' | 'ambiguous_remote' | 'remote_unavailable' | 'unknown_head' | null;
         };
-    InspectBaseBranchBody: {
-      url?: string;
-      path?: string;
-    };
-    AddCodebaseBody: {
-      url?: string;
-      path?: string;
-      base_branch?: string | null;
-    };
+    InspectBaseBranchBody:
+      | {
+          url: string;
+        }
+      | {
+          path: string;
+        };
+    AddCodebaseBody:
+      | {
+          url: string;
+          base_branch?: string | null;
+        }
+      | {
+          path: string;
+          base_branch?: string | null;
+        };
     DeleteCodebaseResponse: {
       success: boolean;
     };

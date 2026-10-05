@@ -2982,6 +2982,10 @@ async function runWorkflowWithOwnedSource(
       try {
         const repoConfig = await loadRepoConfig(codebase.default_cwd);
         const rawBase = repoConfig?.worktree?.baseBranch?.trim();
+        const repoPath = git.toRepoPath(codebase.default_cwd);
+        const remote =
+          repoConfig?.worktree?.remote?.trim() || (await git.getDefaultRemote(repoPath));
+        if (!remote) throw new Error('Set worktree.remote to select a git remote.');
         // Four-level fallback: --base override → repo config → codebase default →
         // git auto-detect. Mirrors WorktreeProvider and executeWorkflow, so the
         // reuse check validates against the base this dispatch actually asked
@@ -2994,11 +2998,11 @@ async function runWorkflowWithOwnedSource(
         } else if (codebaseDefaultBranch) {
           configuredBase = git.toBranchName(codebaseDefaultBranch);
         } else {
-          configuredBase = await git.getDefaultBranch(git.toRepoPath(codebase.default_cwd));
+          configuredBase = await git.getDefaultBranch(repoPath, remote);
         }
         const isValidBase = await git.isAncestorOf(
           git.toWorktreePath(existingEnv.working_path),
-          `origin/${configuredBase}`
+          `${remote}/${configuredBase}`
         );
         if (!isValidBase) {
           getLog().warn(

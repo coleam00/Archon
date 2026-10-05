@@ -489,6 +489,7 @@ mock.module('@archon/git', () => ({
   toWorktreePath: mock((path: string) => path),
   toBranchName: mock((branch: string) => branch),
   getDefaultBranch: mock(() => Promise.resolve('dev')),
+  getDefaultRemote: mock(() => Promise.resolve('origin')),
   isAncestorOf: mock(() => Promise.resolve(true)),
 }));
 
@@ -3980,7 +3981,7 @@ describe('workflowRunCommand', () => {
     }
   });
 
-  it('does not emit base branch warning when reused worktree is valid', async () => {
+  it('validates an automatic reused worktree against the configured upstream remote', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const conversationDb = await import('@archon/core/db/conversations');
@@ -4005,6 +4006,11 @@ describe('workflowRunCommand', () => {
       workflow_type: 'task',
       workflow_id: 'my-feature',
     });
+    const core = await import('@archon/core');
+    const gitModule = await import('@archon/git');
+    (core.loadRepoConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      worktree: { remote: ' upstream ' },
+    });
     // isAncestorOf returns true by default — no warning expected
     (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -4015,6 +4021,8 @@ describe('workflowRunCommand', () => {
     const consoleWarnSpy = spyOn(console, 'warn').mockImplementation(() => {});
     try {
       await workflowRunCommand('/test/path', 'assist', 'hello', { branchName: 'my-feature' });
+      expect(gitModule.getDefaultBranch).toHaveBeenCalledWith('/test/path', 'upstream');
+      expect(gitModule.isAncestorOf).toHaveBeenCalledWith('/worktrees/feat', 'upstream/dev');
       const baseBranchWarnCalls = consoleWarnSpy.mock.calls.filter(
         (args: unknown[]) => typeof args[0] === 'string' && args[0].includes('not based on')
       );

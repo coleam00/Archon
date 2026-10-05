@@ -198,3 +198,77 @@ test('prefill distinguishes unavailable remote, unknown HEAD, absent or ambiguou
   );
   expect(await inspectProjectBaseBranch({ path: root })).toEqual({ kind: 'folder' });
 }, 30000);
+
+test('configured upstream controls the worktree commit, dispatch metadata and BASE_BRANCH', async () => {
+  const { local, remote } = await fixture('configured-remote');
+  const upstream = join(root, 'upstream.git');
+  execFileSync('git', ['clone', '--bare', '-q', remote, upstream]);
+  git(upstream, 'symbolic-ref', 'HEAD', 'refs/heads/release');
+  git(local, 'remote', 'add', 'upstream', upstream);
+  git(local, 'checkout', 'release');
+  await mkdir(join(local, '.archon'));
+  const config = 'worktree:\n  remote: " upstream "\n';
+  await writeFile(join(local, '.archon', 'config.yaml'), config);
+  git(local, 'add', '.archon/config.yaml');
+  git(local, 'commit', '-qm', 'select upstream');
+  git(local, 'push', '-q', 'upstream', 'release');
+  git(local, 'checkout', 'private-feature');
+  await mkdir(join(local, '.archon'), { recursive: true });
+  await writeFile(join(local, '.archon', 'config.yaml'), config);
+  const project = await registerRepository(local);
+  const provider = new WorktreeProvider(async () => ({ remote: ' upstream ' }));
+  const env = await provider.create({
+    codebaseId: project.codebaseId,
+    canonicalRepoPath: toRepoPath(local),
+    workflowType: 'task',
+    identifier: 'upstream-dispatch',
+  });
+  expect(git(env.workingPath, 'rev-parse', 'HEAD')).toBe(
+    git(local, 'rev-parse', 'upstream/release')
+  );
+  expect(git(env.workingPath, 'rev-parse', 'HEAD')).not.toBe(git(local, 'rev-parse', 'origin/dev'));
+  const { createWorkflowDeps } = await import('../workflows/store-adapter');
+  const { getOrCreateConversation } = await import('../db/conversations');
+  const { getWorkflowRun } = await import('../db/workflows');
+  const { executeWorkflow } = await import('@archon/workflows/executor');
+  const { resolveWorkflow } = await import('@archon/workflows/graph-plan');
+  const { readRunDispatchMetadata } = await import('@archon/workflows/schemas/workflow-run');
+  const conversation = await getOrCreateConversation(
+    'cli',
+    'upstream-dispatch',
+    project.codebaseId
+  );
+  const output = join(env.workingPath, 'base-branch.txt');
+  const result = await executeWorkflow(
+    createWorkflowDeps(),
+    { sendMessage: async () => {}, getPlatformType: () => 'cli', getStreamingMode: () => 'batch' },
+    'upstream-dispatch',
+    env.workingPath,
+    resolveWorkflow({
+      name: 'branch-proof',
+      description: 'Prove selected remote branch',
+      nodes: [
+        {
+          id: 'base',
+          kind: 'exec',
+          runtime: 'sh',
+          script: 'printf "%s" "$BASE_BRANCH" > base-branch.txt',
+        },
+      ],
+    }),
+    'prove the configured remote',
+    conversation.id,
+    { codebaseId: project.codebaseId }
+  );
+  expect(result.success).toBe(true);
+  expect(await readFile(output, 'utf8')).toBe('release');
+  if (!result.workflowRunId) throw new Error('run missing');
+  const run = await getWorkflowRun(result.workflowRunId);
+  expect(readRunDispatchMetadata(run?.metadata)?.base_branch).toBe('release');
+}, 30000);
+
+test('the exported inspection seam rejects an ambiguous source before inspecting either', async () => {
+  const ambiguous = { url: 'https://example.com/repo', path: root };
+  // @ts-expect-error Both sources violate the exported exclusive source contract.
+  await expect(inspectProjectBaseBranch(ambiguous)).rejects.toThrow('Provide either');
+});

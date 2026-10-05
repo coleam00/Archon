@@ -60,6 +60,9 @@
     ],
     [
       "src/experiments/console/"
+    ],
+    [
+      "src/experiments/AddProjectDialog.test.tsx"
     ]
   ]
 }

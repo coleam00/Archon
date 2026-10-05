@@ -425,11 +425,10 @@ bash nodes pass to `gh pr create --base`). Four sources can supply it, highest f
 | 1 | `--base <branch>` | one dispatch |
 | 2 | `worktree.baseBranch` in `.archon/config.yaml` | the repo |
 | 3 | The registered codebase's stored default branch | the repo |
-| 4 | Git auto-detection (`origin/HEAD`, then `origin/main`) | the repo |
+| 4 | Live symbolic HEAD advertised by the selected remote | the repo |
 
-Levels 2--4 are static per repo, so a run that needs a different base than its
-neighbours had to edit config -- global, and racy when several runs dispatch at
-once. New registrations store a branch only when explicitly chosen with `--base-branch`.
+Levels 2 and 3 are project choices; level 4 is resolved live using `worktree.remote`
+or the automatically selected remote. Use `--base` for a different base on one dispatch. New registrations store a branch only when explicitly chosen with `--base-branch`.
 An unset project branch follows the remote's live HEAD advertisement, including renames;
 resolution requires a reachable remote with a known symbolic HEAD and never guesses `main`.
 Existing stored branches remain explicit, including values older versions detected from a

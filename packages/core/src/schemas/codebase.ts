@@ -40,3 +40,16 @@ export const projectBaseBranchInspectionSchema = z.discriminatedUnion('kind', [
 ]);
 
 export type ProjectBaseBranchInspection = z.infer<typeof projectBaseBranchInspectionSchema>;
+
+export const codebaseSourceError = 'Provide either "url" or "path", not both and not neither';
+export const codebaseSourceSchema = z.union(
+  [z.object({ url: z.string().min(1) }).strict(), z.object({ path: z.string().min(1) }).strict()],
+  { error: codebaseSourceError }
+);
+
+type SourceVariant = z.infer<typeof codebaseSourceSchema>;
+type UnionKeys<T> = T extends unknown ? keyof T : never;
+type ExclusiveSource<T = SourceVariant> = T extends SourceVariant
+  ? T & Partial<Record<Exclude<UnionKeys<SourceVariant>, keyof T>, never>>
+  : never;
+export type CodebaseSource = ExclusiveSource;
