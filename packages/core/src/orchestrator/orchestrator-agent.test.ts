@@ -4148,7 +4148,8 @@ describe('paused approval gate routing', () => {
         rejection_reason: '',
         rejection_count: 0,
       },
-      expect.any(Array)
+      expect.any(Array),
+      undefined
     );
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
     // Continuation: resolution without it would leave the run stranded (#2565).

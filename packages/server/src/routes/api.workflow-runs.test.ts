@@ -3108,7 +3108,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           data: { decision: 'rejected', reason: 'needs work' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
@@ -3161,7 +3162,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           step_name: 'review-gate',
           data: { decision: 'rejected', reason: 'needs more tests' },
         },
-      ]
+      ],
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
@@ -3202,7 +3204,8 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
           data: { decision: 'rejected', reason: 'still bad' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
     expect(mockUpdateWorkflowRun).not.toHaveBeenCalled();
@@ -3683,7 +3686,8 @@ describe('approve/reject auto-resume', () => {
           data: { decision: 'rejected', reason: 'no' },
         },
       ],
-      { step_name: 'review-gate', reason: 'approval_rejected' }
+      { step_name: 'review-gate', reason: 'approval_rejected' },
+      undefined
     );
   });
 });

@@ -21,6 +21,8 @@ mock.module('./connection', () => ({
 
 import {
   createWorkflowRun,
+  resolveApprovalGate,
+  resolveAndCancelApprovalGate,
   getWorkflowRun,
   getWorkflowRunStatus,
   getActiveWorkflowRun,
@@ -58,6 +60,21 @@ describe('workflows database', () => {
   beforeEach(() => {
     mockQuery.mockReset();
     mockQuery.mockImplementation(() => Promise.resolve(createQueryResult([])));
+  });
+
+  test('resolution binds the expected gate node in the PostgreSQL CAS', async () => {
+    const metadata = { approval: { nodeId: 'review', resolved: 'approved' } };
+    expect(await resolveApprovalGate('run-1', metadata, [], 'review')).toEqual({ resolved: false });
+    expect(mockQuery.mock.calls[0]?.[0]).toContain("metadata->'approval'->>'nodeId' = $3");
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual(['run-1', JSON.stringify(metadata), 'review']);
+  });
+
+  test('terminal rejection binds the expected gate node in the PostgreSQL CAS', async () => {
+    expect(
+      await resolveAndCancelApprovalGate('run-1', [], { step_name: 'review' }, 'review')
+    ).toEqual({ resolved: false });
+    expect(mockQuery.mock.calls[0]?.[0]).toContain("metadata->'approval'->>'nodeId' = $2");
+    expect(mockQuery.mock.calls[0]?.[1]).toEqual(['run-1', 'review']);
   });
 
   const mockWorkflowRun: WorkflowRun = {

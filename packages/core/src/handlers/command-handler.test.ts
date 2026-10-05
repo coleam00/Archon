@@ -2964,7 +2964,8 @@ describe('CommandHandler', () => {
               step_name: 'refine',
               data: { decision: 'approved', comment: 'Add error handling', iteration: 2 },
             },
-          ]
+          ],
+          undefined
         );
       });
 
@@ -3037,7 +3038,8 @@ describe('CommandHandler', () => {
             loop_user_input: 'Approved',
           }),
           // Audit events ride the CAS transaction (#2146); metadata is the focus here.
-          expect.any(Array)
+          expect.any(Array),
+          undefined
         );
       });
 
@@ -3573,7 +3575,8 @@ describe('CommandHandler', () => {
               step_name: 'review',
               data: { decision: 'rejected', reason: 'needs work' },
             },
-          ]
+          ],
+          undefined
         );
       });
 
@@ -3618,7 +3621,8 @@ describe('CommandHandler', () => {
               data: { decision: 'rejected', reason: 'bad' },
             },
           ],
-          { step_name: 'review', reason: 'approval_rejected' }
+          { step_name: 'review', reason: 'approval_rejected' },
+          undefined
         );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });
@@ -3660,7 +3664,8 @@ describe('CommandHandler', () => {
               data: { decision: 'rejected', reason: 'reason' },
             },
           ],
-          { step_name: 'gate', reason: 'approval_rejected' }
+          { step_name: 'gate', reason: 'approval_rejected' },
+          undefined
         );
         expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
       });

@@ -93,7 +93,7 @@ const { createWorkflowOperations } = await import('../operations/workflow-operat
 const { createIsolationStore } = await import('./isolation-environments');
 const { requestDetachedRunStop } = await import('../services/run-owner-stop');
 const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
-const { approveWorkflow, rejectWorkflow } = createWorkflowOperations({
+const operationDeps = {
   store: {
     ...workflowDb,
     listWorkflowRuns: workflowDb.listDashboardRuns,
@@ -109,7 +109,8 @@ const { approveWorkflow, rejectWorkflow } = createWorkflowOperations({
   reclaimContainerEnv: async () => {
     throw new Error('Unexpected container cleanup');
   },
-});
+};
+const { approveWorkflow, rejectWorkflow } = createWorkflowOperations(operationDeps);
 
 // workflow_runs.conversation_id is NOT NULL with an enforced FK — seed a parent.
 await db.query(
@@ -1227,6 +1228,67 @@ describe('durable wait continuation races — real SQLite', () => {
   });
 });
 
+describe('stale gate actions — real SQLite', () => {
+  test.each([
+    { name: 'approve', decision: 'approve', extra: {} },
+    { name: 'declared reject', decision: 'reject', extra: {} },
+    { name: 'custom', decision: 'revise', extra: {} },
+    { name: 'writeback reject', decision: 'reject', extra: { type: 'writeback' } },
+    {
+      name: 'rework reject',
+      decision: 'reject',
+      extra: { decisionsAuthored: false, onRejectPrompt: 'Improve it' },
+    },
+    { name: 'terminal reject', decision: 'reject', extra: { decisionsAuthored: false } },
+  ])(
+    'a $name action cannot resolve a gate opened after its read',
+    async ({ name, decision, extra }) => {
+      const runId = `stale-${name}`;
+      const earlier = {
+        nodeId: 'earlier',
+        message: 'Choose',
+        type: 'approval',
+        decisionsAuthored: true,
+        decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+        ...extra,
+      };
+      const later = { nodeId: 'later', message: 'Next choice', type: 'approval' as const };
+      await seedPausedRun(runId, 'wf-stale', earlier);
+      const operations = createWorkflowOperations({
+        ...operationDeps,
+        store: {
+          ...operationDeps.store,
+          getWorkflowRun: async id => {
+            const snapshot = await getWorkflowRun(id);
+            expect(
+              (
+                await resolveApprovalGate(
+                  id,
+                  { approval: { ...earlier, resolved: 'approved' } },
+                  []
+                )
+              ).resolved
+            ).toBe(true);
+            await resumeWorkflowRun(id);
+            await pauseWorkflowRun(id, later);
+            return snapshot;
+          },
+        },
+      });
+
+      await expect(
+        operations.respondToWorkflow(runId, decision, 'feedback', 'earlier')
+      ).rejects.toThrow('no longer paused at the expected gate');
+      const current = await getWorkflowRun(runId);
+      expect(current?.status).toBe('paused');
+      expect(current?.metadata.approval).toEqual(later);
+      expect(await countEvents(runId, 'approval_received')).toBe(0);
+      expect(await countEvents(runId, 'node_completed')).toBe(0);
+      expect(await countEvents(runId, 'workflow_cancelled')).toBe(0);
+    }
+  );
+});
+
 describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
   test('wins once on an open gate and merges the resolution metadata', async () => {
     await seedPausedRun(
@@ -1243,7 +1305,8 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
         approval_response: 'approved',
         rejection_reason: '',
       },
-      [approvalEvent('approved')]
+      [approvalEvent('approved')],
+      'review'
     );
     expect(outcome.resolved).toBe(true);
 
@@ -1426,7 +1489,8 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
     const outcome = await resolveAndCancelApprovalGate(
       'rc-open',
       [approvalEvent('rejected')],
-      gateCancellation
+      gateCancellation,
+      'review'
     );
     expect(outcome.resolved).toBe(true);
 

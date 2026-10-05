@@ -663,15 +663,6 @@ export interface WorkflowOperationsDeps {
   reclaimContainerEnv: (envId: string, store: IIsolationStore) => Promise<void>;
 }
 
-function assertExpectedGate(
-  approval: ApprovalContext | undefined,
-  expectedNodeId: string | undefined
-): void {
-  if (expectedNodeId !== undefined && approval?.nodeId !== expectedNodeId) {
-    throw new Error(`Stale gate action: run is no longer paused at node '${expectedNodeId}'`);
-  }
-}
-
 export interface WorkflowOperations {
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'];
@@ -1129,7 +1120,6 @@ export function createWorkflowOperations({
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
     const approval = assertApprovable(run);
-    assertExpectedGate(approval, expectedNodeId);
 
     // Whitespace-only comments count as absent (mirrors feedbackProvided below):
     // HTTP/CLI/chat pass the raw comment through since #2074, so '   ' would
@@ -1258,9 +1248,16 @@ export function createWorkflowOperations({
     // transaction means a failed event write rolls the resolution back so a retry
     // can win the still-open gate (#2146). The run stays 'paused'; resume is
     // guarded independently by resumeWorkflowRun's CAS.
-    const { resolved: won } = await store.resolveApprovalGate(runId, metadataPayload, events);
+    const { resolved: won } = await store.resolveApprovalGate(
+      runId,
+      metadataPayload,
+      events,
+      expectedNodeId
+    );
     if (!won) {
-      throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
+      throw new Error(
+        `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
+      );
     }
 
     await publishGateExecution(run, events);
@@ -1293,7 +1290,6 @@ export function createWorkflowOperations({
   ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
     const approval = assertRejectable(run);
-    assertExpectedGate(approval, expectedNodeId);
 
     // Exhaustively switched on the suspend reason (#2489) so a future reason value
     // fails loudly here instead of silently taking the generic rework/cancel path
@@ -1318,10 +1314,13 @@ export function createWorkflowOperations({
           const { resolved: won } = await store.resolveApprovalGate(
             runId,
             { approval: { ...approval, resolved: 'rejected' }, approval_response: 'rejected' },
-            [rejectionEvent]
+            [rejectionEvent],
+            expectedNodeId
           );
           if (!won) {
-            throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
+            throw new Error(
+              `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
+            );
           }
           await publishGateExecution(run, [rejectionEvent]);
           captureApprovalResolved({ resolution: 'rejected' });
@@ -1422,7 +1421,8 @@ export function createWorkflowOperations({
       ({ resolved: won } = await store.resolveApprovalGate(
         runId,
         { approval: { ...approval, resolved: 'rejected' } },
-        [nodeCompletedEvent, rejectionEvent]
+        [nodeCompletedEvent, rejectionEvent],
+        expectedNodeId
       ));
     } else if (willStageRework) {
       ({ resolved: won } = await store.resolveApprovalGate(
@@ -1432,20 +1432,25 @@ export function createWorkflowOperations({
           rejection_reason: rejectReason,
           rejection_count: currentCount + 1,
         },
-        [rejectionEvent]
+        [rejectionEvent],
+        expectedNodeId
       ));
     } else {
       // The CAS writes `workflow_cancelled` itself; this only names the gate that
       // ended the run. A stable token, not the user's rejection prose — that is
       // already on the approval_received event above and does not belong on two
       // rows (#2906).
-      ({ resolved: won } = await store.resolveAndCancelApprovalGate(runId, [rejectionEvent], {
-        step_name: approval?.nodeId ?? 'unknown',
-        reason: 'approval_rejected',
-      }));
+      ({ resolved: won } = await store.resolveAndCancelApprovalGate(
+        runId,
+        [rejectionEvent],
+        { step_name: approval?.nodeId ?? 'unknown', reason: 'approval_rejected' },
+        expectedNodeId
+      ));
     }
     if (!won) {
-      throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
+      throw new Error(
+        `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
+      );
     }
 
     await publishGateExecution(
@@ -1490,7 +1495,6 @@ export function createWorkflowOperations({
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
     const approval = assertRespondable(run, decision);
-    assertExpectedGate(approval, expectedNodeId);
 
     const structuredOutput = { decision, text: text ?? '' };
     const events: GateResolutionEvent[] = [
@@ -1510,10 +1514,13 @@ export function createWorkflowOperations({
     const { resolved: won } = await store.resolveApprovalGate(
       runId,
       { approval: { ...approval, resolved: 'approved' }, approval_response: decision },
-      events
+      events,
+      expectedNodeId
     );
     if (!won) {
-      throw new Error(`Workflow run ${runId} was already resolved and is awaiting resume.`);
+      throw new Error(
+        `Workflow run ${runId} was already resolved or is no longer paused at the expected gate.`
+      );
     }
 
     await publishGateExecution(run, events);
@@ -1543,7 +1550,7 @@ export function createWorkflowOperations({
    * keeps its exact prior behavior byte-for-byte. Any other decision resolves
    * through `respondToWorkflowWithDeclaredDecision`, which only accepts a
    * decision the gate actually declared. Button actions also supply the expected
-   * node ID, checked against the same persisted context used for resolution.
+   * node ID, checked atomically when the store commits the resolution.
    */
   async function respondToWorkflow(
     runId: string,

@@ -96,6 +96,30 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
     return rows[0].metadata;
   }
 
+  test.each(['resolve', 'cancel'] as const)(
+    '%s checks the expected node atomically',
+    async mode => {
+      const approval = { nodeId: 'later', message: 'Choose', type: 'approval' };
+      const id = await seed('paused', { approval });
+      const resolve = (expectedNodeId: string) =>
+        mode === 'resolve'
+          ? workflows.resolveApprovalGate(
+              id,
+              { approval: { ...approval, resolved: 'approved' } },
+              [],
+              expectedNodeId
+            )
+          : workflows.resolveAndCancelApprovalGate(id, [], { step_name: 'later' }, expectedNodeId);
+      expect(await resolve('earlier')).toEqual({ resolved: false });
+      expect((await workflows.getWorkflowRun(id))?.metadata.approval).toEqual(approval);
+      expect((await workflows.getWorkflowRun(id))?.status).toBe('paused');
+      expect(await resolve('later')).toEqual({ resolved: true });
+      expect((await workflows.getWorkflowRun(id))?.status).toBe(
+        mode === 'resolve' ? 'paused' : 'cancelled'
+      );
+    }
+  );
+
   test('resuming an interrupted run removes its stop reason and error keys', async () => {
     const id = await seed('failed', {
       error: 'Process terminated (SIGINT)',

@@ -10977,7 +10977,8 @@ describe('workflowRejectCommand', () => {
           data: { decision: 'rejected', reason: 'not good' },
         },
       ],
-      { step_name: 'gate', reason: 'approval_rejected' }
+      { step_name: 'gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected and cancelled'));
   });
@@ -11043,7 +11044,8 @@ describe('workflowRejectCommand', () => {
           step_name: 'gate',
           data: { decision: 'rejected', reason: 'Rejected' },
         },
-      ]
+      ],
+      undefined
     );
   });
 
@@ -11083,7 +11085,8 @@ describe('workflowRejectCommand', () => {
           step_name: 'gate',
           data: expect.objectContaining({ structured_output: structuredOutput }),
         }),
-      ])
+      ]),
+      undefined
     );
     const parsed = JSON.parse(firstJsonPayload(jsonStdoutSpy)) as Record<string, unknown>;
     expect(parsed).toMatchObject({ ok: true, runId: 'run-new-mode-json', action: 'reject' });
@@ -11142,7 +11145,8 @@ describe('workflowRejectCommand', () => {
           step_name: 'gate',
           data: { decision: 'rejected', reason: 'needs work' },
         },
-      ]
+      ],
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('Rejected workflow'));
   });
@@ -11245,7 +11249,8 @@ describe('workflowRejectCommand', () => {
           data: { decision: 'rejected', reason: 'still bad' },
         },
       ],
-      { step_name: 'gate', reason: 'approval_rejected' }
+      { step_name: 'gate', reason: 'approval_rejected' },
+      undefined
     );
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining('max attempts reached'));
   });
@@ -11520,7 +11525,8 @@ describe('workflowRespondCommand', () => {
             structured_output: { decision: 'approve', text: 'looks good' },
           }),
         }),
-      ])
+      ]),
+      undefined
     );
   });
 
@@ -11560,7 +11566,8 @@ describe('workflowRespondCommand', () => {
             structured_output: { decision: 'revise', text: 'needs more detail' },
           }),
         }),
-      ])
+      ]),
+      undefined
     );
   });
 
