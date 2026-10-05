@@ -89,9 +89,6 @@ export function isConnectableVendor(id: string): boolean {
 
 /**
  * One credential a given agent consumes, with connection/detection state.
- * Hand-synced with `agentCredentialStatusSchema` in
- * `@archon/server/routes/schemas/provider-key.schemas.ts` (core can't own
- * route schemas) — update both together.
  */
 export interface AgentCredentialStatus {
   vendor: string;
@@ -109,8 +106,6 @@ export interface AgentCredentialStatus {
 
 /**
  * One agent's credential surface + readiness.
- * Hand-synced with `agentCredentialsSchema` in
- * `@archon/server/routes/schemas/provider-key.schemas.ts` — update both together.
  */
 export interface AgentCredentialMatrixEntry {
   id: string;
