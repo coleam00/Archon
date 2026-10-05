@@ -126,7 +126,7 @@ paths travel with the result and survive resume; the parent cannot declare an
 carries only its top-level fields, so a nested read from it fails as undeclared until
 the producer reruns.
 
-During the current run, downstream interpolation and `when:` conditions see the full returned node output. Successful bash events retain only a 32 KiB UTF-8 audit preview, so after a process boundary a resumed run rehydrates that persisted preview rather than the full output. If a large gate verdict must survive a restart intact, store it through a deliberately managed artifact contract instead of relying on the event preview.
+During the current run, downstream interpolation and `when:` conditions see the full returned node output. Large successful `bash:`/`script:` output is persisted as a bounded audit preview plus a full spill file. After a process boundary, a resumed run restores the full output from the spill when it is readable and its UTF-8 byte length matches the event's recorded original length. If the spill is missing, unreadable, or its byte length does not match, resume keeps the bounded preview.
 
 ### Shell Quoting in `bash:` vs `script:`
 
