@@ -70,8 +70,8 @@ function normalizePath(path: string): string {
 
 /**
  * Places one argument with the owner that can run it, rewriting the path so it is
- * relative to that owner's working directory. Arguments this cannot place — flags, flag
- * values and substring filters — come back `undefined` and are forwarded verbatim.
+ * relative to that owner's working directory. Arguments this cannot place come back
+ * `undefined` and are forwarded verbatim. The caller excludes test-name option values.
  *
  * A relative argument is read against the repository root, which is where `bun run test`
  * always runs from. Reading it against some other working directory would let the same
@@ -128,11 +128,14 @@ async function runPlan(): Promise<number> {
  * owner means no run: the caller reports that rather than falling back to the full suite.
  */
 export function planRequestedRuns(requested: string[]): RequestedRun[] {
+  let expectsTestName = false;
   const routes = requested.map(
-    (argument): { argument: string; route: RoutedArgument | undefined } => ({
-      argument,
-      route: routeArgument(argument),
-    })
+    (argument): { argument: string; route: RoutedArgument | undefined } => {
+      const route = expectsTestName ? undefined : routeArgument(argument);
+      expectsTestName =
+        !expectsTestName && (argument === '-t' || argument === '--test-name-pattern');
+      return { argument, route };
+    }
   );
 
   const owners = new Map<string, TestOwner>();

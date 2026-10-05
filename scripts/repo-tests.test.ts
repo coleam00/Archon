@@ -5,6 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
+import { testTimeout } from '@archon/paths/test-utils';
 import { planRequestedRuns } from './repo-tests';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -99,6 +100,26 @@ describe('planRequestedRuns', () => {
     expect(runs[1].args).toEqual(['--bail', 'src/skills.test.ts']);
   });
 
+  for (const option of ['-t', '--test-name-pattern']) {
+    test.each(['scripts', '.archon/scripts'])(
+      `forwards ${option} value %s unchanged to root and package owners`,
+      pattern => {
+        const runs = planRequestedRuns([
+          'scripts/pack-scripts-validation.test.ts',
+          option,
+          pattern,
+          'packages/paths/src/archon-paths.test.ts',
+        ]);
+
+        expect(runs.map(run => run.args)).toEqual([
+          ['./scripts/pack-scripts-validation.test.ts', option, pattern],
+          [option, pattern, 'src/archon-paths.test.ts'],
+        ]);
+        expect(planRequestedRuns([option, pattern])).toEqual([]);
+      }
+    );
+  }
+
   test('plans no run when no argument names an owner', () => {
     expect(planRequestedRuns(['some/where/nope.test.ts'])).toEqual([]);
     expect(planRequestedRuns(['logger'])).toEqual([]);
@@ -156,4 +177,23 @@ describe('repo-tests exit codes', () => {
 
     expect(exitCode).toBe(0);
   });
+
+  test(
+    'bun run test .archon/scripts/ executes the directory tests',
+    async () => {
+      const child = Bun.spawn(['bun', 'run', 'test', '.archon/scripts/'], {
+        cwd: REPO_ROOT,
+        stdout: 'ignore',
+        stderr: 'pipe',
+      });
+      const [exitCode, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stderr).text(),
+      ]);
+
+      expect(exitCode).toBe(0);
+      expect(stderr).toContain('(pass)');
+    },
+    testTimeout(60_000)
+  );
 });
