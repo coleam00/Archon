@@ -6,7 +6,8 @@ import { z } from 'zod';
  * whether the turn succeeded or failed. It is separate from `result` because a result can
  * arrive while work the turn started is still running (Claude reports a `result` while
  * background agents are live, then a later `result` once they drain). The engine
- * finishes a node on `settled`, not on `result`.
+ * finishes a node on `settled`, not on `result`. Every observed subtask must have
+ * ended as reported by the runtime. Cancellation or lost observation never settles.
  */
 export const providerSettledSchema = z.object({ type: z.literal('settled') });
 export type ProviderSettled = z.infer<typeof providerSettledSchema>;

@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   checkCredentialStatuses,
+  checkBackgroundSettle,
   checkEventVocabulary,
   checkFailureClasses,
   checkSessionIdReported,
@@ -19,7 +20,7 @@ function turn(...chunks: unknown[]): () => AsyncIterable<unknown> {
   };
 }
 
-const resumable = { sessionResume: true };
+const resumable = { sessionResume: true, backgroundWork: 'unobserved' as const };
 
 const failedTurnEnd = [
   { type: 'result', isError: true, failure: { class: 'auth', evidence: 'HTTP 401' } },
@@ -545,7 +546,7 @@ describe('session id conformance', () => {
     };
     expect(
       await runProviderConformance({
-        capabilities: { sessionResume: false },
+        capabilities: { sessionResume: false, backgroundWork: 'unobserved' },
         failureCases: [conforming],
         turns: [unnamed],
       })
@@ -553,8 +554,65 @@ describe('session id conformance', () => {
   });
 });
 
+describe('runtime-backed background settlement', () => {
+  test('reported providers must supply background evidence', async () => {
+    expect(
+      await runProviderConformance({
+        capabilities: { sessionResume: false, backgroundWork: 'reported' },
+        turns: [],
+        failureCases: [],
+      })
+    ).toEqual(['reported provider has no background conformance cases']);
+  });
+  test('a background case that throws is a violation, not a rejected run', async () => {
+    const violations = await runProviderConformance({
+      capabilities: { sessionResume: false, backgroundWork: 'reported' },
+      turns: [],
+      failureCases: [],
+      backgroundCases: [
+        {
+          name: 'throwing',
+          runtimeStatus: () => 'running',
+          run: async function* () {
+            yield { type: 'subtask', taskId: 't', status: 'started' };
+            throw new Error('stream broke');
+          },
+        },
+      ],
+    });
+    expect(violations).toContain(
+      'throwing: threw before its background work settled (stream broke)'
+    );
+  });
+  test.each(['early settle', 'invented stop', 'runtime completion'] as const)('%s', async mode => {
+    let status: 'running' | 'completed' = 'running';
+    const violations = await checkBackgroundSettle([
+      {
+        name: mode,
+        runtimeStatus: () => status,
+        run: async function* () {
+          yield { type: 'subtask', taskId: 't', status: 'started' };
+          yield { type: 'result' };
+          if (mode === 'runtime completion') {
+            status = 'completed';
+            yield { type: 'subtask', taskId: 't', status: 'completed' };
+          } else if (mode === 'invented stop') {
+            yield { type: 'subtask', taskId: 't', status: 'stopped' };
+          }
+          yield { type: 'settled' };
+          status = 'completed';
+        },
+      },
+    ]);
+    if (mode === 'runtime completion') expect(violations).toEqual([]);
+    else expect(violations).toContain(`${mode}: runtime still reports t live at settled`);
+    if (mode === 'invented stop')
+      expect(violations).toContain('invented stop: invented stopped for t');
+  });
+});
+
 describe('session fork conformance', () => {
-  const forking = { sessionResume: true, sessionFork: true };
+  const forking = { sessionResume: true, sessionFork: true, backgroundWork: 'unobserved' as const };
   const forkTurn: ProviderForkCase = {
     name: 'fork turn',
     source: 'session-1',
