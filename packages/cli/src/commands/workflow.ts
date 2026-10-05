@@ -4524,7 +4524,9 @@ function formatProviderEvent(
       state.toolNames.set(toolCallKey(line.attemptId, event.toolCallId), name);
       // A title is already what the call does, such as the command a Codex shell runs.
       const brief =
-        !event.title && event.rawInput ? formatToolInputBrief(name, event.rawInput) : null;
+        !event.title && event.rawInput !== undefined
+          ? formatToolInputBrief(name, event.rawInput)
+          : null;
       return `  ${oneLine(`tool: ${name}${brief && brief !== '{}' ? ` ${brief}` : ''}`, TRANSCRIPT_TOOL_LINE_MAX)}`;
     }
     case 'tool_call_update': {
