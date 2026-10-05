@@ -127,10 +127,10 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 - Archon's `.gitignore` excludes `.env` files. `<cwd>/.archon/.env` should also be gitignored (project-local secrets).
 
 **Subprocess env isolation:**
-- At startup, `stripCwdEnv()` removes **all** keys that Bun auto-loaded from the CWD `.env` files (`.env`, `.env.local`, `.env.development`, `.env.production`), plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
+- At startup, `stripCwdEnv()` removes **all** keys named in the CWD project env files (`.env`, `.env.local`, `.env.development`, `.env.production`), whatever their value or source, including shell exports and direnv, plus nested Claude Code session markers (`CLAUDECODE`, `CLAUDE_CODE_*` except auth vars) and debugger vars (`NODE_OPTIONS`, `VSCODE_INSPECTOR_OPTIONS`). This runs before any module reads `process.env`.
 - Then `loadArchonEnv(cwd)` loads archon-owned env from `~/.archon/.env` (user scope) and `<cwd>/.archon/.env` (repo scope, wins over user) with `override: true`. Both are trusted sources — the user controls them and all keys are intentional. The repo scope still cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`; Archon refuses to start if it does, so a repository cannot choose which Archon home or plugin executables are used.
 - Per-codebase env vars configured via `codebase_env_vars` or `.archon/config.yaml` `env:` are merged on top at workflow execution time.
-- `<cwd>/.env` is the **only** untrusted source. It belongs to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
+- The CWD project env files listed above are untrusted sources. They belong to the target project, not to Archon. Directory ownership (`.archon/`) is the security boundary — not the filename.
 
 **Per-user provider credentials:**
 - Each user can connect their own provider API key or subscription. Credentials are encrypted at rest with **AES-256-GCM** using an auto-provisioned key (`~/.archon/credential-key`) or an explicit `TOKEN_ENCRYPTION_KEY` on managed installs. Credentials are never logged and **never returned by any endpoint** — responses carry only `provider`/`kind`/`label` metadata. See [AI Provider Credentials](/reference/api/#ai-provider-credentials).
@@ -140,12 +140,14 @@ The GitHub and Gitea adapters verify webhook signatures to ensure payloads origi
 
 Archon prevents target repo `.env` from leaking into subprocesses through structural protection:
 
-1. **Boot cleanup:** `stripCwdEnv()` removes Bun-auto-loaded CWD `.env` keys from `process.env` before any application code runs. **This is the primary guard** — every subprocess Archon spawns inherits from the already-cleaned `process.env`.
+1. **Boot cleanup:** `stripCwdEnv()` removes from `process.env` every key named in the CWD project env files, regardless of value or source before any application code runs. **This is the primary guard** — every subprocess Archon spawns inherits from the already-cleaned `process.env`.
 2. **Claude Code subprocess:** when the SDK is configured to spawn a Bun-runnable JS entry point (legacy npm-installed `cli.js`/`cli.mjs`/`cli.cjs`), Archon also passes `executableArgs: ['--no-env-file']` so Bun skips its env autoload inside the spawned process. SDK 0.2.x ships per-platform native binaries instead — those don't auto-load `.env` from cwd, so the flag is unnecessary and is omitted.
 3. **Bun script nodes:** `bun --no-env-file` prevents script node subprocesses from loading target repo `.env`.
 4. **Bash nodes:** Not affected — bash does not auto-load `.env` files.
 
-Archon's own env sources (`~/.archon/.env`, dev `.env`) are loaded after the CWD strip and pass through to subprocesses normally.
+This strict deletion prevents a project `ANTHROPIC_API_KEY` from overriding Claude subscription authentication and billing the API instead. It also prevents project keys, including shell or direnv values with the same names, from overriding Archon's defaults or environment.
+
+Put install credentials such as `GH_TOKEN` in `~/.archon/.env`. Archon's own env sources (`~/.archon/.env` and `<cwd>/.archon/.env`) load after the strip and pass through to subprocesses normally. The strip removes project key names at boot; it does not forbid explicitly supplying those names through Archon's later trusted env layers.
 
 **If you need env vars available during workflow execution**, use managed env injection:
 - `.archon/config.yaml` `env:` section (per-repo, checked into version control)
