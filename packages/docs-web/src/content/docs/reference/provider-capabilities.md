@@ -37,6 +37,10 @@ reporting declarations; absence means unknown, not unsupported.
 Background work: `reported` waits for runtime-reported task endings; `none` means verified absent;
 `unobserved` means background work may exist without an observable lifecycle. A process
 backgrounded inside a foreground shell command (`cmd &`) is invisible to every provider.
+Codex observes subagents through `subAgentActivity` notifications and unified-exec processes
+through `commandExecution` items with source `unifiedExecStartup`. It keeps the app-server
+running after the parent result until those observed lifecycles end. Idle thread status is
+not evidence that this work has ended.
 
 ## Providers
 
@@ -50,7 +54,7 @@ backgrounded inside a foreground shell command (`cmd &`) is invisible to every p
 
 | Capability | `claude` | `codex` | `opencode` | `pi` | `copilot` |
 | --- | --- | --- | --- | --- | --- |
-| Background work observation | reported | unobserved | unobserved | none | unobserved |
+| Background work observation | reported | reported | unobserved | none | unobserved |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ✅ | ❌ | ✅ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |

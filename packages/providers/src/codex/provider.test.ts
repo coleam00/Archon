@@ -1,4 +1,4 @@
-import { describe, test, expect, mock, beforeEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, beforeAll, afterAll } from 'bun:test';
 import { mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -14,7 +14,11 @@ mock.module('@archon/paths', () => ({
 }));
 
 import { TOOL_OUTPUT_MAX_CHARS, type ProviderFailureClass } from '@archon/provider-contract';
-import { runProviderConformance } from '@archon/provider-contract/conformance';
+import {
+  checkFailureClasses,
+  runProviderConformance,
+  type ProviderBackgroundCase,
+} from '@archon/provider-contract/conformance';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   THREAD_ID,
@@ -30,6 +34,7 @@ import {
   plan,
   rateLimits,
   reasoning,
+  subAgentActivity,
   tokenUsage,
   turnCompleted,
   turnError,
@@ -69,6 +74,10 @@ async function streamOf(
   options?: SendQueryOptions
 ): Promise<MessageChunk[]> {
   const chunks = await run(providerWith(script).provider, options);
+  if (script.exitCode !== undefined || script.startupFailure || script.spawnError) {
+    expect(chunks.some(chunk => chunk.type === 'settled')).toBe(false);
+    return chunks;
+  }
   expect(chunks.at(-1)).toEqual({ type: 'settled' });
   return chunks.slice(0, -1);
 }
@@ -95,6 +104,54 @@ async function fakeBinary(): Promise<string> {
   return path;
 }
 
+// Notification ordering and item shapes from the 0.160.0 #3728 probe, with fixture IDs.
+function backgroundCase(agent: boolean): ProviderBackgroundCase {
+  const bg = {
+    ...command('exec-1', 'sleep 20'),
+    source: 'unifiedExecStartup' as const,
+    processId: '94316',
+  };
+  const taskId = agent ? 'agent:child-thread' : `command:${THREAD_ID}:exec-1`;
+  const runtime = new Map<string, Extract<MessageChunk, { type: 'subtask' }>['status']>();
+  return {
+    name: agent ? 'subagent outlives its parent' : 'unified exec outlives its turn',
+    runtimeStatus: id => runtime.get(id),
+    run: async function* () {
+      runtime.clear();
+      runtime.set(taskId, 'started');
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(agent ? subAgentActivity('started') : bg),
+          ...(agent ? [itemCompleted(subAgentActivity('started'))] : []),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+        yield chunk;
+        if (chunk.type === 'result') {
+          expect(server.processes[0].stdinEnded).toBe(false);
+          runtime.set(taskId, 'completed');
+          if (agent) {
+            server.processes[0].send(itemStarted(subAgentActivity('completed')));
+            server.processes[0].send(itemCompleted(subAgentActivity('completed')));
+          } else
+            server.processes[0].send(itemCompleted({ ...bg, status: 'completed', exitCode: 0 }));
+        }
+      }
+    },
+  };
+}
+
+const originalCodexHome = process.env.CODEX_HOME;
+beforeAll(async () => {
+  process.env.CODEX_HOME = trackTempRoot(await mkdtemp(join(tmpdir(), 'codex-home-')));
+});
+afterAll(() => {
+  if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+  else process.env.CODEX_HOME = originalCodexHome;
+});
+
 beforeEach(() => {
   mockLogger.warn.mockClear();
   mockLogger.info.mockClear();
@@ -107,7 +164,7 @@ describe('CodexProvider', () => {
 
   test('getCapabilities returns the Codex capability set', () => {
     expect(new CodexProvider().getCapabilities()).toEqual({
-      backgroundWork: 'unobserved' as const,
+      backgroundWork: 'reported' as const,
       sessionResume: true,
       sessionFork: true,
       mcp: true,
@@ -131,6 +188,198 @@ describe('CodexProvider', () => {
       settingSources: false,
       nativeTools: false,
       containerExec: false,
+    });
+  });
+
+  describe('background work', () => {
+    test('keeps the app-server alive after the result until both observed lifecycles end', async () => {
+      const bg = {
+        ...command('exec-1', 'sleep 20'),
+        source: 'unifiedExecStartup' as const,
+        processId: '94316',
+      };
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started')),
+          itemCompleted(subAgentActivity('started')),
+          itemStarted(bg),
+          agentMessage('parent answer'),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+        chunks.push(chunk);
+        const process = server.processes[0];
+        if (chunk.type === 'result') {
+          expect(process.stdinEnded).toBe(false);
+          process.send(itemCompleted({ ...bg, status: 'completed', exitCode: 0 }));
+        } else if (
+          chunk.type === 'subtask' &&
+          chunk.status === 'completed' &&
+          chunk.taskType === 'command_execution'
+        ) {
+          expect(process.stdinEnded).toBe(false);
+          process.send(itemStarted(subAgentActivity('completed')));
+          process.send(itemCompleted(subAgentActivity('completed')));
+        }
+      }
+      expect(chunks.filter(c => c.type === 'subtask').map(c => c.status)).toEqual([
+        'started',
+        'started',
+        'completed',
+        'completed',
+      ]);
+      expect(chunks.filter(c => c.type === 'tool_call_update')).toEqual([]);
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
+
+    test('tracks a child process started after the parent result without adopting child replies or unrelated work', async () => {
+      const bg = { ...command('exec-child', 'sleep 20'), source: 'unifiedExecStartup' as const };
+      const { provider, server } = providerWith({
+        notifications: [
+          itemStarted(subAgentActivity('started', 'unrelated-child'), 'unrelated-thread'),
+          itemStarted(subAgentActivity('started')),
+          agentMessage('{"answer":"parent"}'),
+          turnCompleted('completed'),
+        ],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+        nodeConfig: {
+          output_format: {
+            type: 'json_schema',
+            schema: {
+              type: 'object',
+              properties: { answer: { type: 'string' } },
+              required: ['answer'],
+              additionalProperties: false,
+            },
+          },
+        },
+      })) {
+        chunks.push(chunk);
+        const process = server.processes[0];
+        if (chunk.type === 'result') {
+          process.send(itemStarted(bg, 'child-thread', 'child-turn'));
+          process.send(
+            itemCompleted(
+              {
+                type: 'agentMessage',
+                id: 'child-reply',
+                text: 'child answer',
+                phase: null,
+                memoryCitation: null,
+                delivery: null,
+                questions: null,
+              },
+              'child-thread',
+              'child-turn'
+            )
+          );
+          process.send(turnCompleted('completed', null, TURN_ID, 'child-thread'));
+          process.send(itemStarted(subAgentActivity('completed')));
+        } else if (
+          chunk.type === 'subtask' &&
+          chunk.taskType === 'local_agent' &&
+          chunk.status === 'completed'
+        ) {
+          expect(process.stdinEnded).toBe(false);
+          process.send(
+            itemCompleted({ ...bg, status: 'completed', exitCode: 0 }, 'child-thread', 'child-turn')
+          );
+        }
+      }
+      expect(chunks.filter(c => c.type === 'subtask').map(c => c.status)).toEqual([
+        'started',
+        'started',
+        'completed',
+        'completed',
+      ]);
+      expect(chunks.filter(c => c.type === 'agent_message_chunk')).toEqual([
+        { type: 'agent_message_chunk', text: '{"answer":"parent"}' },
+      ]);
+      expect(resultOf(chunks).structuredOutput).toEqual({ answer: 'parent' });
+      expect(chunks.at(-1)).toEqual({ type: 'settled' });
+    });
+
+    test.each(['completed', 'failed', 'declined'] as const)(
+      'reports unified exec terminal status %s from the runtime',
+      async status => {
+        const bg = { ...command('exec-1', 'exit 1'), source: 'unifiedExecStartup' as const };
+        const { provider, server } = providerWith({
+          notifications: [
+            itemStarted(bg),
+            turnCompleted('failed', turnError('other', 'parent failed')),
+          ],
+          completion: null,
+        });
+        const chunks: MessageChunk[] = [];
+        for await (const chunk of provider.sendQuery('p', '/workspace')) {
+          chunks.push(chunk);
+          if (chunk.type === 'result') {
+            expect(server.processes[0].stdinEnded).toBe(false);
+            server.processes[0].send(itemCompleted({ ...bg, status, exitCode: 1 }));
+          }
+        }
+        expect(chunks.filter(c => c.type === 'subtask').map(c => c.status)).toEqual([
+          'started',
+          status === 'declined' ? 'stopped' : status,
+        ]);
+        expect(chunks.at(-1)).toEqual({ type: 'settled' });
+      }
+    );
+
+    test('cancellation after a result leaves observed work live and does not settle', async () => {
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(subAgentActivity('started')), turnCompleted('completed')],
+        completion: null,
+      });
+      const controller = new AbortController();
+      const chunks: MessageChunk[] = [];
+      const consume = async (): Promise<void> => {
+        for await (const chunk of provider.sendQuery('p', '/workspace', undefined, {
+          abortSignal: controller.signal,
+        })) {
+          chunks.push(chunk);
+          if (chunk.type === 'result') {
+            server.processes[0].send(itemCompleted(subAgentActivity('interrupted')));
+            server.processes[0].send(itemCompleted(subAgentActivity('interacted')));
+            controller.abort();
+          }
+        }
+      };
+      await expect(consume()).rejects.toThrow('Query aborted');
+      expect(chunks.map(c => c.type)).toEqual(['subtask', 'result']);
+      expect(server.processes[0].stdinEnded).toBe(true);
+    });
+
+    test('an abnormal process exit after the final notification is not a settle', async () => {
+      const { provider, server } = providerWith({
+        notifications: [turnCompleted('completed')],
+        exitCode: 137,
+      });
+      const chunks = await run(provider);
+      expect(chunks.map(c => c.type)).toEqual(['result']);
+      expect(server.processes[0].signals).toEqual([]);
+    });
+
+    test('lost observation after the result never invents an end or settles', async () => {
+      const { provider, server } = providerWith({
+        notifications: [itemStarted(subAgentActivity('started')), turnCompleted('completed')],
+        completion: null,
+      });
+      const chunks: MessageChunk[] = [];
+      for await (const chunk of provider.sendQuery('p', '/workspace')) {
+        chunks.push(chunk);
+        if (chunk.type === 'result') server.processes[0].exit(137);
+      }
+      expect(chunks.map(c => c.type)).toEqual(['subtask', 'result']);
+      expect(chunks[0]).toMatchObject({ status: 'started' });
+      expect(server.processes[0].stdinEnded).toBe(false);
     });
   });
 
@@ -1100,6 +1349,7 @@ describe('CodexProvider', () => {
       });
       const violations = await runProviderConformance({
         capabilities: new CodexProvider().getCapabilities(),
+        backgroundCases: [backgroundCase(true), backgroundCase(false)],
         turns: [
           { name: 'completed turn', run: turn({ notifications: [agentMessage('hi')] }) },
           {
@@ -1140,31 +1390,10 @@ describe('CodexProvider', () => {
             run: turn(failed('other', "The 'x' model is not supported")),
           },
           {
-            name: 'process exits mid-turn',
-            expected: 'transient',
-            evidence: 'exited',
-            run: turn({
-              notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
-              exitCode: 137,
-            }),
-          },
-          {
-            name: 'binary that exits before answering',
-            expected: 'misconfigured',
-            evidence: 'stdin is not a terminal',
-            run: turn({ startupFailure: { code: 1, stderr: 'Error: stdin is not a terminal' } }),
-          },
-          {
             name: 'binary pin that does not exist',
             expected: 'misconfigured',
             evidence: 'does not exist',
             run: turn({}, { assistantConfig: { codexBinaryPath: '/nonexistent/codex-bin' } }),
-          },
-          {
-            name: 'binary missing at spawn',
-            expected: 'misconfigured',
-            evidence: 'ENOENT',
-            run: turn({ spawnError: 'ENOENT' }),
           },
         ],
         forkTurn: {
@@ -1187,6 +1416,31 @@ describe('CodexProvider', () => {
           }),
         },
       });
+      expect(
+        await checkFailureClasses([
+          {
+            name: 'process exits mid-turn',
+            expected: 'transient',
+            evidence: 'exited',
+            run: turn({
+              notifications: [itemStarted(command('cmd-1', 'sleep 60'))],
+              exitCode: 137,
+            }),
+          },
+          {
+            name: 'binary that exits before answering',
+            expected: 'misconfigured',
+            evidence: 'stdin is not a terminal',
+            run: turn({ startupFailure: { code: 1, stderr: 'Error: stdin is not a terminal' } }),
+          },
+          {
+            name: 'binary missing at spawn',
+            expected: 'misconfigured',
+            evidence: 'ENOENT',
+            run: turn({ spawnError: 'ENOENT' }),
+          },
+        ])
+      ).toEqual([]);
       expect(violations).toEqual([]);
     });
   });
