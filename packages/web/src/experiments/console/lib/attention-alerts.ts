@@ -57,8 +57,12 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+export function getAttentionAlertsState(): AttentionAlertsState {
+  return state;
+}
+
 export function useAttentionAlerts(): AttentionAlertsState {
-  return useSyncExternalStore(subscribe, () => state);
+  return useSyncExternalStore(subscribe, getAttentionAlertsState);
 }
 
 let chime: HTMLAudioElement | null = null;
@@ -115,9 +119,16 @@ export function refreshNotificationAccess(): void {
 /** Must run inside a click handler, like {@link enableAttentionAlerts}. */
 export function requestNotificationAccess(): void {
   if (typeof Notification === 'undefined' || Notification.permission !== 'default') return;
-  void Notification.requestPermission().then(permission => {
-    update({ notifications: permission });
-  });
+  Notification.requestPermission().then(
+    permission => {
+      update({ notifications: permission });
+    },
+    (e: unknown) => {
+      update({
+        notificationError: `The browser could not ask for notification permission: ${e instanceof Error ? e.message : String(e)}`,
+      });
+    }
+  );
 }
 
 function alertRun(run: Run): void {
