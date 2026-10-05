@@ -299,12 +299,24 @@ async function main(): Promise<number> {
   }
 
   const { values, positionals } = parsedArgs;
+  if (
+    values['base-branch'] !== undefined &&
+    (positionals[0] !== 'workflow' || positionals[1] !== 'run')
+  ) {
+    await fail(
+      values.json === true,
+      '--base-branch is only supported by workflow run for initial project registration.'
+    );
+    await shutdownTelemetry();
+    return 1;
+  }
   const cwdValue = values.cwd;
   const cwd = resolve(typeof cwdValue === 'string' ? cwdValue : process.cwd());
   const branchName = values.branch as string | undefined;
   const fromBranch =
     (values.from as string | undefined) ?? (values['from-branch'] as string | undefined);
   const baseBranch = values.base as string | undefined;
+  const registrationBaseBranch = values['base-branch'] as string | undefined;
   const workflowSourceFlag = values['workflow-source'] as string | undefined;
   const noWorktree = values['no-worktree'] as boolean | undefined;
   const folderFlag = values.folder as boolean | undefined;
@@ -761,6 +773,7 @@ async function main(): Promise<number> {
               branchName,
               fromBranch,
               baseBranch,
+              registrationBaseBranch,
               adoptRunId: values.adopt as string | undefined,
               supersedesRunId: values.supersedes as string | undefined,
               // `--workflow-source` selects WHERE the workflow is read from; `--cwd`

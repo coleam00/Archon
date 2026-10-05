@@ -1318,6 +1318,64 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/codebases/base-branch': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Inspect the remote default without registering a project */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody: {
+        content: {
+          'application/json': components['schemas']['InspectBaseBranchBody'];
+        };
+      };
+      responses: {
+        /** @description Base branch inspection */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['InspectBaseBranchResponse'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/codebases/{id}/env': {
     parameters: {
       query?: never;
@@ -3893,9 +3951,26 @@ export interface components {
       /** Format: date-time */
       updated_at: string;
     };
+    InspectBaseBranchResponse:
+      | {
+          /** @enum {string} */
+          kind: 'folder';
+        }
+      | {
+          /** @enum {string} */
+          kind: 'repo';
+          defaultBranch: string | null;
+          /** @enum {string|null} */
+          reason: 'no_remote' | 'ambiguous_remote' | 'remote_unavailable' | 'unknown_head' | null;
+        };
+    InspectBaseBranchBody: {
+      url?: string;
+      path?: string;
+    };
     AddCodebaseBody: {
       url?: string;
       path?: string;
+      base_branch?: string | null;
     };
     DeleteCodebaseResponse: {
       success: boolean;

@@ -27,3 +27,16 @@ export const codebaseRowSchema = z.object({
 });
 
 export type Codebase = z.infer<typeof codebaseRowSchema>;
+
+export const projectBaseBranchInspectionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('folder') }),
+  z.object({
+    kind: z.literal('repo'),
+    defaultBranch: z.string().nullable(),
+    reason: z
+      .enum(['no_remote', 'ambiguous_remote', 'remote_unavailable', 'unknown_head'])
+      .nullable(),
+  }),
+]);
+
+export type ProjectBaseBranchInspection = z.infer<typeof projectBaseBranchInspectionSchema>;

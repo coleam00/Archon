@@ -33,6 +33,8 @@ import {
   toSafeConfig,
   updateGlobalConfig,
   cloneRepository,
+  inspectProjectBaseBranch,
+  ProjectRegistrationError,
   registerRepository,
   registerFolder,
   ConversationNotFoundError,
@@ -68,9 +70,16 @@ import type { UserTiersPatch, UserAliasesPatch, AliasesPatch } from '@archon/cor
 import { InvalidConfigError, parseWorkflowRunConfig } from '@archon/core/config';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { EffortLevel } from '@archon/workflows/schemas/effort';
-import { findRepoRoot, removeWorktree, toRepoPath, toWorktreePath } from '@archon/git';
+import {
+  ConfiguredBaseBranchNotFoundError,
+  findRepoRoot,
+  removeWorktree,
+  toRepoPath,
+  toWorktreePath,
+} from '@archon/git';
 import {
   createLogger,
+  canonicalizeProjectPath,
   getWorkflowFolderSearchPaths,
   getCommandFolderSearchPaths,
   getBundledWorkflowsPath,
@@ -337,6 +346,8 @@ import {
   codebaseSchema,
   codebaseIdParamsSchema,
   addCodebaseBodySchema,
+  inspectBaseBranchBodySchema,
+  inspectBaseBranchResponseSchema,
   deleteCodebaseResponseSchema,
   codebaseEnvVarsResponseSchema,
   setEnvVarBodySchema,
@@ -757,6 +768,27 @@ const getCodebaseRoute = createRoute({
       description: 'Codebase',
     },
     404: jsonError('Not found'),
+    500: jsonError('Server error'),
+  },
+});
+
+const inspectBaseBranchRoute = createRoute({
+  method: 'post',
+  path: '/api/codebases/base-branch',
+  tags: ['Codebases'],
+  summary: 'Inspect the remote default without registering a project',
+  request: {
+    body: {
+      content: { 'application/json': { schema: inspectBaseBranchBodySchema } },
+      required: true,
+    },
+  },
+  responses: {
+    200: {
+      content: { 'application/json': { schema: inspectBaseBranchResponseSchema } },
+      description: 'Base branch inspection',
+    },
+    400: jsonError('Bad request'),
     500: jsonError('Server error'),
   },
 });
@@ -3130,6 +3162,24 @@ export function registerApiRoutes(
     }
   });
 
+  registerOpenApiRoute(inspectBaseBranchRoute, async c => {
+    const body = getValidatedBody(c, inspectBaseBranchBodySchema);
+    try {
+      return c.json(
+        await inspectProjectBaseBranch(
+          body.url !== undefined ? { url: body.url } : { path: body.path ?? '' }
+        ),
+        200
+      );
+    } catch (error) {
+      return apiError(
+        c,
+        error instanceof ProjectRegistrationError ? 400 : 500,
+        (error as Error).message
+      );
+    }
+  });
+
   // POST /api/codebases - Add a project (clone from URL or register local path)
   registerOpenApiRoute(addCodebaseRoute, async c => {
     const body = getValidatedBody(c, addCodebaseBodySchema);
@@ -3142,9 +3192,9 @@ export function registerApiRoutes(
       // needs no new field.
       let result;
       if (body.url) {
-        result = await cloneRepository(body.url);
+        result = await cloneRepository(body.url, { baseBranch: body.base_branch ?? undefined });
       } else {
-        const localPath = body.path ?? '';
+        const localPath = await canonicalizeProjectPath(body.path ?? '');
         // Detect git-ness. A resolvable repo root → register as a repo project;
         // a definitive null ("not a git repository") → folder project. A THROW
         // is ambiguous: findRepoRoot throws both for a nonexistent path (benign
@@ -3165,7 +3215,11 @@ export function registerApiRoutes(
             );
           }
         }
-        result = repoRoot ? await registerRepository(localPath) : await registerFolder(localPath);
+        result = repoRoot
+          ? await registerRepository(localPath, { baseBranch: body.base_branch ?? undefined })
+          : await registerFolder(localPath, undefined, {
+              baseBranch: body.base_branch ?? undefined,
+            });
       }
 
       // Fetch the full codebase record for a consistent response
@@ -3176,6 +3230,11 @@ export function registerApiRoutes(
 
       return c.json(toApiCodebase(codebase), result.alreadyExisted ? 200 : 201);
     } catch (error) {
+      if (
+        error instanceof ProjectRegistrationError ||
+        error instanceof ConfiguredBaseBranchNotFoundError
+      )
+        return apiError(c, 400, error.message);
       getLog().error({ err: error }, 'add_codebase_failed');
       return apiError(
         c,

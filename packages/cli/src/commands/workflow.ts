@@ -312,6 +312,7 @@ export interface WorkflowRunOptions {
    * (`$BASE_BRANCH`). Mutually exclusive with `--no-worktree`.
    */
   baseBranch?: string;
+  registrationBaseBranch?: string;
   noWorktree?: boolean;
   /**
    * Register the current non-git cwd as a folder project on first use and run
@@ -568,7 +569,19 @@ export function buildDetachedRunCmd(
   // the child died with `Unknown command: B:/~BUN/root/archon-...exe` (#2248).
   // cli.ts's own parser reads `process.argv.slice(2)` unconditionally, which is
   // the contract this must match.
-  const userArgs = argv.slice(2).filter(arg => arg !== '--detach' && arg !== '--json');
+  const userArgs: string[] = [];
+  const supplied = argv.slice(2);
+  for (let index = 0; index < supplied.length; index++) {
+    const arg = supplied[index];
+    if (arg === '--')
+      return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs, ...supplied.slice(index)];
+    if (arg === '--base-branch') {
+      index++;
+      continue;
+    }
+    if (arg.startsWith('--base-branch=') || arg === '--detach' || arg === '--json') continue;
+    userArgs.push(arg);
+  }
   // --cwd is appended last (parseArgs last-wins) so the child resolves the same
   // absolute working dir regardless of any relative --cwd the caller passed.
   return [...baseCmd, ...userArgs, '--cwd', cwd, ...extraArgs];
@@ -1561,7 +1574,7 @@ export async function workflowListCommand(
  */
 async function resolveRunCodebase(
   cwd: string,
-  options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder'>
+  options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'registrationBaseBranch'>
 ): Promise<{
   codebase: Awaited<ReturnType<typeof codebaseDb.getCodebase>>;
   lookupError: Error | null;
@@ -1610,17 +1623,30 @@ async function resolveRunCodebase(
     }
   }
 
+  if (options.registrationBaseBranch !== undefined) {
+    if (lookupError) throw lookupError;
+    if (!repoRoot || codebase?.kind === 'folder')
+      throw new Error('Folder projects have no base branch; remove --base-branch.');
+    if (codebase)
+      throw new Error(
+        '--base-branch applies only to initial registration. This project is already registered; use --base for a run override.'
+      );
+  }
+
   // Auto-register unregistered repos (creates project structure for artifacts/logs)
   if (!codebase && !lookupError) {
     if (repoRoot) {
       try {
-        const result = await registerRepository(repoRoot);
+        const result = await registerRepository(repoRoot, {
+          baseBranch: options.registrationBaseBranch,
+        });
         codebase = await codebaseDb.getCodebase(result.codebaseId);
         if (!result.alreadyExisted) {
           getLog().info({ name: result.name }, 'cli.codebase_auto_registered');
         }
       } catch (error) {
         const err = error as Error;
+        if (options.registrationBaseBranch !== undefined) throw err;
         registrationError = err;
         getLog().warn(
           { err, errorType: err.constructor.name, repoRoot },
@@ -1945,6 +1971,20 @@ async function runWorkflowWithOwnedSource(
     throw new Error(
       '--resume and --model are mutually exclusive. A resumed run keeps its original model bindings.'
     );
+  }
+
+  if (options.registrationBaseBranch !== undefined) {
+    if (!options.registrationBaseBranch.trim())
+      throw new Error('--base-branch requires a nonempty branch name.');
+    if (
+      options.resume ||
+      options.adoptRunId !== undefined ||
+      options.supersedesRunId !== undefined ||
+      options.dryRun
+    )
+      throw new Error(
+        '--base-branch applies only to initial registration and cannot be combined with --resume, --adopt, --supersedes, or --dry-run.'
+      );
   }
 
   const dryRunOnlyOptions = [

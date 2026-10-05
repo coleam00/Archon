@@ -2,7 +2,10 @@
  * Zod schemas for codebase API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import { codebaseRowSchema } from '@archon/core/schemas/codebase';
+import {
+  codebaseRowSchema,
+  projectBaseBranchInspectionSchema,
+} from '@archon/core/schemas/codebase';
 
 /** A codebase record (wire shape with ISO string dates). */
 export const codebaseSchema = codebaseRowSchema
@@ -23,6 +26,7 @@ export const addCodebaseBodySchema = z
   .object({
     url: z.string().min(1).optional(),
     path: z.string().min(1).optional(),
+    base_branch: z.string().trim().min(1).nullable().optional(),
   })
   .refine(b => (b.url !== undefined) !== (b.path !== undefined), {
     message: 'Provide either "url" or "path", not both and not neither',
@@ -59,3 +63,17 @@ export const codebaseEnvVarParamsSchema = z.object({
 export const envVarMutationResponseSchema = z
   .object({ success: z.boolean() })
   .openapi('EnvVarMutationResponse');
+
+export const inspectBaseBranchBodySchema = z
+  .object({
+    url: z.string().min(1).optional(),
+    path: z.string().min(1).optional(),
+  })
+  .refine(b => (b.url !== undefined) !== (b.path !== undefined), {
+    message: 'Provide either "url" or "path", not both and not neither',
+  })
+  .openapi('InspectBaseBranchBody');
+
+export const inspectBaseBranchResponseSchema = projectBaseBranchInspectionSchema.openapi(
+  'InspectBaseBranchResponse'
+);

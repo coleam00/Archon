@@ -14041,9 +14041,72 @@ describe('run codebase resolution', () => {
     expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
   }
 
+  it('passes the registration choice while leaving this run base unset', async () => {
+    await workflowRunCommand(childRoot, 'probe', 'go', {
+      noWorktree: true,
+      registrationBaseBranch: 'release',
+    });
+    expect(core.registerRepository).toHaveBeenCalledWith(childRoot, { baseBranch: 'release' });
+    expectChildExecution();
+  });
+
+  it('explicit registration failure is fatal even without worktrees', async () => {
+    (core.registerRepository as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error("Configured base branch 'unknown' not found on remote 'origin'")
+    );
+    await expect(
+      workflowRunCommand(childRoot, 'probe', 'go', {
+        noWorktree: true,
+        registrationBaseBranch: 'unknown',
+      })
+    ).rejects.toThrow("Configured base branch 'unknown'");
+    expect(executor.executeWorkflow).not.toHaveBeenCalled();
+  });
+
+  it('rejects a registration choice for an existing project', async () => {
+    (codebases.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValue(child);
+    await expect(
+      workflowRunCommand(childRoot, 'probe', 'go', {
+        noWorktree: true,
+        registrationBaseBranch: 'release',
+      })
+    ).rejects.toThrow('already registered');
+    expect(core.registerRepository).not.toHaveBeenCalled();
+  });
+
+  it('rejects a registration choice for a folder project', async () => {
+    (core.registerFolder as ReturnType<typeof mock>).mockClear();
+    (git.findRepoRoot as ReturnType<typeof mock>).mockResolvedValue(null);
+    await expect(
+      workflowRunCommand(childRoot, 'probe', 'go', {
+        noWorktree: true,
+        folder: true,
+        registrationBaseBranch: 'release',
+      })
+    ).rejects.toThrow('Folder projects have no base branch');
+    expect(core.registerFolder).not.toHaveBeenCalled();
+  });
+
+  for (const incompatible of [
+    { resume: true },
+    { adoptRunId: 'old' },
+    { supersedesRunId: 'old' },
+    { dryRun: true },
+  ]) {
+    it(`rejects registration choice with ${Object.keys(incompatible)[0]}`, async () => {
+      await expect(
+        workflowRunCommand(childRoot, 'probe', 'go', {
+          ...incompatible,
+          registrationBaseBranch: 'release',
+        })
+      ).rejects.toThrow('initial registration');
+      expect(core.registerRepository).not.toHaveBeenCalled();
+    });
+  }
+
   it('registers an unregistered child from its nearest Git root', async () => {
     await workflowRunCommand(`${childRoot}/tools`, 'probe', 'go', { noWorktree: true });
-    expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+    expect(core.registerRepository).toHaveBeenCalledWith(childRoot, { baseBranch: undefined });
     expectChildExecution();
   });
 
@@ -14053,7 +14116,7 @@ describe('run codebase resolution', () => {
       errors: [],
     });
     await workflowRunCommand(childRoot, 'probe', 'go');
-    expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+    expect(core.registerRepository).toHaveBeenCalledWith(childRoot, { baseBranch: undefined });
     expectChildExecution();
   });
 
@@ -14069,7 +14132,7 @@ describe('run codebase resolution', () => {
       expect(mockCreateWorkflowRun).toHaveBeenCalledWith(
         expect.objectContaining({ codebase_id: child.id })
       );
-      expect(core.registerRepository).toHaveBeenCalledWith(childRoot);
+      expect(core.registerRepository).toHaveBeenCalledWith(childRoot, { baseBranch: undefined });
       expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
     } finally {
       jest.useRealTimers();
@@ -14113,7 +14176,7 @@ describe('run codebase resolution', () => {
       await workflowRunCommand(`${childRoot}/tools`, 'probe', 'go', { noWorktree: true });
       expect(codebases.findCodebaseByDefaultCwd).toHaveBeenCalledWith(childRoot);
       expect(codebases.findCodebaseByDefaultCwd).not.toHaveBeenCalledWith(gitSpelling);
-      expect(core.registerRepository).toHaveBeenCalledWith(gitSpelling);
+      expect(core.registerRepository).toHaveBeenCalledWith(gitSpelling, { baseBranch: undefined });
       expectChildExecution();
     } finally {
       mockCanonicalizeProjectPath.mockReset().mockImplementation(async (path: string) => path);
@@ -14147,4 +14210,46 @@ describe('run codebase resolution', () => {
     expect(codebases.findCodebaseByPathPrefix).not.toHaveBeenCalled();
     expect(core.registerRepository).not.toHaveBeenCalled();
   });
+});
+
+describe('detached registration branch choice', () => {
+  it('preserves a flag-looking positional message after the argument delimiter', () => {
+    const cmd = buildDetachedRunCmd(
+      true,
+      '/archon',
+      [
+        '/archon',
+        '/entry',
+        'workflow',
+        'run',
+        'test',
+        '--base-branch',
+        'release',
+        '--',
+        '--base-branch',
+      ],
+      '/repo',
+      ['--conversation-id', 'conv']
+    );
+    expect(cmd.slice(-2)).toEqual(['--', '--base-branch']);
+    expect(cmd.indexOf('--conversation-id')).toBeLessThan(cmd.indexOf('--'));
+  });
+  for (const binary of [true, false]) {
+    for (const choice of [['--base-branch', 'release'], ['--base-branch=release']]) {
+      it(`consumes registration choice before the child in binary=${binary} syntax=${choice[0]}`, () => {
+        const cmd = buildDetachedRunCmd(
+          binary,
+          '/bun',
+          ['/bun', '/cli.ts', 'workflow', 'run', 'test', '--detach', ...choice, '--base', 'dev'],
+          '/repo',
+          []
+        );
+        expect(cmd).not.toContain('--base-branch');
+        expect(cmd).not.toContain('--base-branch=release');
+        expect(cmd).not.toContain('release');
+        expect(cmd).toContain('--base');
+        expect(cmd).toContain('dev');
+      });
+    }
+  }
 });

@@ -35,7 +35,6 @@ import { buildManageRunTool } from './manage-run-tool';
 import { getArchonWorkspacesPath, ensureArchonWorkspacesPath } from '@archon/paths';
 import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import {
-  execFileAsync,
   findRepoRoot,
   getDefaultRemote,
   syncWorkspace,
@@ -3375,11 +3374,10 @@ async function handleRegisterProject(
     );
   }
   const kind: 'repo' | 'folder' = repoRoot ? 'repo' : 'folder';
-  const detectedBranch = kind === 'repo' ? await detectCurrentGitBranch(canonicalPath) : null;
   const codebase = await codebaseDb.createCodebase({
     name: projectName,
     default_cwd: canonicalPath,
-    default_branch: detectedBranch,
+    default_branch: null,
     ai_assistant_type: config.assistant,
     kind,
   });
@@ -3395,20 +3393,6 @@ async function handleRegisterProject(
       'If this should be a git repo, resolve the error and re-register.';
   }
   return `Project "${projectName}" registered successfully!\nPath: ${canonicalPath}\nID: ${codebase.id}${kindNote}`;
-}
-
-async function detectCurrentGitBranch(projectPath: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync(
-      'git',
-      ['-C', projectPath, 'rev-parse', '--abbrev-ref', 'HEAD'],
-      { timeout: 5000 }
-    );
-    const branch = stdout.trim();
-    return branch && branch !== 'HEAD' ? branch : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
