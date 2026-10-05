@@ -14,6 +14,8 @@
  * filters the flag and example lists by owner for scoped slices.
  */
 
+import { userRoleSchema } from '@archon/core/schemas/user';
+
 interface FlagOwner {
   command: string;
   subcommand?: string;
@@ -466,7 +468,7 @@ const scopedOnlyHelp: HelpEntry[] = [
   {
     command: 'user',
     subcommand: 'role',
-    spec: 'user role <id> <admin|member>',
+    spec: `user role <id> <${userRoleSchema.options.join('|')}>`,
     description: 'Set a user role using the full user id',
   },
   {
