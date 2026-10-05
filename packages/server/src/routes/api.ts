@@ -9,6 +9,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
+import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
@@ -3051,20 +3052,20 @@ export function registerApiRoutes(
     return c.json(result);
   });
 
-  // GET /api/stream/__dashboard__ — multiplexed dashboard SSE (all workflow events)
+  // GET /api/stream/__dashboard__ — dashboard SSE (workflow lifecycle events)
   // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
-  app.get('/api/stream/__dashboard__', async c => {
+  app.get(`/api/stream/${DASHBOARD_STREAM}`, async c => {
     return streamSSE(c, async stream => {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
 
-      webAdapter.registerStream('__dashboard__', stream);
-      getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_opened');
+      webAdapter.registerStream(DASHBOARD_STREAM, stream);
+      getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_opened');
 
       stream.onAbort(() => {
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_disconnected');
-        webAdapter.removeStream('__dashboard__', stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_disconnected');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
       });
 
       try {
@@ -3082,8 +3083,8 @@ export function registerApiRoutes(
           getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
         }
       } finally {
-        webAdapter.removeStream('__dashboard__', stream);
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_closed');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_closed');
       }
     });
   });

@@ -38,6 +38,118 @@ beforeEach(() => {
 });
 
 describe('SSETransport', () => {
+  test('dashboard connections coexist and disconnect independently', () => {
+    const transport = new SSETransport();
+    const first = createMockStream();
+    const second = createMockStream();
+    try {
+      transport.registerStream('__dashboard__', first);
+      transport.registerStream('__dashboard__', second);
+      transport.emitWorkflowEvent('__dashboard__', 'first event');
+
+      expect(first.close).not.toHaveBeenCalled();
+      expect(first.writeSSE).toHaveBeenCalledWith({ data: 'first event' });
+      expect(second.writeSSE).toHaveBeenCalledWith({ data: 'first event' });
+
+      transport.removeStream('__dashboard__', first);
+      transport.removeStream('__dashboard__', first);
+      transport.emitWorkflowEvent('__dashboard__', 'second event');
+
+      expect(first.writeSSE).toHaveBeenCalledTimes(1);
+      expect(second.writeSSE).toHaveBeenCalledWith({ data: 'second event' });
+      expect(transport.hasActiveStream('__dashboard__')).toBe(true);
+
+      transport.removeStream('__dashboard__', second);
+      expect(transport.hasActiveStream('__dashboard__')).toBe(false);
+    } finally {
+      transport.stop();
+    }
+  });
+
+  test('a failed dashboard writer does not remove or delay another connection', async () => {
+    const transport = new SSETransport();
+    const failed = createMockStream({
+      writeSSE: mock(() => Promise.reject(new Error('disconnected'))),
+    });
+    const healthy = createMockStream();
+    try {
+      transport.registerStream('__dashboard__', failed);
+      transport.registerStream('__dashboard__', healthy);
+      await transport.emit('__dashboard__', 'first event');
+      await transport.emit('__dashboard__', 'second event');
+
+      expect(failed.writeSSE).toHaveBeenCalledTimes(1);
+      expect(failed.close).toHaveBeenCalledTimes(1);
+      expect(healthy.writeSSE).toHaveBeenCalledTimes(2);
+      expect(transport.hasActiveStream('__dashboard__')).toBe(true);
+    } finally {
+      transport.stop();
+    }
+  });
+
+  test('a pending dashboard write does not delay delivery to other connections', async () => {
+    const transport = new SSETransport();
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const slow = createMockStream({ writeSSE: mock(() => promise) });
+    const healthy = createMockStream();
+    try {
+      transport.registerStream('__dashboard__', slow);
+      transport.registerStream('__dashboard__', healthy);
+      const emitted = transport.emit('__dashboard__', 'event');
+      expect(healthy.writeSSE).toHaveBeenCalledWith({ data: 'event' });
+      resolve();
+      await emitted;
+    } finally {
+      resolve();
+      transport.stop();
+    }
+  });
+
+  test('closed dashboard writers are removed and shutdown closes remaining connections', async () => {
+    const transport = new SSETransport();
+    const closed = createMockStream();
+    const first = createMockStream();
+    const second = createMockStream();
+    try {
+      transport.registerStream('__dashboard__', closed);
+      transport.registerStream('__dashboard__', first);
+      transport.registerStream('__dashboard__', second);
+      Object.defineProperty(closed, 'closed', { value: true });
+      await transport.emit('__dashboard__', 'event');
+      expect(closed.writeSSE).not.toHaveBeenCalled();
+      expect(first.writeSSE).toHaveBeenCalledWith({ data: 'event' });
+      expect(second.writeSSE).toHaveBeenCalledWith({ data: 'event' });
+      Object.defineProperty(closed, 'closed', { value: false });
+      transport.stop();
+      expect(closed.close).not.toHaveBeenCalled();
+      expect(first.close).toHaveBeenCalledTimes(1);
+      expect(second.close).toHaveBeenCalledTimes(1);
+      expect(transport.hasActiveStream('__dashboard__')).toBe(false);
+    } finally {
+      transport.stop();
+    }
+  });
+
+  test('a late conversation write failure cannot remove its replacement', async () => {
+    const transport = new SSETransport();
+    const { promise, reject } = Promise.withResolvers<void>();
+    const old = createMockStream({ writeSSE: mock(() => promise) });
+    const replacement = createMockStream();
+    try {
+      transport.registerStream('conv-1', old);
+      const emitted = transport.emit('conv-1', 'old event');
+      transport.registerStream('conv-1', replacement);
+      reject(new Error('old connection failed'));
+      await emitted;
+      transport.removeStream('conv-1', old);
+      await transport.emit('conv-1', 'new event');
+      expect(transport.hasActiveStream('conv-1')).toBe(true);
+      expect(replacement.writeSSE).toHaveBeenCalledWith({ data: 'new event' });
+    } finally {
+      transport.stop();
+    }
+  });
+
   describe('registerStream', () => {
     test('registers a stream for a conversation', () => {
       const transport = new SSETransport();
@@ -156,11 +268,17 @@ describe('SSETransport', () => {
       expect(stream.writeSSE).toHaveBeenCalledWith({ data: '{"type":"text"}' });
     });
 
-    test('no-ops when no stream exists (no buffering)', async () => {
+    test('buffers events until a stream connects', async () => {
       const transport = new SSETransport();
 
-      // Should not throw
-      await transport.emit('conv-1', '{"type":"text"}');
+      try {
+        await transport.emit('conv-1', '{"type":"text"}');
+        const stream = createMockStream();
+        transport.registerStream('conv-1', stream);
+        expect(stream.writeSSE).toHaveBeenCalledWith({ data: '{"type":"text"}' });
+      } finally {
+        transport.stop();
+      }
     });
 
     test('no-ops when stream is closed', async () => {
@@ -197,11 +315,17 @@ describe('SSETransport', () => {
       expect(stream.writeSSE).toHaveBeenCalledWith({ data: '{"type":"workflow_status"}' });
     });
 
-    test('no-ops when no stream exists (consistent with emit)', () => {
+    test('buffers workflow events until a stream connects', () => {
       const transport = new SSETransport();
 
-      // Should not throw
-      transport.emitWorkflowEvent('conv-1', '{"type":"workflow_status"}');
+      try {
+        transport.emitWorkflowEvent('conv-1', '{"type":"workflow_status"}');
+        const stream = createMockStream();
+        transport.registerStream('conv-1', stream);
+        expect(stream.writeSSE).toHaveBeenCalledWith({ data: '{"type":"workflow_status"}' });
+      } finally {
+        transport.stop();
+      }
     });
   });
 
