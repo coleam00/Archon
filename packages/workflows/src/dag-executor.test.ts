@@ -16971,8 +16971,13 @@ describe('executeDagWorkflow -- env var injection', () => {
         workflowRun,
         config: {
           ...minimalConfig,
-          envVars: { MY_SECRET: 'abc123', ANTHROPIC_API_KEY: 'acting-user-secret' },
-          protectedEnvKeys: ['ANTHROPIC_API_KEY'],
+          envVars: {
+            MY_SECRET: 'abc123',
+            ANTHROPIC_API_KEY: 'acting-user-secret',
+            GIT_AUTHOR_NAME: 'connected-author',
+            GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
+          },
+          protectedEnvKeys: ['ANTHROPIC_API_KEY', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL'],
         },
       })
     );
@@ -16982,8 +16987,14 @@ describe('executeDagWorkflow -- env var injection', () => {
     expect(optionsArg?.env).toEqual({
       MY_SECRET: 'abc123',
       ANTHROPIC_API_KEY: 'acting-user-secret',
+      GIT_AUTHOR_NAME: 'connected-author',
+      GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
     });
-    expect(optionsArg?.protectedEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
+    expect(optionsArg?.protectedEnvKeys).toEqual([
+      'ANTHROPIC_API_KEY',
+      'GIT_AUTHOR_NAME',
+      'GIT_AUTHOR_EMAIL',
+    ]);
   });
 
   it('does not set env on claudeOptions when config.envVars is empty', async () => {
@@ -29388,6 +29399,8 @@ describe('subprocess credential redaction', () => {
     const projectSecret = 'project-secret-with-no-known-shape';
     const databaseUrl = 'postgres://user:password@db.internal/archon';
     const fileDeliveredSecret = 'oauth-token-only-present-in-auth-file';
+    const authorName = 'connected-author';
+    const authorEmail = '42+connected-author@users.noreply.github.com';
     const logDir = join(testDir, 'logs');
     const workflowRun = makeWorkflowRun('container-redaction-run', {
       workflow_name: 'container-redaction',
@@ -29444,9 +29457,17 @@ describe('subprocess credential redaction', () => {
               CUSTOM_AUTH: otherInjectedSecret,
               PROJECT_SECRET: projectSecret,
               DATABASE_URL: databaseUrl,
+              GIT_AUTHOR_NAME: authorName,
+              GIT_AUTHOR_EMAIL: authorEmail,
               BASE_BRANCH: 'main',
             },
-            protectedEnvKeys: ['OPENAI_API_KEY', 'CUSTOM_AUTH', 'DATABASE_URL'],
+            protectedEnvKeys: [
+              'OPENAI_API_KEY',
+              'CUSTOM_AUTH',
+              'DATABASE_URL',
+              'GIT_AUTHOR_NAME',
+              'GIT_AUTHOR_EMAIL',
+            ],
             protectedCredentialValues: [fileDeliveredSecret],
           },
           execContext,
@@ -29460,6 +29481,9 @@ describe('subprocess credential redaction', () => {
       expect(dockerArgs.join(' ')).toContain(otherInjectedSecret);
       expect(dockerArgs.join(' ')).toContain(projectSecret);
       expect(dockerArgs.join(' ')).toContain(databaseUrl);
+      expect(dockerArgs).toContain(`GIT_AUTHOR_NAME=${authorName}`);
+      expect(dockerArgs).toContain(`GIT_AUTHOR_EMAIL=${authorEmail}`);
+      expect(dockerArgs.join(' ')).not.toContain('GIT_COMMITTER_');
 
       expect(rejection).toBeDefined();
       expect(rejection?.code).toBe(1);
@@ -29472,6 +29496,8 @@ describe('subprocess credential redaction', () => {
         rejection?.stdout,
         rejection?.stderr,
       ].join('\n');
+      expect(rejectionText).not.toContain(authorName);
+      expect(rejectionText).not.toContain(authorEmail);
       expect(rejectionText).not.toContain(openAiSecret);
       expect(rejectionText).not.toContain(otherInjectedSecret);
       expect(rejectionText).not.toContain(projectSecret);

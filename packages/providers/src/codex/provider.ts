@@ -970,7 +970,8 @@ export class CodexProvider implements IAgentProvider {
           ...(nodePlugins?.length ? ['-c', 'features.plugins=true'] : []),
         ],
         env,
-        this.spawner
+        this.spawner,
+        requestOptions?.protectedEnvKeys
       );
       // An abort while the setup above awaited found no process to stop.
       if (abortSignal?.aborted) throw new Error('Query aborted');
