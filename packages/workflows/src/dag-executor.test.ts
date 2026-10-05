@@ -22950,7 +22950,9 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    // The bash-timeout case can leave its killed shell's `sleep` holding the directory on
+    // Windows; a raw rm fails that passing test with EBUSY.
+    await removeTempTree(testDir);
   });
 
   async function runDag(
