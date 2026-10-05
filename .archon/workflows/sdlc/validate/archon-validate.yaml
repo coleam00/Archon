@@ -93,13 +93,8 @@ nodes:
                 items: { type: string }
                 minItems: 1
             required: [name, argv]
-        # Untracked paths under `.archon/` that the run injected and the gate
-        # would refuse. The runner moves them aside while the checks run.
-        quarantine:
-          type: array
-          items: { type: string }
         notes: { type: string }
-      required: [checks, quarantine, notes]
+      required: [checks, notes]
 
   # Runs the declared checks and records every exit status in
   # `$ARTIFACTS_DIR/validation.md`. Green and "didn't finish" are read from those

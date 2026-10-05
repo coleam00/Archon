@@ -132,6 +132,23 @@ function parseWorkflowYaml(
   return { workflow: result.workflow, warnings: result.warnings };
 }
 
+describe('workflow YAML line endings', () => {
+  it.each(['"', "'"])('folds multiline %s-quoted prompts identically for LF and CRLF', quote => {
+    const lf = `name: line-endings
+description: Quoted multiline scalar
+nodes:
+  - id: read
+    prompt: ${quote}first line
+      second line${quote}
+`;
+    const { workflow: lfWorkflow } = parseWorkflowYaml(lf);
+    const { workflow: crlfWorkflow } = parseWorkflowYaml(lf.replaceAll('\n', '\r\n'));
+
+    expect(inlinePrompt(lfWorkflow.nodes[0])).toBe('first line second line');
+    expect(crlfWorkflow).toEqual(lfWorkflow);
+  });
+});
+
 describe('Workflow Loader', () => {
   let testDir: string;
   const originalArchonHome = process.env.ARCHON_HOME;

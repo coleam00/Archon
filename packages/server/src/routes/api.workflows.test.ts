@@ -10,6 +10,7 @@ import * as archonPaths from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { validationErrorHook } from './openapi-defaults';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
+import { parseYaml } from '@archon/workflows/loader';
 
 /** Test app factory: includes defaultHook to format validation errors as { error: string }. */
 function createTestApp(): OpenAPIHono {
@@ -26,7 +27,11 @@ const mockDiscoverWorkflows = mock(async (_cwd: string | null) => ({
 // Default: returns a valid workflow. Use mockReturnValueOnce in tests that need a parse failure.
 const mockParseWorkflow = mock<(typeof import('@archon/workflows/loader'))['parseWorkflow']>(
   (content: string, _filename: string) => {
-    const name = /^name:\s*['"]?([^'"\n]+)['"]?$/m.exec(content)?.[1] ?? 'test';
+    const raw = parseYaml(content);
+    const name =
+      raw !== null && typeof raw === 'object' && 'name' in raw && typeof raw.name === 'string'
+        ? raw.name
+        : 'test';
     return {
       workflow: makeTestWorkflow({ name, description: 'Test workflow' }),
       error: null,
@@ -512,7 +517,7 @@ describe('GET /api/workflows/:name', () => {
     await mkdir(workflowDir, { recursive: true });
     await writeFile(
       join(workflowDir, 'authored.yaml'),
-      'name: authored\ndescription: Raw\nnodes:\n  - id: plan\n    command: plan\n    settingSources: []\n'
+      'name: authored\r\ndescription: "Raw\r\n  workflow"\r\nnodes:\r\n  - id: plan\r\n    command: plan\r\n    settingSources: []\r\n'
     );
 
     try {
@@ -525,7 +530,7 @@ describe('GET /api/workflows/:name', () => {
       const body = (await response.json()) as { authored?: unknown };
       expect(body.authored).toEqual({
         name: 'authored',
-        description: 'Raw',
+        description: 'Raw workflow',
         nodes: [{ id: 'plan', command: 'plan', settingSources: [] }],
       });
     } finally {
