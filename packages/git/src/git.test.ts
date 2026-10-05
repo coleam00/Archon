@@ -1042,168 +1042,80 @@ branch refs/heads/feature/auth
 
   describe('getDefaultBranch', () => {
     let execSpy: Mock<typeof git.execFileAsync>;
-
     beforeEach(() => {
       execSpy = spyOn(git, 'execFileAsync');
     });
-
     afterEach(() => {
       execSpy.mockRestore();
     });
-
-    test('returns branch from symbolic-ref (origin/main)', async () => {
-      execSpy.mockResolvedValue({ stdout: 'origin/main\n', stderr: '' });
-
-      const result = await git.getDefaultBranch(repo('/workspace/repo'));
-
-      expect(result).toBe(branch('main'));
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'symbolic-ref', 'refs/remotes/origin/HEAD', '--short'],
-        expect.any(Object)
-      );
-    });
-
-    test('returns branch from symbolic-ref (origin/master)', async () => {
-      execSpy.mockResolvedValue({ stdout: 'origin/master\n', stderr: '' });
-
-      const result = await git.getDefaultBranch(repo('/workspace/repo'));
-
-      expect(result).toBe(branch('master'));
-    });
-
-    test('uses custom remote for symbolic-ref lookup and prefix stripping', async () => {
-      execSpy.mockResolvedValue({ stdout: 'upstream/main\n', stderr: '' });
-
-      const result = await git.getDefaultBranch(repo('/workspace/repo'), 'upstream');
-
-      expect(result).toBe(branch('main'));
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'symbolic-ref', 'refs/remotes/upstream/HEAD', '--short'],
-        expect.any(Object)
-      );
-    });
-
-    test('errors instead of guessing main when symbolic-ref fails and origin/main exists (#2471)', async () => {
-      // Regression: previously the function probed <remote>/main and returned
-      // 'main' whenever it existed. That is wrong for repos where 'main' is a
-      // release branch and the actual default is something else (e.g. 'dev').
-      // Must now throw, even though origin/main exists.
-      mockLogger.warn.mockClear();
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('symbolic-ref')) {
-          throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
-        }
-        // origin/main exists — this is what made the old guess "look right".
-        return { stdout: 'abc123\n', stderr: '' };
+    for (const name of ['main', 'master', 'dev', 'team/trunk']) {
+      test(`reads advertised ${name} instead of cached HEAD`, async () => {
+        execSpy.mockImplementation(async (_cmd, args) => ({
+          stdout: args.includes('ls-remote')
+            ? `ref: refs/heads/${name}\tHEAD\nabc123\tHEAD\nabc123\trefs/heads/${name}\n`
+            : '.git',
+          stderr: '',
+        }));
+        expect(await git.getDefaultBranch(repo('/workspace/repo'), 'upstream')).toBe(branch(name));
+        expect(execSpy).toHaveBeenCalledWith(
+          'git',
+          expect.arrayContaining(['ls-remote', 'upstream']),
+          expect.any(Object)
+        );
       });
-
+    }
+    test('unknown HEAD does not guess from advertised main', async () => {
+      execSpy.mockResolvedValue({ stdout: 'abc123\trefs/heads/main\n', stderr: '' });
       await expect(git.getDefaultBranch(repo('/workspace/repo'))).rejects.toThrow(
-        'Cannot detect default branch for /workspace/repo: origin/HEAD is not set'
+        'origin/HEAD is not known'
       );
-      // The error must name all three configuration surfaces so the reader
-      // sees the cheapest fix for their situation.
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        { repoPath: '/workspace/repo', remote: 'origin' },
-        'default_branch_detection_failed'
-      );
-      // Verify rev-parse is NOT called — the <remote>/main guess is gone.
-      const revParseCalls = execSpy.mock.calls.filter(
-        ([, args]) => Array.isArray(args) && args.includes('rev-parse')
-      );
-      expect(revParseCalls).toHaveLength(0);
-      // Error must surface all three configuration surfaces.
-      const expectedMessage =
-        'Pass --base, set worktree.baseBranch in .archon/config.yaml, or set the codebase default_branch field.';
-      await expect(git.getDefaultBranch(repo('/workspace/repo'))).rejects.toThrow(expectedMessage);
+      for (const setting of ['--base', 'worktree.baseBranch', 'default_branch'])
+        await expect(git.getDefaultBranch(repo('/workspace/repo'))).rejects.toThrow(setting);
     });
-
-    test('returns non-standard branch from symbolic-ref (origin/develop)', async () => {
-      execSpy.mockResolvedValue({ stdout: 'origin/develop\n', stderr: '' });
-
-      const result = await git.getDefaultBranch(repo('/workspace/repo'));
-
-      expect(result).toBe(branch('develop'));
-    });
-
-    test('returns non-standard branch from symbolic-ref (origin/trunk)', async () => {
-      execSpy.mockResolvedValue({ stdout: 'origin/trunk\n', stderr: '' });
-
-      const result = await git.getDefaultBranch(repo('/workspace/repo'));
-
-      expect(result).toBe(branch('trunk'));
-    });
-
-    test('throws when symbolic-ref fails and names the remote in the error', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('symbolic-ref')) {
-          throw new Error('fatal: ref refs/remotes/mar/HEAD is not a symbolic ref');
-        }
-        throw new Error('fatal: Needed a single revision');
+    test('a failed remote query retains evidence', async () => {
+      execSpy.mockImplementation(async (_cmd, args) => {
+        if (args.includes('ls-remote'))
+          throw Object.assign(new Error('connection refused'), { code: 128 });
+        return { stdout: '.git', stderr: '' };
       });
-
-      await expect(git.getDefaultBranch(repo('/workspace/repo'), 'mar')).rejects.toThrow(
-        'mar/HEAD is not set'
-      );
-      // Verify NO rev-parse fallback is attempted — the <remote>/main guess is
-      // gone. Without this guard a future regression could re-introduce it.
-      const revParseCalls = execSpy.mock.calls.filter(
-        ([, args]) => Array.isArray(args) && args.includes('rev-parse')
-      );
-      expect(revParseCalls).toHaveLength(0);
-    });
-
-    test('throws for unexpected symbolic-ref errors (permission denied)', async () => {
-      mockLogger.error.mockClear();
-      execSpy.mockRejectedValue(new Error('fatal: permission denied'));
-
       await expect(git.getDefaultBranch(repo('/workspace/repo'))).rejects.toThrow(
-        'Failed to get default branch for /workspace/repo: fatal: permission denied'
-      );
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoPath: '/workspace/repo',
-        }),
-        'default_branch_symbolic_ref_failed'
+        'connection refused'
       );
     });
-
-    test('treats a missing repository path as an operational failure', async () => {
-      mockLogger.warn.mockClear();
-      mockLogger.error.mockClear();
-      execSpy.mockRejectedValue(
-        new Error("fatal: cannot change to '/workspace/missing': No such file or directory")
-      );
-
-      await expect(git.getDefaultBranch(repo('/workspace/missing'))).rejects.toThrow(
-        "Failed to get default branch for /workspace/missing: fatal: cannot change to '/workspace/missing': No such file or directory"
-      );
-      expect(mockLogger.warn).not.toHaveBeenCalled();
-      expect(mockLogger.error).toHaveBeenCalledWith(
-        expect.objectContaining({
-          repoPath: '/workspace/missing',
-          remote: 'origin',
-        }),
-        'default_branch_symbolic_ref_failed'
-      );
-    });
-
-    test('error message names all three configuration surfaces (#2471)', async () => {
-      // Acceptance criterion: the reader should see the cheapest fix for their
-      // situation — CLI flag, repo config, and codebase DB field.
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('symbolic-ref')) {
-          throw new Error('fatal: ref refs/remotes/origin/HEAD is not a symbolic ref');
+    test('remote inspection scopes credentials, sanitizes failures, and leaves native helpers available without credentials', async () => {
+      execSpy.mockImplementation(async (_cmd, args, options) => {
+        expect(args.join(' ')).not.toContain('private-token');
+        expect(options?.env?.GIT_TERMINAL_PROMPT).toBe('0');
+        if (options?.env?.ARCHON_GIT_PASSWORD) {
+          expect(args).toContain('credential.helper=');
+          throw Object.assign(new Error('private-token denied'), { code: 128 });
         }
+        expect(args).not.toContain('credential.helper=');
         return { stdout: '', stderr: '' };
       });
-
-      await expect(git.getDefaultBranch(repo('/workspace/repo'))).rejects.toThrow('--base');
+      const result = await git.inspectRemoteBranches({
+        kind: 'url',
+        url: 'https://git.example.com/repo',
+        credentials: { username: 'oauth2', password: 'private-token' },
+      });
+      expect(result).toEqual({ status: 'unavailable', evidence: '*** denied' });
+      expect(process.env.ARCHON_GIT_PASSWORD).toBeUndefined();
+      expect(
+        await git.inspectRemoteBranches({ kind: 'url', url: 'https://git.example.com/repo' })
+      ).toEqual({ status: 'available', defaultBranch: null, branches: [] });
+    });
+    test('rejects credential-bearing URLs before git is called', async () => {
+      await expect(
+        git.inspectRemoteBranches({ kind: 'url', url: 'https://user:secret@git.example.com/repo' })
+      ).rejects.toThrow('must not include credentials');
+      expect(execSpy).not.toHaveBeenCalled();
+    });
+    test('local failures propagate before querying a remote', async () => {
+      execSpy.mockRejectedValue(new Error('permission denied'));
       await expect(git.getDefaultBranch(repo('/workspace/repo'))).rejects.toThrow(
-        'worktree.baseBranch'
+        'permission denied'
       );
-      await expect(git.getDefaultBranch(repo('/workspace/repo'))).rejects.toThrow('default_branch');
+      expect(execSpy).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -2067,6 +1979,8 @@ branch refs/heads/feature/auth
 
     test('throws error if fetch fails', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('ls-remote'))
+          return { stdout: 'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n', stderr: '' };
         if (args.includes('fetch')) {
           throw new Error('fatal: unable to access repository');
         }
@@ -2117,6 +2031,8 @@ branch refs/heads/feature/auth
 
     test('includes operation context in fetch error message', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('ls-remote'))
+          return { stdout: 'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n', stderr: '' };
         if (args.includes('fetch')) {
           throw new Error('fatal: network unreachable');
         }
@@ -2480,6 +2396,8 @@ branch refs/heads/feature/auth
 
     test('includes custom remote name in fetch error message', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('ls-remote'))
+          return { stdout: 'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n', stderr: '' };
         if (args.includes('fetch')) {
           throw new Error("fatal: 'mar' does not appear to be a git repository");
         }
@@ -2549,6 +2467,8 @@ branch refs/heads/feature/auth
       let fetchCalls = 0;
 
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('ls-remote'))
+          return { stdout: 'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n', stderr: '' };
         if (args.includes('fetch')) {
           fetchCalls++;
           throw raceError;
@@ -2567,6 +2487,8 @@ branch refs/heads/feature/auth
       let fetchCalls = 0;
 
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
+        if (args.includes('ls-remote'))
+          return { stdout: 'abc123\trefs/heads/main\nabc123\trefs/heads/dev\n', stderr: '' };
         if (args.includes('fetch')) {
           fetchCalls++;
           throw new Error("fatal: 'origin' does not appear to be a git repository");

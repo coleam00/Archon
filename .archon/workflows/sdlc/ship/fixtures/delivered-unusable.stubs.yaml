@@ -35,6 +35,7 @@ deliver__impl__assert-changed: "2 files changed"
 deliver__gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
 deliver__pr__pr: { intent: "/fixture/pr-intent.json" }
 deliver__pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 5, url: "https://github.com/example/repo/pull/5", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+deliver__review-policy: { risks: "fixture-owned-policy" }
 deliver__classify:
   tier: full
   errors: false
@@ -44,7 +45,8 @@ deliver__classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 deliver__resolve-scope: '{"errors":"false"}'
-deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":""}'
+deliver__review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"deliver__review__mode","invocation":{"loopPath":[]}}}'
+deliver__review__coverage: { full: true }
 deliver__review__scope:
   # PR diff in scope; head sha stubbed
   docs: false

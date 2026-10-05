@@ -74,10 +74,6 @@ mock.module('../db/codebases', () => ({
   updateCodebase: mock(async () => undefined),
 }));
 
-mock.module('../config/resolve-assistant', () => ({
-  resolveDefaultAssistant: mock(async () => 'claude'),
-}));
-
 mock.module('../utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));

@@ -603,6 +603,12 @@ const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--base-branch <name>',
+    description:
+      'Initial repository registration only; omit to follow the remote default. Use --base for a run override.',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--base <branch>',
     description: 'Per-dispatch base override for epic slices (worktree cut-from + PR target)',
     owners: [{ command: 'workflow', subcommand: 'run' }],
