@@ -48,7 +48,7 @@ Archon provides a unified directory and configuration system with:
 ├── worktrees/                      # Legacy global worktrees (repos not in workspaces/)
 ├── vendor/codex/                   # Codex native binary (binary builds, user-placed)
 ├── web-dist/<version>/             # Cached web UI dist (archon serve, binary only)
-├── update-check.json               # Update check cache (binary builds only, 24h TTL)
+├── update-check.json               # Update check cache (binary builds only, 1h release-data TTL; 24h CLI notice interval)
 ├── tier-notice.json                # One-time tier-default notice state (CLI, per version)
 ├── install.json                    # Last compiled CLI path and version (discovery hint)
 ├── credential-key                  # Auto-provisioned per-user credential encryption key

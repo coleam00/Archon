@@ -1,3 +1,9 @@
+import { withBranchLaunchSource } from '../workflows/branch-launch-source';
+import {
+  prepareRunAiConfiguration,
+  assertRunCredentials,
+  type PreparedRunAiConfiguration,
+} from '@archon/workflows/run-preflight';
 /**
  * Orchestrator - Main conversation handler
  * Routes slash commands and AI messages appropriately
@@ -373,6 +379,95 @@ async function dispatchBackgroundWorkflowOwned(
   assertInteractiveClassNotBackgrounded(workflow);
   assertComposedGateDriveable(workflow.nodes);
 
+  const workflowDeps = createWorkflowDeps();
+  const engine = new InProcessWorkflowEngine(workflowDeps);
+  const prepare = async (
+    preflightCwd: string
+  ): Promise<
+    | {
+        workflow: ResolvedWorkflow;
+        preparedSource: PreparedWorkflowSource;
+        preparedAiConfiguration: PreparedRunAiConfiguration;
+      }
+    | undefined
+  > => {
+    // Freeze this run's executable source, then re-resolve the workflow FROM the frozen
+    // copy so the definition executed and the commands and scripts beside it are one
+    // consistent set of bytes. This background path calls `executeWorkflow` directly, so
+    // without its own capture it would be the one surface still reading live source.
+    //
+    // Ordinary worktrees inherit workflow definitions from the canonical checkout.
+    // Adoption is different: the selected branch is the declared estate, so its
+    // workflow source must stay anchored to that exact checkout.
+    const workflowSourceRoot = ctx.adoptionLane
+      ? preflightCwd
+      : ((await resolveWorkflowSourceRoot(preflightCwd)) ?? preflightCwd);
+    let preparedSource: PreparedWorkflowSource | undefined;
+    try {
+      preparedSource = await prepareWorkflowSource(workflowDeps, {
+        sourceRoot: workflowSourceRoot,
+      });
+      // From here the owner reclaims it unless a run adopts it, whichever way we leave.
+      owner.hold(preparedSource);
+      // See the note in orchestrator-agent.ts: an empty capture means the definition came
+      // from a binary's embedded bundled set, which has nothing on disk to re-read.
+      if (preparedSource.manifest.scopes.length > 0) {
+        const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
+          preflightCwd,
+          loadConfig,
+          preparedSource.roots
+        );
+        const reResolved = resolveWorkflowName(
+          workflow.name,
+          capturedWorkflows.map(w => w.workflow)
+        );
+        if (!reResolved) {
+          throw new Error(`workflow '${workflow.name}' is not present in the captured source`);
+        }
+        workflow = reResolved;
+      }
+      await recordSelectedWorkflow(preparedSource.anchor.root, workflow.name);
+    } catch (error) {
+      const err = error as Error;
+      // Reclaim before returning: this branch is the console's default dispatch path, and
+      // leaving the tree behind here leaks one capture per failed dispatch.
+      getLog().error({ err, workflowName: workflow.name }, 'workflow.source_capture_failed');
+      await ctx.platform.sendMessage(
+        ctx.conversationId,
+        `Could not capture the workflow source for **${workflow.name}**: ${err.message}. ` +
+          'Nothing has been started.'
+      );
+      return;
+    }
+
+    const preparedAiConfiguration = await prepareRunAiConfiguration(
+      workflowDeps,
+      workflow,
+      preflightCwd,
+      {
+        codebaseId: ctx.codebaseId,
+        userId: ctx.userId,
+        runConfig: ctx.runConfig,
+        ...(ctx.modelOverrides
+          ? { modelOverrideLayer: { kind: 'raw', overrides: ctx.modelOverrides } }
+          : {}),
+      }
+    );
+    await assertRunCredentials(workflowDeps, preparedAiConfiguration);
+
+    return { workflow, preparedSource, preparedAiConfiguration };
+  };
+  const preflightCwd =
+    ctx.adoptionLane?.kind === 'reuse-worktree' ? ctx.adoptionLane.workingPath : ctx.cwd;
+  const prepared =
+    ctx.adoptionLane?.kind === 'checkout-branch'
+      ? await withBranchLaunchSource(ctx.cwd, ctx.adoptionLane.taskBranch.branch, prepare)
+      : await prepare(preflightCwd);
+  if (!prepared) return;
+  workflow = prepared.workflow;
+  let { preparedSource } = prepared;
+  const { preparedAiConfiguration } = prepared;
+
   // 1. Generate worker conversation ID
   const workerPlatformId = `${ctx.platform.getPlatformType()}-worker-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
@@ -484,6 +579,9 @@ async function dispatchBackgroundWorkflowOwned(
     workerCwd = ctx.cwd;
   }
 
+  if (ctx.adoptionLane?.kind === 'checkout-branch')
+    preparedSource = { ...preparedSource, origin: workerCwd };
+
   // 4. Notify parent chat that workflow is dispatching
   await ctx.platform.sendMessage(
     ctx.conversationId,
@@ -500,57 +598,6 @@ async function dispatchBackgroundWorkflowOwned(
     workerConversationId: workerPlatformId,
     workflowName: workflow.name,
   });
-  const workflowDeps = createWorkflowDeps();
-  const engine = new InProcessWorkflowEngine(workflowDeps);
-
-  // Freeze this run's executable source, then re-resolve the workflow FROM the frozen
-  // copy so the definition executed and the commands and scripts beside it are one
-  // consistent set of bytes. This background path calls `executeWorkflow` directly, so
-  // without its own capture it would be the one surface still reading live source.
-  //
-  // Ordinary worktrees inherit workflow definitions from the canonical checkout.
-  // Adoption is different: the selected branch is the declared estate, so its
-  // workflow source must stay anchored to that exact checkout.
-  const workflowSourceRoot = ctx.adoptionLane
-    ? workerCwd
-    : ((await resolveWorkflowSourceRoot(workerCwd)) ?? workerCwd);
-  let preparedSource: PreparedWorkflowSource | undefined;
-  try {
-    preparedSource = await prepareWorkflowSource(workflowDeps, {
-      sourceRoot: workflowSourceRoot,
-    });
-    // From here the owner reclaims it unless a run adopts it, whichever way we leave.
-    owner.hold(preparedSource);
-    // See the note in orchestrator-agent.ts: an empty capture means the definition came
-    // from a binary's embedded bundled set, which has nothing on disk to re-read.
-    if (preparedSource.manifest.scopes.length > 0) {
-      const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
-        workerCwd,
-        loadConfig,
-        preparedSource.roots
-      );
-      const reResolved = resolveWorkflowName(
-        workflow.name,
-        capturedWorkflows.map(w => w.workflow)
-      );
-      if (!reResolved) {
-        throw new Error(`workflow '${workflow.name}' is not present in the captured source`);
-      }
-      workflow = reResolved;
-    }
-    await recordSelectedWorkflow(preparedSource.anchor.root, workflow.name);
-  } catch (error) {
-    const err = error as Error;
-    // Reclaim before returning: this branch is the console's default dispatch path, and
-    // leaving the tree behind here leaks one capture per failed dispatch.
-    getLog().error({ err, workflowName: workflow.name }, 'workflow.source_capture_failed');
-    await ctx.platform.sendMessage(
-      ctx.conversationId,
-      `Could not capture the workflow source for **${workflow.name}**: ${err.message}. ` +
-        'Nothing has been started.'
-    );
-    return;
-  }
 
   // 7. Publish the owner before the row can become visible as active.
   const runLiveOwner = await startRunLiveOwner(preparedSource.runId);
@@ -639,6 +686,7 @@ async function dispatchBackgroundWorkflowOwned(
             baseBranch: codebaseBaseBranch,
             resolveChildIsolation,
             preparedSource,
+            preparedAiConfiguration,
             capturedSourceOwner: backgroundOwner,
             ...(workerCutFromCommit !== undefined ? { cutFromCommit: workerCutFromCommit } : {}),
             // Only consumed when `preCreatedRun` is undefined (pre-creation failed and

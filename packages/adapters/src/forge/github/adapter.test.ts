@@ -17,8 +17,8 @@
  *   - `handleMessage`           (step 13, orchestrator)
  *     → opens the real SQLite database and creates ~/.archon/workspaces/
  *
- * All three are stubbed below. To re-audit, run this file with `ARCHON_HOME`
- * pointed at an empty temp dir and assert nothing appears in it.
+ * All three are stubbed below. The package-cwd test preload checks its own
+ * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
 import {
   describe,

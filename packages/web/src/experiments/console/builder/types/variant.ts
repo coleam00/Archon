@@ -11,6 +11,7 @@
  */
 import type { WorkflowNodeKind } from '../../primitives/workflow-graph';
 import type { WireDagNode, WireWorkflowDefinition } from './wire';
+import type { WireBaseKey } from './wire-keys';
 
 /**
  * The eight representable node variants — an alias of the console's
@@ -23,44 +24,6 @@ export type VariantId = WorkflowNodeKind;
 // Base fields — shared across every variant (the wire base keys minus `id`)
 // ---------------------------------------------------------------------------
 
-/**
- * The base-field keys present on every wire `DagNode`, excluding `id` (which is
- * partitioned out separately) and the eight mutually-exclusive mode fields
- * (command/prompt/bash/script/loop/approval/wait/cancel) plus their satellites
- * (runtime/deps/timeout). Picking from `WireDagNode` keeps `BaseFields` exactly
- * in sync with the generated spec.
- *
- * Exported so `variants/base-fields.ts` can derive its runtime key list from an
- * exhaustive `Record<WireBaseKey, true>` — adding a key here without updating
- * the record (or vice versa) is a compile error, not silent round-trip loss.
- */
-export type WireBaseKey =
-  | 'depends_on'
-  | 'when'
-  | 'trigger_rule'
-  | 'model'
-  | 'provider'
-  | 'context'
-  | 'output_format'
-  | 'allowed_tools'
-  | 'denied_tools'
-  | 'idle_timeout'
-  | 'retry'
-  | 'hooks'
-  | 'mcp'
-  | 'skills'
-  | 'plugins'
-  | 'agents'
-  | 'effort'
-  | 'maxBudgetUsd'
-  | 'systemPrompt'
-  | 'fallbackModel'
-  | 'betas'
-  | 'sandbox'
-  | 'always_run'
-  | 'persist_session'
-  | 'output_type';
-
 /** Shared base fields carried verbatim across the round-trip. All optional. */
 export type BaseFields = Pick<WireDagNode, WireBaseKey>;
 
@@ -69,49 +32,36 @@ export type BaseFields = Pick<WireDagNode, WireBaseKey>;
 // ---------------------------------------------------------------------------
 
 /**
- * Loop config. `fresh_context` is always present (engine default `false`).
+ * Loop config: the wire `loop` object itself, plus the node-level `timeout` a
+ * loop node may carry. Derived from the generated type rather than restated, so
+ * a field the engine adds to `loop` is carried by the converters (which copy the
+ * object) without a list here to keep in step.
  *
  * Exactly ONE of `prompt` (inline per-iteration prompt) / `command` (named
  * command file whose body is the per-iteration prompt) is present — mirroring
  * the engine schema's one-of rule. The inspector's source toggle maintains the
  * invariant while editing; structural validation reports a violation instead
  * of letting export guess.
+ *
+ * `until` is optional since #2563 (a loop may declare only `until_bash` or
+ * `until_field`), so every read must tolerate `undefined`. `fresh_context` is
+ * required on the generated type because the engine defaults it, but an
+ * authored file may omit it; it is carried as read.
  */
-export interface LoopNodeData {
-  prompt?: string;
-  command?: string;
-  /**
-   * Prose completion signal. Optional since #2563 — a loop declaring only
-   * `until_bash` has no prose path at all, so the engine requires *at least one*
-   * of the two rather than `until` unconditionally. Structural validation mirrors
-   * that rule; every read here must tolerate `undefined`.
-   */
-  until?: string;
-  max_iterations: number;
-  fresh_context: boolean;
-  until_bash?: string;
-  /**
-   * Structured completion channel (#2563): names a declared boolean in the node's
-   * `output_format` (carried as a base field) whose `true` ends the loop. `loop:`
-   * only — a `loop_group` has no such channel.
-   */
-  until_field?: string;
-  interactive?: boolean;
-  gate_message?: string;
-}
+export type LoopNodeData = NonNullable<WireDagNode['loop']> & {
+  timeout?: WireDagNode['timeout'];
+};
+
+/**
+ * Human-gate approval data: the wire `approval` object itself, derived from the
+ * generated type so its fields are not restated here. `decisions` (#2707) has
+ * no editor yet and is carried verbatim; dropping it on save would turn a
+ * custom gate back into approve/reject.
+ */
+export type ApprovalNodeData = NonNullable<WireDagNode['approval']>;
 
 /** The `on_reject` sub-object on an approval node. */
-export interface ApprovalOnReject {
-  prompt: string;
-  max_attempts?: number;
-}
-
-/** Human-gate approval data. */
-export interface ApprovalNodeData {
-  message: string;
-  capture_response?: boolean;
-  on_reject?: ApprovalOnReject;
-}
+export type ApprovalOnReject = NonNullable<ApprovalNodeData['on_reject']>;
 
 /** Cancel data — the wire `cancel` is a bare string; we wrap it as `reason`. */
 export interface CancelNodeData {
@@ -154,6 +104,8 @@ export interface ScriptNodeData {
   runtime: 'bun' | 'uv';
   deps?: string[];
   timeout?: number;
+  /** What a timeout does instead of failing the node. No editor yet; carried verbatim. */
+  on_timeout?: WireDagNode['on_timeout'];
   /**
    * Node-local bindings (#2637). Opaque passthrough: the builder has no editor
    * for them yet, but dropping the field on save would silently destroy a
@@ -179,6 +131,8 @@ export interface PromptNodeData {
 export interface BashNodeData {
   bash: string;
   timeout?: number;
+  /** What a timeout does instead of failing the node. No editor yet; carried verbatim. */
+  on_timeout?: WireDagNode['on_timeout'];
 }
 
 /** Maps each variant id to its concrete data shape. */
@@ -207,14 +161,36 @@ export type VariantData = VariantDataMap[VariantId];
  * No `position`/selection/clipboard fields — those are canvas concerns owned by
  * PR-2 (added as an additive extension later).
  */
-export type BuilderNode = {
-  [K in VariantId]: {
-    id: string;
-    variant: K;
-    base: BaseFields;
-    data: VariantDataMap[K];
-  };
-}[VariantId];
+export type BuilderNode =
+  | {
+      [K in VariantId]: {
+        id: string;
+        variant: K;
+        base: BaseFields;
+        data: VariantDataMap[K];
+      };
+    }[VariantId]
+  | OpaqueBuilderNode;
+
+/**
+ * Valid authored node modes the builder has no editor for. Kept out of
+ * `VariantId` on purpose: they cannot be created from the palette or switched
+ * to, only opened from an existing workflow.
+ */
+export type OpaqueKind = 'loop_group' | 'workflow' | 'include';
+
+/**
+ * A node the builder shows read-only and writes back exactly as it was read.
+ * Its graph position (`base.depends_on`, `when`, …) stays editable; the mode
+ * fields in `fields` are carried verbatim so an open-and-save never rewrites
+ * a loop group, a sub-workflow call or an include into something else.
+ */
+export interface OpaqueBuilderNode {
+  id: string;
+  variant: 'opaque';
+  base: BaseFields;
+  data: { kind: OpaqueKind; fields: Partial<WireDagNode> };
+}
 
 /** Workflow-level metadata (everything on the wire def except name/description/nodes). */
 export type WorkflowMeta = Omit<WireWorkflowDefinition, 'name' | 'description' | 'nodes'>;

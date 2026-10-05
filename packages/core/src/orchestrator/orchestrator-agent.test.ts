@@ -1,3 +1,10 @@
+mock.module('../workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
 /**
  * Tests for orchestrator-agent.ts
  *
@@ -12,7 +19,7 @@
  * Mock setup MUST occur before any import of the module under test.
  */
 
-import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { mock, describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -352,6 +359,10 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
 };
 
 mock.module('@archon/providers', () => ({
+  getRegistration: () => ({
+    parseConfig: (raw: Record<string, unknown>) => raw,
+    credentials: { vendorFor: () => 'anthropic' },
+  }),
   getAgentProvider: mock(() => ({
     sendQuery: mockSendQuery,
     getType: mock(() => 'claude'),
@@ -390,7 +401,24 @@ mock.module('../utils/error', () => ({
 }));
 
 mock.module('../workflows/store-adapter', () => ({
-  createWorkflowDeps: mock(() => ({})),
+  createWorkflowDeps: mock(() => ({
+    store: { getCodebaseEnvVars: async () => ({}) },
+    sealRunConfig: (_layer: unknown, source: unknown) => ({
+      version: 1,
+      ciphertext: 'sealed',
+      source,
+      keys: [],
+    }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    }),
+    loadConfig: async () => ({
+      assistant: 'claude',
+      assistants: { claude: {} },
+      aliases: { '@planner': { provider: 'claude', model: 'sonnet' } },
+      commands: {},
+    }),
+  })),
 }));
 
 const mockGetPausedWorkflowRun = mock<typeof WorkflowDb.getPausedWorkflowRun>(() =>
@@ -2475,7 +2503,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     const captureArg = lastCaptureCall[1] as {
       sourceRoot?: string;
     };
-    expect(captureArg.sourceRoot).toBe('/wt/from-branch');
+    expect(captureArg.sourceRoot).toBe('/adopted/snapshot');
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/wt/from-branch');
   });
 
@@ -3202,6 +3230,35 @@ describe('workflow dispatch routing — interactive flag', () => {
       inputs?: Record<string, string>;
     };
     expect(ctx.inputs).toEqual({ diff: 'D1' });
+  });
+
+  test('foreground credential refusal stops before isolation or execution', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const original = adapter.createWorkflowDeps();
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      isPerUserProviderKeysEnabled: () => true,
+      getUserProviderCredentialStatus: async () => ({
+        state: 'unusable',
+        source: 'archon',
+        evidence: 'cannot read',
+      }),
+    }));
+    const platform = makePlatform();
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
+    try {
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { userId: 'origin' });
+      expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
+        'credential cannot be used: cannot read'
+      );
+      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+      expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    } finally {
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
   });
 
   test('threads context.workflowModelOverrides into a fresh foreground run', async () => {

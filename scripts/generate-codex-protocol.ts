@@ -34,6 +34,7 @@ const ROOTS = [
   'InitializeResponse',
   'v2/ThreadStartResponse',
   'v2/ThreadResumeResponse',
+  'v2/ThreadForkResponse',
   'v2/TurnStartResponse',
   'v2/TurnInterruptResponse',
   'v2/LoginAccountResponse',
