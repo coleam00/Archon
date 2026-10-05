@@ -11,7 +11,7 @@ Accepted work order (may be empty in `review`, where scope.md carries it):
 
 $INPUTS.work_order
 
-Then read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Those are the project's own values: a structural preference that one of them states is a finding you cite, and one that none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and scale depth to what the change can destroy: irreversible or destructive paths, lifecycle ownership, persisted contracts and schemas, credentials and auth boundaries, integration boundaries, and concurrency over shared state each get an explicit attempt to refute the invariant they rest on; a prose-only change gets the minimum. In light mode, verify prior simplify findings first, then examine only the delta.
+Then read, where the project has them, its `architecture.md`, its `engineering.md`, and its direction document — at the root, in a config directory such as `.archon/`, or wherever its steering files point. Those are the project's own values: a structural preference that one of them states is a finding you cite, and one that none of them states is taste you leave out. Anchor the review on the accepted work order's stated invariants, and scale scrutiny to concrete consequences and explicitly try to refute the relevant invariants; a prose-only change gets the minimum. In light mode, verify prior simplify findings first, then examine only the delta.
 
 ## Establish the contract
 
