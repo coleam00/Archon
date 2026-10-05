@@ -502,14 +502,18 @@ async function main(): Promise<number> {
         // "database unavailable" instead of the misleading "not a git repository".
         let folderCodebase: { default_cwd: string; kind: 'repo' | 'folder' } | null = null;
         let gateLookupError: Error | null = null;
+        let codebaseDb: typeof import('@archon/core/db/codebases') | undefined;
         try {
-          const codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
+          codebaseDb = await loadRoute(() => import('@archon/core/db/codebases'), {
             database: true,
           });
           folderCodebase =
             (await codebaseDb.findCodebaseByDefaultCwd(realCwd)) ??
             (await codebaseDb.findCodebaseByPathPrefix(realCwd));
         } catch (dbError) {
+          if (codebaseDb && dbError instanceof codebaseDb.InvalidCodebaseDefaultCwdError) {
+            return await fail(jsonFlag, dbError.message);
+          }
           gateLookupError = dbError as Error;
           getLog().warn(
             { err: gateLookupError, cwd: realCwd },
