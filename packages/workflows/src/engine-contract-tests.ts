@@ -1,4 +1,5 @@
-import { getProviderCapabilities } from '@archon/providers';
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
+
 import { describe, expect, it } from 'bun:test';
 import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -160,10 +161,12 @@ function defaultConfig(): WorkflowConfig {
 }
 
 function makeDeps(
+  providers: ProviderRegistry,
   store: IWorkflowStore = makeStore(),
   overrides: Partial<WorkflowDeps> = {}
 ): WorkflowDeps {
   return {
+    providers,
     store,
     loadConfig: async () => defaultConfig(),
     getAgentProvider: () => ({
@@ -235,6 +238,7 @@ interface WorkflowEngineContractObservations {
 }
 
 export function runWorkflowEngineContractTests(
+  providers: ProviderRegistry,
   makeEngine: (deps: WorkflowDeps) => IWorkflowEngine,
   observations: WorkflowEngineContractObservations
 ): void {
@@ -249,7 +253,7 @@ export function runWorkflowEngineContractTests(
           return makeRun();
         },
       });
-      const deps = makeDeps(store, {
+      const deps = makeDeps(providers, store, {
         loadConfig: async () => {
           configLoads += 1;
           return defaultConfig();
@@ -277,7 +281,7 @@ export function runWorkflowEngineContractTests(
         },
         getWorkflowRun: async () => ({ ...pending, status: 'completed' as const }),
       });
-      const result = await makeEngine(makeDeps(store)).submit({
+      const result = await makeEngine(makeDeps(providers, store)).submit({
         ...callInput(),
         options: { preCreatedRun: pending },
       });
@@ -288,7 +292,7 @@ export function runWorkflowEngineContractTests(
     it('refuses a fresh execution whose pending claim was already consumed', async () => {
       const pending = makeRun({ id: 'pending-run', status: 'pending' });
       const store = makeStore({ claimPendingWorkflowRun: async () => null });
-      const result = await makeEngine(makeDeps(store)).submit({
+      const result = await makeEngine(makeDeps(providers, store)).submit({
         ...callInput(),
         options: { preCreatedRun: pending },
       });
@@ -316,12 +320,12 @@ export function runWorkflowEngineContractTests(
           },
         });
         const result = await makeEngine(
-          makeDeps(store, {
+          makeDeps(providers, store, {
             getAgentProvider: () => {
               return {
                 getType: (): 'claude' => 'claude',
-                getCapabilities: (): ReturnType<typeof getProviderCapabilities> =>
-                  getProviderCapabilities('claude'),
+                getCapabilities: (): import('@archon/provider-contract').ProviderCapabilities =>
+                  requireProvider(providers, 'claude').capabilities,
                 checkCredential: async (): Promise<
                   import('@archon/provider-contract').CredentialStatus
                 > => ({ state: 'not_checked', source: 'native' }),
@@ -364,7 +368,7 @@ export function runWorkflowEngineContractTests(
         },
       });
       const engine = makeEngine(
-        makeDeps(store, {
+        makeDeps(providers, store, {
           loadConfig: async () => {
             configLoads += 1;
             return defaultConfig();
@@ -393,7 +397,7 @@ export function runWorkflowEngineContractTests(
         resumeWorkflowRun: async () => resumed,
         getWorkflowRun: async () => ({ ...resumed, status: 'completed' as const }),
       });
-      const engine = makeEngine(makeDeps(store, { loadConfig: () => config.promise }));
+      const engine = makeEngine(makeDeps(providers, store, { loadConfig: () => config.promise }));
       const admission = await engine.resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'accepted-run', status: 'paused' }),
@@ -414,7 +418,7 @@ export function runWorkflowEngineContractTests(
         resumeWorkflowRun: async () => resumed,
         getWorkflowRun: async () => ({ ...resumed, status: 'paused' as const }),
       });
-      const admission = await makeEngine(makeDeps(store)).resume({
+      const admission = await makeEngine(makeDeps(providers, store)).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'paused-run', status: 'paused' }),
       });
@@ -447,7 +451,7 @@ nodes:
         ],
       });
 
-      const admission = await makeEngine(makeDeps(store)).resume({
+      const admission = await makeEngine(makeDeps(providers, store)).resume({
         ...resumeCallInput(),
         legacyWorkflow: conflicting,
         run,
@@ -487,7 +491,7 @@ nodes:
       });
 
       const error = await captureRejection(
-        makeEngine(makeDeps(store)).resume({ ...resumeCallInput(), run })
+        makeEngine(makeDeps(providers, store)).resume({ ...resumeCallInput(), run })
       );
       expect(error).toBeInstanceOf(Error);
       expect(reads).toBe(0);
@@ -513,7 +517,7 @@ nodes:
       const input = resumeCallInput();
 
       const error = await captureRejection(
-        makeEngine(makeDeps(store)).resume({
+        makeEngine(makeDeps(providers, store)).resume({
           ...input,
           run: makeRun({ status: 'paused' }),
           legacyWorkflow,
@@ -532,7 +536,7 @@ nodes:
           return makeRun();
         },
       });
-      const result = await makeEngine(makeDeps(store)).resume({
+      const result = await makeEngine(makeDeps(providers, store)).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'empty-run', status: 'paused' }),
       });
@@ -545,6 +549,7 @@ nodes:
       const caughtHydrationError = await captureRejection(
         makeEngine(
           makeDeps(
+            providers,
             makeStore({
               getDagResumeSnapshot: async () => Promise.reject(hydrationError),
             })
@@ -557,6 +562,7 @@ nodes:
       const caughtClaimError = await captureRejection(
         makeEngine(
           makeDeps(
+            providers,
             resumableStore({
               resumeWorkflowRun: async () => Promise.reject(claimError),
             })
@@ -588,7 +594,7 @@ nodes:
         run: makeRun({ status: 'paused' }),
         options,
       } as unknown as WorkflowResumeInput;
-      const error = await captureRejection(makeEngine(makeDeps(store)).resume(input));
+      const error = await captureRejection(makeEngine(makeDeps(providers, store)).resume(input));
       expect(error).toBeInstanceOf(Error);
       expect(reads).toBe(0);
       expect(claims).toBe(0);
@@ -609,7 +615,7 @@ nodes:
         },
       });
       const admission = await makeEngine(
-        makeDeps(store, { loadConfig: () => config.promise })
+        makeDeps(providers, store, { loadConfig: () => config.promise })
       ).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'failed-run', status: 'paused' }),
@@ -635,7 +641,7 @@ nodes:
         },
       });
       const admission = await makeEngine(
-        makeDeps(store, { loadConfig: () => config.promise })
+        makeDeps(providers, store, { loadConfig: () => config.promise })
       ).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'write-failed-run', status: 'paused' }),
@@ -665,7 +671,7 @@ nodes:
         },
       });
       const admission = await makeEngine(
-        makeDeps(store, { loadConfig: async () => Promise.reject(cause) })
+        makeDeps(providers, store, { loadConfig: async () => Promise.reject(cause) })
       ).resume({
         ...resumeCallInput(),
         run: makeRun({ id: 'terminal-error-run', status: 'paused' }),

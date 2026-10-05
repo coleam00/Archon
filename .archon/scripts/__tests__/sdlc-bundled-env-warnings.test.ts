@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -29,7 +30,7 @@ afterEach(() => {
 });
 
 test('the bundled sdlc pack never warns about ARCHON_SDLC_FORGE', async () => {
-  const result = await discoverWorkflows(projectDir, { loadDefaults: true });
+  const result = await discoverWorkflows(projectDir, {providers: providerRegistry,  loadDefaults: true });
 
   expect(result.errors).toEqual([]);
   const warnings = result.workflows.flatMap(w => w.parseWarnings ?? []);

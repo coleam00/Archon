@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * Source capture: what a run freezes, and what it must keep resolving after the
  * authoring checkout moves on.
@@ -710,7 +711,10 @@ describe('the capture is authoritative, not advisory', () => {
     );
 
     await expect(
-      discoverWorkflows(target, { sourceRoots: capturedSourceRoots(capture.anchor) })
+      discoverWorkflows(target, {
+        providers: providerRegistry,
+        sourceRoots: capturedSourceRoots(capture.anchor),
+      })
     ).rejects.toThrow(WorkflowSourceIntegrityError);
   });
 

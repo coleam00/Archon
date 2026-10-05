@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import type { CredentialStatus } from '@archon/provider-contract';
@@ -56,6 +57,7 @@ function fixture(status: CredentialStatus = { state: 'not_checked', source: 'nat
     checkCredential,
     provider,
     deps: {
+      providers: providerRegistry,
       loadConfig: mock(async () => config),
       store: { getCodebaseEnvVars: mock(async () => ({ DB_SETTING: 'db' })) },
       getAgentProvider: mock(() => provider),

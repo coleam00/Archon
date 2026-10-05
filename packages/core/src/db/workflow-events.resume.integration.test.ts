@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -102,6 +103,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
   };
   const deps: WorkflowDeps = {
+    providers: providerRegistry,
     store,
     loadConfig: async () => config,
     getAgentProvider: () => {

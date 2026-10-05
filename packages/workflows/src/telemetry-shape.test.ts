@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, test } from 'bun:test';
 import { registerBuiltinProviders } from '@archon/providers';
 import { basename } from 'node:path';
@@ -19,7 +20,7 @@ beforeAll(() => {
 
 /** Parse and resolve a workflow the way discovery does for an include-free file. */
 function resolve(yaml: string): ResolvedWorkflow {
-  const parsed = parseWorkflow(yaml, 'custom.yaml');
+  const parsed = parseWorkflow(yaml, 'custom.yaml', providerRegistry);
   if (!parsed.workflow) throw new Error(parsed.error.error);
   const { workflows, errors } = expandWorkflowIncludes(
     new Map([[parsed.workflow.name, parsed.workflow]])
@@ -43,7 +44,11 @@ function resolveProjectCopy(
   const rawByName = new Map<string, WorkflowDefinition>();
   for (const [key, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     const path = BUNDLED_WORKFLOW_PATHS[key];
-    const { workflow } = parseWorkflow(content, path ? basename(path) : `${key}.yaml`);
+    const { workflow } = parseWorkflow(
+      content,
+      path ? basename(path) : `${key}.yaml`,
+      providerRegistry
+    );
     if (!workflow) continue;
     const owner = BUNDLED_WORKFLOW_OWNERS[key];
     if (owner) qualifyWorkflowResources(workflow, { source: 'bundled', ...owner });
@@ -53,7 +58,8 @@ function resolveProjectCopy(
   if (yaml === undefined) throw new Error(`${bundledKey} is not bundled`);
   const parsed = parseWorkflow(
     edit(yaml.replace(new RegExp(`^name: ${bundledKey}$`, 'm'), `name: ${name}`)),
-    `${name}.yaml`
+    `${name}.yaml`,
+    providerRegistry
   );
   if (!parsed.workflow) throw new Error(parsed.error.error);
   const owner = BUNDLED_WORKFLOW_OWNERS[bundledKey];
@@ -71,21 +77,25 @@ describe('deriveBundledAncestry', () => {
       yaml.replace(/^nodes:\n/m, 'nodes:\n  - id: acme-extra\n    bash: echo acme\n')
     );
     expect(copy.nodes.some(node => node.id === 'acme-extra')).toBe(true);
-    expect(deriveBundledAncestry(copy)).toEqual({
+    expect(deriveBundledAncestry(providerRegistry, copy)).toEqual({
       derivedFrom: 'archon-implement',
       derivedSimilarity: 'modified',
     });
   });
 
   test('an unchanged copy of a workflow that includes another bundled workflow is identical', () => {
-    expect(deriveBundledAncestry(resolveProjectCopy('archon-deliver', 'acme-deliver'))).toEqual({
+    expect(
+      deriveBundledAncestry(providerRegistry, resolveProjectCopy('archon-deliver', 'acme-deliver'))
+    ).toEqual({
       derivedFrom: 'archon-deliver',
       derivedSimilarity: 'identical',
     });
   });
 
   test('an unchanged project copy of a pack workflow is identical despite its project owner', () => {
-    expect(deriveBundledAncestry(resolveProjectCopy('archon-plan', 'acme-plan'))).toEqual({
+    expect(
+      deriveBundledAncestry(providerRegistry, resolveProjectCopy('archon-plan', 'acme-plan'))
+    ).toEqual({
       derivedFrom: 'archon-plan',
       derivedSimilarity: 'identical',
     });
@@ -104,7 +114,7 @@ describe('deriveBundledAncestry', () => {
         '    depends_on: [acme-fetch]',
       ].join('\n')
     );
-    expect(deriveBundledAncestry(custom)).toBeUndefined();
+    expect(deriveBundledAncestry(providerRegistry, custom)).toBeUndefined();
   });
 });
 
@@ -155,7 +165,7 @@ describe('describeWorkflowShape', () => {
     );
     const sent = JSON.stringify({
       shape: describeWorkflowShape(custom),
-      ancestry: deriveBundledAncestry(custom),
+      ancestry: deriveBundledAncestry(providerRegistry, custom),
     });
     for (const secret of ['acme-secret-intake', 'acme-secret-node', 'Acme secret prompt'])
       expect(sent).not.toContain(secret);

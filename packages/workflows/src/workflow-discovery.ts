@@ -1,3 +1,4 @@
+import { type ProviderRegistry } from '@archon/provider-contract';
 /**
  * Workflow discovery - finds and loads workflow YAML files from disk.
  *
@@ -194,6 +195,7 @@ async function isPackDirectory(dirPath: string): Promise<boolean> {
  * Failures are per-file: one broken file does not abort loading the rest.
  */
 async function loadWorkflowsFromDir(
+  providers: ProviderRegistry,
   dirPath: string,
   depth = 0,
   configuredEnvNames?: ReadonlySet<string>
@@ -220,14 +222,19 @@ async function loadWorkflowsFromDir(
           // A directory holding a pack manifest is a pack, read only by the pack loader,
           // so a copied pack loads the same tree the same way as when it was installed.
           if (await isPackDirectory(entryPath)) continue;
-          const subResult = await loadWorkflowsFromDir(entryPath, depth + 1, configuredEnvNames);
+          const subResult = await loadWorkflowsFromDir(
+            providers,
+            entryPath,
+            depth + 1,
+            configuredEnvNames
+          );
           for (const [filename, parsed] of subResult.workflows) {
             workflows.set(filename, parsed);
           }
           errors.push(...subResult.errors);
         } else if (entry.endsWith('.yaml') || entry.endsWith('.yml')) {
           const content = await readFile(entryPath, 'utf-8');
-          const result = parseWorkflow(content, entry, configuredEnvNames);
+          const result = parseWorkflow(content, entry, providers, configuredEnvNames);
 
           if (result.workflow) {
             workflows.set(entry, { workflow: result.workflow, parseWarnings: result.warnings });
@@ -275,6 +282,7 @@ interface PackWorkflowFile {
  * commands and scripts to its own folder. `label` names the pack in errors.
  */
 async function loadPackWorkflows(
+  providers: ProviderRegistry,
   packPath: string,
   pack: string,
   source: WorkflowSource,
@@ -365,7 +373,7 @@ async function loadPackWorkflows(
       });
       continue;
     }
-    const parsed = parseWorkflow(content, filename, configuredEnvNames);
+    const parsed = parseWorkflow(content, filename, providers, configuredEnvNames);
     if (!parsed.workflow) {
       // A scope file's error keeps its bare filename, which resume matches against a
       // run's workflow name. An installed pack's error names the pack and folder.
@@ -389,6 +397,7 @@ async function loadPackWorkflows(
 }
 
 async function loadPackagedWorkflowsFromDir(
+  providers: ProviderRegistry,
   workflowsRoot: string,
   source: WorkflowSource,
   configuredEnvNames?: ReadonlySet<string>
@@ -442,7 +451,14 @@ async function loadPackagedWorkflowsFromDir(
       continue;
     }
 
-    const loaded = await loadPackWorkflows(packPath, pack, source, pack, configuredEnvNames);
+    const loaded = await loadPackWorkflows(
+      providers,
+      packPath,
+      pack,
+      source,
+      pack,
+      configuredEnvNames
+    );
     errors.push(...loaded.errors);
     for (const { filename, parsed } of loaded.files) {
       if (workflows.has(filename) || collided.has(filename)) {
@@ -469,7 +485,10 @@ async function loadPackagedWorkflowsFromDir(
  * Note: Bundled workflows are embedded at compile time and should ALWAYS be valid.
  * Parse failures indicate a build-time corruption and are logged as errors.
  */
-function loadBundledWorkflows(configuredEnvNames?: ReadonlySet<string>): DirLoadResult {
+function loadBundledWorkflows(
+  providers: ProviderRegistry,
+  configuredEnvNames?: ReadonlySet<string>
+): DirLoadResult {
   const workflows = new Map<string, ParsedWorkflowFile>();
   const errors: WorkflowLoadError[] = [];
 
@@ -477,7 +496,7 @@ function loadBundledWorkflows(configuredEnvNames?: ReadonlySet<string>): DirLoad
     const path = BUNDLED_WORKFLOW_PATHS[name];
     if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
     const filename = basename(path);
-    const result = parseWorkflow(content, filename, configuredEnvNames);
+    const result = parseWorkflow(content, filename, providers, configuredEnvNames);
     if (result.workflow) {
       const owner = BUNDLED_WORKFLOW_OWNERS[name];
       if (owner !== undefined) {
@@ -692,7 +711,8 @@ export async function resolveWorkflowCommandContents(
  */
 export async function discoverWorkflows(
   cwd: string | null,
-  options?: {
+  options: {
+    providers: ProviderRegistry;
     loadDefaults?: boolean;
     commandFolder?: string;
     loadDefaultCommands?: boolean;
@@ -712,7 +732,7 @@ export async function discoverWorkflows(
     envVarNames?: readonly string[];
   }
 ): Promise<WorkflowLoadResult> {
-  const roots = options?.sourceRoots ?? liveSourceRoots(cwd);
+  const roots = options.sourceRoots ?? liveSourceRoots(cwd);
   await assertWorkflowSourceIntegrity(roots);
   const projectRoot = roots.project;
   // Names the exec env-read checker treats as "supplied": .archon/.env + ~/.archon/.env
@@ -720,7 +740,7 @@ export async function discoverWorkflows(
   // @archon/paths' getArchonEnvNames) plus config.yaml's env:.
   const configuredEnvNames: ReadonlySet<string> = new Set([
     ...archonPaths.getArchonEnvNames(cwd ?? process.cwd()),
-    ...(options?.envVarNames ?? []),
+    ...(options.envVarNames ?? []),
   ]);
   // Map of filename -> workflow + source + parse warnings, for deduplication.
   // A later scope's `set()` replaces all three together, so a clean project file
@@ -878,8 +898,8 @@ export async function discoverWorkflows(
     // Pre-resolve command-file contents for include-target command nodes so the expander
     // can catch a block command file that references a sibling id namespacing renames.
     const commandContents = await resolveIncludeBlockCommandContents(roots, rawByName, {
-      commandFolder: options?.commandFolder,
-      loadDefaultCommands: options?.loadDefaultCommands,
+      commandFolder: options.commandFolder,
+      loadDefaultCommands: options.loadDefaultCommands,
     });
     const { workflows: expandedByName, errors: expansionErrors } = expandWorkflowIncludes(
       rawByName,
@@ -943,6 +963,7 @@ export async function discoverWorkflows(
     for (const pack of listed.packs) {
       const label = `${pack.owner}/${pack.name}`;
       const loaded = await loadPackWorkflows(
+        options.providers,
         pack.dir,
         pack.key,
         'installed',
@@ -1034,7 +1055,7 @@ export async function discoverWorkflows(
   };
 
   // 1. Load from app's bundled defaults (unless opted out)
-  const loadDefaultWorkflows = options?.loadDefaults !== false;
+  const loadDefaultWorkflows = options.loadDefaults !== false;
   if (loadDefaultWorkflows) {
     // A captured run loads the bundled workflows IT froze — including in a binary, where
     // the capture wrote the embedded constants out as files. That is what lets a paused
@@ -1042,7 +1063,7 @@ export async function discoverWorkflows(
     if (isBinaryBuild() && roots.kind === 'live') {
       // Binary: load from embedded bundled content
       getLog().debug('loading_bundled_default_workflows');
-      const bundledResult = loadBundledWorkflows(configuredEnvNames);
+      const bundledResult = loadBundledWorkflows(options.providers, configuredEnvNames);
       for (const [filename, parsed] of bundledResult.workflows) {
         workflowsByFile.set(filename, { ...parsed, source: 'bundled' });
       }
@@ -1065,6 +1086,7 @@ export async function discoverWorkflows(
             const parsed = parseWorkflow(
               await readBundleContent(file),
               filename,
+              options.providers,
               configuredEnvNames
             );
             if (!parsed.workflow) {
@@ -1081,8 +1103,13 @@ export async function discoverWorkflows(
           // A capture's inventory belongs to that run, including packs no longer shipped.
           await access(appWorkflowsPath);
           appResult = mergeScopeResults(
-            await loadWorkflowsFromDir(appDefaultsPath, 0, configuredEnvNames),
-            await loadPackagedWorkflowsFromDir(appWorkflowsPath, 'bundled', configuredEnvNames)
+            await loadWorkflowsFromDir(options.providers, appDefaultsPath, 0, configuredEnvNames),
+            await loadPackagedWorkflowsFromDir(
+              options.providers,
+              appWorkflowsPath,
+              'bundled',
+              configuredEnvNames
+            )
           );
         }
         for (const [filename, parsed] of appResult.workflows) {
@@ -1120,8 +1147,13 @@ export async function discoverWorkflows(
   try {
     await access(homeWorkflowPath);
     const homeResult = mergeScopeResults(
-      await loadWorkflowsFromDir(homeWorkflowPath, 0, configuredEnvNames),
-      await loadPackagedWorkflowsFromDir(homeWorkflowPath, 'global', configuredEnvNames)
+      await loadWorkflowsFromDir(options.providers, homeWorkflowPath, 0, configuredEnvNames),
+      await loadPackagedWorkflowsFromDir(
+        options.providers,
+        homeWorkflowPath,
+        'global',
+        configuredEnvNames
+      )
     );
     for (const [filename, parsed] of homeResult.workflows) {
       if (workflowsByFile.has(filename)) {
@@ -1153,8 +1185,13 @@ export async function discoverWorkflows(
   try {
     await access(workflowPath);
     const repoResult = mergeScopeResults(
-      await loadWorkflowsFromDir(workflowPath, 0, configuredEnvNames),
-      await loadPackagedWorkflowsFromDir(workflowPath, 'project', configuredEnvNames)
+      await loadWorkflowsFromDir(options.providers, workflowPath, 0, configuredEnvNames),
+      await loadPackagedWorkflowsFromDir(
+        options.providers,
+        workflowPath,
+        'project',
+        configuredEnvNames
+      )
     );
 
     // Repo workflows override bundled AND home scope by exact filename match.
@@ -1233,6 +1270,7 @@ export async function discoverWorkflowsWithConfig(
     commands?: { folder?: string };
     envVars?: Record<string, string>;
   }>,
+  providers: ProviderRegistry,
   /**
    * Where source is read from, when that is not `cwd`, and the settings that govern it.
    *
@@ -1269,6 +1307,7 @@ export async function discoverWorkflowsWithConfig(
     }
   }
   return discoverWorkflows(cwd, {
+    providers,
     loadDefaults,
     commandFolder,
     loadDefaultCommands,

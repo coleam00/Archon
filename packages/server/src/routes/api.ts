@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * REST API routes for the Archon Web UI.
  * Provides conversation, codebase, and SSE streaming endpoints.
@@ -139,7 +140,7 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
     const absolutePath = join(dir, filename);
     try {
       const content = await readFile(absolutePath, 'utf-8');
-      const parsed = parseWorkflow(content, filename);
+      const parsed = parseWorkflow(content, filename, providerRegistry);
       if (parsed.workflow !== null && !acceptedNames.has(parsed.workflow.name)) continue;
       return { absolutePath, filename, packaged: false, parsed, content };
     } catch (error) {
@@ -225,7 +226,7 @@ async function findPackagedWorkflowAt(
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
         throw error;
       }
-      const parsed = parseWorkflow(content, yamlFilename);
+      const parsed = parseWorkflow(content, yamlFilename, providerRegistry);
       const yamlStem = yamlFilename.replace(/\.ya?ml$/, '');
       const isMalformedTarget =
         parsed.workflow === null && (yamlStem === name || workflowFolder === name);
@@ -265,7 +266,7 @@ function findBundledWorkflow(
   const direct = BUNDLED_WORKFLOWS[name];
   if (direct !== undefined) {
     const filename = `${name}.yaml`;
-    const parsed = parseWorkflow(direct, filename);
+    const parsed = parseWorkflow(direct, filename, providerRegistry);
     if (parsed.error !== null || parsed.workflow?.name === name) {
       return { filename, parsed, content: direct };
     }
@@ -279,7 +280,7 @@ function findBundledWorkflow(
   for (const [filenameStem, content] of Object.entries(BUNDLED_WORKFLOWS)) {
     if (filenameStem === name) continue;
     const filename = `${filenameStem}.yaml`;
-    const parsed = parseWorkflow(content, filename);
+    const parsed = parseWorkflow(content, filename, providerRegistry);
     if (parsed.workflow?.name !== name) continue;
     if (match !== null) throw new Error(`Multiple bundled workflows declare the name '${name}'`);
     match = { filename, parsed, content };
@@ -2130,7 +2131,7 @@ export function registerApiRoutes(
         .join(', ')}`;
     }
     if (entry.effort !== undefined) {
-      const validEfforts = validEffortsForProvider(entry.provider);
+      const validEfforts = validEffortsForProvider(providerRegistry, entry.provider);
       if (validEfforts === null) {
         return `Provider '${entry.provider}' does not support effort (${label}).`;
       }
@@ -3344,7 +3345,11 @@ export function registerApiRoutes(
       // pass null to discovery so it returns bundled + home-scoped workflows.
       // This avoids a misleading empty state on first run, before any project
       // is registered, when bundled defaults are present
-      const result = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+      const result = await discoverWorkflowsWithConfig(
+        workingDir ?? null,
+        loadConfig,
+        providerRegistry
+      );
 
       // Resolve repo-owner-curated recommended list (per-project only).
       // Filter to names present in the discovered set; preserve declared order.
@@ -4395,7 +4400,7 @@ export function registerApiRoutes(
     }
 
     try {
-      const result = parseWorkflow(yamlContent, 'validate-input.yaml');
+      const result = parseWorkflow(yamlContent, 'validate-input.yaml', providerRegistry);
 
       if (result.error) {
         return c.json({ valid: false, errors: [result.error.error] });
@@ -4432,7 +4437,11 @@ export function registerApiRoutes(
       // CLI and chat use for a qualified name. Any other name, including a legacy file
       // whose name contains `:`, continues to the file lookups below.
       if (name.includes(':')) {
-        const { workflows } = await discoverWorkflowsWithConfig(workingDir ?? null, loadConfig);
+        const { workflows } = await discoverWorkflowsWithConfig(
+          workingDir ?? null,
+          loadConfig,
+          providerRegistry
+        );
         const hit = resolveWorkflowName(
           name,
           workflows.filter(entry => entry.source === 'installed').map(entry => entry.workflow)
@@ -4600,7 +4609,7 @@ export function registerApiRoutes(
         return apiError(c, 400, 'Failed to serialize workflow definition');
       }
 
-      const parsed = parseWorkflow(yamlContent, `${name}.yaml`);
+      const parsed = parseWorkflow(yamlContent, `${name}.yaml`, providerRegistry);
       if (parsed.error) {
         return apiError(c, 400, 'Workflow definition is invalid', parsed.error.error);
       }

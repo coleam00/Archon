@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { settlingProvider } from './test-settling-provider';
 /**
  * Tests for US-005: dependency installation (deps field) in script nodes.
@@ -194,6 +195,7 @@ const mockGetAgentProvider = mock<WorkflowDeps['getAgentProvider']>(_provider =>
 
 function createMockDeps(): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: createMockStore(),
     getAgentProvider: provider => settlingProvider(mockGetAgentProvider(provider)),
     loadConfig: mock(() =>

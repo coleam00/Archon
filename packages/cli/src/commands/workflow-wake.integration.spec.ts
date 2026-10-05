@@ -110,7 +110,7 @@ const user = await findOrCreateUserByPlatformIdentity('cli', 'cold-operator');
 const conversation = await getOrCreateConversation('cli', 'cold-fixture', codebase.id, undefined, user.id);
 const deps = createWorkflowDeps();
 const source = await prepareWorkflowSource(deps, { sourceRoot: cwd });
-const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, source.roots);
+const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, deps.providers, source.roots);
 const workflow = discovery.workflows.find(entry => entry.workflow.name === 'cold')?.workflow;
 if (!workflow) throw new Error(JSON.stringify(discovery.errors));
 await recordSelectedWorkflow(source.anchor.root, workflow.name);

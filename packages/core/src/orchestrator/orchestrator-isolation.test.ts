@@ -1,3 +1,8 @@
+import {
+  providerRegistry,
+  registerBuiltinProviders,
+  registerCommunityProviders,
+} from '@archon/providers';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
     _repo: string,
@@ -123,7 +128,11 @@ mock.module('../handlers/command-handler', () => ({
   })),
 }));
 
+registerBuiltinProviders();
+registerCommunityProviders();
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
   isRegisteredProvider: () => true,
   getRegistration: () => ({
     parseConfig: (raw: Record<string, unknown>) => raw,
@@ -162,6 +171,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() => Promise.resolve());
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
+    providers: providerRegistry,
     store: {
       createWorkflowRun: mockCreateWorkflowRun,
       failWorkflowRun: mockFailWorkflowRun,

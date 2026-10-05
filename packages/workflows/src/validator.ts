@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 /**
  * Workflow and command validation — Level 3 (resource resolution).
  *
@@ -29,7 +30,6 @@ import {
 } from '@archon/paths/skills';
 import { compileOutputSchema } from './structured-output';
 import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
-import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -330,11 +330,11 @@ function resolveValidationProvider(
  * parseWorkflow never expands includes, so `workflow.name` is the authoritative id here.
  */
 let bundledWorkflowDefsCache: WorkflowDefinition[] | undefined;
-function getBundledWorkflowDefs(): WorkflowDefinition[] {
+function getBundledWorkflowDefs(providers: ProviderRegistry): WorkflowDefinition[] {
   if (bundledWorkflowDefsCache) return bundledWorkflowDefsCache;
   const defs: WorkflowDefinition[] = [];
   for (const [filename, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-    const { workflow } = parseWorkflow(content, filename);
+    const { workflow } = parseWorkflow(content, filename, providers);
     if (workflow) defs.push(workflow);
   }
   bundledWorkflowDefsCache = defs;
@@ -352,6 +352,7 @@ export async function validateWorkflowResources(
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   },
   cwd: string,
+  providers: ProviderRegistry,
   config?: ValidationConfig,
   defaultProvider?: string
 ): Promise<ValidationIssue[]> {
@@ -478,8 +479,7 @@ export async function validateWorkflowResources(
       });
     }
 
-    const providerCaps =
-      provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
+    const providerCaps = provider ? providers.get(provider)?.capabilities : undefined;
 
     // --- Strict-schema compatibility (#2945, #3557) ---
     // A schema with a bare object or incomplete 'required' coverage is rejected
@@ -558,7 +558,7 @@ export async function validateWorkflowResources(
       let resolvedTarget: WorkflowDefinition | undefined;
       let ambiguityMessage: string | undefined;
       try {
-        resolvedTarget = resolveWorkflowName(node.workflow, getBundledWorkflowDefs());
+        resolvedTarget = resolveWorkflowName(node.workflow, getBundledWorkflowDefs(providers));
       } catch (err) {
         ambiguityMessage = (err as Error).message;
       }

@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
@@ -161,6 +162,7 @@ export function createWorkflowDeps(): WorkflowDeps {
   const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),
+    providers: providerRegistry,
     getAgentProvider,
     loadConfig: loadMergedConfig,
     sealRunConfig: sealWorkflowRunConfig,

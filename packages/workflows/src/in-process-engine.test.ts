@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * Wires the shared `IWorkflowEngine` contract-test suite
  * (`engine-contract-tests.ts`) against `InProcessWorkflowEngine`
@@ -112,6 +113,6 @@ registerCommunityProviders();
 import { InProcessWorkflowEngine } from './in-process-engine';
 import { runWorkflowEngineContractTests } from './engine-contract-tests';
 
-runWorkflowEngineContractTests(deps => new InProcessWorkflowEngine(deps), {
+runWorkflowEngineContractTests(providerRegistry, deps => new InProcessWorkflowEngine(deps), {
   executedWorkflow: () => executedWorkflow,
 });

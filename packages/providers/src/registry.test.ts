@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import * as paths from '@archon/paths';
 import {
+  providerRegistry,
   getAgentProvider,
   getProviderCapabilities,
   registerProvider,
@@ -77,6 +78,34 @@ describe('registry', () => {
   beforeEach(() => {
     clearRegistry();
     registerBuiltinProviders();
+  });
+
+  test('read-only registry reflects registration order without instantiating providers', () => {
+    const factory = () => {
+      throw new Error('metadata reads must not instantiate');
+    };
+    expect(providerRegistry.get('absent')).toBeUndefined();
+    const entry = makeMockRegistration('custom', { factory });
+    registerProvider(entry);
+    expect(providerRegistry.get('custom')).toEqual(entry);
+    expect(providerRegistry.list().map(provider => provider.id)).toEqual([
+      'claude',
+      'codex',
+      'custom',
+    ]);
+    clearRegistry();
+    expect(providerRegistry.list()).toEqual([]);
+  });
+
+  test('only one provider can own unprefixed model refs', () => {
+    registerProvider(makeMockRegistration('first', { ownsUnprefixedModelRefs: true }));
+    expect(() =>
+      registerProvider(makeMockRegistration('second', { ownsUnprefixedModelRefs: true }))
+    ).toThrow("Provider 'first' already owns unprefixed model refs");
+    expect(providerRegistry.get('second')).toBeUndefined();
+    expect(() => registerPiProvider()).toThrow(
+      "Provider 'first' already owns unprefixed model refs"
+    );
   });
 
   describe('getAgentProvider', () => {

@@ -62,7 +62,6 @@ import {
   rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
-  isContinueSubcommand,
   RESUME_RUN_CONFIG_CONFLICT,
 } from './dispatch-guards';
 import { resolveCliExitCode } from './utils/workflow-exit-code';
@@ -150,14 +149,14 @@ async function registerProviders(): Promise<void> {
 
 async function loadRoute<T>(
   loader: () => Promise<T>,
-  options: { providers?: boolean; database?: boolean } = {}
+  options: { providers?: false; database?: boolean } = {}
 ): Promise<T> {
   const [{ setPlatformPolicies }, { bundledPlatformPolicies }] = await Promise.all([
     import('@archon/core/platforms/registry'),
     import('@archon/adapters/platform-policies'),
   ]);
   setPlatformPolicies(bundledPlatformPolicies);
-  if (options.providers) await registerProviders();
+  if (options.providers !== false) await registerProviders();
   const route = await loader();
   if (options.database) databaseRouteLoaded = true;
   return route;
@@ -412,7 +411,7 @@ async function main(): Promise<number> {
       const schedule = subcommand === 'wake' && positionals[2] === 'schedule';
       const { workflowContinuationCommand } = await loadRoute(
         () => import('./commands/workflow-continuations'),
-        { providers: !schedule, database: !schedule }
+        { database: !schedule }
       );
       return await workflowContinuationCommand(subcommand, positionals.slice(2), values);
     }
@@ -433,8 +432,12 @@ async function main(): Promise<number> {
       );
     }
     if (command === 'plugin') {
-      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'));
-      const { getArchonVersion } = await loadRoute(() => import('./commands/version'));
+      const { pluginCommand } = await loadRoute(() => import('./commands/plugin'), {
+        providers: false,
+      });
+      const { getArchonVersion } = await loadRoute(() => import('./commands/version'), {
+        providers: false,
+      });
       return await pluginCommand(subcommand, positionals.slice(2), {
         // The trusted plugins directory forge and workflow-pack discovery read, so repo
         // env cannot redirect where an install lands.
@@ -551,7 +554,6 @@ async function main(): Promise<number> {
     switch (command) {
       case 'trigger': {
         const { triggerCommand } = await loadRoute(() => import('./commands/trigger'), {
-          providers: subcommand === 'fire' || subcommand === 'drain' || subcommand === 'execute',
           database: true,
         });
         await triggerCommand(subcommand, positionals.slice(2), {
@@ -582,7 +584,6 @@ async function main(): Promise<number> {
         const chatMessage = positionals.slice(1).join(' ');
         if (!chatMessage) return await fail(jsonFlag, 'Usage: archon chat <message>');
         const { chatCommand } = await loadRoute(() => import('./commands/chat'), {
-          providers: true,
           database: true,
         });
         await chatCommand(chatMessage);
@@ -618,7 +619,6 @@ async function main(): Promise<number> {
           repoPath = repoRoot;
         }
         const { setupCommand } = await loadRoute(() => import('./commands/setup'), {
-          providers: true,
           database: true,
         });
         const setupExitCode = await setupCommand({
@@ -656,14 +656,6 @@ async function main(): Promise<number> {
           workflowEventEmitCommand,
           isValidEventType,
         } = await loadRoute(() => import('./commands/workflow'), {
-          // `resume`, `approve`, `reject`, and `respond` all reach `workflowRunCommand`,
-          // so they need the registry for the same reason `run` does. They need it more,
-          // in fact: a continuation resolves its workflow from the run's captured source,
-          // and passing that capture's `source_config` into discovery is what skips
-          // `loadConfig()` — the call that self-registers providers for every other
-          // route. Without this, the loader rejects any `provider:`-scoped workflow and
-          // the run is reported as missing from its own capture.
-          providers: subcommand === 'run' || isContinueSubcommand(subcommand),
           database: true,
         });
         switch (subcommand) {
@@ -1242,7 +1234,6 @@ async function main(): Promise<number> {
           aiCapacityListCommand,
           aiCapacityReleaseCommand,
         } = await loadRoute(() => import('./commands/ai'), {
-          providers: true,
           database: true,
         });
         switch (subcommand) {
@@ -1336,7 +1327,8 @@ async function main(): Promise<number> {
 
       case 'telemetry': {
         const { telemetryStatusCommand, telemetryResetCommand } = await loadRoute(
-          () => import('./commands/telemetry')
+          () => import('./commands/telemetry'),
+          { providers: false }
         );
         switch (subcommand) {
           case 'status':
@@ -1359,7 +1351,9 @@ async function main(): Promise<number> {
             // Optional positional path; otherwise install into the resolved cwd.
             const targetArg = positionals[2];
             const targetPath = targetArg ? resolve(targetArg) : cwd;
-            const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'));
+            const { skillInstallCommand } = await loadRoute(() => import('./commands/skill'), {
+              providers: false,
+            });
             return await skillInstallCommand(targetPath);
           }
 

@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * CLI commands for `archon validate workflows` and `archon validate commands`.
  *
@@ -91,7 +92,8 @@ export async function validateWorkflowsCommand(
   const defaultProvider = mergedConfig.assistant;
   const { workflows: workflowEntries, errors: loadErrors } = await discoverWorkflowsWithConfig(
     cwd,
-    loadConfig
+    loadConfig,
+    providerRegistry
   );
 
   // Build results from load errors (Level 1-2 failures)
@@ -112,6 +114,7 @@ export async function validateWorkflowsCommand(
     const issues = await validateWorkflowResources(
       workflow,
       cwd,
+      providerRegistry,
       {
         ...workflowValidationConfig(mergedConfig, config),
         workflowSource: source,

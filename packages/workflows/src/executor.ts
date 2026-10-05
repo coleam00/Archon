@@ -93,7 +93,7 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
-import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
+
 import type { ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
@@ -888,7 +888,12 @@ export async function resolveContinuationWorkflow(
   if (!capture) return undefined; // predates capture — the caller keeps live behavior
   const roots = capturedSourceRoots(capture.anchor);
 
-  const { workflows, errors } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig, roots);
+  const { workflows, errors } = await discoverWorkflowsWithConfig(
+    cwd,
+    deps.loadConfig,
+    deps.providers,
+    roots
+  );
   const workflow = resolveWorkflowName(
     run.workflow_name,
     workflows.map(w => w.workflow)
@@ -1264,6 +1269,7 @@ async function runChildWorkflow(
       const { workflows } = await discoverWorkflowsWithConfig(
         cwd,
         deps.loadConfig,
+        deps.providers,
         childSource.roots
       );
       childWorkflow = resolveWorkflowName(
@@ -1705,7 +1711,11 @@ async function maybeResumeParentRun(
       parentWorkflow = continuation.workflow;
     } else {
       // No recorded source: a parent predating capture, which resumes live as it always did.
-      const { workflows } = await discoverWorkflowsWithConfig(parentCwd, deps.loadConfig);
+      const { workflows } = await discoverWorkflowsWithConfig(
+        parentCwd,
+        deps.loadConfig,
+        deps.providers
+      );
       parentWorkflow = resolveWorkflowName(
         parent.workflow_name,
         workflows.map(w => w.workflow)
@@ -2091,10 +2101,11 @@ export async function executeWorkflow(
     }
   }
 
-  if (!isRegisteredProvider(resolvedProvider)) {
+  if (!deps.providers.get(resolvedProvider)) {
     throw new Error(
       `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
-        `Registered: ${getRegisteredProviders()
+        `Registered: ${deps.providers
+          .list()
           .map(p => p.id)
           .join(', ')}`
     );
@@ -2979,7 +2990,7 @@ export async function executeWorkflow(
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
       isResume: isContinuation,
-      ...workflowTelemetryShape(workflow, runSource),
+      ...workflowTelemetryShape(deps.providers, workflow, runSource),
     });
 
     let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';

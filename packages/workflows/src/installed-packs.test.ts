@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * Installed workflow packs in the one catalog: every consumer resolves them through
  * `discoverWorkflowsWithConfig`, only manifest entrypoints are dispatchable, and a run
@@ -127,7 +128,7 @@ nodes:
 }
 
 const discover = (): ReturnType<typeof discoverWorkflowsWithConfig> =>
-  discoverWorkflowsWithConfig(project, loadConfig);
+  discoverWorkflowsWithConfig(project, loadConfig, providerRegistry);
 const names = (entries: readonly { workflow: { name: string } }[]): string[] =>
   entries.map(entry => entry.workflow.name);
 
@@ -184,7 +185,7 @@ describe('installed packs in the catalog', () => {
 
     // Validation resolves the pack's own command and script.
     const review = resolveWorkflowName(REVIEW, definitions) as ResolvedWorkflow;
-    const issues = await validateWorkflowResources(review, project, {
+    const issues = await validateWorkflowResources(review, project, providerRegistry, {
       workflowSource: 'installed',
     });
     expect(issues.filter(issue => issue.level === 'error')).toEqual([]);
@@ -255,6 +256,7 @@ describe('installed packs in the catalog', () => {
     const { workflows } = await discoverWorkflowsWithConfig(
       project,
       loadConfig,
+      providerRegistry,
       capturedSourceRoots(child.anchor)
     );
     expect(workflows.find(entry => entry.workflow.name === REVIEW)?.workflow.description).toBe(

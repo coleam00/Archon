@@ -1,4 +1,4 @@
-import type { IAgentProvider } from '@archon/providers/types';
+import type { IAgentProvider } from '@archon/provider-contract';
 /** The part of a provider this helper touches; test mocks type their chunks loosely. */
 interface QueryingProvider {
   sendQuery(...args: never[]): AsyncIterable<unknown> | Iterable<unknown>;

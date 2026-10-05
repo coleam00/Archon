@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * Repository-level parity checks: the web UI's copies of two engine grammars —
  * the `$<nodeId>.output` reference and the `when:` comparison atom — must stay
@@ -166,7 +167,8 @@ nodes:
   - id: use
     prompt: "${text}"
 `,
-      'output-input-parity.yaml'
+      'output-input-parity.yaml',
+      providerRegistry
     );
     expect(engine.error).toBeNull();
     expect(engine.workflow).not.toBeNull();

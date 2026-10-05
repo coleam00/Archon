@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -53,7 +54,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'review-item.md'), 'Review $INPUTS.item.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
     expect(result.workflows.map(item => item.workflow.name)).toContain('parent');
@@ -112,7 +116,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'body-review.md'), 'Review $INPUTS.context and emit DONE.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
     const parent = result.workflows.find(item => item.workflow.name === 'parent')?.workflow;
@@ -174,7 +181,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'nested-command.md'), 'Read $seed.output and continue.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.errors.filter(error => error.filename === 'parent.yaml')).toHaveLength(0);
     const parent = result.workflows.find(item => item.workflow.name === 'parent')?.workflow;
@@ -220,7 +230,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
     );
     await writeFile(join(commandDir, 'leaky-command.md'), 'Use $caller.output directly.');
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
 
     expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
     const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
@@ -271,7 +284,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
       const originalArchonHome = process.env.ARCHON_HOME;
       process.env.ARCHON_HOME = archonHome;
       try {
-        const result = await discoverWorkflows(cwd, { loadDefaults: false });
+        const result = await discoverWorkflows(cwd, {
+          providers: providerRegistry,
+          loadDefaults: false,
+        });
 
         expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
         const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;
@@ -328,7 +344,10 @@ describe('discoverWorkflows — nested included command compilation', () => {
       const originalArchonHome = process.env.ARCHON_HOME;
       process.env.ARCHON_HOME = archonHome;
       try {
-        const result = await discoverWorkflows(cwd, { loadDefaults: false });
+        const result = await discoverWorkflows(cwd, {
+          providers: providerRegistry,
+          loadDefaults: false,
+        });
 
         expect(result.workflows.map(item => item.workflow.name)).not.toContain('parent');
         const message = result.errors.find(error => error.filename === 'parent.yaml')?.error;

@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
  * Covers concurrent-run guards, model/provider resolution, and resume logic
@@ -267,6 +268,7 @@ function makePlatform(): IWorkflowPlatform {
 
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: store ?? makeStore(),
     getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
     loadConfig: mock(
@@ -2582,6 +2584,7 @@ describe('executeWorkflow', () => {
     it('passes configured docsPath when set', async () => {
       const store = makeStore();
       const deps = {
+        providers: providerRegistry,
         store,
         loadConfig: mock(
           async (): Promise<WorkflowConfig> => ({

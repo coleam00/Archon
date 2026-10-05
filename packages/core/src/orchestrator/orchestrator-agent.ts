@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
 /**
@@ -143,7 +144,7 @@ function applyPresetToRequestOptions(
   // is shared with `applyPresetOptions` in the DAG executor rather than
   // restated, so the same tier cannot mean different depths in chat and in a
   // workflow.
-  const decision = resolvePresetEffort(provider, preset.effort);
+  const decision = resolvePresetEffort(providerRegistry, provider, preset.effort);
   if (!decision.ok) {
     // `unsupported` = the provider has no reasoning control at all. Warn instead
     // of silently dropping.
@@ -1526,6 +1527,7 @@ async function captureFreshSource(
       const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
         runCwd,
         loadConfig,
+        providerRegistry,
         preparedSource.roots
       );
       const reResolved = resolveWorkflowName(
@@ -1784,7 +1786,11 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
     // by discoverWorkflowsWithConfig — no option needed.
-    const result = await discoverWorkflowsWithConfig(getArchonWorkspacesPath(), loadConfig);
+    const result = await discoverWorkflowsWithConfig(
+      getArchonWorkspacesPath(),
+      loadConfig,
+      providerRegistry
+    );
     workflows = [...result.workflows];
     allErrors.push(...result.errors);
   } catch (error) {
@@ -1844,6 +1850,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         const repoResult = await discoverWorkflowsWithConfig(
           workflowCwd,
           () => Promise.resolve(loadedConfig),
+          providerRegistry,
           workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
         );
         const workflowMap = new Map(workflows.map(w => [w.workflow.name, w]));

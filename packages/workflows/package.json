@@ -54,10 +54,12 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@archon/plugin-manifest": "workspace:*",
-    "@archon/providers": "workspace:*",
     "@hono/zod-openapi": "^1.4.0",
     "zod": "^4.4.3",
     "ajv": "^8.20.0"
+  },
+  "devDependencies": {
+    "@archon/providers": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

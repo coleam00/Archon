@@ -20,6 +20,7 @@ export function registerPiProvider(): void {
   if (isRegisteredProvider('pi')) return;
   registerProvider({
     id: 'pi',
+    ownsUnprefixedModelRefs: true,
     displayName: 'Pi (community)',
     factory: () => new PiProvider(),
     capabilities: PI_CAPABILITIES,

@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * `archon ai` — per-user AI-provider credentials AND install-wide model config.
  *
@@ -361,7 +362,7 @@ function validateEntryInputs(
     return false;
   }
   if (effort !== undefined) {
-    const validEfforts = validEffortsForProvider(provider);
+    const validEfforts = validEffortsForProvider(providerRegistry, provider);
     if (validEfforts === null) {
       console.error(`Provider '${provider}' does not support effort.`);
       return false;

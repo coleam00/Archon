@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
@@ -556,6 +557,7 @@ function makeProvider() {
 
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store,
     getAgentProvider: mock(() =>
       settlingProvider(makeProvider())
@@ -662,7 +664,10 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -2823,7 +2828,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.workflows.some(w => w.workflow.name === 'fan-parent-caller-schema')).toBe(false);
     const loadError = result.errors.find(e => e.filename.includes('fan-parent-caller-schema'));
     expect(loadError?.error).toBe(
@@ -4609,7 +4617,10 @@ describe('workflow: late resolution is a deliberate affordance', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -4659,7 +4670,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows.map(w => w.workflow.name)).toContain('parent-forward-ref');
   });
@@ -4680,7 +4694,7 @@ nodes:
     );
 
     const wf = await discover('parent-forward-ref');
-    const issues = await validateWorkflowResources(wf, cwd);
+    const issues = await validateWorkflowResources(wf, cwd, providerRegistry);
     const errors = issues.filter(i => i.level === 'error');
     expect(errors).toHaveLength(0);
   });
@@ -4906,7 +4920,10 @@ nodes:
     // assertion must flip to expect the slot to be ABSENT from plain discovery.
     await writeWorkflow('leaky-slot', slotYaml('leaky-slot', 'LEAK'));
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.workflows.map(w => w.workflow.name)).toContain('leaky-slot');
   });
 
@@ -5129,7 +5146,10 @@ describe('workflow: declared input contract at runtime (#2470)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -5381,7 +5401,10 @@ describe('workflow: runtime $INPUTS delivery and cold resume (#2470)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -5862,7 +5885,10 @@ describe('workflow: returns rebinds the child terminal output (#2470)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -6018,7 +6044,10 @@ describe('workflow: typed value transport (#2637)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -6647,7 +6676,10 @@ describe('workflow: callee-owned result contracts (#2453)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7003,7 +7035,10 @@ describe('workflow: artifact pointers across the child boundary (#2453)', () => 
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7271,7 +7306,10 @@ describe('workflow: a child contract drives the parent composed path (#2453)', (
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7571,7 +7609,10 @@ describe('sub-run staged capture is reclaimed when the recursive rename fails (#
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7662,7 +7703,10 @@ describe("a child's terminal status write fails during setup (#2910)", () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;

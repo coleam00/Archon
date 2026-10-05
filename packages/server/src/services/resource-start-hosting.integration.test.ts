@@ -1,3 +1,4 @@
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import { saveUserProviderKey } from '@archon/core/db/user-provider-key-store';
 import { getWorkflowRun } from '@archon/core/db/workflows';
 import { execFileAsync } from '@archon/git';
@@ -32,6 +33,9 @@ import {
   startWorkflowContinuationScheduler,
   stopWorkflowContinuationScheduler,
 } from './workflow-resume-service';
+
+registerBuiltinProviders();
+registerCommunityProviders();
 
 const USER_ID = '22222222-2222-4222-8222-222222222222';
 const HOST_ID = 'server-host';

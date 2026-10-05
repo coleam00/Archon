@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { loadConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
 import { resolveContinuationWorkflow } from '@archon/workflows/executor';
@@ -40,7 +41,7 @@ export async function resolveRunWorkflow(
 
   let discovery: Awaited<ReturnType<typeof discoverWorkflowsWithConfig>>;
   try {
-    discovery = await discoverWorkflowsWithConfig(workflowCwd, loadConfig);
+    discovery = await discoverWorkflowsWithConfig(workflowCwd, loadConfig, providerRegistry);
   } catch (error) {
     const err = toError(error);
     log.error({ err, cwd: workflowCwd, runId: run.id }, 'workflow.resume_discovery_failed');

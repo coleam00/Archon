@@ -23,8 +23,11 @@ export const PACKAGE_EDGES: Readonly<Record<string, PackageEdges>> = {
   // Isolation imports the engine-owned write-back shapes type-only. This table checks the
   // edge, not the import kind; keep those imports `import type`.
   isolation: { runtime: ['git', 'paths', 'provider-contract', 'workflows'] },
-  // The registry edge remains until #3638 introduces the injected port.
-  workflows: { runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract', 'providers'] },
+  // Tests run the engine against the real registered providers.
+  workflows: {
+    runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract'],
+    test: ['providers'],
+  },
   // Core assembles execution and persistence services.
   core: { runtime: ['git', 'isolation', 'paths', 'provider-contract', 'providers', 'workflows'] },
   // Transport adapters normalize platform input for core.

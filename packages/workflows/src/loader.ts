@@ -1,3 +1,4 @@
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 /**
  * Workflow loader - discovers and parses workflow YAML files
  */
@@ -27,11 +28,7 @@ import {
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
-import {
-  isRegisteredProvider,
-  getRegisteredProviders,
-  getProviderCapabilities,
-} from '@archon/providers';
+
 import {
   dagNodeSchema,
   ignoredFieldsForNode,
@@ -1457,6 +1454,7 @@ export type ParseResult =
 export function parseWorkflow(
   content: string,
   filename: string,
+  providers: ProviderRegistry,
   configuredEnvNames?: ReadonlySet<string>
 ): ParseResult {
   try {
@@ -1609,12 +1607,13 @@ export function parseWorkflow(
     // per node. Model strings are NOT validated — they pass through to the SDK
     // at run time, which is the source of truth for what model names exist
     // (vendor SDKs ship new models faster than Archon can update).
-    if (provider && !isRegisteredProvider(provider)) {
+    if (provider && !providers.get(provider)) {
       return {
         workflow: null,
         error: {
           filename,
-          error: `Unknown provider '${provider}'. Registered: ${getRegisteredProviders()
+          error: `Unknown provider '${provider}'. Registered: ${providers
+            .list()
             .map(p => p.id)
             .join(', ')}`,
           errorType: 'validation_error',
@@ -1623,12 +1622,13 @@ export function parseWorkflow(
     }
     for (const node of dagNodes) {
       if (isIncludeDirective(node)) continue;
-      if (node.provider !== undefined && !isRegisteredProvider(node.provider)) {
+      if (node.provider !== undefined && !providers.get(node.provider)) {
         return {
           workflow: null,
           error: {
             filename,
-            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${getRegisteredProviders()
+            error: `Node '${node.id}': unknown provider '${node.provider}'. Registered: ${providers
+              .list()
               .map(p => p.id)
               .join(', ')}`,
             errorType: 'validation_error',
@@ -1662,8 +1662,8 @@ export function parseWorkflow(
       }
 
       const knownProvider = consumerProvider ?? sourceProvider;
-      if (knownProvider !== undefined && isRegisteredProvider(knownProvider)) {
-        const caps = getProviderCapabilities(knownProvider);
+      if (knownProvider !== undefined && providers.get(knownProvider)) {
+        const caps = requireProvider(providers, knownProvider).capabilities;
         if (!caps.sessionResume || caps.sessionFork !== true) {
           return {
             workflow: null,
@@ -1694,8 +1694,10 @@ export function parseWorkflow(
       if (!nodeUsesPersistedScope(node, workflowPersistSessions)) continue;
 
       const explicitProvider = ('provider' in node ? node.provider : undefined) ?? provider;
-      if (!explicitProvider || !isRegisteredProvider(explicitProvider)) continue;
-      const handling = persistedSessionHandling(getProviderCapabilities(explicitProvider));
+      if (!explicitProvider || !providers.get(explicitProvider)) continue;
+      const handling = persistedSessionHandling(
+        requireProvider(providers, explicitProvider).capabilities
+      );
       if (handling === 'unsupported') {
         return {
           workflow: null,

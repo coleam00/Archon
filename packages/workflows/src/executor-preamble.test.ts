@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 /**
  * Tests for the executeWorkflow() preamble: concurrent-run guard, staleness
  * detection, and resume logic.  These run before DAG dispatch and are exercised
@@ -160,6 +161,7 @@ function makePlatform(): IWorkflowPlatform & { sendMessage: ReturnType<typeof mo
 
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: store ?? makeStore(),
     loadConfig: mock(
       async (): Promise<WorkflowConfig> => ({

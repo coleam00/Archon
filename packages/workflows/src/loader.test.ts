@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile, rm, readdir, readFile } from 'fs/promises';
 import { join, basename } from 'path';
@@ -39,7 +40,10 @@ import { type ProviderDefaults } from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
 
-import { discoverWorkflows, discoverWorkflowsWithConfig } from './workflow-discovery';
+import {
+  discoverWorkflows as discoverWorkflowsWithProviders,
+  discoverWorkflowsWithConfig,
+} from './workflow-discovery';
 import {
   isExecNode,
   isHaltNode,
@@ -49,7 +53,7 @@ import {
   isWorkflowNode,
   isIncludeDirective,
 } from './schemas';
-import { parseWorkflow, type ParseResult } from './loader';
+import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from './loader';
 import { COMPILED_LOOP_COMMAND, type LoopWithCompiledCommand } from './compiled-command';
 import { KNOWN_WORKFLOW_KEYS } from './schemas/workflow';
 import type { WorkflowDefinition } from './schemas/workflow';
@@ -58,6 +62,21 @@ import type { JsonValue } from './output-ref';
 import * as bundledDefaults from './defaults/bundled-defaults';
 import { parsePackagedResourceReference } from './packaged-workflow';
 import { discoverScriptsForCwd } from './script-discovery';
+
+function discoverWorkflows(
+  cwd: string | null,
+  options: Omit<Parameters<typeof discoverWorkflowsWithProviders>[1], 'providers'> = {}
+) {
+  return discoverWorkflowsWithProviders(cwd, { ...options, providers: providerRegistry });
+}
+
+function parseWorkflow(
+  content: string,
+  filename: string,
+  configuredEnvNames?: ReadonlySet<string>
+): ParseResult {
+  return parseWorkflowWithProviders(content, filename, providerRegistry, configuredEnvNames);
+}
 
 /** The inline prompt text of an agent node, or undefined for any other kind
  * (formerly the bare `'prompt' in node ? node.prompt : ...` idiom, #2486). */
@@ -1723,7 +1742,7 @@ nodes:
         envVars: { NAME: 'value' },
       }));
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       expect(result.errors).toEqual([]);
       const entry = result.workflows.find(w => w.workflow.name === 'uses-configured-env');
@@ -1766,6 +1785,7 @@ nodes:
       const result = await discoverWorkflowsWithConfig(
         testDir,
         loadConfigShouldNotRun,
+        providerRegistry,
         capturedSourceRoots(capture.anchor)
       );
 
@@ -1782,7 +1802,7 @@ nodes:
         defaults: { loadDefaultWorkflows: false },
       }));
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       // With loadDefaults: false, no archon-* defaults should appear
       const archonWorkflow = result.workflows.find(w => w.workflow.name.startsWith('archon-'));
@@ -1796,7 +1816,7 @@ nodes:
         throw new Error('Config not found');
       });
 
-      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+      const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
 
       // With config failure, defaults to true, so archon-* should appear
       const archonWorkflow = result.workflows.find(w => w.workflow.name === 'archon-review');
@@ -1828,7 +1848,7 @@ nodes:
           defaults: { loadDefaultWorkflows: false },
         }));
 
-        const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig);
+        const result = await discoverWorkflowsWithConfig(testDir, mockLoadConfig, providerRegistry);
         const entry = result.workflows.find(w => w.workflow.name === 'home-only');
         expect(entry).toBeDefined();
         expect(entry?.source).toBe('global');
@@ -6326,11 +6346,14 @@ nodes:
 `
       );
 
-      const result = await discoverWorkflowsWithConfig(testDir, () =>
-        Promise.resolve({
-          defaults: { loadDefaultWorkflows: false },
-          commands: { folder: 'my-cmds' },
-        })
+      const result = await discoverWorkflowsWithConfig(
+        testDir,
+        () =>
+          Promise.resolve({
+            defaults: { loadDefaultWorkflows: false },
+            commands: { folder: 'my-cmds' },
+          }),
+        providerRegistry
       );
       expect(result.errors.filter(error => error.filename === 'cc-parent.yaml')).toHaveLength(0);
       const parent = result.workflows.find(
@@ -6552,7 +6575,7 @@ nodes:
       // project context — running loadConfig with no cwd would silently apply
       // home-dir or working-dir defaults to a request that has neither.
       const mockLoadConfig = mock(async () => ({ defaults: { loadDefaultWorkflows: true } }));
-      await discoverWorkflowsWithConfig(null, mockLoadConfig);
+      await discoverWorkflowsWithConfig(null, mockLoadConfig, providerRegistry);
       expect(mockLoadConfig).not.toHaveBeenCalled();
     });
   });
@@ -9240,4 +9263,28 @@ nodes:
     expect(result.error?.error).toContain('$LOOP_PREV.work.output.proposal.typo');
     expect(result.error?.error).toContain("field 'typo'");
   });
+});
+
+it('parsing uses only the supplied registry for provider identity', () => {
+  const claude = providerRegistry.get('claude');
+  if (!claude) throw new Error('test registry must contain Claude');
+  const custom = { ...claude, id: 'custom' };
+  const providers = {
+    get: (id: string) => (id === custom.id ? custom : undefined),
+    list: () => [custom],
+  };
+  const yaml = `name: registry-port
+description: Registry boundary
+provider: custom
+nodes:
+  - id: act
+    prompt: Do something
+`;
+  expect(parseWorkflowWithProviders(yaml, 'registry.yaml', providers).error).toBeNull();
+  const result = parseWorkflowWithProviders(
+    yaml.replace('provider: custom', 'provider: claude'),
+    'registry.yaml',
+    providers
+  );
+  expect(result.error?.error).toBe("Unknown provider 'claude'. Registered: custom");
 });

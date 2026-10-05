@@ -29,6 +29,7 @@ export {
   registerBuiltinProviders,
   registerCommunityProviders,
   clearRegistry,
+  providerRegistry,
 } from './registry';
 
 // Error
