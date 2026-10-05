@@ -66,6 +66,12 @@
       "src/workflows/branch-launch-source.test.ts"
     ],
     [
+      "src/db/conversation-detach.integration.test.ts"
+    ],
+    [
+      "src/db/conversation-detach.postgres.integration.test.ts"
+    ],
+    [
       "src/db/resource-starts.integration.test.ts"
     ],
     [
@@ -140,6 +146,9 @@
     ],
     [
       "src/db/workflows.resume-cas.integration.test.ts"
+    ],
+    [
+      "src/db/workflow-gate-deferral.integration.test.ts"
     ],
     [
       "src/db/workflow-terminal-telemetry.integration.test.ts"
@@ -287,6 +296,9 @@
     ],
     [
       "src/workflows/commit-author.integration.test.ts"
+    ],
+    [
+      "src/db/users.sqlite.integration.test.ts"
     ]
   ]
 }

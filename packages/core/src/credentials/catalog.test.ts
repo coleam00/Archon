@@ -38,6 +38,21 @@ describe('credentials/catalog', () => {
     expect(catalog.get('amazon-bedrock')?.kinds).toEqual(['ambient']);
   });
 
+  test('Azure uses the new Pi vendor id while existing connections remain visible', () => {
+    expect(getVendorCatalog().get('azure')).toEqual({
+      vendor: 'azure',
+      displayName: 'Azure OpenAI',
+      kinds: ['api_key'],
+      agents: ['pi'],
+    });
+    const pi = buildAgentCredentialMatrix([
+      { provider: 'azure-openai-responses', kind: 'api_key' },
+    ]).find(agent => agent.id === 'pi');
+    expect(pi?.credentials.find(credential => credential.vendor === 'azure')?.connected).toBe(
+      'api_key'
+    );
+  });
+
   test('legacy agent ids are not catalog vendors; opencode contributes nothing static', () => {
     const catalog = getVendorCatalog();
     for (const legacy of ['claude', 'codex', 'copilot']) {

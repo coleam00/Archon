@@ -300,7 +300,8 @@ export class SqliteAdapter implements IDatabase {
     // database missing a failed migration must NOT be stamped as fully applied
     // by this build, or the vintage becomes a wrong answer that gets believed.
     let allApplied = true;
-    // Users columns. `role` is the web-auth identity seam (default 'admin').
+    // Keep 'admin' for older writers and existing rows; new writers insert 'member'.
+    // Changing a SQLite column default would require a table rebuild.
     // Better Auth's own tables are PostgreSQL-only — web auth is never enabled
     // on SQLite — so only the role column is backfilled here.
     try {

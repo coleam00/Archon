@@ -3412,6 +3412,8 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'workflow';
+              /** @enum {boolean} */
+              fanOut?: true;
             }
           | {
               id: string;
@@ -4906,9 +4908,15 @@ export interface components {
             toolCallId: string;
             name: string;
             title?: string;
-            rawInput?: {
-              [key: string]: unknown;
-            };
+            rawInput?:
+              | string
+              | number
+              | boolean
+              | {
+                  [key: string]: unknown;
+                }
+              | unknown[]
+              | null;
           }
         | {
             /** @enum {string} */

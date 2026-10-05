@@ -1,6 +1,7 @@
 /**
  * Database operations for workflow runs
  */
+import { lockConversationOwnership } from './conversation-ownership';
 import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
@@ -42,6 +43,7 @@ import {
   workflowWaitStepName,
   workflowWaitContextSchema,
   TERMINAL_WORKFLOW_STATUSES,
+  RESUMABLE_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
@@ -58,7 +60,11 @@ import type {
   WorkflowWaitPause,
   NodeStateEventInput,
 } from '@archon/workflows/store';
-import { FAN_OUT_CANCEL_REASONS, waitCompletionEvents } from '@archon/workflows/store';
+import {
+  FAN_OUT_CANCEL_REASONS,
+  waitCompletionEvents,
+  WorkflowRunPauseConflictError,
+} from '@archon/workflows/store';
 
 export interface WorkflowRunInsert {
   id?: string;
@@ -378,6 +384,10 @@ export async function insertWorkflowRun(
   }
 
   try {
+    await lockConversationOwnership(query, [
+      data.conversation_id,
+      ...(data.parent_conversation_id ? [data.parent_conversation_id] : []),
+    ]);
     const result = await query<WorkflowRun>(
       data.id === undefined
         ? `INSERT INTO remote_agent_workflow_runs
@@ -416,7 +426,7 @@ export async function insertWorkflowRun(
 
 export async function createWorkflowRun(data: WorkflowRunInsert): Promise<WorkflowRun> {
   try {
-    return await insertWorkflowRun((sql, params) => pool.query(sql, params), data);
+    return await getDatabase().withTransaction(query => insertWorkflowRun(query, data));
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_create_failed');
@@ -1530,34 +1540,75 @@ export async function cancelFanOutRun(
 export async function pauseWorkflowRun(
   id: string,
   approvalContext: ApprovalContext,
-  extraMetadata?: Record<string, unknown>
+  extraMetadata?: Record<string, unknown>,
+  suspension?: NodeStateEventInput
 ): Promise<void> {
   try {
-    const result = await pool.query(
-      `UPDATE remote_agent_workflow_runs
+    await getDatabase().withTransaction(async query => {
+      const result = await query(
+        `UPDATE remote_agent_workflow_runs
        SET status = 'paused', metadata = ${writeApprovalMetadata(2, 3)}
        WHERE id = $1 AND status = 'running'`,
-      [
-        id,
-        // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
-        // atomic write so there is no window where the run is paused without it (M3).
-        JSON.stringify(extraMetadata ?? {}),
-        // The complete gate context. JSON.stringify drops undefined, and the write
-        // replaces rather than merges, so an optional field the caller left unset is
-        // simply absent — no explicit-null reset list to keep in sync.
-        JSON.stringify(approvalContext),
-      ]
-    );
-    if (result.rowCount === 0) {
-      getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
-      throw new Error(`Workflow run not found or not in running state (id: ${id})`);
-    }
+        [
+          id,
+          // Caller-supplied run-level metadata (e.g. `pending_writeback`) rides the SAME
+          // atomic write so there is no window where the run is paused without it (M3).
+          JSON.stringify(extraMetadata ?? {}),
+          // The complete gate context. JSON.stringify drops undefined, and the write
+          // replaces rather than merges, so an optional field the caller left unset is
+          // simply absent — no explicit-null reset list to keep in sync.
+          JSON.stringify(approvalContext),
+        ]
+      );
+      if (result.rowCount === 0) {
+        getLog().warn({ workflowRunId: id }, 'db.workflow_run_pause_no_match');
+        throw new WorkflowRunPauseConflictError(id);
+      }
+      if (suspension) await insertWorkflowEvent(query, suspension);
+    });
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Workflow run not found')) throw error;
+    if (error instanceof WorkflowRunPauseConflictError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_pause_failed');
     throw new Error(`Failed to pause workflow run: ${err.message}`);
   }
+}
+
+/** Fail an undelivered gate only while the persisted approval still matches its owner. */
+export async function failPausedApproval(
+  id: string,
+  approvalContext: ApprovalContext,
+  error: string
+): Promise<{ failed: boolean }> {
+  const dialect = getDialect();
+  const approvalMatches =
+    getDatabaseType() === 'postgresql'
+      ? "metadata->'approval' = $2::jsonb"
+      : "json_extract(metadata, '$.approval') = json($2)";
+  const outcome = await getDatabase().withTransaction(async query => {
+    const update = await query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'failed', completed_at = ${dialect.now()},
+           metadata = ${dialect.jsonMerge('metadata', 3)}
+       WHERE id = $1 AND status = 'paused' AND ${approvalMatches}`,
+      [
+        id,
+        JSON.stringify(approvalContext),
+        JSON.stringify({ error, stop_reason: { reason: 'node_error' } }),
+      ]
+    );
+    const failed = (update.rowCount ?? 0) > 0;
+    if (failed) {
+      await insertTerminalWorkflowEvent(query, {
+        workflow_run_id: id,
+        event_type: 'workflow_failed',
+        data: { error, exit_reason: 'node_error' },
+      });
+    }
+    return { failed };
+  });
+  if (outcome.failed) await reportRunTerminal(id);
+  return outcome;
 }
 
 /** Pause a running run on a persisted wait condition. */
@@ -2398,4 +2449,19 @@ export async function deleteWorkflowRun(id: string): Promise<void> {
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_delete_failed');
     throw new Error(`Failed to delete workflow run: ${err.message}`);
   }
+}
+
+export async function listConversationDetachBlockers(
+  query: TransactionQuery,
+  conversationId: string
+): Promise<readonly Pick<WorkflowRun, 'id' | 'status'>[]> {
+  const result = await query<Pick<WorkflowRun, 'id' | 'status'>>(
+    `SELECT id, status FROM remote_agent_workflow_runs
+     WHERE (conversation_id = $1 OR parent_conversation_id = $1)
+       AND (status NOT IN (${TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')})
+            OR status IN (${RESUMABLE_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ')}))
+     ORDER BY id`,
+    [conversationId]
+  );
+  return result.rows;
 }

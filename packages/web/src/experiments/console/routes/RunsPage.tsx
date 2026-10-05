@@ -49,6 +49,7 @@ function buildDemoRuns(scope: Scope, projectName: string | null): Run[] {
     conversationPlatformId: null as string | null,
     workerPlatformId: null as string | null,
     outcome: null,
+    terminalRecord: null,
     workingPath: null,
     userMessage: '',
     activeNodes: [] as string[],
