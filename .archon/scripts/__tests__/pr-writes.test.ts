@@ -152,7 +152,27 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('refused');
     expect(result.stderr).toContain('the base branch does not exist');
+    // Nothing was written, so a retry may create.
+    expect(existsSync(join(result.artifacts, 'pr-intent.json.create-started'))).toBe(false);
   });
+
+  it.each(['outcome_unknown', 'verification_failed'] as const)(
+    'keeps the create claim after a %s create so a retry cannot open a duplicate',
+    outcome => {
+      const result = publishPr({
+        source: 'forge',
+        forge: {
+          kind: 'fake',
+          response: [
+            forgeOperation('pr.view', null),
+            forgeFailure('pr.create', outcome, 'forge plugin timed out'),
+          ],
+        },
+      });
+      expect(result.code).not.toBe(0);
+      expect(existsSync(join(result.artifacts, 'pr-intent.json.create-started'))).toBe(true);
+    }
+  );
 
   it('reuses the open pull request when the head repository differs only in case', () => {
     const result = publishPr({

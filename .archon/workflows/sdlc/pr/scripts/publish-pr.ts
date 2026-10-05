@@ -14,9 +14,10 @@
  * - INPUTS_INTENT: path to the JSON intent the preparing node wrote.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createPr, findOpenPrByHead, viewPr, type CreatePrIntent } from '../../.shared/pr.ts';
 import {
+  ForgeOperationError,
   forgeSource,
   record,
   sameRepo,
@@ -103,7 +104,16 @@ function publish(): PrRecord {
     }
     throw error;
   }
-  return createPr(createIntent, source);
+  try {
+    return createPr(createIntent, source);
+  } catch (error) {
+    // A forge refusal is definite: no write was sent, so the claim would only
+    // block a retry. Every other failure may have left a pull request behind.
+    if (error instanceof ForgeOperationError && error.mutation?.outcome === 'refused') {
+      unlinkSync(claimPath);
+    }
+    throw error;
+  }
 }
 
 try {
