@@ -1077,7 +1077,14 @@ export async function inspectResumableRun(
   // A valid composed instance start is always preceded by its durable fan-out plan.
   // Do not treat an arbitrary unresolved node_started row as resumable: ordinary nodes
   // have no ambiguity guard and replaying one could duplicate its side effects.
-  const hasFanOutRecoveryState = snapshot.fanOutSnapshots.size > 0;
+  const hasFanOutRecoveryState =
+    snapshot.fanOutSnapshots.size > 0 ||
+    [...(snapshot.unfinishedInvocations?.values() ?? [])].some(
+      execution =>
+        execution.node.kind === 'workflow' &&
+        execution.node.fanOut === true &&
+        execution.lifecycle.status === 'failed'
+    );
   if (
     priorCompletedNodes.size === 0 &&
     !hasReRunGateState &&
@@ -1103,7 +1110,7 @@ export async function inspectResumableRun(
 /**
  * Hydrate an already-located resumable `WorkflowRun` candidate into the form
  * {@link executeWorkflow} expects. Returns `null` when the candidate has no
- * completed nodes and no interactive-loop gate state — nothing worth resuming.
+ * completed nodes, durable fan-out recovery state, or resumable gate/wait state.
  *
  * The return shape is spread-compatible with {@link ExecuteWorkflowOptions}
  * so callers can write `executeWorkflow(..., { ...hydrated, codebaseId })`.
