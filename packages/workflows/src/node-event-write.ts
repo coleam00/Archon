@@ -18,6 +18,12 @@ import { getWorkflowEventEmitter } from './event-emitter';
 import type { NodeStateEventInput } from './store';
 import { readNodeRecordEvent, type ReadNodeRecordEvent } from './node-record-reader';
 
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('workflow.node-event-write');
+  return cachedLog;
+}
+
 /** Non-busy storage rejection must leave node retry policy and reach the run failure boundary. */
 export class NodeEventWriteError extends Error {
   constructor(event: NodeStateEventInput, cause: unknown) {
@@ -45,7 +51,7 @@ export async function persistNodeEvent(
         (('code' in error && error.code === 'SQLITE_BUSY') ||
           ('errno' in error && error.errno === 5));
       if (!busy) throw new NodeEventWriteError(event, error);
-      createLogger('workflow.node-event-write').warn(
+      getLog().warn(
         {
           workflowRunId: event.workflow_run_id,
           stepName: event.step_name,
