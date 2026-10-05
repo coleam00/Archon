@@ -271,13 +271,15 @@ Record each PR as covered (with the matching entry and PR, closing-issue or
 content evidence), drafted, partly covered, or pending operator review. Use this
 record to check that every merged PR is accounted for and every change appears once.
 
-**Categorize into Keep a Changelog sections:**
-- **Breaking** — changes that break existing behavior users may rely on (only when there are any)
-- **Added** — new features, new files, new capabilities
-- **Changed** — modifications to existing behavior
-- **Fixed** — bug fixes
-- **Deprecated** — features still available but discouraged or planned for removal
-- **Removed** — deleted features or code
+**Categorize into Keep a Changelog sections.** This list is the one category and
+order rule for the release section; render categories in this order and omit empty ones:
+1. **Breaking** — changes that break existing behavior users may rely on
+2. **Security** — vulnerability fixes and security-relevant hardening
+3. **Added** — new features, new files, new capabilities
+4. **Changed** — modifications to existing behavior
+5. **Deprecated** — features still available but discouraged or planned for removal
+6. **Removed** — deleted features or code
+7. **Fixed** — bug fixes
 
 **Writing rules:**
 - Write entries as a human would — clear, concise, user-facing language
@@ -308,7 +310,8 @@ record to check that every merged PR is accounted for and every change appears o
    uncovered drafts into one new version section below `[Unreleased]`. Combine
    entries under one heading per category; preserve the hand-written entries
    verbatim, including their paragraphs, links and tables. Add no draft that
-   repeats a retained change. Use this format, omitting empty categories:
+   repeats a retained change. Use this format, with one `### <Category>` heading
+   per non-empty category in the Step 5 order:
 
 ```markdown
 ## [x.y.z] - YYYY-MM-DD
@@ -324,28 +327,14 @@ One-line summary of the release.
 - Entry one (#PR)
 - Entry two (#PR)
 
-### Changed
-
-- Entry one (#PR)
-
 ### Fixed
-
-- Entry one (#PR)
-
-### Deprecated
-
-- Entry one (#PR)
-
-### Removed
 
 - Entry one (#PR)
 ```
 
-Omit the `### Breaking` section entirely when the release has no breaking changes.
-**`### Breaking` must come first**, immediately after the one-line summary and before
-Added/Changed/Fixed/Deprecated/Removed — Step 9's release workflow reads this section verbatim
-into the GitHub release body, so this file's own section order is what makes breaking
-changes appear first on the release page.
+**`### Breaking` must come first**, immediately after the one-line summary. Step 9's
+release workflow reads this section verbatim into the GitHub release body, so this
+file's own section order is what makes breaking changes appear first on the release page.
 
 After merging, leave the `[Unreleased]` header empty. Verify that every original
 hand-written entry survives verbatim in the new section and every uncovered
