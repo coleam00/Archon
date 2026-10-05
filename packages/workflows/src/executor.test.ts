@@ -3758,8 +3758,8 @@ describe('executeWorkflow', () => {
     // #2304 — the contract is "Cleared by the same persistence block the moment
     // a later resume writes a real root". The faulted arm stamps `true`; the
     // else arm MUST ride the same atomic metadata write with `false` on the
-    // heal, or a row that has resolved leaves the flag set and the
-    // state-preflight gate (#2200) / maintainer-triage read it as still faulted.
+    // heal, or a row that has resolved leaves the flag set and every reader
+    // treats it as still faulted.
     it('clears metadata.identity_unresolved when a faulted row heals (resolved on resume)', async () => {
       const updateSpy = mock(async () => {});
       const store = makeStore({
