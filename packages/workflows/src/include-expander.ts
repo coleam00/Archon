@@ -63,7 +63,11 @@ import {
   type JsonValue,
 } from './output-ref';
 import { createLogger } from '@archon/paths';
-import { validateDagStructure, validateWorkflowOutcomeDeclaration } from './loader';
+import {
+  validateDagStructure,
+  validateNodeOutputFormats,
+  validateWorkflowOutcomeDeclaration,
+} from './loader';
 import { resolveDeclaredInputs } from './workflow-inputs';
 import { resolveWorkflowName } from './router';
 import { parseWhenAtom, whenAtoms } from './when-atom';
@@ -1304,6 +1308,10 @@ export function expandWorkflowIncludes(
     const structureError = validateDagStructure(expanded.nodes, undefined, expanded.includeAliases);
     if (structureError) {
       throw new IncludeExpansionError(structureError);
+    }
+    const outputFormatError = validateNodeOutputFormats(expanded.nodes);
+    if (outputFormatError) {
+      throw new IncludeExpansionError(outputFormatError);
     }
 
     const dedupedRequires = [...new Set(requires)];

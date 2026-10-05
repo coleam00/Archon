@@ -2823,3 +2823,36 @@ test('include aliases and prior-iteration namespaces retain complete nested suff
   );
   expect(inlinePrompt(nodeById(expanded, 'summary'))).toBe('$sub__read.output.proposal.action');
 });
+
+describe('loop_group structured completion after include expansion (#2998)', () => {
+  test.each([false, true])('checks an included terminal schema (until_bash: %s)', withBash => {
+    const block = wf('structured-review', [
+      {
+        id: 'review',
+        prompt: 'Review',
+        output_format: { type: 'object', properties: { done: { type: 'boolean' } } },
+      },
+    ]);
+    const parent = wf('parent', [
+      {
+        id: 'refine',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          ...(withBash ? { until_bash: 'exit 0' } : {}),
+          nodes: [{ id: 'check', include: 'structured-review' }],
+        },
+      },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
+    if (withBash) {
+      expect(errors).toEqual([]);
+      expect(workflows.has('parent')).toBe(true);
+    } else {
+      expect(errors).toHaveLength(1);
+      expect(errors[0].error).toContain("terminal node 'check__review'");
+      expect(errors[0].error).toContain('until_bash');
+      expect(workflows.has('parent')).toBe(false);
+    }
+  });
+});
