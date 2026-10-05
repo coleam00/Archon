@@ -26,8 +26,8 @@ import {
 } from './schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
+import { compileOutputSchema } from './structured-output';
 import {
-  compileOutputSchema,
   isRegisteredProvider,
   getRegisteredProviders,
   getProviderCapabilities,

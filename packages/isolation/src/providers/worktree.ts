@@ -913,7 +913,7 @@ export class WorktreeProvider implements IIsolationProvider {
     // isolation-environment row tracking it, and the next run on the same branch
     // adopts it as ready (#3448).
     const warnings = await this.rollBackOnFailure(repoPath, worktreePath, () =>
-      this.finishWorktreeSetup(request, repoPath, worktreePath, worktreeConfig)
+      this.finishWorktreeSetup(repoPath, worktreePath, worktreeConfig)
     );
 
     const lockWarning = await this.releaseSetupLock(repoPath, worktreePath);
@@ -930,19 +930,10 @@ export class WorktreeProvider implements IIsolationProvider {
    * Returns the warnings a caller should surface on an otherwise usable worktree.
    */
   private async finishWorktreeSetup(
-    request: IsolationRequest,
     repoPath: RepoPath,
     worktreePath: string,
     worktreeConfig: WorktreeCreateConfig | null
   ): Promise<string[]> {
-    // Stamp the originating user's git identity on this worktree so workflow
-    // commits attribute to the human (PR-C). Scoped to the worktree's local
-    // config; absent identity leaves the ambient git config untouched. Failure
-    // is non-fatal — commits would just fall back to the ambient identity.
-    if (request.gitIdentity?.email) {
-      await this.applyGitIdentity(worktreePath, request.gitIdentity);
-    }
-
     // Initialize submodules unless explicitly opted out. The check is free
     // when `.gitmodules` is absent (access-based short-circuit), so repos
     // without submodules pay nothing. Default-on matches git's own intent
@@ -1099,30 +1090,6 @@ export class WorktreeProvider implements IIsolationProvider {
       await refreshWorktreeIndex(toWorktreePath(worktreePath));
     } catch (err) {
       getLog().warn({ err: err as Error, worktreePath }, 'worktree.index_refresh_failed');
-    }
-  }
-
-  /**
-   * Set worktree-local `git config user.email`/`user.name` so commits made in
-   * this worktree attribute to the originating user. Non-fatal on failure: a
-   * worktree without the override simply uses the ambient git identity.
-   */
-  private async applyGitIdentity(
-    worktreePath: string,
-    identity: { email: string; name?: string }
-  ): Promise<void> {
-    try {
-      await execFileAsync('git', ['-C', worktreePath, 'config', 'user.email', identity.email], {
-        timeout: 5000,
-      });
-      if (identity.name) {
-        await execFileAsync('git', ['-C', worktreePath, 'config', 'user.name', identity.name], {
-          timeout: 5000,
-        });
-      }
-      getLog().debug({ worktreePath, email: identity.email }, 'isolation.git_identity_applied');
-    } catch (err) {
-      getLog().warn({ err: err as Error, worktreePath }, 'isolation.git_identity_apply_failed');
     }
   }
 

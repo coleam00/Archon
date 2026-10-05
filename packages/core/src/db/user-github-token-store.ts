@@ -73,11 +73,7 @@ export async function saveUserGithubToken(params: SaveUserGithubTokenParams): Pr
       params.refreshTokenExpiresAt?.toISOString() ?? null,
     ]
   );
-  // Never log token values; githubLogin is user-identifying but low-sensitivity.
-  getLog().info(
-    { userId: params.userId, githubLogin: params.githubLogin },
-    'user_github_token.stored'
-  );
+  getLog().info({ userId: params.userId }, 'user_github_token.stored');
 }
 
 export async function getUserGithubTokenRecord(userId: string): Promise<UserGithubTokenRow | null> {
@@ -97,6 +93,12 @@ export async function deleteUserGithubToken(userId: string): Promise<void> {
   getLog().info({ userId }, 'user_github_token.deleted');
 }
 
+type GithubIdentity = Pick<UserGithubTokenRow, 'github_user_id' | 'github_login'>;
+
+function formatGithubNoreplyEmail(identity: GithubIdentity): string {
+  return `${identity.github_user_id}+${identity.github_login}@users.noreply.github.com`;
+}
+
 /**
  * The commit no-reply email for a connected user, or null if not connected.
  * Format: `<numeric_id>+<login>@users.noreply.github.com`.
@@ -104,7 +106,15 @@ export async function deleteUserGithubToken(userId: string): Promise<void> {
 export async function getUserGithubNoreplyEmail(userId: string): Promise<string | null> {
   const row = await getUserGithubTokenRecord(userId);
   if (!row) return null;
-  return `${row.github_user_id}+${row.github_login}@users.noreply.github.com`;
+  return formatGithubNoreplyEmail(row);
+}
+
+export async function getUserGithubAuthor(
+  userId: string
+): Promise<{ name: string; email: string } | undefined> {
+  const row = await getUserGithubTokenRecord(userId);
+  if (!row) return undefined;
+  return { name: row.github_login, email: formatGithubNoreplyEmail(row) };
 }
 
 const inflightRefreshes = new Map<string, Promise<string | null>>();

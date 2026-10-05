@@ -124,6 +124,59 @@ export async function checkSettled(cases: readonly ProviderTurnCase[]): Promise<
   return violations;
 }
 
+/** Runtime evidence is sampled as the provider emits, so invented closes cannot pass. */
+export interface ProviderBackgroundCase extends ProviderTurnCase {
+  runtimeStatus(taskId: string): Extract<ProviderChunk, { type: 'subtask' }>['status'] | undefined;
+}
+
+export async function checkBackgroundSettle(
+  cases: readonly ProviderBackgroundCase[]
+): Promise<string[]> {
+  if (cases.length === 0) return ['reported provider has no background conformance cases'];
+  const violations: string[] = [];
+  for (const turn of cases) {
+    const observed = new Set<string>();
+    let resultWhileLive = false;
+    let settled = false;
+    try {
+      for await (const raw of turn.run()) {
+        const parsed = providerChunkSchema.safeParse(raw);
+        if (!parsed.success) continue;
+        const chunk = parsed.data;
+        if (chunk.type === 'subtask') {
+          observed.add(chunk.taskId);
+          if (
+            TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
+            turn.runtimeStatus(chunk.taskId) !== chunk.status
+          ) {
+            violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
+          }
+        } else if (chunk.type === 'result') {
+          resultWhileLive ||= [...observed].some(
+            id => !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')
+          );
+        } else if (chunk.type === 'settled') {
+          settled = true;
+          for (const id of observed) {
+            if (!TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')) {
+              violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      violations.push(
+        `${turn.name}: threw before its background work settled (${(error as Error).message})`
+      );
+      continue;
+    }
+    if (!settled || observed.size === 0 || !resultWhileLive) {
+      violations.push(`${turn.name}: background case must settle after a result with live work`);
+    }
+  }
+  return violations;
+}
+
 const TERMINAL_SUBTASK_STATUSES: ReadonlySet<string> = new Set(subtaskTerminalStatusSchema.options);
 
 /**
@@ -135,7 +188,8 @@ const TERMINAL_SUBTASK_STATUSES: ReadonlySet<string> = new Set(subtaskTerminalSt
  *     background work outlives its first `result` may start calls after it; those close
  *     before the following `result`;
  *  3. no `tool_call_update` arrives without an earlier `tool_call` for its id;
- *  4. every subtask's last status before `settled` is `completed`, `failed` or `stopped`.
+ *  4. every subtask's last status before `settled` is `completed`, `failed` or `stopped`,
+ *     as reported by its runtime (verified by `checkBackgroundSettle`).
  *     A stream that never settles is reported by `checkSettled`.
  */
 export async function checkEventVocabulary(cases: readonly ProviderTurnCase[]): Promise<string[]> {
@@ -353,7 +407,8 @@ export async function checkCredentialStatuses(
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
   /** The provider's declared capabilities; pass `getCapabilities()`. */
-  capabilities: Pick<ProviderCapabilities, 'sessionResume' | 'sessionFork'>;
+  capabilities: Pick<ProviderCapabilities, 'sessionResume' | 'sessionFork' | 'backgroundWork'>;
+  backgroundCases?: readonly ProviderBackgroundCase[];
   failureCases: readonly ProviderFailureCase[];
   /** Turns that succeed, including one whose result arrives before its work drains. */
   turns: readonly ProviderTurnCase[];
@@ -370,6 +425,7 @@ export async function runProviderConformance(suite: ProviderConformanceSuite): P
     ...suite.turns,
     ...(suite.toolTurn ? [suite.toolTurn] : []),
     ...(suite.forkTurn ? [suite.forkTurn] : []),
+    ...(suite.backgroundCases ?? []),
   ];
   const forkViolations = !suite.capabilities.sessionFork
     ? []
@@ -377,6 +433,9 @@ export async function runProviderConformance(suite: ProviderConformanceSuite): P
       ? await checkForkedSession(suite.forkTurn)
       : ['the provider declares sessionFork but the suite has no forkTurn'];
   return [
+    ...(suite.capabilities.backgroundWork === 'reported'
+      ? await checkBackgroundSettle(suite.backgroundCases ?? [])
+      : []),
     ...(await checkFailureClasses(suite.failureCases)),
     // A failed turn settles too.
     ...(await checkSettled([...turns, ...suite.failureCases])),

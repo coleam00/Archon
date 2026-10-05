@@ -23,9 +23,12 @@ import { CODEX_CAPABILITIES } from './codex/capabilities';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
 import { registerPiProvider } from './community/pi/registration';
-import { InvalidProviderRunConfigError, UnknownProviderError } from './errors';
 import { createLogger } from '@archon/paths';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import {
+  EFFORT_LADDER,
+  InvalidProviderRunConfigError,
+  UnknownProviderError,
+} from '@archon/provider-contract';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

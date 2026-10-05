@@ -37,7 +37,10 @@
  * grace on `docker stop` can under-report. See SECURITY.md.
  */
 
-import type { OverlayChangeSummary, WriteBackApplySummary } from '@archon/providers/types';
+import type {
+  OverlayChangeSummary,
+  WriteBackApplySummary,
+} from '@archon/workflows/container-context';
 import { createLogger } from '@archon/paths';
 import type { DockerRunner } from './docker-exec';
 import { extractDockerError } from './docker-exec';
