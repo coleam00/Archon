@@ -3,7 +3,8 @@ description: |
   Review a change through parallel specialist lenses and produce one evidence-based
   verdict. On the first round, seams always runs. A full-tier round adds code,
   tests, and simplify; a focused round (a low-risk change) adds one general
-  reviewer instead. Errors is selected for failure-path changes and docs only for
+  reviewer first. An engaged full-review risk adds the full specialists before
+  synthesis. Errors judges failure visibility and containment; docs runs only for
   shipped-doc changes.
   Reviews a PR when given one, otherwise the working diff. Every round also holds the change to the accepted contract: each
   stated acceptance item, invariant, and steering constraint is met with cited
@@ -43,13 +44,14 @@ inputs:
       this empty and use the PR's problem, outcome, and explicit scope instead.
   errors:
     default: false
-    description: Enable the silent-failure lens on a full review.
+    description: Enable the failure visibility and containment lens.
   tier:
     default: "full"
     description: >-
       focused — seams plus one general reviewer, for a change that engages none
       of the risks the lenses scale on; any other value runs the full tier: code,
-      seams, tests and simplify.
+      seams, tests and simplify. A focused risk escalation adds those specialists
+      before the round publishes its verdict.
   docs:
     default: "auto"
     description: >-
@@ -81,7 +83,9 @@ nodes:
         head: { type: string, minLength: 1 }
         # The previous round's reviewed commit; empty on a first round.
         cursor: { type: string }
-      required: [continuation, head, cursor]
+        risks: { type: string, minLength: 1 }
+        execution: { type: object }
+      required: [continuation, head, cursor, risks, execution]
 
   - id: scope
     command: review-scope
@@ -116,6 +120,7 @@ nodes:
   # mislead the others. Seams runs on every tier: a contract two sides must keep
   # in agreement is as easy to break in a small change as in a large one.
   - id: seams
+    output_type: review-lens
     command: review-seams
     context: fresh
     mutates_checkout: false
@@ -126,27 +131,30 @@ nodes:
       delay_ms: 20000
 
   - id: code
+    output_type: review-lens
     command: review-code
     context: fresh
     mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.tier != 'focused'"
+    depends_on: [coverage]
+    when: "$mode.output.continuation == false && $coverage.output.full == true"
     retry:
       max_attempts: 2
       delay_ms: 20000
 
   - id: tests
+    output_type: review-lens
     command: review-tests
     context: fresh
     mutates_checkout: false
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.tier != 'focused'"
+    depends_on: [coverage]
+    when: "$mode.output.continuation == false && $coverage.output.full == true"
     retry:
       max_attempts: 2
       delay_ms: 20000
 
-  # A low-risk change gets one general reviewer in place of code and tests.
+  # A focused reviewer can require full coverage before this round concludes.
   - id: focused
+    output_type: review-lens
     command: review-focused
     context: fresh
     mutates_checkout: false
@@ -155,6 +163,28 @@ nodes:
     retry:
       max_attempts: 2
       delay_ms: 20000
+    output_format:
+      type: object
+      properties:
+        full_review: { type: boolean }
+        reason: { type: string, pattern: '\S' }
+      required: [full_review, reason]
+
+  - id: coverage
+    output_type: review-coverage
+    script: resolve-review-coverage
+    runtime: bun
+    depends_on: [scope, focused]
+    trigger_rule: none_failed_min_one_success
+    with:
+      continuation: "$mode.output.continuation"
+      tier: "$INPUTS.tier"
+      focused: { from: "$focused.output", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        full: { type: boolean }
+      required: [full]
 
   # Structure is judged on every full-tier change, never selected for one; the
   # focused reviewer carries a machinery check instead. The charter lives in its
@@ -165,10 +195,11 @@ nodes:
     with:
       stage: review
       work_order: "$INPUTS.work_order"
-    depends_on: [scope]
-    when: "$mode.output.continuation == false && $INPUTS.tier != 'focused'"
+    depends_on: [coverage]
+    when: "$mode.output.continuation == false && $coverage.output.full == true"
 
   - id: errors
+    output_type: review-lens
     command: review-errors
     context: fresh
     mutates_checkout: false
@@ -179,6 +210,7 @@ nodes:
       delay_ms: 20000
 
   - id: docs
+    output_type: review-lens
     command: review-docs
     context: fresh
     mutates_checkout: false
@@ -194,7 +226,7 @@ nodes:
   # mode/scope preflight: synthesize separately requires scope to have succeeded.
   - id: review-complete
     bash: "true"
-    depends_on: [seams, code, tests, focused, simplify, errors, docs]
+    depends_on: [coverage, seams, code, tests, focused, simplify, errors, docs]
     trigger_rule: all_done
 
   # A failed specialist (a provider stream dying mid-review, say) must not kill

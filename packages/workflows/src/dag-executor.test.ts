@@ -34824,6 +34824,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       moved: true,
       fork: true,
       continuation: false,
+      full: true,
       state: 'red',
     };
     const inheritedRouteText = JSON.stringify(inheritedRoute);

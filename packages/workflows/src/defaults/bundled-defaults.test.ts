@@ -234,17 +234,9 @@ describe('bundled-defaults', () => {
         // discovery. Every reviewer states it in the same words.
         expect(content).toContain('is a finding, even when the contract never named it');
         expect(content).toContain('$ARTIFACTS_DIR/review/scope.md');
-        // The risk taxonomy the removed file used to own, now stated in every prompt
-        // that depends on it rather than cited.
-        expect(content).toContain(
-          'irreversible or destructive paths, lifecycle ownership, persisted contracts and ' +
-            'schemas, credentials and auth boundaries, integration boundaries'
-        );
-      }
-      // Synthesis judges whether the lenses engaged those risks; the lenses scale their
-      // own depth by them.
-      for (const key of lenses) {
-        expect(BUNDLED_COMMANDS[key]).toContain('scale depth to what the change can destroy');
+        if (!key.includes(':simplify::')) {
+          expect(content).toContain('$mode.output.risks');
+        }
       }
     });
 
@@ -503,17 +495,15 @@ describe('bundled-defaults', () => {
       const specialists = ['seams', 'code', 'tests', 'focused', 'simplify', 'errors', 'docs'];
       const reviewComplete = parsed.workflow.nodes.find(node => node.id === 'review-complete');
       expect(reviewComplete?.kind).toBe('exec');
-      expect(reviewComplete?.depends_on).toEqual(specialists);
-      // Seams runs on every tier; code and tests only on the full one, where the
-      // focused reviewer stands in for them on a low-risk change.
+      expect(reviewComplete?.depends_on).toEqual(['coverage', ...specialists]);
       const lensWhen = (id: string) => parsed.workflow?.nodes.find(node => node.id === id)?.when;
       expect(lensWhen('seams')).not.toContain('tier');
-      expect(lensWhen('code')).toContain("$INPUTS.tier != 'focused'");
-      expect(lensWhen('tests')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('code')).toContain('$coverage.output.full == true');
+      expect(lensWhen('tests')).toContain('$coverage.output.full == true');
       expect(lensWhen('focused')).toContain("$INPUTS.tier == 'focused'");
       // Structure is a full-tier lens again: delivery's pre-PR pass is the first look,
       // not a replacement for this one.
-      expect(lensWhen('simplify')).toContain("$INPUTS.tier != 'focused'");
+      expect(lensWhen('simplify')).toContain('$coverage.output.full == true');
       // Reviewers are read-only by the engine's check, not only by their prompts.
       for (const id of [
         'scope',
