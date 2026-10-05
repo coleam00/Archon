@@ -20,7 +20,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 
 import { WorktreeProvider } from './worktree';
 import type { IsolationRequest } from '../types';
-import { MissingProjectDirectoryError } from '../errors';
+import { classifyIsolationError, MissingProjectDirectoryError } from '../errors';
 
 // The provider logs a full setup failure and its rollback. Both are expected here,
 // and a child logger takes the level set before it is created.
@@ -216,6 +216,109 @@ describe('WorktreeProvider against real git', () => {
     expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
   });
 
+  test('a failing post-checkout hook rolls back its clean checkout and preserves the error', async () => {
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\necho hook-failure-3477 >&2\nexit 42\n',
+      { mode: 0o755 }
+    );
+
+    await expect(provider.create(request)).rejects.toThrow('hook-failure-3477');
+
+    expect(existsSync(worktreePath)).toBe(false);
+    expect(await registeredWorktrees()).not.toContain(resolve(worktreePath));
+    expect((await git(repoPath, 'rev-parse', TASK_BRANCH)).trim()).toBe(
+      (await git(repoPath, 'rev-parse', 'main')).trim()
+    );
+  });
+
+  test.each(['tracked', 'untracked', 'ignored'])(
+    'preserves %s changes left by a failing hook',
+    async kind => {
+      if (kind === 'ignored') {
+        await writeFile(join(repoPath, '.git', 'info', 'exclude'), 'hook-output\n');
+      }
+      const filename = kind === 'tracked' ? 'README.md' : 'hook-output';
+      await writeFile(
+        join(repoPath, '.git', 'hooks', 'post-checkout'),
+        `#!/bin/sh\nprintf hook-work > ${filename}\necho dirty-hook-failure >&2\nexit 42\n`,
+        { mode: 0o755 }
+      );
+      const error = await provider.create(request).catch((error: unknown) => error);
+      if (!(error instanceof Error)) throw new Error('Expected hook failure');
+      expect(error.message).toContain('dirty-hook-failure');
+      expect(classifyIsolationError(error)).toContain('contains changes');
+      expect(await readFile(join(worktreePath, filename), 'utf-8')).toBe('hook-work');
+      expect(await registeredWorktrees()).toContain(resolve(worktreePath));
+      expect(await lockReasonOf(worktreePath)).toMatch(/^archon: worktree setup in progress: .+/);
+      await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
+    }
+  );
+
+  test('a dirty fork-PR hook failure keeps the original error through adoption fallback', async () => {
+    const remotePath = join(root, 'remote.git');
+    await git(root, 'init', '--bare', '-q', remotePath);
+    await git(repoPath, 'remote', 'add', 'origin', remotePath);
+    await git(repoPath, 'push', '-q', 'origin', 'main', 'main:refs/pull/42/head');
+    const prRequest: IsolationRequest = {
+      codebaseId: request.codebaseId,
+      codebaseName: request.codebaseName,
+      canonicalRepoPath: request.canonicalRepoPath,
+      workflowType: 'pr',
+      identifier: '42',
+      prBranch: toBranchName('feature/review'),
+      isForkPR: true,
+      baseBranch: toBranchName('main'),
+    };
+    const prPath = provider.getWorktreePath(prRequest, provider.generateBranchName(prRequest));
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\nprintf hook-work > hook-output\necho fork-hook-failure >&2\nexit 42\n',
+      { mode: 0o755 }
+    );
+    const error = await provider.create(prRequest).catch((error: unknown) => error);
+    if (!(error instanceof Error)) throw new Error('Expected fork hook failure');
+    expect(error.message).toContain('fork-hook-failure');
+    expect(classifyIsolationError(error)).toContain('contains changes');
+    expect(await readFile(join(prPath, 'hook-output'), 'utf-8')).toBe('hook-work');
+    expect(await registeredWorktrees()).toContain(resolve(prPath));
+    expect(await lockReasonOf(prPath)).toMatch(/^archon: worktree setup in progress: .+/);
+  });
+
+  test('preserves a pre-existing worktree at the target path', async () => {
+    await git(repoPath, 'worktree', 'add', '-q', worktreePath, TASK_BRANCH);
+    await writeFile(join(worktreePath, 'user-work'), 'keep me');
+    await writeFile(join(repoPath, '.git', 'hooks', 'post-checkout'), '#!/bin/sh\nexit 42\n', {
+      mode: 0o755,
+    });
+    const adopted = await provider.create(request);
+    expect(adopted.metadata.adopted).toBe(true);
+    expect(await readFile(join(worktreePath, 'user-work'), 'utf-8')).toBe('keep me');
+    expect(await registeredWorktrees()).toContain(resolve(worktreePath));
+    expect(await lockReasonOf(worktreePath)).toBeNull();
+  });
+
+  test.each([false, true])('preserves a pre-existing directory (empty: %s)', async empty => {
+    await mkdir(worktreePath, { recursive: true });
+    if (!empty) await writeFile(join(worktreePath, 'user-work'), 'keep me');
+    await expect(provider.create(request)).rejects.toThrow('the directory already exists');
+    expect(existsSync(worktreePath)).toBe(true);
+    if (!empty) expect(await readFile(join(worktreePath, 'user-work'), 'utf-8')).toBe('keep me');
+  });
+
+  test('an add that creates nothing reports only the original failure', async () => {
+    const missingBranchRequest: IsolationRequest = {
+      ...request,
+      workflowType: 'task',
+      taskBranch: { kind: 'existing', branch: toBranchName('missing-branch') },
+    };
+    const error = await provider.create(missingBranchRequest).catch((error: unknown) => error);
+    if (!(error instanceof Error)) throw new Error('Expected add failure');
+    expect(error.message).toContain('missing-branch');
+    expect(classifyIsolationError(error)).not.toContain('was left behind');
+    expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
+  });
+
   test('a setup failure after `git worktree add` leaves nothing for the next run to adopt', async () => {
     await addUnreachableSubmodule();
     const branchHead = (await git(repoPath, 'rev-parse', TASK_BRANCH)).trim();
@@ -231,6 +334,21 @@ describe('WorktreeProvider against real git', () => {
     // whose submodules were never initialized.
     await expect(provider.create(request)).rejects.toThrow(/Submodule initialization failed/);
     expect(existsSync(worktreePath)).toBe(false);
+  });
+
+  test('a later setup failure preserves changes from a successful checkout hook', async () => {
+    await addUnreachableSubmodule();
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\nprintf hook-work > hook-output\n',
+      { mode: 0o755 }
+    );
+    const error = await provider.create(request).catch((error: unknown) => error);
+    if (!(error instanceof Error)) throw new Error('Expected submodule failure');
+    expect(error.message).toContain('Submodule initialization failed');
+    expect(classifyIsolationError(error)).toContain('contains changes');
+    expect(await readFile(join(worktreePath, 'hook-output'), 'utf-8')).toBe('hook-work');
+    expect(await lockReasonOf(worktreePath)).toMatch(/^archon: worktree setup in progress: .+/);
   });
 
   test('a worktree whose setup completed survives and is reused by the next run', async () => {
@@ -251,25 +369,21 @@ describe('WorktreeProvider against real git', () => {
     expect(existsSync(join(worktreePath, 'work-in-progress.txt'))).toBe(true);
   });
 
-  test('a checkout still marked as being set up is refused, not adopted', async () => {
+  test.each([
+    'archon: worktree setup in progress',
+    'archon: worktree setup in progress: previous-attempt',
+  ])('refuses an unfinished checkout with lock %s', async reason => {
     // What a setup killed mid-flight leaves behind: the checkout git created,
     // still carrying the lock the run took before setting it up.
     await git(repoPath, 'worktree', 'add', '-q', worktreePath, TASK_BRANCH);
-    await git(
-      repoPath,
-      'worktree',
-      'lock',
-      '--reason',
-      'archon: worktree setup in progress',
-      worktreePath
-    );
+    await git(repoPath, 'worktree', 'lock', '--reason', reason, worktreePath);
 
     await expect(provider.create(request)).rejects.toThrow(/its setup did not finish/);
 
     // Refusing must not destroy it either: the operator decides, and a live run
     // may still own it.
     expect(existsSync(worktreePath)).toBe(true);
-    expect(await lockReasonOf(worktreePath)).toBe('archon: worktree setup in progress');
+    expect(await lockReasonOf(worktreePath)).toBe(reason);
   });
 
   test('the checkout is marked unfinished from the moment git creates it', async () => {
@@ -291,7 +405,13 @@ describe('WorktreeProvider against real git', () => {
     // Taking the lock after `add` returned would leave this reading `unlocked`,
     // and a concurrent run adopting a checkout with no submodules and no
     // configured files. `--lock` on the add itself is what closes that window.
-    expect(await lockSeenDuringAdd()).toBe('archon: worktree setup in progress');
+    const firstReason = await lockSeenDuringAdd();
+    expect(firstReason).toMatch(/^archon: worktree setup in progress: .+/);
+    await provider.destroy(worktreePath, { canonicalRepoPath: request.canonicalRepoPath });
+    await provider.create(request);
+    const secondReason = await lockSeenDuringAdd();
+    expect(secondReason).toMatch(/^archon: worktree setup in progress: .+/);
+    expect(secondReason).not.toBe(firstReason);
   });
 
   test("a checkout locked for someone else's reason is still adopted", async () => {
