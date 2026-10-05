@@ -10,6 +10,9 @@
  *    ANTHROPIC_API_KEY can override Claude subscription auth and incur API
  *    billing; other project keys can override Archon's defaults/environment.
  *    Install credentials belong in ~/.archon/.env, loaded after this strip.
+ *    Exception: a detached child (--internal-detached-run-config) gets the six
+ *    DETACHED_INSTALL_CONTEXT_KEYS restored afterwards from the trusted detached
+ *    config, never from the project .env.
  *
  * 2. Nested Claude Code session markers: When archon is launched from inside a
  *    Claude Code terminal, the parent shell exports CLAUDECODE=1 and several
@@ -38,8 +41,8 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
 ]);
 
 /**
- * Strip every key named in CWD .env files, whatever its value or source,
- * and nested Claude Code session markers from process.env.
+ * Strip every key named in CWD .env files, whatever its value or source
+ * (detached children then restore DETACHED_INSTALL_CONTEXT_KEYS), and nested Claude Code session markers from process.env.
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
  * Safe to call even when no CWD .env files exist.
  */
