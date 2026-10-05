@@ -23,6 +23,7 @@ import {
   resolveClaudeBinaryWithSource,
   type ClaudeBinaryResolution,
 } from '@archon/providers/claude/binary-resolver';
+import type { probeOpencodeRuntime } from '@archon/providers/community/opencode/runtime';
 import type { IAgentProvider } from '@archon/providers';
 import type { Codebase, MergedConfig, SchemaVersionInfo } from '@archon/core';
 import type { CredentialStatus } from '@archon/provider-contract';
@@ -302,16 +303,12 @@ async function defaultLoadCodexBinaryDeps(env: NodeJS.ProcessEnv): Promise<Codex
 export interface OpenCodeDeps {
   /** True when the merged default assistant is opencode. */
   isDefaultAssistant: boolean;
-  /** Cheap module-presence probe — resolves the SDK WITHOUT booting the server. */
-  probeRuntimeModule: () => Promise<boolean>;
+  probeRuntime: typeof probeOpencodeRuntime;
 }
 
 /**
- * Report whether the embedded OpenCode runtime SDK is present. OpenCode's
- * runtime is heavyweight to start (spawns a child process and binds a port),
- * so doctor NEVER boots it — it only probes that the SDK module resolves. Skips
- * unless OpenCode is the configured assistant or `--full` is passed, matching
- * the lazy-start posture of `GET /api/providers/opencode/credentials`.
+ * OpenCode startup spawns a child process and binds a port. Doctor checks its
+ * dependencies without booting it, only when configured or requested with --full.
  */
 export async function checkOpenCode(
   env: NodeJS.ProcessEnv,
@@ -336,7 +333,7 @@ export async function checkOpenCode(
     return {
       label,
       status: 'skip',
-      message: 'OpenCode not configured (pass --full to probe the runtime SDK)',
+      message: 'OpenCode not configured (pass --full to probe the runtime dependencies)',
     };
   }
 
@@ -350,10 +347,9 @@ export async function checkOpenCode(
     };
   }
 
-  let present: boolean;
+  let availability: Awaited<ReturnType<OpenCodeDeps['probeRuntime']>>;
   try {
-    // Cheap probe only — resolves the SDK module without starting the server.
-    present = await deps.probeRuntimeModule();
+    availability = await deps.probeRuntime();
   } catch (err) {
     return {
       label,
@@ -362,29 +358,41 @@ export async function checkOpenCode(
     };
   }
 
-  if (present) {
-    return {
-      label,
-      status: 'pass',
-      message: 'embedded runtime SDK present (module resolves; server not started)',
-    };
+  switch (availability) {
+    case 'ready':
+      return {
+        label,
+        status: 'pass',
+        message: 'embedded runtime SDK and opencode executable present (server not started)',
+      };
+    case 'executable-missing':
+      return {
+        label,
+        status: 'fail',
+        message:
+          'opencode executable not found on PATH. Install the OpenCode CLI and add it to PATH.',
+      };
+    case 'sdk-entrypoint-missing':
+      return {
+        label,
+        status: 'fail',
+        message:
+          '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
+      };
+    default: {
+      const unhandled: never = availability;
+      throw new Error(`unhandled OpenCode availability: ${String(unhandled)}`);
+    }
   }
-  return {
-    label,
-    status: 'fail',
-    message:
-      '@opencode-ai/sdk resolved but the createOpencode entrypoint is missing — reinstall dependencies (bun install).',
-  };
 }
 
 async function defaultLoadOpenCodeDeps(): Promise<OpenCodeDeps> {
   const { loadConfig } = await import('@archon/core');
-  const { probeOpencodeRuntimeModule } =
-    await import('@archon/providers/community/opencode/runtime');
+  const { probeOpencodeRuntime } = await import('@archon/providers/community/opencode/runtime');
   const config = await loadConfig(process.cwd());
   return {
     isDefaultAssistant: config.assistant === 'opencode',
-    probeRuntimeModule: probeOpencodeRuntimeModule,
+    probeRuntime: probeOpencodeRuntime,
   };
 }
 

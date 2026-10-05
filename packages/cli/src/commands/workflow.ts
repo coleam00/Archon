@@ -2,6 +2,7 @@
  * Workflow command - list and run workflows
  */
 
+import { generateConversationId } from '../utils/conversation-id';
 import { toolCallDisplayName } from '@archon/provider-contract';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 import { readNodeRecordData, readNodeRecordEvent } from '@archon/workflows/node-record-reader';
@@ -477,15 +478,6 @@ export function resolveContainerBackendConfig(
 export function hasUnresolvedWriteback(metadata: Record<string, unknown> | undefined): boolean {
   if (!metadata) return false;
   return metadata.pending_writeback !== undefined && metadata.writeback_resolved !== true;
-}
-
-/**
- * Generate a unique conversation ID for CLI usage
- */
-function generateConversationId(): string {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 8);
-  return `cli-${String(timestamp)}-${random}`;
 }
 
 /**

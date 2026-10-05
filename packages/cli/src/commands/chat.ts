@@ -4,6 +4,7 @@
  * Single-shot: streams response to stdout and exits.
  * Multi-turn conversations happen via the web UI.
  */
+import { generateConversationId } from '../utils/conversation-id';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { handleMessage } from '@archon/core';
 
@@ -13,7 +14,7 @@ import { handleMessage } from '@archon/core';
  */
 export async function chatCommand(message: string): Promise<void> {
   const adapter = new CLIAdapter({ streamingMode: 'batch' });
-  const conversationId = `cli-chat-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const conversationId = generateConversationId('cli-chat');
 
   // TODO: thread userId once the CLI auth path lands. handleMessage will then
   // receive { userId } via HandleMessageContext and the conversation row will

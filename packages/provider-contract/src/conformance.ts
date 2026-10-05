@@ -293,6 +293,37 @@ export async function checkSessionIdReported(
   return violations;
 }
 
+/** A turn that continues the session `source` in a fork. */
+export interface ProviderForkCase extends ProviderTurnCase {
+  /** The session the turn forks; it must already exist for the provider to fork. */
+  source: string;
+}
+
+/**
+ * A fork continues its source in a new session and leaves the source unchanged, so two runs
+ * that continue one session never write into it together. Every result of the fork turn
+ * reports the source's context restored (`resumed: true`) and names a session other than
+ * the source: the engine fails a named resume that gets either one wrong.
+ */
+export async function checkForkedSession(forkTurn: ProviderForkCase): Promise<string[]> {
+  const violations: string[] = [];
+  try {
+    for await (const chunk of forkTurn.run()) {
+      if (!isResultChunk(chunk)) continue;
+      const { sessionId, resumed } = chunk as { sessionId?: unknown; resumed?: unknown };
+      if (resumed !== true) {
+        violations.push(`${forkTurn.name}: a result does not report the source session restored`);
+      }
+      if (sessionId === forkTurn.source) {
+        violations.push(`${forkTurn.name}: a result names the source session, not a fork`);
+      }
+    }
+  } catch {
+    // checkSettled reports the throw.
+  }
+  return violations;
+}
+
 /**
  * The `toolTurn` fixture must exercise what rule 2 is about: at least two tool calls, one of
  * them interrupted and closed as `cancelled`. A smaller fixture would pass rule 2 vacuously.
@@ -369,7 +400,7 @@ export async function checkCredentialStatuses(
 /** Everything a provider supplies to be checked. Later checks add their own fixtures here. */
 export interface ProviderConformanceSuite {
   /** The provider's declared capabilities; pass `getCapabilities()`. */
-  capabilities: Pick<ProviderCapabilities, 'sessionResume' | 'backgroundWork'>;
+  capabilities: Pick<ProviderCapabilities, 'sessionResume' | 'sessionFork' | 'backgroundWork'>;
   backgroundCases?: readonly ProviderBackgroundCase[];
   failureCases: readonly ProviderFailureCase[];
   /** Turns that succeed, including one whose result arrives before its work drains. */
@@ -378,25 +409,33 @@ export interface ProviderConformanceSuite {
    * A turn with two tool calls, one of them interrupted. A provider without tools omits it.
    */
   toolTurn?: ProviderTurnCase;
+  /** A turn that forks an existing session. Required when the provider declares `sessionFork`. */
+  forkTurn?: ProviderForkCase;
 }
 
 export async function runProviderConformance(suite: ProviderConformanceSuite): Promise<string[]> {
-  const extraTurns = [
+  const turns = [
+    ...suite.turns,
     ...(suite.toolTurn ? [suite.toolTurn] : []),
+    ...(suite.forkTurn ? [suite.forkTurn] : []),
     ...(suite.backgroundCases ?? []),
   ];
+  const forkViolations = !suite.capabilities.sessionFork
+    ? []
+    : suite.forkTurn
+      ? await checkForkedSession(suite.forkTurn)
+      : ['the provider declares sessionFork but the suite has no forkTurn'];
   return [
     ...(suite.capabilities.backgroundWork === 'reported'
       ? await checkBackgroundSettle(suite.backgroundCases ?? [])
       : []),
     ...(await checkFailureClasses(suite.failureCases)),
     // A failed turn settles too.
-    ...(await checkSettled([...suite.turns, ...extraTurns, ...suite.failureCases])),
+    ...(await checkSettled([...turns, ...suite.failureCases])),
     // Every fixture streams the vocabulary, a failed turn included.
-    ...(await checkEventVocabulary([...suite.turns, ...extraTurns, ...suite.failureCases])),
+    ...(await checkEventVocabulary([...turns, ...suite.failureCases])),
     ...(suite.toolTurn ? await checkToolTurnShape(suite.toolTurn) : []),
-    ...(suite.capabilities.sessionResume
-      ? await checkSessionIdReported([...suite.turns, ...extraTurns])
-      : []),
+    ...(suite.capabilities.sessionResume ? await checkSessionIdReported(turns) : []),
+    ...forkViolations,
   ];
 }

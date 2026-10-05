@@ -1,11 +1,13 @@
 /** Re-exports for the variants layer. */
 export { partitionNode } from './base-fields';
-export { detectVariant, detectVariantOrNull } from './detect';
+export { detectOpaqueKind, detectVariant, detectVariantOrNull } from './detect';
 export { VARIANT_CAPABILITIES, type VariantCapabilities } from './capabilities';
 export {
   VARIANTS,
   VARIANT_REGISTRY,
   isVariantId,
+  nodeCapabilities,
+  nodeLabel,
   variantDataFromDag,
   nodeDataToDag,
   type VariantRegistryEntry,

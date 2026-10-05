@@ -52,7 +52,7 @@ backgrounded inside a foreground shell command (`cmd &`) is invisible to every p
 | --- | --- | --- | --- | --- | --- |
 | Background work observation | reported | unobserved | unobserved | none | unobserved |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ❌ | ❌ | ✅ | ❌ |
+| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ✅ | ❌ | ✅ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |

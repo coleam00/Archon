@@ -4063,6 +4063,16 @@ describe('typed failures (#1797, #3524)', () => {
           },
         },
       ],
+      forkTurn: {
+        name: 'forked session',
+        source: 's',
+        run: () => {
+          mockQuery.mockImplementation(async function* () {
+            yield { type: 'result', subtype: 'success', is_error: false, session_id: 's-fork' };
+          });
+          return client.sendQuery('test', '/workspace', 's', { forkSession: true });
+        },
+      },
       toolTurn: {
         name: 'tool turn with an interrupted call',
         run: () => {

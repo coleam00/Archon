@@ -289,7 +289,7 @@ Scalar `context: shared` is only for ambient session threading through a sequent
 This is an exact, immutable fork contract:
 
 - Source and consumer must resolve to the same provider.
-- Claude and Pi support immutable forks. Codex explicitly does not; an omitted fork capability is also unsupported.
+- Claude, Codex and Pi support immutable forks. A provider that omits the fork capability does not.
 - A missing source handle, unavailable prior context, missing branch handle, or provider that reuses the source session fails the node. Named resume never falls back to a fresh session.
 - Two parallel consumers may name the same source; each receives its own branch while the source remains unchanged.
 - Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
@@ -612,20 +612,27 @@ substitution instead of splicing in the failed producer's leftover output; a `ba
 `prompt:`/`command:` body must not assume a dependency succeeded just because it was
 allowed to run (`trigger_rule: all_done`).
 
-:::caution[Double-quoting `$node.output` in `bash:` nodes is a silent footgun]
-In `bash:` nodes, `$nodeId.output` and `$nodeId.output.field` are injected pre-quoted by Archon. For small outputs, values are **single-quoted inline** — the quoting is already provided by the substitution. For outputs exceeding 32 KB, Archon spills to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and substitutes `$(cat '<path>')` instead. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon). Wrapping the substitution in double quotes breaks the **small (inline) case**: `var="$n.output"` becomes `var="'value'"`, embedding the literal single-quotes as part of the value. (For the large `$(cat ...)` case, double-quoting is harmless — `var="$(cat ...)"` is correct bash — but you can't know the output's size at author time, so the rule is unconditional: never double-quote.)
+:::caution[Assign output references, then quote the variable in shell bodies]
+In `bash:` and `until_bash:`, Archon injects `$nodeId.output`, `$nodeId.output.field`, and `$LOOP_PREV.nodeId.output[.field]` using two forms:
+
+- Small string outputs are single-quoted inline, such as `'a b   c *'`.
+- Outputs exceeding 32 KB spill to the run-owned `$ARTIFACTS_DIR/.archon/node-output-spills/<node>[.<field>].nodeoutput` file and become `$(cat '<path>')`. These files follow the [run-artifact retention lifecycle](/reference/archon-directories/#user-level-archon).
+
+A bare argument such as `printf '%s' $emit.output` works with the inline form, but the unquoted command substitution in the spill form splits words and expands globs. Wrapping the reference in double quotes breaks the inline form instead: `value="$emit.output"` becomes `value="'a b   c *'"`, preserving the single quotes as data. Single quotes around a reference also produce the wrong value.
+
+**Rule: assign, then quote the variable.** Keep the reference as the whole, unquoted assignment value; quote the shell variable wherever you use it:
 
 ```bash
-# WRONG — produces status="'ok'" (single quotes become part of the value)
-status="$emit.output.status"
-[ "$status" = "ok" ]   # → always false
+value=$emit.output
+printf '%s' "$value"
 
-# CORRECT — leave unquoted; bash assigns: status=ok
 status=$emit.output.status
-[ "$status" = "ok" ]   # → true
+[ "$status" = "ok" ]
 ```
 
-**Rule:** use `var=$node.output.field`, never `var="$node.output.field"`. This applies whether the output is small (single-quoted inline) or large (`$(cat ...)`). Numeric and boolean fields are injected raw (without quotes), so double-quoting accidentally "works" for them — making the bug intermittent and hard to spot.
+Assignments suppress word splitting and glob expansion in both regimes. `export value=$emit.output` and `local value=$emit.output` are also safe. Numeric and boolean fields are injected raw, but use the same idiom so a change to a string value remains safe.
+
+`archon validate workflows` warns about quoted references and bare references outside complete assignments. Heredoc bodies remain outside this check.
 :::
 
 ### `output_format` for Structured JSON
@@ -1002,8 +1009,8 @@ The **CLI is different**: each `archon workflow run` mints a fresh conversation 
 Two runs of the same workflow in the same scope can run at the same time. Neither waits for the other, and they never write into the same provider conversation:
 
 - When a run starts, it reads the scope's persisted sessions once. Each `persist_session` node continues from that copy, not from a session another run saved after this run started.
-- The node continues the saved session only when its provider can **fork** it (declares `sessionFork: true`). The fork is a new session with the saved history, so the saved one stays unchanged. Claude and Pi fork.
-- A provider that cannot fork would resume the saved session in place, so two runs could append to one conversation. Instead, the node does not continue it. The run records a `node_session_not_continued` workflow event naming the session it skipped (an 8-character preview) and posts a notice in the conversation. `archon validate workflows` also warns before any run, but only for a node whose provider is written in the workflow file itself; a node from an included block, or one whose provider comes from config defaults or a `model:` alias, is checked only when it runs. Codex, OpenCode and Copilot are in this group today, so their `persist_session` nodes do not carry context between runs; pass state between runs through artifacts instead.
+- The node continues the saved session only when its provider can **fork** it (declares `sessionFork: true`). The fork is a new session with the saved history, so the saved one stays unchanged. Claude, Codex and Pi fork.
+- A provider that cannot fork would resume the saved session in place, so two runs could append to one conversation. Instead, the node does not continue it. The run records a `node_session_not_continued` workflow event naming the session it skipped (an 8-character preview) and posts a notice in the conversation. `archon validate workflows` also warns before any run, but only for a node whose provider is written in the workflow file itself; a node from an included block, or one whose provider comes from config defaults or a `model:` alias, is checked only when it runs. OpenCode and Copilot are in this group today, so their `persist_session` nodes do not carry context between runs; pass state between runs through artifacts instead.
 - When a node finishes with a session, that session becomes the saved one. With overlapping runs, the run whose node finished last wins. A node that finishes without a session id leaves the saved session as it was.
 
 ### Workflow-level default
@@ -1059,7 +1066,7 @@ If the stored session is gone (for example, a Pi JSONL file was moved), the prov
 
 The node still completes on that fresh session, and its new session id is persisted so the *next* run continues from it. The node is **not** re-run — the fresh session is already a clean start, so re-running would only repeat it. Expect this only for `persist_session` nodes whose prior session became unavailable; warm resumes and first-time runs are unaffected.
 
-Codex does not fall back: a thread it cannot resume fails the node as `unknown`, with Codex's own error as evidence (for example `no rollout found for thread id …`). Codex reports a missing thread with the same JSON-RPC code as any other invalid request, so Archon cannot tell it apart safely enough to start over on its own. Codex cannot fork a session, so a `persist_session` node on Codex never continues an earlier run's thread (see [Concurrent runs](#concurrent-runs)); a Codex resume only continues a thread from the same run, which is gone only if something removed it mid-run.
+Codex does not fall back: a thread it cannot resume or fork fails the node as `unknown`, with Codex's own error as evidence (for example `no rollout found for thread id …`). Codex reports a missing thread with the same JSON-RPC code as any other invalid request, so Archon cannot tell it apart safely enough to start over on its own. A `persist_session` node on Codex forks the thread an earlier run saved, so once that thread is gone (its rollout under the Codex home was deleted, or the run uses another `CODEX_HOME`) the node fails on every run in that scope. Clear the saved session with [`archon workflow reset-sessions`](/reference/cli/#workflow-reset-sessions) to start the node fresh.
 
 #### By-reference recovery via scope artifacts
 

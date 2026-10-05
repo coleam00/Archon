@@ -481,6 +481,11 @@ interface TurnRequest {
   apiKey: string | undefined;
   cwd: string;
   resumeSessionId: string | undefined;
+  /**
+   * Continue `resumeSessionId` in a new thread with its history, leaving it unchanged, so
+   * concurrent runs that continue one thread never write into it together.
+   */
+  forkSession: boolean;
   threadParams: Pick<ParamsOf<'thread/start'>, 'sandbox' | 'approvalPolicy' | 'model' | 'config'>;
   turnParams: Omit<ParamsOf<'turn/start'>, 'threadId'>;
   /**
@@ -525,9 +530,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
     threadParams = { ...threadParams, config: scope.config };
     declared = scope.declared;
   }
-  // A resumed thread needs the same config: Codex does not store it with the thread.
+  // A resumed or forked thread needs the same config: Codex does not store it with the
+  // thread, and a fork without it loads the user's MCP servers and plugins again.
   const threadResponse = request.resumeSessionId
-    ? await connection.request('thread/resume', {
+    ? await connection.request(request.forkSession ? 'thread/fork' : 'thread/resume', {
         threadId: request.resumeSessionId,
         cwd: request.cwd,
         ...threadParams,
@@ -539,7 +545,11 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   request.onThread(threadId);
   if (declared) await checkThreadMcpScope(connection, threadId, declared);
   getLog().debug(
-    { sessionIdPreview: sessionPreview(threadId), resumed: !!request.resumeSessionId },
+    {
+      sessionIdPreview: sessionPreview(threadId),
+      resumed: !!request.resumeSessionId,
+      forked: !!request.resumeSessionId && request.forkSession,
+    },
     'codex.thread_ready'
   );
 
@@ -709,7 +719,7 @@ function* completeTurn(
   }
   result.sessionId = state.threadId;
   if (state.usage) result.tokens = state.usage;
-  // Reaching a turn means `thread/resume` succeeded.
+  // Reaching a turn means `thread/resume` or `thread/fork` succeeded.
   if (request.resumeSessionId) result.resumed = true;
   yield result;
 }
@@ -970,6 +980,7 @@ export class CodexProvider implements IAgentProvider {
         apiKey,
         cwd,
         resumeSessionId,
+        forkSession: requestOptions?.forkSession === true,
         threadParams: {
           sandbox: titleRequest ? 'read-only' : 'danger-full-access',
           approvalPolicy: 'never',
