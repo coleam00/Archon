@@ -1262,13 +1262,13 @@ async function* streamClaudeMessages(
       } else if (subtype === 'background_tasks_changed') {
         const { tasks } = msg as SDKBackgroundTasksChangedMessage;
         liveBackgroundIds = new Set(tasks.filter(task => !task.ambient).map(task => task.task_id));
+        backgroundObserved ||= liveBackgroundIds.size > 0;
         for (const task of tasks) {
           if (task.ambient) {
             hiddenTaskIds.add(task.task_id);
             continue;
           }
           if (visibleTaskIds.has(task.task_id)) continue;
-          backgroundObserved = true;
           visibleTaskIds.add(task.task_id);
           yield {
             type: 'subtask',

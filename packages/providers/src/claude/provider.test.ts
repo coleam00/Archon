@@ -3755,6 +3755,26 @@ describe('typed failures (#1797, #3524)', () => {
     expect(stream.chunks.at(-1)).toEqual({ type: 'settled' });
   });
 
+  test('a task announced before its background snapshot still requires the final idle', async () => {
+    mockQuery.mockImplementation(async function* () {
+      yield { type: 'system', subtype: 'task_started', task_id: 't' };
+      yield {
+        type: 'system',
+        subtype: 'background_tasks_changed',
+        tasks: [{ task_id: 't', task_type: 'local_bash', description: 'work' }],
+      };
+      yield { type: 'result', subtype: 'success', session_id: 's' };
+      yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+      yield { type: 'system', subtype: 'background_tasks_changed', tasks: [] };
+      yield { type: 'system', subtype: 'task_notification', task_id: 't', status: 'completed' };
+    });
+    const stream = await collect(client.sendQuery('test', '/workspace'));
+    expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(false);
+    expect(
+      stream.chunks.filter(chunk => chunk.type === 'subtask').map(chunk => chunk.status)
+    ).toEqual(['started', 'completed']);
+  });
+
   test('lost observation leaves a live task open and never settles', async () => {
     mockQuery.mockImplementation(async function* () {
       yield {
