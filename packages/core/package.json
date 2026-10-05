@@ -265,6 +265,9 @@
     ],
     [
       "src/db/isolation-environments.retention.integration.test.ts"
+    ],
+    [
+      "src/workflows/commit-author.integration.test.ts"
     ]
   ]
 }

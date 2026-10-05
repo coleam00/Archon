@@ -29378,6 +29378,8 @@ describe('subprocess credential redaction', () => {
     const projectSecret = 'project-secret-with-no-known-shape';
     const databaseUrl = 'postgres://user:password@db.internal/archon';
     const fileDeliveredSecret = 'oauth-token-only-present-in-auth-file';
+    const authorName = 'connected-author';
+    const authorEmail = '42+connected-author@users.noreply.github.com';
     const logDir = join(testDir, 'logs');
     const workflowRun = makeWorkflowRun('container-redaction-run', {
       workflow_name: 'container-redaction',
@@ -29434,9 +29436,17 @@ describe('subprocess credential redaction', () => {
               CUSTOM_AUTH: otherInjectedSecret,
               PROJECT_SECRET: projectSecret,
               DATABASE_URL: databaseUrl,
+              GIT_AUTHOR_NAME: authorName,
+              GIT_AUTHOR_EMAIL: authorEmail,
               BASE_BRANCH: 'main',
             },
-            protectedEnvKeys: ['OPENAI_API_KEY', 'CUSTOM_AUTH', 'DATABASE_URL'],
+            protectedEnvKeys: [
+              'OPENAI_API_KEY',
+              'CUSTOM_AUTH',
+              'DATABASE_URL',
+              'GIT_AUTHOR_NAME',
+              'GIT_AUTHOR_EMAIL',
+            ],
             protectedCredentialValues: [fileDeliveredSecret],
           },
           execContext,
@@ -29450,6 +29460,9 @@ describe('subprocess credential redaction', () => {
       expect(dockerArgs.join(' ')).toContain(otherInjectedSecret);
       expect(dockerArgs.join(' ')).toContain(projectSecret);
       expect(dockerArgs.join(' ')).toContain(databaseUrl);
+      expect(dockerArgs).toContain(`GIT_AUTHOR_NAME=${authorName}`);
+      expect(dockerArgs).toContain(`GIT_AUTHOR_EMAIL=${authorEmail}`);
+      expect(dockerArgs.join(' ')).not.toContain('GIT_COMMITTER_');
 
       expect(rejection).toBeDefined();
       expect(rejection?.code).toBe(1);
@@ -29462,6 +29475,8 @@ describe('subprocess credential redaction', () => {
         rejection?.stdout,
         rejection?.stderr,
       ].join('\n');
+      expect(rejectionText).not.toContain(authorName);
+      expect(rejectionText).not.toContain(authorEmail);
       expect(rejectionText).not.toContain(openAiSecret);
       expect(rejectionText).not.toContain(otherInjectedSecret);
       expect(rejectionText).not.toContain(projectSecret);

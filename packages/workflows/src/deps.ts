@@ -118,7 +118,7 @@ export interface WorkflowConfig {
   baseBranch?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
-  /** Archon-injected credential entries within envVars. */
+  /** Archon-managed env entries that nodes cannot override. */
   protectedEnvKeys?: readonly string[];
   /** Exact injected credential values, including credentials delivered through files. */
   protectedCredentialValues?: readonly string[];
@@ -198,6 +198,8 @@ export interface WorkflowDeps {
    * throw — return undefined on any failure.
    */
   getUserGithubToken?: (userId: string) => Promise<string | undefined>;
+  /** Connected commit author; undefined when this user has no GitHub connection. */
+  getUserGithubAuthor?: (userId: string) => Promise<{ name: string; email: string } | undefined>;
   /**
    * Optional: whether per-user GitHub attribution is active for this install
    * (GitHub App configured + TOKEN_ENCRYPTION_KEY set). When false/absent, the

@@ -3362,8 +3362,43 @@ describe('executeWorkflow', () => {
       ]);
     });
 
+    for (const [enabled, userId] of [
+      [false, 'u-1'],
+      [true, undefined],
+    ] as const) {
+      it(`does not resolve a commit author with per-user=${enabled} and user=${userId}`, async () => {
+        const author = mock(async () => ({ name: 'other-user', email: 'other@example.test' }));
+        const deps: WorkflowDeps = {
+          ...makeDeps(),
+          isPerUserGitHubEnabled: () => enabled,
+          getUserGithubAuthor: author,
+        };
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          'db-c1',
+          { userId }
+        );
+        expect(author).not.toHaveBeenCalled();
+        expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars).not.toHaveProperty(
+          'GIT_AUTHOR_NAME'
+        );
+        expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars).not.toHaveProperty(
+          'GIT_AUTHOR_EMAIL'
+        );
+      });
+    }
+
     it('protects bot and per-user GitHub credentials beside provider credentials', async () => {
       const store = makeStore({
+        getCodebaseEnvVars: mock(async () => ({
+          GIT_AUTHOR_NAME: 'wrong-user',
+          GIT_AUTHOR_EMAIL: 'wrong@example.test',
+        })),
         getCodebase: mock(async () => ({
           id: 'codebase-1',
           name: 'demo',
@@ -3377,6 +3412,10 @@ describe('executeWorkflow', () => {
         resolveBotGitHubToken: mock(async () => 'bot-token'),
         isPerUserGitHubEnabled: () => true,
         getUserGithubToken: mock(async () => 'user-token'),
+        getUserGithubAuthor: mock(async () => ({
+          name: 'connected-author',
+          email: '42+connected-author@users.noreply.github.com',
+        })),
         isPerUserProviderKeysEnabled: () => true,
         getUserProviderEnv: mock(async () => ({
           env: { ANTHROPIC_API_KEY: 'provider-token' },
@@ -3401,15 +3440,21 @@ describe('executeWorkflow', () => {
         GH_TOKEN: 'user-token',
         GITHUB_TOKEN: 'user-token',
         COPILOT_GITHUB_TOKEN: '',
+        GIT_AUTHOR_NAME: 'connected-author',
+        GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
         ANTHROPIC_API_KEY: 'provider-token',
       });
       expect(configArg?.protectedEnvKeys).toEqual([
         'GH_TOKEN',
         'GITHUB_TOKEN',
         'COPILOT_GITHUB_TOKEN',
+        'GIT_AUTHOR_NAME',
+        'GIT_AUTHOR_EMAIL',
         'ANTHROPIC_API_KEY',
       ]);
       expect(configArg?.protectedCredentialValues).toEqual(['provider-token']);
+      expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
+      expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
     });
 
     it('removes stale credential files before a credential refresh failure', async () => {

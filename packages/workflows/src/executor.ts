@@ -247,7 +247,7 @@ async function resolveBotGitHubEnvForWorkflow(
 }
 
 /**
- * Resolve per-user GitHub token overrides for a run. When per-user mode is on
+ * Resolve per-user GitHub credentials and commit author for a run. When per-user mode is on
  * and the run has an originating user, this routes `gh`/`git push` through the
  * user's personal token — or scrubs the org/bot token when they haven't
  * connected (see {@link resolveGithubTokenOverrides}). Returns {} (no opinion)
@@ -267,7 +267,15 @@ async function resolveUserGithubEnvForWorkflow(
       getLog().warn({ err: err as Error, userId }, 'workflow.user_github_token_resolve_failed');
     }
   }
-  return resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+  const env = resolveGithubTokenOverrides(perUserEnabled, userId, userToken);
+  if (userId && deps.getUserGithubAuthor) {
+    const author = await deps.getUserGithubAuthor(userId);
+    if (author) {
+      env.GIT_AUTHOR_NAME = author.name;
+      env.GIT_AUTHOR_EMAIL = author.email;
+    }
+  }
+  return env;
 }
 
 /**

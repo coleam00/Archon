@@ -141,7 +141,12 @@ mock.module('../db/user-provider-key-store', () => ({
 mock.module('../github-auth/config', () => ({
   isPerUserGitHubEnabled: mock(() => false),
 }));
+const mockGetUserGithubAuthor = mock(async (_userId: string) => ({
+  name: 'connected',
+  email: '42+connected@users.noreply.github.com',
+}));
 mock.module('../db/user-github-token-store', () => ({
+  getUserGithubAuthor: mockGetUserGithubAuthor,
   getDecryptedAccessToken: mock(() => Promise.resolve(undefined)),
 }));
 mock.module('../db/env-vars', () => ({
@@ -316,6 +321,14 @@ describe('createWorkflowStore', () => {
 });
 
 describe('createWorkflowDeps', () => {
+  test('wires the initiating user author resolver', async () => {
+    const deps = createWorkflowDeps();
+    expect(await deps.getUserGithubAuthor?.('user-1')).toEqual({
+      name: 'connected',
+      email: '42+connected@users.noreply.github.com',
+    });
+    expect(mockGetUserGithubAuthor).toHaveBeenCalledWith('user-1');
+  });
   test('returns WorkflowDeps with store, getAgentProvider, and loadConfig', () => {
     const deps = createWorkflowDeps();
     expect(deps.store).toBeDefined();
