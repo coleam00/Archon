@@ -71,7 +71,6 @@ deliver__shape__simplify: { findings: false }
 deliver__shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 deliver__review__tests: "0 findings"
 deliver__review__review-complete: "settled"
-flip-ready: { pr_url: "https://github.com/example/repo/pull/4" }
 fixture:
   expect: completed
   reached: [gate-continue, deliver__flip-ready, outcome]

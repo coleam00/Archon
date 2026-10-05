@@ -50,7 +50,6 @@ deliver__classify:
 deliver__resolve-scope: '{"errors":"false"}'
 deliver__match-discoveries: { matches: [] }
 deliver__file-discoveries: '{"records":[]}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/3" }
 fixture:
   expect: completed
   inputs:

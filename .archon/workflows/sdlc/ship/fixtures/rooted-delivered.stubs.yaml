@@ -85,7 +85,6 @@ deliver__resolve-scope: '{"errors":"false"}'
 deliver__file-discoveries: '{"records":[]}'
 deliver__match-discoveries: { matches: [] }
 deliver__fork: '{"fork":true}'
-flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 fixture:
   expect: completed
   inputs:
