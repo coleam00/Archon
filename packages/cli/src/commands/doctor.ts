@@ -9,7 +9,6 @@ import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync, readdirSync
 import { join } from 'path';
 import { execFileAsync } from '@archon/git';
 import {
-  BUNDLED_IS_BINARY,
   getArchonHome,
   createLogger,
   getTelemetryStatus,
@@ -118,22 +117,12 @@ export interface ClaudeBinaryDeps {
  * one tool meant to catch real environment breakage (#2263).
  */
 export async function checkClaudeBinary(
-  // Injected so tests can drive the binary-mode branch — `BUNDLED_IS_BINARY`
-  // is a static const re-export and cannot be spied at runtime. Kept (rather
-  // than inferred from a nullish resolve result like `checkCodexBinary` does)
-  // because Claude's resolver honors CLAUDE_BIN_PATH in dev mode too, so a
-  // truthy result is NOT proof of binary mode.
-  isBinary: boolean = BUNDLED_IS_BINARY,
   loadDeps: () => Promise<ClaudeBinaryDeps> = defaultLoadClaudeBinaryDeps,
   resolve: (
     configPath?: string
   ) => Promise<ClaudeBinaryResolution | undefined> = resolveClaudeBinaryWithSource
 ): Promise<CheckResult> {
   const label = 'Claude binary';
-  if (!isBinary) {
-    return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
-  }
-
   let deps: ClaudeBinaryDeps;
   try {
     deps = await loadDeps();
@@ -153,8 +142,6 @@ export async function checkClaudeBinary(
     return { label, status: 'fail', message: (err as Error).message };
   }
 
-  // Defensive: the resolver only returns undefined outside binary mode, which
-  // the isBinary guard above already handled.
   if (!resolved) {
     return { label, status: 'skip', message: 'dev mode (SDK resolves via node_modules)' };
   }
