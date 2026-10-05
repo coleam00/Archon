@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { components } from '@/lib/api.generated';
-import { detailFixture } from '../primitives/run.test-fixtures';
+import { detailFixture, terminalRecord } from '../primitives/run.test-fixtures';
 import { getRun, listRuns } from './runs';
 
 const originalFetch = globalThis.fetch;
@@ -15,6 +15,28 @@ function respond(payload: unknown): void {
 }
 
 describe('run responses', () => {
+  test('getRun preserves succeeded terminal returns', async () => {
+    const response: components['schemas']['WorkflowRunDetail'] = {
+      ...detailFixture,
+      run: {
+        ...detailFixture.run,
+        outcome: 'succeeded',
+        terminal_record: terminalRecord(
+          {
+            availability: 'available',
+            node_id: 'result',
+            value: { rationale: 'The change is delivered.' },
+          },
+          'succeeded'
+        ),
+      },
+    };
+    respond(response);
+    const detail = await getRun('run-1');
+    expect(detail.run.outcome).toBe('succeeded');
+    expect(detail.run.terminalRecord).toEqual(response.run.terminal_record);
+  });
+
   test('getRun preserves terminal returns, engine nodes and normalized events', async () => {
     respond(detailFixture);
     const detail = await getRun('run-1');

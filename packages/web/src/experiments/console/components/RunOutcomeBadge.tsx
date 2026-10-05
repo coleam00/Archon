@@ -38,7 +38,11 @@ export function RunOutcomeBadge({
   return (
     <div className="inline-flex max-w-full min-w-0 flex-wrap items-start gap-2">
       {badge}
-      <dl className="grid min-w-0 max-w-full grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 text-[11px]">
+      <dl
+        aria-label="Workflow output"
+        tabIndex={0}
+        className="grid max-h-[30vh] min-w-0 max-w-full grid-cols-[auto_minmax(0,1fr)] gap-x-2 gap-y-1 overflow-y-auto text-[11px]"
+      >
         {fields.map(([key, text]) => (
           <div key={key} className="contents">
             <dt className="max-w-32 whitespace-pre-wrap font-mono text-text-tertiary [overflow-wrap:anywhere]">
