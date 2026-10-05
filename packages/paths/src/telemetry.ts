@@ -1054,15 +1054,16 @@ export function captureWorkflowTerminal(props: WorkflowTerminalProperties): void
 
 /**
  * Best-effort exit flush. Slow ingestion drops pending events after 75 ms;
- * telemetry must not hold up CLI exit or server shutdown.
+ * telemetry must not hold up CLI exit or server shutdown. Tests may override the
+ * budget to wait for delivery rather than exercise best-effort exit behavior.
  */
-export async function shutdownTelemetry(): Promise<void> {
+export async function shutdownTelemetry(timeoutMs = TELEMETRY_SHUTDOWN_TIMEOUT_MS): Promise<void> {
   if (clientInit === undefined) return;
   try {
     const initialized = await clientInit;
     if (initialized) {
       try {
-        await initialized.client.shutdown(TELEMETRY_SHUTDOWN_TIMEOUT_MS);
+        await initialized.client.shutdown(timeoutMs);
       } finally {
         // The SDK deadline only races its flush; it leaves fetch running.
         initialized.abortController.abort();

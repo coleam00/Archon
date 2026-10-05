@@ -1771,6 +1771,29 @@ it('CLI cleanup retains historical Telegram workspaces with no adapter credentia
   }
 });
 
+describe('registration base branch parsing', () => {
+  it('rejects the registration flag outside workflow run', () => {
+    const result = spawnSync(
+      process.execPath,
+      [CLI_ENTRY, 'version', '--base-branch', 'release', '--json'],
+      { encoding: 'utf8', env: { ...process.env, ARCHON_TELEMETRY_DISABLED: '1' } }
+    );
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('--base-branch is only supported by workflow run');
+  });
+  for (const choice of [['--base-branch', 'release'], ['--base-branch=release']]) {
+    it(`keeps ${choice[0]} distinct from the dispatch base`, () => {
+      const { values } = parseArgs({
+        args: ['workflow', 'run', 'deliver', ...choice, '--base', 'dev'],
+        options: cliArgOptions,
+        allowPositionals: true,
+      });
+      expect(values['base-branch']).toBe('release');
+      expect(values.base).toBe('dev');
+    });
+  }
+});
+
 describe('compiled CLI update notices', () => {
   const cases = [
     { args: ['workflow', 'run'], notice: true, status: 1 },

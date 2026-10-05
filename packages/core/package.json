@@ -279,6 +279,12 @@
       "src/db/isolation-environments.retention.integration.test.ts"
     ],
     [
+      "src/handlers/register-base-branch.integration.test.ts"
+    ],
+    [
+      "src/workflows/continuation-host-base-branch.test.ts"
+    ],
+    [
       "src/workflows/commit-author.integration.test.ts"
     ]
   ]

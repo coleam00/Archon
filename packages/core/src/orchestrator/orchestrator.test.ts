@@ -5,7 +5,8 @@ mock.module('../workflows/branch-launch-source', () => ({
     prepare: (path: string) => Promise<unknown>
   ) => prepare('/adopted/snapshot'),
 }));
-import { mock, describe, test, expect, beforeEach } from 'bun:test';
+import * as git from '@archon/git';
+import { mock, describe, test, expect, beforeEach, spyOn } from 'bun:test';
 import { mkdtemp, realpath } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { tmpdir } from 'os';
@@ -1808,27 +1809,13 @@ describe('orchestrator-agent handleMessage', () => {
       }
     });
 
-    test('/register-project stores detected current branch', async () => {
+    test('/register-project stores no branch choice and asks nothing', async () => {
       const projectPath = await mkdtemp(join(tmpdir(), 'archon-register-project-'));
       // handleRegisterProject canonicalizes before storing (macOS tmpdir lives
       // under /var → /private/var), so the stored default_cwd is canonical.
       const canonicalPath = await mockCanonicalizeProjectPath(projectPath);
+      const repoSpy = spyOn(git, 'findRepoRoot').mockResolvedValue(git.toRepoPath(canonicalPath));
       try {
-        const initExit = await Bun.spawn(['git', 'init', '-b', 'develop'], {
-          cwd: projectPath,
-        }).exited;
-        expect(initExit, 'git init failed during registration fixture setup').toBe(0);
-        const commitExit = await Bun.spawn(['git', 'commit', '--allow-empty', '-m', 'init'], {
-          cwd: projectPath,
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: 'Archon Test',
-            GIT_AUTHOR_EMAIL: 'archon-test@example.com',
-            GIT_COMMITTER_NAME: 'Archon Test',
-            GIT_COMMITTER_EMAIL: 'archon-test@example.com',
-          },
-        }).exited;
-        expect(commitExit, 'git commit failed during registration fixture setup').toBe(0);
         mockExistsSync.mockReturnValue(true);
         mockListCodebases.mockResolvedValue([]);
         mockCreateCodebase.mockResolvedValue({
@@ -1843,11 +1830,12 @@ describe('orchestrator-agent handleMessage', () => {
         expect(mockCreateCodebase).toHaveBeenCalledWith({
           name: 'my-app',
           default_cwd: canonicalPath,
-          default_branch: 'develop',
+          default_branch: null,
           ai_assistant_type: 'claude',
           kind: 'repo',
         });
       } finally {
+        repoSpy.mockRestore();
         await removeTempTree(projectPath);
       }
     });
