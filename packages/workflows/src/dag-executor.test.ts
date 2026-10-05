@@ -4579,11 +4579,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
   });
 
   afterEach(async () => {
-    try {
-      await rm(testDir, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup errors
-    }
+    await removeTempTree(testDir);
   });
 
   // Deterministic nodes run real subprocesses, so a side-effect counter file is
@@ -4731,6 +4727,116 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         ([event]) => event.event_type === 'node_failed' && event.data?.failure_kind === 'timeout'
       );
       expect(timedOut).toHaveLength(2);
+    },
+    testTimeout(10_000)
+  );
+
+  it(
+    'publish retries a hung forge create and reuses the PR without repeating the push or create',
+    async () => {
+      const pack = join(import.meta.dir, '../../../.archon/workflows/sdlc/pr');
+      const parsed = parseWorkflow(
+        await Bun.file(join(pack, 'archon-pr.yaml')).text(),
+        'archon-pr.yaml'
+      );
+      if (parsed.workflow === null) throw new Error(parsed.error.error);
+      const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
+      if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
+      const calls = join(testDir, 'forge-calls.jsonl');
+      const created = join(testDir, 'created');
+      const pushed = join(testDir, 'pushed');
+      const client = join(testDir, 'forge-client.ts');
+      const intentPath = join(testDir, 'intent.json');
+      const repo = { host: 'github.com', path: 'example/repo' };
+      const pr = {
+        schemaVersion: 1,
+        repo,
+        number: 42,
+        url: 'https://github.com/example/repo/pull/42',
+        head: 'feature',
+        base: 'dev',
+        is_draft: true,
+        state: 'open',
+        head_repo: repo,
+        head_revision: 'deadbeef',
+        base_revision: null,
+        maintainer_can_modify: null,
+      };
+      await writeFile(
+        intentPath,
+        JSON.stringify({
+          repo,
+          head: 'feature',
+          headRevision: 'deadbeef',
+          base: 'dev',
+          title: 'A title',
+          bodyPath: join(testDir, 'body.md'),
+          draft: true,
+        })
+      );
+      await writeFile(join(testDir, 'body.md'), 'A body');
+      await writeFile(
+        client,
+        `
+        import { appendFileSync, existsSync, writeFileSync } from 'node:fs';
+        const op = Bun.argv[3];
+        appendFileSync(${JSON.stringify(calls)}, JSON.stringify(op) + '\\n');
+        if (op === 'pr.create') {
+          writeFileSync(${JSON.stringify(created)}, 'created');
+          await new Promise(() => setInterval(() => {}, 1000));
+        } else if (op === 'pr.view') {
+          const value = existsSync(${JSON.stringify(created)}) ? { pr: ${JSON.stringify(pr)} } : null;
+          console.log(JSON.stringify({ operationId: 'fake', ok: true, result: { op, value } }));
+        } else {
+          process.exit(1);
+        }
+      `
+      );
+      const { mockDeps } = await runNodes([
+        {
+          id: 'pr',
+          kind: 'exec',
+          runtime: 'bun',
+          script: `require('fs').appendFileSync(${JSON.stringify(pushed)}, 'push\\n');
+            console.log(JSON.stringify({ intent: ${JSON.stringify(intentPath)} }));`,
+          output_format: {
+            type: 'object',
+            properties: { intent: { type: 'string' } },
+            required: ['intent'],
+          },
+        },
+        {
+          ...publish,
+          // Shorten the authored timing for the real subprocess regression.
+          timeout: 1000,
+          retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
+          script: `process.env.ARCHON_SDLC_FORGE = 'forge';
+            process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify([process.execPath, client]))};
+            await import(${JSON.stringify(join(pack, 'scripts/publish-pr.ts'))});`,
+        },
+      ]);
+      expect(await readFile(pushed, 'utf8')).toBe('push\n');
+      expect(
+        (await readFile(calls, 'utf8'))
+          .trim()
+          .split('\n')
+          .map(line => JSON.parse(line) as unknown)
+      ).toEqual(['pr.view', 'pr.create', 'pr.view']);
+      const terminals = (
+        mockDeps.store.persistWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
+      ).mock.calls
+        .map(([event]) => event)
+        .filter(
+          event =>
+            event.step_name === 'publish' &&
+            (event.event_type === 'node_failed' || event.event_type === 'node_completed')
+        );
+      expect(terminals).toHaveLength(2);
+      expect(terminals[0].data?.failure_kind).toBe('timeout');
+      expect(terminals[1].event_type).toBe('node_completed');
+      expect(JSON.stringify(terminals[1].data)).toContain(pr.url);
+      expect(mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(mockDeps.store.completeWorkflowRun).toHaveBeenCalled();
     },
     testTimeout(10_000)
   );

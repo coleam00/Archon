@@ -807,6 +807,8 @@ describe('bundled-defaults', () => {
       const publish = prParsed.workflow.nodes.find(node => node.id === 'publish');
       expect(publish).toMatchObject({ kind: 'exec', runtime: 'bun', script: 'publish-pr' });
       if (publish?.kind !== 'exec') throw new Error('publish is not an exec node');
+      expect(publish.timeout).toBe(30000);
+      expect(publish.retry).toEqual({ max_attempts: 2, delay_ms: 20000 });
       expect(publish.output_type).toBe('pull-request');
       expect(publish.output_format).toMatchObject({
         properties: {
