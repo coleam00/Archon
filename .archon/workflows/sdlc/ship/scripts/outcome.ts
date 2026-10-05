@@ -14,7 +14,7 @@
  * - INPUTS_INV_VERDICT / INPUTS_INV_SUMMARY: the investigation's verdict and
  *   summary, or "null" when it did not run.
  * - INPUTS_PLAN_SUMMARY: the planner's summary, or "null" when it did not run.
- * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the flip's certified URL, or "null"
+ * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the confirmed ready URL, or "null"
  *   when the deliver branch was skipped.
  *
  * A failed delivery cannot reach this node: the failure cascades an

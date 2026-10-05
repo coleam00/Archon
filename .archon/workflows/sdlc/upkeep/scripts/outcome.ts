@@ -8,7 +8,7 @@
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_ACTION / INPUTS_SUMMARY: the assessment's verdict.
- * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the flip's certified URL, or "null"
+ * - INPUTS_DELIVERED: `$deliver.output.pr_url`, the confirmed ready URL, or "null"
  *   when the deliver branch was skipped (no_action). The value is validated at the
  *   producer, so nothing here re-reads it for URL shape.
  *

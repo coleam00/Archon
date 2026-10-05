@@ -1,7 +1,7 @@
 /**
  * The deliver pack's one pull-request check reader and its gate policy.
  *
- * Both sources return the same units, so `check-ci` and `flip-ready`
+ * Both sources return the same units, so `check-ci` and `confirm-ready`
  * classify one shape whichever source read it. ./forge.ts owns which source a
  * run selected; this file owns how a read is performed and how it gates.
  */

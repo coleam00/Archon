@@ -10,8 +10,8 @@
  * Red is not one thing. A change that breaks a check must never reach a pull request.
  * A check that was already red at the run's starting commit, that failed because the
  * environment did, or whose evidence nobody could read, is not evidence about the
- * change — and reality gets checked again downstream: flip-ready refuses to make the
- * PR ready while its real CI is not green. So this fails on `introduced` and lets the
+ * change — and reality gets checked again downstream: confirm-ready puts the PR back
+ * in draft while its real CI is not green. So this fails on `introduced` and lets the
  * causes in `PASSES_RED` through with the claim recorded.
  *
  * A validation that did not finish (`incomplete`) is not red at all. It fails too,

@@ -1,13 +1,13 @@
 /**
  * The delivery tail's terminal report.
  *
- * flip-ready owns the one irreversible public action and certifies the ready pull
- * request's URL as its declared result. This composes what the run's reader — usually
+ * confirm-ready owns the final ready claim and certifies the ready pull request's URL
+ * as its declared result. This composes what the run's reader — usually
  * an orchestrating agent — actually receives, which is that URL plus whatever the
  * review recorded in the run's discovery sidecar.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_PR_URL: `$flip-ready.output.pr_url`, certified non-empty at the producer.
+ * - INPUTS_PR_URL: `$confirm-ready.output.pr_url`, certified non-empty at the producer.
  */
 
 import { artifactsDir, emit, trimmed } from '../../.shared/io.ts';

@@ -150,8 +150,9 @@ The engine retains what every exec node prints, so a node's output is the record
 whether it set out to keep one or not. Never print a value that can contain a
 secret: read it where it is normalized and pass on the normalized form. A remote
 URL is the common one — `https://<token>@host/repo` is a perfectly ordinary origin
-— so the ready flip normalizes `owner/repo` inside the substitution that reads the
-remote, and only that reaches a command line. Failure messages are the same
+— so `.shared/remote.ts` reads remote URLs only to normalize them to `host` and
+`owner/repo`, and only the remote's name and that identity reach a command line or
+a message. Failure messages are the same
 surface: interpolating the raw value into one leaks it just as effectively.
 
 That retention is also why a node does not need its own log. The ready flip once

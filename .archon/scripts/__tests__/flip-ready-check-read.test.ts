@@ -112,6 +112,15 @@ describe('confirm-ready on the final head, default gh source', () => {
       expect(undoCalled(result.gh)).toBe(false);
     });
 
+    it('fails closed when the cause record cannot be read', () => {
+      const { inputs, artifacts } = records(fixed);
+      delete artifacts['nodes/ci-cause.json'];
+      const result = confirm({ gh: { checks: green, pr: { isDraft: false } }, inputs, artifacts });
+      expect(result.code).not.toBe(0);
+      expect(undoCalled(result.gh)).toBe(true);
+      expect(result.stderr).toContain('could not read this ci-cause record');
+    });
+
     it('owes nothing when the fix moved nothing, or the red was not introduced', () => {
       for (const byType of [
         { 'ci-cause': { cause: 'introduced' }, 'ci-fix-delta': { moved: false } },

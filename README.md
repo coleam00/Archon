@@ -240,7 +240,7 @@ Archon ships the `sdlc` workflow pack for the software development lifecycle:
 | `archon-plan` | Turn decided intent into an implementable plan |
 | `archon-implement` | Build decided work until the project's checks pass; commits, no PR |
 | `archon-pr` | Open a pull request for committed work on the current branch |
-| `archon-deliver` | Implement → draft PR → review → fix findings → validate → CI → ready for review |
+| `archon-deliver` | Implement → draft PR → review → fix findings → validate → ready for review → CI, back to draft if it stays red |
 | `archon-review` | Review a PR or the working diff through parallel specialist lenses |
 | `archon-validate` | Run the project's own checks and report a structured verdict |
 | `archon-upkeep` | Update one dependency through the reviewed delivery tail |

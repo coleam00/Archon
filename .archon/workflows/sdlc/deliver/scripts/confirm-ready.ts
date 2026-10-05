@@ -38,6 +38,7 @@ function unreviewedFix(): string | undefined {
   const artifacts = artifactsDir();
   const cause = readTyped<{ cause: string }>(listing, artifacts, 'ci-cause');
   if (cause.listingProblem !== undefined) return cause.listingProblem;
+  if (cause.problems.length > 0) return cause.problems[0];
   if (cause.values.at(-1)?.cause !== 'introduced') return undefined;
   if (readTyped<{ moved: boolean }>(listing, artifacts, 'ci-fix-delta').values.at(-1)?.moved === false) {
     return undefined;
