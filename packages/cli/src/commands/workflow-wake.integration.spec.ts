@@ -30,8 +30,18 @@ interface RunRow {
   conversation_id: string;
   user_id: string | null;
 }
+/**
+ * The CLI children write this database while the test reads it. Wait on their locks the
+ * way the SQLite adapter does, instead of failing on the first SQLITE_BUSY.
+ */
+function openDb(f: Fixture, readonly = false): Database {
+  const path = join(f.home, 'archon.db');
+  const db = readonly ? new Database(path, { readonly: true }) : new Database(path);
+  db.run('PRAGMA busy_timeout = 5000');
+  return db;
+}
 function row(f: Fixture): RunRow {
-  const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+  const db = openDb(f, true);
   try {
     const run = db
       .query<
@@ -143,7 +153,7 @@ async function due(f: Fixture): Promise<void> {
   if (deadline > Date.now()) await Bun.sleep(deadline - Date.now() + 10);
 }
 function events(f: Fixture, type: string): number {
-  const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+  const db = openDb(f, true);
   try {
     return (
       db
@@ -224,7 +234,7 @@ describe('cold CLI continuation host', () => {
     expect(b.exitCode, b.stderr || b.stdout).toBe(0);
     expect(row(f).status).toBe('completed');
     expect(events(f, 'wait_signaled')).toBe(2);
-    const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+    const db = openDb(f, true);
     try {
       expect(
         db
@@ -241,7 +251,7 @@ describe('cold CLI continuation host', () => {
 
   test('a valid signal survives a visible container refusal without claiming', async () => {
     const f = await seed('      event: ready\n      deadline_ms: 60000');
-    const db = new Database(join(f.home, 'archon.db'));
+    const db = openDb(f);
     try {
       db.run(
         "UPDATE remote_agent_workflow_runs SET metadata = json_set(metadata, '$.isolation', 'container')"
@@ -275,7 +285,7 @@ describe('cold CLI continuation host', () => {
     const original = row(f);
     await due(f);
     const reset = (): Database => {
-      const db = new Database(join(f.home, 'archon.db'));
+      const db = openDb(f);
       db.run('UPDATE remote_agent_workflow_runs SET metadata = ?, working_path = ?', [
         original.metadata,
         f.project,
@@ -337,7 +347,7 @@ describe('cold CLI continuation host', () => {
       stdout += decoder.decode(chunk.value, { stream: true });
     }
     expect(JSON.parse(stdout.split('\n')[0] ?? '')).toMatchObject({ accepted: 0 });
-    const db = new Database(join(f.home, 'archon.db'));
+    const db = openDb(f);
     try {
       db.run(
         "UPDATE remote_agent_workflow_runs SET metadata = json_set(metadata, '$.wait.resumeAt', ?)",
