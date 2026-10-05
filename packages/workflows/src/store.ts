@@ -303,6 +303,14 @@ export interface IWorkflowRunNodeSessionStore {
   }): Promise<void>;
 }
 
+/** Only a zero-row pause CAS produces this error; storage failures must propagate. */
+export class WorkflowRunPauseConflictError extends Error {
+  constructor(runId: string) {
+    super(`Workflow run not found or not in running state (id: ${runId})`);
+    this.name = 'WorkflowRunPauseConflictError';
+  }
+}
+
 export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionStore {
   /** Resolve an open paused gate and commit its audit events atomically; a CAS loser writes nothing. */
   resolveApprovalGate(
@@ -453,12 +461,14 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
    * Pause a running run for human review, stamping the approval context. Optional
    * `extraMetadata` is folded into the SAME atomic metadata write (e.g. the
    * container write-back gate's `pending_writeback` marker) so there is never a
-   * paused-without-marker window.
+   * paused-without-marker window. The optional suspension is committed with the
+   * pause so a decision cannot be followed by a stale node_suspended row.
    */
   pauseWorkflowRun(
     id: string,
     approvalContext: ApprovalContext,
-    extraMetadata?: Record<string, unknown>
+    extraMetadata?: Record<string, unknown>,
+    suspension?: NodeStateEventInput
   ): Promise<void>;
   /** Pause a running run and record its engine-owned wait start atomically. */
   pauseWorkflowRunForWait(
@@ -486,6 +496,12 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
     waitContext: WorkflowWaitContext,
     completion: WorkflowWaitCompletion
   ): Promise<{ cleared: false } | { cleared: true; nodeEvent: NodeStateEventInput }>;
+  /** Fail only this still-unresolved gate when its required prompt cannot be delivered. */
+  failPausedApproval(
+    id: string,
+    approvalContext: ApprovalContext,
+    error: string
+  ): Promise<{ failed: boolean }>;
 
   /**
    * Atomically CLAIM the container write-back apply before the live root is mutated

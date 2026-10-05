@@ -343,14 +343,29 @@ describe('mapPiEvent', () => {
     ]);
   });
 
-  test('tool_execution_start omits rawInput when args are not an object', () => {
-    const chunks = mapPiEvent({
-      type: 'tool_execution_start',
-      toolCallId: 'call-1',
-      toolName: 'bash',
-      args: 'just-a-string',
-    });
-    expect(chunks).toEqual([{ type: 'tool_call', toolCallId: 'call-1', name: 'bash' }]);
+  test.each(['just-a-string', 0, false, null, ['a', 1]].map(value => [value] as const))(
+    'tool_execution_start preserves JSON args %j',
+    args => {
+      expect(
+        mapPiEvent({
+          type: 'tool_execution_start',
+          toolCallId: 'call-1',
+          toolName: 'bash',
+          args,
+        })
+      ).toEqual([{ type: 'tool_call', toolCallId: 'call-1', name: 'bash', rawInput: args }]);
+    }
+  );
+
+  test('tool_execution_start omits undefined args', () => {
+    expect(
+      mapPiEvent({
+        type: 'tool_execution_start',
+        toolCallId: 'call-1',
+        toolName: 'bash',
+        args: undefined,
+      })
+    ).toEqual([{ type: 'tool_call', toolCallId: 'call-1', name: 'bash' }]);
   });
 
   test('tool_execution_end → completed tool_call_update with matching id', () => {

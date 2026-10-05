@@ -150,6 +150,7 @@ function createMockStore(): IWorkflowStore {
         },
       })
     ),
+    failPausedApproval: mock(() => Promise.resolve({ failed: true })),
     claimWriteback: mock(() => Promise.resolve({ claimed: true })),
     releaseWritebackClaim: mock(() => Promise.resolve()),
     cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: false })),

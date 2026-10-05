@@ -110,6 +110,7 @@ export function createWorkflowStore(): IWorkflowStore {
     pauseWorkflowRunForWait: workflowDb.pauseWorkflowRunForWait,
     failPausedAttentionWait: workflowDb.failPausedAttentionWait,
     clearWorkflowWaitContext: workflowDb.clearWorkflowWaitContext,
+    failPausedApproval: workflowDb.failPausedApproval,
     claimWriteback: workflowDb.claimWriteback,
     releaseWritebackClaim: workflowDb.releaseWritebackClaim,
     cancelWorkflowRun: workflowDb.cancelWorkflowRun,

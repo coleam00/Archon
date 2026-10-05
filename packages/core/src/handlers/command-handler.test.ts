@@ -586,6 +586,13 @@ describe('CommandHandler', () => {
   });
 
   describe('parseCommand', () => {
+    test('parses the exact multiword detach name as one argument', () => {
+      expect(parseCommand('/detach-project "My App"')).toEqual({
+        command: 'detach-project',
+        args: ['My App'],
+      });
+    });
+
     test('should extract command and args from /clone command', () => {
       const result = parseCommand('/clone https://github.com/user/repo');
       expect(result.command).toBe('clone');
@@ -977,7 +984,7 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         // cwd + isolation env go; codebase_id is deliberately absent from the
-        // payload — detaching the project is /setproject none's job.
+        // payload — detaching the project is /detach-project's job.
         expect(mockUpdateConversation).toHaveBeenCalledWith(baseConversation.id, {
           cwd: null,
           isolation_env_id: null,

@@ -27,7 +27,7 @@ const mockPauseWorkflowRun = mock(() => Promise.resolve());
 const mockPauseWorkflowRunForWait = mock(() => Promise.resolve());
 const mockFailPausedAttentionWait = mock(() => Promise.resolve({ failed: true }));
 const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true }));
-const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
+const mockFailPausedApproval = mock(() => Promise.resolve({ failed: true }));
 
 mock.module('../db/workflows', () => ({
   findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
@@ -59,7 +59,8 @@ mock.module('../db/workflows', () => ({
   pauseWorkflowRunForWait: mockPauseWorkflowRunForWait,
   failPausedAttentionWait: mockFailPausedAttentionWait,
   clearWorkflowWaitContext: mockClearWorkflowWaitContext,
-  resolveApprovalGate: mockResolveApprovalGate,
+  resolveApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  failPausedApproval: mockFailPausedApproval,
   claimWriteback: mock(() => Promise.resolve({ claimed: true })),
   releaseWritebackClaim: mock(() => Promise.resolve()),
 }));
@@ -239,6 +240,7 @@ describe('createWorkflowStore', () => {
       'pauseWorkflowRunForWait',
       'failPausedAttentionWait',
       'clearWorkflowWaitContext',
+      'failPausedApproval',
       'claimWriteback',
       'releaseWritebackClaim',
       'cancelWorkflowRun',

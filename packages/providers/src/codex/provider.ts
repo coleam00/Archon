@@ -23,6 +23,7 @@ import type {
 } from '../types';
 import {
   sessionPreview,
+  toolCallSchema,
   truncateToolOutput,
   type ProviderFailureClass,
 } from '@archon/provider-contract';
@@ -392,8 +393,8 @@ function toolCallOf(item: ToolItem): ToolCallEvent {
         name: item.tool,
         title: `${item.server}/${item.tool}`,
       };
-      if (typeof item.arguments === 'object' && item.arguments !== null) {
-        call.rawInput = item.arguments as Record<string, unknown>;
+      if (item.arguments !== undefined) {
+        call.rawInput = toolCallSchema.shape.rawInput.parse(item.arguments);
       }
       return call;
     }
@@ -437,6 +438,43 @@ function toolCallUpdateOf(item: ToolItem): ToolCallUpdateEvent {
     case 'fileChange':
       return update;
   }
+}
+
+type SubtaskEvent = Extract<ProviderEvent, { type: 'subtask' }>;
+
+function backgroundEventOf(
+  item: ThreadItem,
+  completed: boolean,
+  threadId: string
+): SubtaskEvent | undefined {
+  if (item.type === 'subAgentActivity') {
+    if (item.kind !== 'started' && item.kind !== 'completed') return undefined;
+    return {
+      type: 'subtask',
+      taskId: `agent:${item.agentThreadId}`,
+      taskType: 'local_agent',
+      description: item.agentPath,
+      status: item.kind,
+    };
+  }
+  if (item.type === 'commandExecution' && item.source === 'unifiedExecStartup') {
+    const terminalStatuses = {
+      inProgress: undefined,
+      completed: 'completed',
+      failed: 'failed',
+      declined: 'stopped',
+    } as const;
+    const status = completed ? terminalStatuses[item.status] : 'started';
+    if (!status) return undefined;
+    return {
+      type: 'subtask',
+      taskId: `command:${threadId}:${item.id}`,
+      taskType: 'command_execution',
+      description: item.command,
+      status,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -502,8 +540,8 @@ interface TurnRequest {
 }
 
 /**
- * Runs one turn and yields its events, then its one result. A JSON-RPC error or the
- * process ending before `turn/completed` is thrown for `sendQuery` to classify.
+ * Keeps observing background work after the parent completes.
+ * Lost observation is thrown for `sendQuery` to classify; it never settles.
  */
 async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   const { connection, nodePlugins } = request;
@@ -562,6 +600,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
   request.onTurn(turnId);
 
   const startedToolIds = new Set<string>();
+  const liveTasks = new Set<string>();
+  const agentThreads = new Set<string>();
+  let parentCompleted = false;
+  let pendingFailure: ResultChunk | undefined;
   const errors: string[] = [];
   let lastAgentMessage = '';
   // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
@@ -582,7 +624,7 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
 
       case 'thread/tokenUsage/updated':
         // Usage reported for another turn of the thread is not this turn's.
-        if (notification.params.turnId === turnId) {
+        if (notification.params.threadId === threadId && notification.params.turnId === turnId) {
           const { tokenUsage } = notification.params;
           usageSpan = { first: usageSpan?.first ?? tokenUsage, end: tokenUsage.total };
         }
@@ -612,25 +654,36 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
         break;
       }
 
-      case 'item/started': {
-        const { item } = notification.params;
-        if (isToolItem(item) && !startedToolIds.has(item.id)) {
-          startedToolIds.add(item.id);
-          yield toolCallOf(item);
-        }
-        break;
-      }
-
+      case 'item/started':
       case 'item/completed': {
-        const { item } = notification.params;
-        getLog().debug({ itemType: item.type, itemId: item.id }, 'item_completed');
+        const { item, threadId: itemThreadId, turnId: itemTurnId } = notification.params;
+        const parentItem = itemThreadId === threadId && itemTurnId === turnId;
+        if (!parentItem && !agentThreads.has(itemThreadId)) break;
+        const completed = notification.method === 'item/completed';
+        // Unified exec is a process lifecycle, not a foreground tool call: its end may
+        // arrive after the result, which closes foreground tool calls in the contract.
+        if (
+          item.type === 'subAgentActivity' ||
+          (item.type === 'commandExecution' && item.source === 'unifiedExecStartup')
+        ) {
+          const event = backgroundEventOf(item, completed, itemThreadId);
+          if (event) {
+            if (event.status === 'started') {
+              if (liveTasks.has(event.taskId)) break;
+              liveTasks.add(event.taskId);
+              if (item.type === 'subAgentActivity') agentThreads.add(item.agentThreadId);
+            } else if (!liveTasks.delete(event.taskId)) break;
+            yield event;
+          }
+          break;
+        }
+        if (!parentItem) break;
         if (isToolItem(item)) {
-          // A file change is reported only once it is applied: open the call here so its
-          // update always has one.
           if (!startedToolIds.has(item.id)) {
             startedToolIds.add(item.id);
             yield toolCallOf(item);
           }
+          if (!completed) break;
           if (item.type === 'mcpToolCall' && item.status === 'failed') {
             getLog().warn(
               { server: item.server, tool: item.tool, error: item.error, itemId: item.id },
@@ -638,12 +691,10 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
             );
           }
           yield toolCallUpdateOf(item);
-        } else if (item.type === 'agentMessage' && item.text) {
-          // A turn can hold several messages (preamble + answer); the last is the
-          // structured-output candidate.
+        } else if (completed && item.type === 'agentMessage' && item.text) {
           lastAgentMessage = item.text;
           yield { type: 'agent_message_chunk', text: item.text };
-        } else if (item.type === 'reasoning') {
+        } else if (completed && item.type === 'reasoning') {
           const text = item.summary.join('\n\n');
           if (text) yield { type: 'agent_thought_chunk', text };
         }
@@ -651,21 +702,34 @@ async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageChunk> {
       }
 
       case 'turn/completed': {
-        const { turn } = notification.params;
-        if (turn.id !== turnId) break;
-        yield* completeTurn(turn.status, turn.error, request, {
+        const { turn, threadId: completedThreadId } = notification.params;
+        if (completedThreadId !== threadId || turn.id !== turnId || parentCompleted) break;
+        parentCompleted = true;
+        for (const chunk of completeTurn(turn.status, turn.error, request, {
           threadId,
           usage: usageSpan && turnUsageOf(usageSpan.first, usageSpan.end),
           rateLimits,
           lastAgentMessage,
-        });
-        return;
+        })) {
+          // The executor stops reading on failure results, so live work must drain first.
+          if (chunk.type === 'result' && chunk.failure) pendingFailure = chunk;
+          else yield chunk;
+        }
+        break;
       }
 
       default:
         break;
     }
+    // The lifecycle contract covers starts observed before the parent's turn/completed
+    // and their descendants. After that, the parent model cannot initiate new work;
+    // later starts belong to already-live work, so an empty observed set can settle.
+    if (parentCompleted && liveTasks.size === 0) {
+      if (pendingFailure) yield pendingFailure;
+      return;
+    }
   }
+  if (pendingFailure) yield pendingFailure;
   throw connection.closedError(await connection.ended, errors);
 }
 
@@ -873,7 +937,7 @@ export class CodexProvider implements IAgentProvider {
   /**
    * One call is one Codex turn on its own app-server process. A failure ends in a
    * `result` carrying a typed `failure`, and the engine decides whether to try again.
-   * Every turn ends in `settled`. Only cancellation throws.
+   * Observed work must drain before `settled`; lost observation never settles.
    */
   async *sendQuery(
     prompt: string,
@@ -883,6 +947,7 @@ export class CodexProvider implements IAgentProvider {
   ): AsyncGenerator<MessageChunk> {
     const abortSignal = requestOptions?.abortSignal;
     let resultReported = false;
+    let observationLost = false;
     let threadId: string | undefined;
     let turnId: string | undefined;
     let connection: AppServerConnection | undefined;
@@ -1005,7 +1070,6 @@ export class CodexProvider implements IAgentProvider {
           turnId = id;
         },
       });
-      // Codex does not expose a complete background-work lifecycle here.
       for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
         if (chunk.type === 'result') {
           // An interrupted turn completes before its process ends; a cancel is not a result.
@@ -1018,6 +1082,7 @@ export class CodexProvider implements IAgentProvider {
       if (abortSignal?.aborted === true) {
         throw new Error('Query aborted');
       }
+      observationLost = error instanceof ConnectionClosedError || resultReported;
       getLog().error({ err: error, resultReported }, 'query_error');
       if (!resultReported) {
         const failureClass = failureClassOfStop(error);
@@ -1037,10 +1102,16 @@ export class CodexProvider implements IAgentProvider {
       }
     } finally {
       abortSignal?.removeEventListener('abort', onAbort);
-      await connection?.shutdown(this.shutdownGraceMs);
+      if (connection) {
+        const end = await connection.shutdown(this.shutdownGraceMs);
+        if (end?.kind !== 'exited' || end.code !== 0 || end.signal !== null) {
+          observationLost = true;
+          if (end)
+            getLog().error({ err: connection.closedError(end) }, 'codex.app_server_abnormal_exit');
+        }
+      }
     }
-    // Background work is unobserved; this marks the end of the observed turn.
-    yield { type: 'settled' };
+    if (!observationLost) yield { type: 'settled' };
   }
 
   getType(): string {
