@@ -116,6 +116,7 @@ export interface WorkflowConfig {
   /** Default assistant provider (validated against provider registry at runtime) */
   assistant: string;
   baseBranch?: string;
+  remote?: string;
   docsPath?: string;
   envVars?: Record<string, string>;
   /** Archon-managed env entries that nodes cannot override. */

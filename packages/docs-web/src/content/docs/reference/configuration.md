@@ -75,7 +75,9 @@ assistants:
     # Accepts the native binary (~/.local/bin/claude from the curl installer),
     # the npm-installed cli.js, or the npm platform-package directory
     # (e.g. @anthropic-ai/claude-code-win32-x64 — auto-expanded to claude/claude.exe).
-    # Source/dev mode auto-resolves.
+    # In all modes: CLAUDE_BIN_PATH wins, then claudeBinaryPath.
+    # Source/dev mode uses SDK resolution only when neither pin is set.
+    # Invalid explicit pins fail instead of falling back.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
     model: gpt-5.6-terra
@@ -357,7 +359,7 @@ worktree:
 
 **Base branch behavior:** Before creating a worktree, the canonical workspace is synced to the latest code. Resolution order:
 1. If `worktree.baseBranch` is set: Uses the configured branch. **Fails with an error** if the branch doesn't exist on the resolved remote (no silent fallback).
-2. If omitted: Auto-detects the default branch via `git symbolic-ref` on the resolved remote. Works without any config for standard repos.
+2. If omitted: Uses the project's stored explicit branch, if present; otherwise resolves the default from the remote's live HEAD advertisement. Renames are followed even when local remote HEAD is stale. A reachable remote with a known symbolic HEAD is required; no branch name is guessed.
 3. If auto-detection fails and a workflow references `$BASE_BRANCH`: Fails with an error explaining the resolution chain.
 
 **Docs path behavior:** The `docs.path` setting controls where the `$DOCS_DIR` variable points. When not configured, `$DOCS_DIR` defaults to `docs/`. Unlike `$BASE_BRANCH`, this variable always has a safe default and never throws an error. Configure it when your documentation lives outside the standard `docs/` directory (e.g., `packages/docs-web/src/content/docs`).

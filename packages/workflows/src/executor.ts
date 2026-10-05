@@ -22,7 +22,7 @@ import * as archonPaths from '@archon/paths';
 import { createLogger, captureWorkflowInvoked, captureWorkflowTerminal } from '@archon/paths';
 import { workflowTelemetryShape } from './telemetry-shape';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
-import { getDefaultBranch, toRepoPath } from '@archon/git';
+import { getDefaultBranch, getDefaultRemote, toRepoPath } from '@archon/git';
 import type {
   DagNode,
   IncludeDirective,
@@ -41,6 +41,8 @@ import {
   isRunBlockedOnChild,
   reRunsOwnNodeOnResume,
   isWorkflowWaitContext,
+  pendingWorkflowWaitDeadline,
+  runAttention,
   isScheduledWorkflowResume,
   isWaitNode,
   isIncludeDirective,
@@ -1975,7 +1977,10 @@ export async function executeWorkflow(
     baseBranch = '';
   } else {
     try {
-      baseBranch = await getDefaultBranch(toRepoPath(cwd));
+      const repoPath = toRepoPath(cwd);
+      const remote = config.remote?.trim() || (await getDefaultRemote(repoPath));
+      if (!remote) throw new Error('Set worktree.remote to select a git remote.');
+      baseBranch = await getDefaultBranch(repoPath, remote);
     } catch (error) {
       // Intentional fallback: auto-detection failure is non-fatal.
       // substituteWorkflowVariables throws if $BASE_BRANCH is actually referenced in a prompt.
@@ -2335,16 +2340,32 @@ export async function executeWorkflow(
         const duration = formatDuration(elapsedMs);
         const shortId = activeWorkflow.id.slice(0, 8);
 
-        // Status-aware copy. The lock query returns running, paused, and
-        // fresh-pending rows — telling the user to "wait for it to finish"
-        // is wrong for `paused` (waiting on user action via approve/reject).
         let stateLine: string;
         let actionLines: string;
         if (activeWorkflow.status === 'paused') {
-          stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
-          actionLines =
-            `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
-            `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n` +
+          const attention = runAttention(activeWorkflow);
+          const wait = pendingWorkflowWaitDeadline(activeWorkflow);
+          if (attention?.kind === 'action_required') {
+            stateLine = `paused waiting for an outside action (${duration} since started, run \`${shortId}\`)`;
+            actionLines =
+              `• Complete the outside action: ${attention.message}\n` +
+              `• When it is complete, resume it: \`${formatRunCommand(platform, 'resume', shortId)}\`\n`;
+          } else if (wait) {
+            const waitingFor =
+              wait.kind === 'event' ? `for event \`${wait.event}\` until` : 'until';
+            stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
+            actionLines =
+              (wait.kind === 'event'
+                ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
+                : '') +
+              `• Wait until ${wait.resumeAt}: \`${formatRunCommand(platform, 'status')}\`\n`;
+          } else {
+            stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
+            actionLines =
+              `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
+              `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;
+          }
+          actionLines +=
             // Cancel stops live work, and a paused run has none: abandon discards it.
             `• Discard it: \`${formatRunCommand(platform, 'abandon', shortId)}\`\n` +
             '• Use a different branch: `--branch <other>`';

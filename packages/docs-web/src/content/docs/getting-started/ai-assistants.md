@@ -82,8 +82,6 @@ If none of the three resolves in a compiled binary, Archon throws with install i
 
 The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the npm platform-package directory (e.g. `@anthropic-ai/claude-code-win32-x64`) — directories are auto-expanded to the contained `claude`/`claude.exe`.
 
-**Dev mode override:** when running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. Config-file `claudeBinaryPath` is intentionally binary-mode-only (per-repo, not per-machine).
-
 **CLI version:** Archon asks the Claude Code CLI for its session-state events (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS`) and finishes a node when the session goes idle after its final result. This is verified with Claude Code 2.1.282, the CLI the bundled SDK ships. A configured binary that does not emit those events still works when its process exits after the turn. If its process hangs instead, the node fails at the idle timeout, saying that the provider never signalled that its turn settled.
 
 **Typical paths by install method:**
@@ -99,6 +97,10 @@ The Claude Agent SDK accepts the native compiled binary, a JS `cli.js`, or the n
 | Docker (`ghcr.io/coleam00/archon`) | Pre-set via `ENV CLAUDE_BIN_PATH` in the image — no action required |
 
 If in doubt, `which claude` (macOS/Linux) or `where claude` (Windows) will resolve the executable on your PATH after any of the installers above.
+
+### Binary path configuration for source installs
+
+When running from source (`bun run dev:server`), the SDK auto-resolves its bundled per-platform binary by default. Set `CLAUDE_BIN_PATH` or `assistants.claude.claudeBinaryPath` if you need to override that — most commonly on glibc Linux where the SDK picks the musl variant first and fails to spawn. The env pin takes precedence over the config pin. An invalid explicit pin fails in either mode.
 
 ### Authentication Options
 
@@ -843,7 +845,7 @@ The console **AI Settings** page (Settings in the web UI) has four sections:
 
 ### Per-user model preferences ("Just me")
 
-When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a just-me "Chat runs on" combo (provider + model). The "Just me" scope stores your personal tiers/aliases/default assistant (and optional chat-model pin) in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before.
+When you're logged in (a web identity resolves), the **Model Tiers** and **Model Aliases** panels show a **"This install / Just me"** scope toggle, and **Defaults** gains a just-me "Chat runs on" combo (provider + model). The "Just me" scope stores your personal tiers/aliases/default assistant (and optional chat-model pin) in Archon's database and applies them as the **highest-precedence** layer — your overrides win over the install config for runs and chats *you* start, without changing anyone else's. This needs an identity but **no** `TOKEN_ENCRYPTION_KEY` (model names aren't secrets); on a solo install without web auth the toggle simply doesn't appear and everything behaves exactly as before. If your personal settings fail to load for any other reason, the panels say so ("Couldn't load your personal settings") and stay on install scope.
 
 If a chat asks for the `large` tier and only a different tier is configured, Archon uses the nearest preset and posts a one-line notice telling you which tier answered and where to set `large`.
 

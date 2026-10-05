@@ -2364,7 +2364,6 @@ async function executeNodeInternal(
         );
         nodeAbortController.abort();
       },
-      undefined,
       (msg, resetAt) => {
         const type = msg.type;
         lastWatchdogReset = { type, at: resetAt };
@@ -4058,7 +4057,7 @@ async function finalizeLoopFromSignal(
       )
     );
   }
-  // Old approval cursors have no execution identity or observed start time.
+  // Older paused loop gates may lack execution identity and observed start time.
   // Preserve their completion without inventing historical execution metadata.
   const event: import('./store').NodeStateEventInput = {
     workflow_run_id: workflowRun.id,
@@ -5833,7 +5832,6 @@ async function executeLoopNode(
               );
               iterationAbortController.abort();
             },
-            undefined,
             (msg, resetAt) => {
               const type = msg.type;
               lastWatchdogReset = { type, at: resetAt };
