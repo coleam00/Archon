@@ -1037,10 +1037,7 @@ export function createWorkflowOperations({
           }
         }
       } catch (err) {
-        getLog().warn(
-          { err, runId: runs[i].id },
-          'operations.workflow_abandon_preflight_tree_failed'
-        );
+        getLog().warn({ err, runId: runs[i].id }, 'operations.workflow_abandon_retry_tree_failed');
         failures++;
       }
     }
