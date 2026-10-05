@@ -1,4 +1,5 @@
 import { InProcessWorkflowEngine } from './in-process-engine';
+import { isApprovalContext } from './schemas/workflow-run';
 import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
@@ -184,7 +185,7 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import { waitCompletionEvents } from './store';
+import { waitCompletionEvents, WorkflowRunPauseConflictError } from './store';
 import {
   readRunDispatchMetadata,
   type WorkflowRun,
@@ -382,8 +383,16 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
-  pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (id, approvalContext, extraMetadata) => {
+  pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (
+    id,
+    approvalContext,
+    extraMetadata,
+    suspension
+  ) => {
     const r = this.runs.get(id);
+    if (!r || r.status !== 'running') {
+      return Promise.reject(new WorkflowRunPauseConflictError(id));
+    }
     if (r) {
       r.status = 'paused';
       // Mirrors the real store's write ORDER: run-level metadata is folded in first,
@@ -396,6 +405,7 @@ class InMemoryStore implements IWorkflowStore {
         approval: { ...approvalContext },
       };
     }
+    if (suspension) this.events.push(suspension);
     return Promise.resolve();
   };
 
@@ -456,16 +466,17 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ cleared: false });
   };
 
-  rewriteApprovalContext: IWorkflowStore['rewriteApprovalContext'] = (id, approvalContext) => {
+  failPausedApproval: IWorkflowStore['failPausedApproval'] = (id, approvalContext, error) => {
     const r = this.runs.get(id);
-    // Mirrors the real store's CAS guard (unresolvedGateClause): only while still
-    // paused and unresolved — a human resolving the gate first wins the race.
-    const approval = r?.metadata?.approval as { resolved?: string } | undefined;
-    if (r && r.status === 'paused' && approval?.resolved == null) {
-      r.metadata = { ...r.metadata, approval: { ...approvalContext } };
-      return Promise.resolve({ resolved: true });
+    if (
+      r?.status !== 'paused' ||
+      JSON.stringify(r.metadata?.approval) !== JSON.stringify(approvalContext)
+    ) {
+      return Promise.resolve({ failed: false });
     }
-    return Promise.resolve({ resolved: false });
+    r.status = 'failed';
+    r.metadata = { ...r.metadata, error };
+    return Promise.resolve({ failed: true });
   };
 
   claimWriteback = (): Promise<{ claimed: boolean }> => Promise.resolve({ claimed: true });
@@ -1446,6 +1457,97 @@ nodes:
       e => e.event_type === 'node_completed' && e.step_name === 'sub'
     );
     expect(subCompleted?.data?.node_output).toBe('ai-output');
+  });
+
+  it('concurrent child runs present independent gates and resume the parent in either decision order', async () => {
+    await writeWorkflow(
+      'independent-child',
+      `
+name: independent-child
+description: Child approval
+mutates_checkout: false
+interactive: true
+nodes:
+  - id: review
+    approval:
+      message: Review this child
+  - id: done
+    depends_on: [review]
+    prompt: Done
+`
+    );
+    await writeWorkflow(
+      'independent-parent',
+      `
+name: independent-parent
+description: Independent children
+mutates_checkout: false
+interactive: true
+nodes:
+  - id: first
+    workflow: independent-child
+  - id: second
+    workflow: independent-child
+`
+    );
+    for (const activeFirst of [false, true]) {
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-plat',
+        cwd,
+        await discover('independent-parent'),
+        'goal',
+        { conversationId: 'conv-db' }
+      );
+      const parent = [...store.runs.values()].find(
+        run => run.workflow_name === 'independent-parent'
+      )!;
+      const children = await store.findChildRuns(parent.id);
+      expect(children).toHaveLength(2);
+      expect(children.map(child => child.status)).toEqual(['paused', 'paused']);
+      const prompts = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+        .map(call => call[1] as string)
+        .filter(message => message.includes('**Approval required**'));
+      expect(prompts).toHaveLength(2);
+      for (const child of children)
+        expect(prompts.some(message => message.includes(`approve ${child.id}`))).toBe(true);
+      const approval = parent.metadata.approval;
+      if (!isApprovalContext(approval)) throw new Error('Missing parent block');
+      const active = children.find(child => child.id === approval.childRunId)!;
+      const other = children.find(child => child.id !== approval.childRunId)!;
+      const ordered = activeFirst ? [active, other] : [other, active];
+      for (const [index, child] of ordered.entries()) {
+        store.approveGate(child.id);
+        const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+        expect(hydrated).not.toBeNull();
+        await executeWorkflow(
+          deps,
+          platform,
+          'conv-plat',
+          cwd,
+          await discover('independent-child'),
+          child.user_message,
+          { conversationId: 'conv-db' },
+          { ...hydrated! }
+        );
+        expect((await store.getWorkflowRun(child.id))?.status).toBe('completed');
+        expect((await store.getWorkflowRun(parent.id))?.status).toBe(
+          index === 0 ? 'paused' : 'completed'
+        );
+      }
+      expect(
+        store.events
+          .filter(
+            event => event.workflow_run_id === parent.id && event.event_type === 'node_completed'
+          )
+          .map(event => event.step_name)
+          .sort()
+      ).toEqual(['first', 'second']);
+    }
   });
 
   it('a throw during the parent auto-resume pass lands the parent in failed, never wedged at running', async () => {
@@ -5295,24 +5397,6 @@ nodes:
     // (Defect A), not the gate-slot collision: the losing child is cancelled before it
     // ever reaches its `approval:` node, so `pauseParentOnChild` never runs for it.
     //
-    // SCOPE LIMIT — READ BEFORE TRUSTING THIS TEST FOR #2180 Defect B.
-    // This test CANNOT characterize the single-gate-slot collision. `InMemoryStore`'s
-    // `pauseWorkflowRun` (see above) is an unconditional status write; production's is
-    // `UPDATE … WHERE status='running'` that THROWS on a 0-row match
-    // (`packages/core/src/db/workflows.ts:942+`). Without that CAS there is no second
-    // pauser to lose. A faithful Defect-B test needs a store double that mirrors the
-    // compare-and-set.
-    //
-    // Before #2489, the two pause call sites behaved DIFFERENTLY on collision:
-    // `approval:`/interactive `loop:` gates tolerated a lost CAS via
-    // `pauseGateRespectingExternalTransition` (re-read status, see 'paused', return
-    // SUCCESS — the collision misclassified as a legitimate external transition,
-    // #1123), while `pauseParentOnChild` (workflow: nodes) bypassed that wrapper, so
-    // the throw reached the generic per-node catch and emitted node_failed instead.
-    // #2489 routed `pauseParentOnChild` through the same shared helper, so both call
-    // sites now behave the same way on a lost CAS — a faithful Defect-B test still
-    // needs the CAS-aware store double described above, but no longer needs to pick a
-    // gate type deliberately for this reason.
     await writeWorkflow(
       'gating-child',
       `

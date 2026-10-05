@@ -22,6 +22,7 @@ export const COPILOT_EFFORTS = [
   'medium',
   'high',
   'xhigh',
+  'max',
 ] as const satisfies readonly CopilotEffort[];
 
 export type CopilotEffortsAreComplete = AssertNever<
@@ -44,7 +45,7 @@ export function parseCopilotConfig(raw: Record<string, unknown>): CopilotProvide
   }
 
   // Accept any rung of Archon's shared ladder and clamp it to the SDK's enum
-  // (which has neither `minimal` nor `max`/`ultra`), so
+  // (which has neither `minimal` nor `ultra`/`persistent`), so
   // `assistants.copilot.*` takes the same vocabulary a workflow's `effort:`
   // does. Normalizing at parse time keeps
   // `CopilotProviderDefaults.modelReasoningEffort` SDK-shaped.
