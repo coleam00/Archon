@@ -1,3 +1,4 @@
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
 /**
@@ -2521,6 +2522,7 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and

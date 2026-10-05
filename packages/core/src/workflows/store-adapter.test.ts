@@ -34,6 +34,16 @@ const mockClearWorkflowWaitContext = mock(() => Promise.resolve({ cleared: true 
 const mockResolveApprovalGate = mock(() => Promise.resolve({ resolved: true }));
 
 mock.module('../db/workflows', () => ({
+  findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
+  resolveAndCancelApprovalGate: mock(() => Promise.resolve({ resolved: true })),
+  cancelResumableRunsForConversation: mock(() => Promise.resolve([])),
+  listDashboardRuns: mock(() =>
+    Promise.resolve({
+      runs: [],
+      total: 0,
+      counts: { all: 0, running: 0, completed: 0, failed: 0, cancelled: 0, pending: 0, paused: 0 },
+    })
+  ),
   createWorkflowRun: mockCreateWorkflowRun,
   getWorkflowRun: mockGetWorkflowRun,
   findChildRuns: mockFindChildRuns,
@@ -176,7 +186,9 @@ mock.module('../db/env-vars', () => ({
 mock.module('../db/workflow-node-sessions', () => ({
   listWorkflowNodeSessions: mock(() => Promise.resolve([])),
   upsertWorkflowNodeSession: mock(() => Promise.resolve()),
-  deleteWorkflowNodeSessions: mock(() => Promise.resolve()),
+  deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() =>
+    Promise.resolve({ deleted: 0 })
+  ),
 }));
 mock.module(
   '../db/workflow-run-node-sessions',
@@ -192,9 +204,28 @@ mock.module(
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
 
 describe('createWorkflowStore', () => {
+  test('retains atomic operation implementations at the SQL boundary', async () => {
+    const workflowDb = await import('../db/workflows');
+    const sessionDb = await import('../db/workflow-node-sessions');
+    const store = createWorkflowStore();
+    expect(store.resolveApprovalGate).toBe(workflowDb.resolveApprovalGate);
+    expect(store.resolveAndCancelApprovalGate).toBe(workflowDb.resolveAndCancelApprovalGate);
+    expect(store.cancelResumableRunsForConversation).toBe(
+      workflowDb.cancelResumableRunsForConversation
+    );
+    expect(store.deleteWorkflowNodeSessions).toBe(sessionDb.deleteWorkflowNodeSessions);
+    expect(store.listWorkflowRuns).toBe(workflowDb.listDashboardRuns);
+    expect(store.findWorkflowRunsByIdPrefix).toBe(workflowDb.findWorkflowRunsByIdPrefix);
+  });
   test('returns object with all IWorkflowStore methods', () => {
     const store = createWorkflowStore();
     const requiredMethods: (keyof IWorkflowStore)[] = [
+      'resolveApprovalGate',
+      'resolveAndCancelApprovalGate',
+      'cancelResumableRunsForConversation',
+      'deleteWorkflowNodeSessions',
+      'listWorkflowRuns',
+      'findWorkflowRunsByIdPrefix',
       'createWorkflowRun',
       'getWorkflowRun',
       'findChildRuns',
