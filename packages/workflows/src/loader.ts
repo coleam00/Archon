@@ -789,7 +789,7 @@ function freeFormAiProducerKind(node: DagNode): 'schema-capable' | 'loop-group' 
 const GATE_ON_A_SHELL_NODE =
   "compute the decision in a 'bash:'/'script:' node (or an 'until_bash' check) and gate on that node's output instead";
 
-function collectConditionalTriggerRuleWarnings(
+export function collectConditionalTriggerRuleWarnings(
   nodes: readonly (DagNode | IncludeDirective)[],
   warnings: string[]
 ): void {
@@ -1596,8 +1596,6 @@ export function parseWorkflow(
         error: { filename, error: structureError, errorType: 'validation_error' },
       };
     }
-
-    collectConditionalTriggerRuleWarnings(dagNodes, parseWarnings);
 
     const outputFormatError = validateNodeOutputFormats(dagNodes);
     if (outputFormatError) {

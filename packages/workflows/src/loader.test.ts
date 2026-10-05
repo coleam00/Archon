@@ -5215,6 +5215,56 @@ nodes:
   });
 
   describe('all-conditional trigger rule warning (#3783)', () => {
+    async function loadWarnings(yaml: string) {
+      await writeWorkflowFile(testDir, 'conditional.yaml', yaml);
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      expect(result.workflows).toHaveLength(1);
+      return {
+        workflow: result.workflows[0].workflow,
+        warnings: result.workflows[0].parseWarnings ?? [],
+      };
+    }
+
+    it('warns after a conditional include adds a when to an unconditional entry', async () => {
+      await writeWorkflowFile(
+        testDir,
+        'block.yaml',
+        `name: block
+description: Unconditional reusable join
+nodes:
+  - id: up
+    bash: echo up
+  - id: join
+    depends_on: [up]
+    trigger_rule: none_failed_min_one_success
+    bash: echo joined
+`
+      );
+      await writeWorkflowFile(
+        testDir,
+        'top.yaml',
+        `name: top
+description: Conditional composition
+inputs:
+  run: {}
+nodes:
+  - id: inc
+    include: block
+    when: "$INPUTS.run == true"
+`
+      );
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toEqual([]);
+      const block = result.workflows.find(w => w.workflow.name === 'block');
+      const top = result.workflows.find(w => w.workflow.name === 'top');
+      expect(block).toBeDefined();
+      expect(block?.parseWarnings ?? []).toEqual([]);
+      expect(top).toBeDefined();
+      expect(top?.parseWarnings).toHaveLength(1);
+      expect(top?.parseWarnings?.[0]).toContain("Node 'inc__join'");
+      expect(top?.parseWarnings?.[0]).toContain("every dependency has a 'when'");
+    });
     it.each([
       {
         label: 'one conditional dependency',
@@ -5258,8 +5308,8 @@ nodes:
         rule: 'all_done',
         warns: false,
       },
-    ])('$label', ({ deps, conditional, rule, warns }) => {
-      const { workflow, warnings } = parseWorkflowYaml(`name: conditional-join
+    ])('$label', async ({ deps, conditional, rule, warns }) => {
+      const { workflow, warnings } = await loadWarnings(`name: conditional-join
 description: Conditional join warning
 nodes:
   - id: optional
@@ -5284,10 +5334,9 @@ inputs:
         expect(warnings[0]).toContain('/guides/authoring-workflows/#trigger_rule-values');
       }
     });
-  });
 
-  it('warns within a loop_group scope', () => {
-    const { warnings } = parseWorkflowYaml(`name: conditional-loop-join
+    it('warns within a loop_group scope', async () => {
+      const { warnings } = await loadWarnings(`name: conditional-loop-join
 description: Conditional join inside a loop
 inputs:
   run: {}
@@ -5305,25 +5354,33 @@ nodes:
           trigger_rule: none_failed_min_one_success
           bash: echo joined
 `);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("Node 'join'");
-  });
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("Node 'join'");
+    });
 
-  it('bundled workflows warn only on the conditional archon-ship routing join', () => {
-    const warnedNodes: { workflow: string; warning: string }[] = [];
-    for (const [filename, yaml] of Object.entries(bundledDefaults.BUNDLED_WORKFLOWS)) {
-      const result = parseWorkflow(yaml, filename);
-      expect(result.error).toBeNull();
-      if (!result.workflow) continue;
-      for (const warning of result.warnings) {
-        if (warning.includes("every dependency has a 'when'")) {
-          warnedNodes.push({ workflow: result.workflow.name, warning });
+    it('bundled workflows warn only on the conditional archon-ship routing join', async () => {
+      const warnedNodes: { workflow: string; warning: string }[] = [];
+      const binaryBuild = spyOn(bundledDefaults, 'isBinaryBuild').mockReturnValue(true);
+      try {
+        const discovered = await discoverWorkflows(testDir, { loadDefaults: true });
+        expect(discovered.errors).toEqual([]);
+        expect(discovered.workflows.length).toBe(
+          Object.keys(bundledDefaults.BUNDLED_WORKFLOWS).length
+        );
+        for (const result of discovered.workflows) {
+          for (const warning of result.parseWarnings ?? []) {
+            if (warning.includes("every dependency has a 'when'")) {
+              warnedNodes.push({ workflow: result.workflow.name, warning });
+            }
+          }
         }
+        expect(warnedNodes).toHaveLength(1);
+        expect(warnedNodes[0]?.workflow).toBe('archon-ship');
+        expect(warnedNodes[0]?.warning).toContain("Node 'deliver__impl__implement'");
+      } finally {
+        binaryBuild.mockRestore();
       }
-    }
-    expect(warnedNodes).toHaveLength(1);
-    expect(warnedNodes[0]?.workflow).toBe('archon-ship');
-    expect(warnedNodes[0]?.warning).toContain("Node 'deliver'");
+    });
   });
 
   describe('parse warnings channel (#3444)', () => {
@@ -7791,16 +7848,28 @@ nodes:
       for (const file of files) {
         const result = parseWorkflow(await readFile(file, 'utf-8'), basename(file));
         if (!result.workflow || result.warnings.length === 0) continue;
-        if (result.workflow.name === 'e2e-joins') {
-          // This engine test deliberately makes both dependencies conditional.
-          expect(result.warnings).toHaveLength(1);
-          expect(result.warnings[0]).toContain("Node 'join-none-failed'");
-          expect(result.warnings[0]).toContain("every dependency has a 'when'");
-        } else if (!KNOWN_BAD.has(result.workflow.name)) {
+        if (!KNOWN_BAD.has(result.workflow.name)) {
           unexpected.push(result.workflow.name);
         }
       }
       expect(unexpected).toEqual([]);
+
+      const discovered = await discoverWorkflows(join(corpusDir, '..', '..'), {
+        loadDefaults: false,
+      });
+      expect(discovered.workflows.length).toBeGreaterThan(20);
+      const conditionalWarnings = discovered.workflows.flatMap(({ workflow, parseWarnings }) =>
+        (parseWarnings ?? [])
+          .filter(warning => warning.includes("every dependency has a 'when'"))
+          .map(warning => ({ workflow: workflow.name, warning }))
+      );
+      expect(conditionalWarnings.map(w => w.workflow).sort()).toEqual(['archon-ship', 'e2e-joins']);
+      expect(conditionalWarnings.find(w => w.workflow === 'e2e-joins')?.warning).toContain(
+        "Node 'join-none-failed'"
+      );
+      expect(conditionalWarnings.find(w => w.workflow === 'archon-ship')?.warning).toContain(
+        "Node 'deliver__impl__implement'"
+      );
     });
   });
 
