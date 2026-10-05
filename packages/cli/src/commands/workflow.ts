@@ -81,6 +81,7 @@ import { mkdirSync, openSync, closeSync, readFileSync, rmSync, writeSync } from 
 import { mkdir, open as openFile } from 'node:fs/promises';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createCliWorkflowDeps } from '../utils/workflow-deps';
+import { initializeWorkflowGitHubAppAuth } from '@archon/core/workflows/store-adapter';
 import { toHydratedTimestamp } from '@archon/core/db/timestamps';
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -3755,7 +3756,7 @@ export async function workflowRunCommand(
       // Inside the try so a refused process-group claim still records the `pending` row
       // the launcher handed over (#2872) instead of stranding it.
       if (detachedProcessOwner) assertDetachedRunProcessOwner();
-      createCliWorkflowDeps();
+      initializeWorkflowGitHubAppAuth();
       pending = await withCapturedSource(owner =>
         runWorkflowWithOwnedSource(
           owner,
@@ -5440,7 +5441,7 @@ async function runDetachedControlCommand(
   precheck: () => Promise<WorkflowRun>
 ): Promise<void> {
   try {
-    createCliWorkflowDeps();
+    initializeWorkflowGitHubAppAuth();
     const run = await spelledForCli(precheck);
     // The caller's --cwd, already resolved by cli.ts — NOT process.cwd(). The
     // appended --cwd is last-wins on the child's argv, so discarding it here

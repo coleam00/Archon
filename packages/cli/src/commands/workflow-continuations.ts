@@ -5,6 +5,7 @@ import { getConversationById } from '@archon/core/db/conversations';
 import { getWorkflowRun, signalWorkflowWait } from '@archon/core/db/workflows';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { createCliWorkflowDeps } from '../utils/workflow-deps';
+import { initializeWorkflowGitHubAppAuth } from '@archon/core/workflows/store-adapter';
 import {
   resumeWorkflowContinuation,
   wakeDueWorkflowContinuations,
@@ -179,7 +180,7 @@ export async function workflowContinuationCommand(
   const json = values.json === true;
   try {
     if (action === 'wake' && args[0] === 'schedule') return await wakeSchedule(args, values, json);
-    createCliWorkflowDeps();
+    initializeWorkflowGitHubAppAuth();
     if (action === 'signal') return await signalEvent(args, values, json);
     return await wake(args, values, json);
   } catch (error) {
