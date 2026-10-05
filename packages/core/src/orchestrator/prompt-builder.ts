@@ -3,6 +3,7 @@
  * Constructs the system prompt for the orchestrator agent with all
  * registered projects and available workflows.
  */
+import { resolveProjectAssistant } from '../config/project-assistant';
 import type { Codebase, Conversation } from '../types';
 import type { WorkflowDefinition } from '@archon/workflows/schemas/workflow';
 import {
@@ -20,14 +21,21 @@ type PromptWorkflow = Pick<WorkflowDefinition, 'name' | 'description'> & {
 
 /**
  * Format a single project for the orchestrator prompt.
+ *
+ * Only the scoped project passes a resolved assistant. Resolving an unpinned
+ * project loads its repo config, and an unrelated project's invalid config
+ * must not fail every chat turn, so other projects show only a stored pin.
  */
-export function formatProjectSection(codebase: Codebase): string {
+export function formatProjectSection(
+  codebase: Codebase,
+  assistant: string | null = codebase.ai_assistant_type
+): string {
   let section = `### ${codebase.name}\n`;
   if (codebase.repository_url) {
     section += `- Repository: ${codebase.repository_url}\n`;
   }
   section += `- Directory: ${codebase.default_cwd}\n`;
-  section += `- AI Provider: ${codebase.ai_assistant_type}\n`;
+  if (assistant) section += `- AI Provider: ${assistant}\n`;
   return section;
 }
 
@@ -345,11 +353,11 @@ You can answer questions directly or invoke workflows for structured development
  * The scoped project is shown prominently; other projects are listed separately.
  * Routing rules default to the scoped project when ambiguous.
  */
-export function buildProjectScopedPrompt(
+export async function buildProjectScopedPrompt(
   scopedCodebase: Codebase,
   allCodebases: readonly Codebase[],
   workflows: readonly PromptWorkflow[]
-): string {
+): Promise<string> {
   const otherCodebases = allCodebases.filter(c => c.id !== scopedCodebase.id);
 
   let prompt = `# Archon Orchestrator
@@ -362,7 +370,7 @@ This conversation is scoped to **${scopedCodebase.name}**. Use this project for 
 
 ## Active Project
 
-${formatProjectSection(scopedCodebase)}
+${formatProjectSection(scopedCodebase, await resolveProjectAssistant(scopedCodebase))}
 `;
 
   if (otherCodebases.length > 0) {
@@ -421,11 +429,11 @@ When the user asks what's running, whether a run passed/failed, or to approve / 
  * appended here — the orchestrator adds it conditionally (project-scoped + non-nativeTools
  * providers) via buildRunManagementSection().
  */
-export function buildOrchestratorSystemAppend(
+export async function buildOrchestratorSystemAppend(
   conversation: Conversation,
   codebases: readonly Codebase[],
   workflows: readonly PromptWorkflow[]
-): string {
+): Promise<string> {
   const scopedCodebase = conversation.codebase_id
     ? codebases.find(c => c.id === conversation.codebase_id)
     : undefined;

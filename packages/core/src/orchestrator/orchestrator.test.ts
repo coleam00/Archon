@@ -365,10 +365,10 @@ const mockBuildOrchestratorPrompt = mock<typeof PromptBuilder.buildOrchestratorP
   () => 'You are the orchestrator agent.'
 );
 const mockBuildProjectScopedPrompt = mock<typeof PromptBuilder.buildProjectScopedPrompt>(
-  () => 'You are scoped to project X.'
+  async () => 'You are scoped to project X.'
 );
 const mockBuildOrchestratorSystemAppend = mock<typeof PromptBuilder.buildOrchestratorSystemAppend>(
-  () => 'orchestrator system append'
+  async () => 'orchestrator system append'
 );
 
 mock.module('./prompt-builder', () => ({
@@ -1810,7 +1810,6 @@ describe('orchestrator-agent handleMessage', () => {
           name: 'my-app',
           default_cwd: canonicalPath,
           default_branch: null,
-          ai_assistant_type: 'claude',
           kind: 'folder',
         });
         expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -1844,7 +1843,6 @@ describe('orchestrator-agent handleMessage', () => {
           name: 'my-app',
           default_cwd: canonicalPath,
           default_branch: null,
-          ai_assistant_type: 'claude',
           kind: 'repo',
         });
       } finally {

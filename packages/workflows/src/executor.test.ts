@@ -1226,6 +1226,131 @@ describe('executeWorkflow', () => {
       expect(sentMessage).toContain('--branch');
     });
 
+    it.each(['event', 'time'] as const)(
+      'describes a durable %s wait without offering human approval actions',
+      async kind => {
+        const resumeAt = '2026-10-06T12:00:00.000Z';
+        const otherRun = makeRun({
+          id: 'abc12345-rest-of-uuid',
+          status: 'paused',
+          metadata: {
+            wait: {
+              owner: 'node',
+              nodeId: 'wait-for-checks',
+              kind,
+              waitingSince: '2026-10-05T12:00:00.000Z',
+              resumeAt,
+              ...(kind === 'event' ? { event: 'checks.complete' } : {}),
+            },
+          },
+        });
+        const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => {});
+        const platform = { ...makePlatform(), sendMessage };
+        const result = await executeWorkflow(
+          makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) })),
+          platform,
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          'db-conv-1'
+        );
+
+        expect(result.success).toBe(false);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        const message = sendMessage.mock.calls[0][1];
+        expect(message).toContain('This worktree is in use');
+        expect(message).toContain(resumeAt);
+        expect(message).toContain('Wait until');
+        expect(message).toContain('/workflow status');
+        expect(message).toContain('/workflow abandon abc12345');
+        expect(message).toContain('--branch <other>');
+        expect(message).not.toContain('user input');
+        expect(message).not.toContain('Approve');
+        expect(message).not.toContain('Reject');
+        expect(message).not.toContain('/workflow approve');
+        expect(message).not.toContain('/workflow reject');
+        if (kind === 'event') {
+          expect(message).toContain('waiting for event `checks.complete`');
+          expect(message).toContain('Signal');
+          expect(message).toContain('abc12345-rest-of-uuid');
+        } else {
+          expect(message).toContain('waiting until');
+          expect(message).not.toContain('Signal');
+        }
+      }
+    );
+
+    it.each(['node', 'loop_group'] as const)(
+      'describes a %s attention wait with outside-action and resume guidance',
+      async owner => {
+        const otherRun = makeRun({
+          id: 'abc12345-rest-of-uuid',
+          status: 'paused',
+          metadata: {
+            wait: {
+              owner,
+              nodeId: 'wait-for-access',
+              kind: 'attention',
+              waitingSince: '2026-10-05T12:00:00.000Z',
+              message: 'Restore repository access',
+              ...(owner === 'loop_group'
+                ? { bodyWaitId: 'access', iteration: 1, sessionId: null, sessionProvider: null }
+                : {}),
+            },
+          },
+        });
+        const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => {});
+        const result = await executeWorkflow(
+          makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) })),
+          { ...makePlatform(), sendMessage },
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'test message',
+          'db-conv-1'
+        );
+
+        expect(result.success).toBe(false);
+        expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+        const message = sendMessage.mock.calls[0][1];
+        expect(message).toContain('paused waiting for an outside action');
+        expect(message).toContain('Restore repository access');
+        expect(message).toContain('/workflow resume abc12345');
+        expect(message).toContain('/workflow abandon abc12345');
+        expect(message).toContain('--branch <other>');
+        expect(message).not.toContain('user input');
+        expect(message).not.toContain('/workflow approve');
+        expect(message).not.toContain('/workflow reject');
+      }
+    );
+
+    it('preserves human-pause wording and actions for an approval gate', async () => {
+      const otherRun = makeRun({
+        id: 'abc12345-rest-of-uuid',
+        status: 'paused',
+        metadata: { approval: { type: 'approval', nodeId: 'review', message: 'Approve?' } },
+      });
+      const sendMessage = mock<IWorkflowPlatform['sendMessage']>(async () => {});
+      const result = await executeWorkflow(
+        makeDeps(makeStore({ getActiveWorkflowRunByPath: mock(async () => otherRun) })),
+        { ...makePlatform(), sendMessage },
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'test message',
+        'db-conv-1'
+      );
+
+      expect(result.success).toBe(false);
+      const message = sendMessage.mock.calls[0][1];
+      expect(message).toContain('paused waiting for user input');
+      expect(message).toContain('/workflow approve abc12345');
+      expect(message).toContain('/workflow reject abc12345');
+      expect(message).toContain('/workflow abandon abc12345');
+      expect(message).toContain('--branch <other>');
+    });
+
     it('skips path-lock check when mutates_checkout is false', async () => {
       const getActiveSpy = mock(async () =>
         makeRun({ id: 'other-run', status: 'running' as const })

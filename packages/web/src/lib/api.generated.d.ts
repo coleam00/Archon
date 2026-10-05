@@ -3937,7 +3937,7 @@ export interface components {
       repository_url: string | null;
       default_cwd: string;
       default_branch: string | null;
-      ai_assistant_type: string;
+      ai_assistant_type: string | null;
       /** @enum {string} */
       kind: 'repo' | 'folder';
       commands: {

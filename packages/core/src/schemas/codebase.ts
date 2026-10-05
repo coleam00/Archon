@@ -13,7 +13,7 @@ export const codebaseRowSchema = z.object({
   repository_url: z.string().nullable(),
   default_cwd: z.string(),
   default_branch: z.string().nullable(),
-  ai_assistant_type: z.string(),
+  ai_assistant_type: z.string().nullable(),
   /**
    * Project kind discriminator. `'repo'` = a git repository (worktree isolation,
    * branch/PR flows). `'folder'` = a non-git workspace (multi-repo root or plain

@@ -33,7 +33,6 @@ import {
 import * as db from '@archon/core/db/conversations';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as userDb from '@archon/core/db/users';
-import { resolveDefaultAssistant } from '@archon/core/config/resolve-assistant';
 import { parseAllowedUsers, isGitLabUserAuthorized, verifyWebhookToken } from './auth';
 import { splitIntoParagraphChunks } from '../../../utils/message-splitting';
 import type { GitLabWebhookEvent, GitLabIssue, GitLabMergeRequest } from './types';
@@ -582,7 +581,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
       name: projectPath,
       repository_url: repoUrlNoGit,
       default_cwd: canonicalPath,
-      ai_assistant_type: await resolveDefaultAssistant(canonicalPath),
     });
 
     getLog().info({ codebaseName: codebase.name, path: canonicalPath }, 'gitlab.codebase_created');
@@ -699,8 +697,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
     try {
       // 8. Conversation + codebase setup
       const conversationId = this.buildConversationId(projectPath, iid, isMR);
-      const existingConv = await db.getOrCreateConversation('gitlab', conversationId);
-      const isNewConversation = !existingConv.codebase_id;
 
       const {
         codebase,
@@ -708,7 +704,16 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
         isNew: isNewCodebase,
       } = await this.getOrCreateCodebaseForRepo(projectPath);
 
-      if (isNewConversation) {
+      // 9. Get default branch
+      const defaultBranch = event.project.default_branch;
+
+      // 10. Ensure repo ready
+      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
+
+      const existingConv = await db.getOrCreateConversation('gitlab', conversationId, codebase.id);
+      const needsProjectContext = !existingConv.codebase_id || !existingConv.cwd;
+
+      if (needsProjectContext) {
         try {
           await db.updateConversation(existingConv.id, {
             codebase_id: codebase.id,
@@ -725,12 +730,6 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
           throw updateError;
         }
       }
-
-      // 9. Get default branch
-      const defaultBranch = event.project.default_branch;
-
-      // 10. Ensure repo ready
-      await this.ensureRepoReady(projectPath, defaultBranch, repoPath, isNewCodebase);
 
       // 11. Auto-load commands
       if (isNewCodebase) {
