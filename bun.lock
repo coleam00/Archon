@@ -6,7 +6,7 @@
       "name": "archon",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.289",
-        "@opencode-ai/sdk": "^1.17.3",
+        "@opencode-ai/sdk": "^1.18.34",
       },
       "devDependencies": {
         "@archon/core": "workspace:*",
@@ -191,7 +191,7 @@
         "@earendil-works/pi-coding-agent": "^1.0.3",
         "@github/copilot-sdk": "~1.0.16",
         "@openai/codex": "0.160.0",
-        "@opencode-ai/sdk": "^1.17.3",
+        "@opencode-ai/sdk": "^1.18.34",
         "@sinclair/typebox": "^0.34.41",
         "jsonrepair": "^3.14.0",
         "undici": "8.10.2",
@@ -824,7 +824,7 @@
 
     "@openai/codex-win32-x64": ["@openai/codex@0.160.0-win32-x64", "", { "os": "win32", "cpu": "x64" }, "sha512-/gCFcuOmGlQkgGivWCtY8BNEDixh70Pue0HZOk9S8bj2vUIE1GLD9zcNB/KqqDJmn0S+lIttauLpzQnw6HOCHA=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.17.3", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-oXrEjOuP3+J9pPNw3cmOnRma/xiVQ4WIIvGd6YkhPQgqqi2PnD/b1qfNY0AMead3QfNhKwKdDM4QFJdN2LpByg=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.34", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-R9QWUpcngtdQ6FCixz7NC6n1WsSho6CEuRUzYHz/CzZcp3miSklDzXkm0oDwXVCnuEu+ANoeM0f6RDp51kOMzQ=="],
 
     "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.43.0", "", {}, "sha512-eSYWTm620tTk45EKSedaUL8MFYI8hW164hIXsgIHyxu3VobUB3fFCu5t0hQby6OoWRPsG1KkKUG2M5UadiLiVg=="],
 
