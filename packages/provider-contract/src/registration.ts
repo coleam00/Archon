@@ -5,17 +5,13 @@ import type { ProviderCapabilities } from './capabilities';
 export type ProviderDefaults = Record<string, unknown>;
 
 /**
- * Which authored surface a strict provider-config parse is validating.
- *
- * `install` is `assistants.<provider>` in a global or repository
- * `.archon/config.yaml`; `run` is an explicitly selected per-run layer. They
- * share one parser so both paths reject the same bad values, and the scope
- * lets a provider refuse a key whose consumer owns process-lifetime state and
- * therefore cannot be re-decided per run.
+ * `install` validates global/repository defaults; `run` validates a per-run layer.
+ * `snapshot` projects JSON-compatible run defaults without credentials or
+ * process-owned settings. Providers own which settings have run-lifetime meaning.
  */
-export type ProviderConfigScope = 'install' | 'run';
+export type ProviderConfigScope = 'install' | 'run' | 'snapshot';
 
-/** Strict parser for an authored provider config layer. */
+/** Validate, normalize, and project defaults according to their owning scope. */
 export type ProviderConfigParser = (
   raw: ProviderDefaults,
   scope: ProviderConfigScope

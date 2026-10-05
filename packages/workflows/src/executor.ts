@@ -1,3 +1,4 @@
+import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -1342,7 +1343,9 @@ async function runChildWorkflow(
         {
           codebaseId,
           userId,
-          ...(resumeChild ? { continuationRun: resumeChild.run } : {}),
+          ...(resumeChild
+            ? { continuationRun: resumeChild.run }
+            : { aiConfigurationRun: parentRun, inheritAiConfiguration: true }),
           modelOverrideLayer: { kind: 'resolved', overrides: resolvedModelOverrides },
           ...(runConfig ? { runConfig } : {}),
         }
@@ -1492,6 +1495,7 @@ async function runChildWorkflow(
           parent_conversation_id: parentRun.parent_conversation_id ?? undefined,
           user_id: userId,
           metadata: {
+            [RUN_AI_CONFIGURATION_METADATA_KEY]: childPrepared.aiConfigurationSnapshot,
             [SUBRUN_METADATA_KEYS.parentNodeId]: nodeId,
             // Fan-out instance index (slice 2, PR-C) — stamped only for a fan-out child so
             // parent resume can re-key the ordered instance set by index (findChildRuns is
@@ -1922,15 +1926,28 @@ export async function executeWorkflow(
 
   let prepared: PreparedRunAiConfiguration;
   try {
+    const recorded =
+      preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
+    const aiAncestorId = adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
+    const aiContinuationMode = continuationMode ?? readContinuationMode(preCreatedRun?.metadata);
+    const adoptedAiRun =
+      !isContinuation && !recorded && aiAncestorId && aiContinuationMode !== 'supersede'
+        ? await deps.store.getWorkflowRun(aiAncestorId)
+        : undefined;
+    const inherited =
+      adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
     prepared =
-      opts.preparedAiConfiguration ??
-      (await prepareRunAiConfiguration(deps, workflow, cwd, {
-        codebaseId,
-        userId: executionUserId,
-        runConfig: callerRunConfig,
-        modelOverrideLayer,
-        ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
-      }));
+      !recorded && !inherited && opts.preparedAiConfiguration
+        ? opts.preparedAiConfiguration
+        : await prepareRunAiConfiguration(deps, workflow, cwd, {
+            codebaseId,
+            userId: executionUserId,
+            runConfig: callerRunConfig,
+            modelOverrideLayer,
+            ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
+            aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
+            ...(recorded ? { inheritAiConfiguration: true } : {}),
+          });
   } catch (error) {
     if (error instanceof TerminalStatusWriteError) throw error;
     if (preCreatedRun)
@@ -2183,6 +2200,7 @@ export async function executeWorkflow(
           ...(adoptedFromRunId
             ? { [CONTINUATION_METADATA_KEY]: { mode: continuationMode ?? 'adopt' } }
             : {}),
+          [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot,
           [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
           [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
           ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
@@ -2192,6 +2210,10 @@ export async function executeWorkflow(
         user_id: userId,
         ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
       });
+      workflowRun.metadata = {
+        ...workflowRun.metadata,
+        [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot,
+      };
     } catch (error) {
       const err = error as Error;
       getLog().error(
@@ -2269,6 +2291,9 @@ export async function executeWorkflow(
       ...(isContinuation
         ? {}
         : {
+            ...(Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY)
+              ? {}
+              : { [RUN_AI_CONFIGURATION_METADATA_KEY]: prepared.aiConfigurationSnapshot }),
             [RUN_MODEL_BINDINGS_METADATA_KEY]: modelBindingsMetadata,
             [RUN_DISPATCH_METADATA_KEY]: dispatchMetadata,
             ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),

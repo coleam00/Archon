@@ -3,6 +3,7 @@ import { registerBuiltinProviders, registerCommunityProviders } from '@archon/pr
 import type { CredentialStatus } from '@archon/provider-contract';
 import type { IAgentProvider } from '@archon/providers/types';
 import type { WorkflowConfig } from './deps';
+import type { WorkflowRun } from './schemas';
 import { makeTestResolvedWorkflow, makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
 import {
   prepareRunAiConfiguration,
@@ -57,7 +58,7 @@ function fixture(status: CredentialStatus = { state: 'not_checked', source: 'nat
     checkCredential,
     provider,
     deps: {
-      loadConfig: mock(async () => config),
+      loadConfig: mock(async () => structuredClone(config)),
       store: { getCodebaseEnvVars: mock(async () => ({ DB_SETTING: 'db' })) },
       getAgentProvider: mock(() => provider),
       isPerUserProviderKeysEnabled: () => true,
@@ -266,4 +267,128 @@ describe('run credential preflight', () => {
     });
     expect(checkCredential).not.toHaveBeenCalled();
   });
+});
+
+function savedRun(metadata: Record<string, unknown>): WorkflowRun {
+  return {
+    id: 'run',
+    workflow_name: 'ai',
+    conversation_id: 'conversation',
+    parent_conversation_id: null,
+    codebase_id: null,
+    status: 'paused',
+    outcome: null,
+    user_message: '',
+    metadata,
+    started_at: new Date(),
+    completed_at: null,
+    last_activity_at: null,
+    working_path: '/p',
+    user_id: null,
+    parent_run_id: null,
+    adopted_from_run_id: null,
+    output_root: null,
+    checkout_baseline: null,
+  };
+}
+
+test('continuation retains launch AI values while environment stays live', async () => {
+  const { deps } = fixture();
+  const workflow = makeTestResolvedWorkflow({
+    name: 'ai',
+    nodes: [{ id: 'ai', prompt: 'go', model: '@custom' }],
+  });
+  deps.loadConfig.mockResolvedValue({
+    ...config,
+    assistants: {
+      claude: { model: 'sonnet', settingSources: ['user'] },
+      codex: {},
+      pi: { model: 'openai/native', env: { TOKEN: 'launch-secret' } },
+    },
+    tiers: { small: { provider: 'claude', model: 'haiku' } },
+    aliases: { '@custom': { provider: 'claude', model: 'sonnet' } },
+    envVars: { TOKEN: 'launch-secret' },
+  });
+  const launch = await prepareRunAiConfiguration(deps, workflow, '/p');
+  // The persisted record is a JSON round-trip, as it is in both database adapters.
+  const metadata = JSON.parse(JSON.stringify({ ai_configuration: launch.aiConfigurationSnapshot }));
+  deps.loadConfig.mockResolvedValue({
+    ...config,
+    assistant: 'codex',
+    assistants: { claude: {}, codex: { model: 'gpt' }, pi: { env: { TOKEN: 'live-secret' } } },
+    aliases: { '@custom': { provider: 'codex', model: 'gpt' } },
+    envVars: { TOKEN: 'live-secret' },
+  });
+  const resumed = await prepareRunAiConfiguration(deps, workflow, '/changed', {
+    continuationRun: savedRun(metadata),
+  });
+  expect(resumed.aiProfile).toEqual(launch.aiProfile);
+  expect(resumed.scope).toEqual(launch.scope);
+  expect(resumed.config.assistants.claude).toEqual(launch.config.assistants.claude);
+  expect(resumed.config.assistants.pi?.model).toBe('openai/native');
+  expect(resumed.config.assistants.pi?.env).toEqual({ TOKEN: 'live-secret' });
+  expect(resumed.config.envVars?.TOKEN).toBe('live-secret');
+  expect(JSON.stringify(metadata)).not.toContain('launch-secret');
+});
+
+test('legacy continuation reloads configuration and retains only explicit model overrides', async () => {
+  const { deps } = fixture();
+  const workflow = makeTestResolvedWorkflow({ name: 'ai', model: 'large' });
+  const launch = await prepareRunAiConfiguration(deps, workflow, '/p', {
+    modelOverrideLayer: { kind: 'raw', overrides: { tiers: { large: 'claude/opus' } } },
+  });
+  deps.loadConfig.mockResolvedValue({
+    ...config,
+    assistant: 'codex',
+    aliases: { '@new': { provider: 'codex', model: 'gpt' } },
+  });
+  const resumed = await prepareRunAiConfiguration(deps, workflow, '/p', {
+    continuationRun: savedRun({ model_bindings: launch.modelBindingsMetadata }),
+  });
+  expect(resumed.baseAiProfile.defaultProvider).toBe('codex');
+  expect(resumed.aiProfile.aliases.large).toEqual(launch.aiProfile.aliases.large);
+  expect(resumed.aiProfile.aliases['@new']?.model).toBe('gpt');
+});
+
+test('restoration skips user preferences and native model rediscovery', async () => {
+  const { deps, provider } = fixture();
+  const workflow = makeTestResolvedWorkflow({ name: 'ai', provider: 'pi' });
+  deps.loadConfig.mockResolvedValue({ ...config, assistants: { claude: {}, codex: {}, pi: {} } });
+  provider.resolveCredentialModel = mock(async () => 'openai/native-model');
+  const getUserAiPrefs = mock(async () => ({ defaultProvider: 'claude' }));
+  const launch = await prepareRunAiConfiguration({ ...deps, getUserAiPrefs }, workflow, '/p', {
+    userId: 'launcher',
+  });
+  getUserAiPrefs.mockRejectedValue(new Error('preferences must not be read'));
+  const resumed = await prepareRunAiConfiguration({ ...deps, getUserAiPrefs }, workflow, '/p', {
+    continuationRun: {
+      ...savedRun({ ai_configuration: launch.aiConfigurationSnapshot }),
+      user_id: 'launcher',
+    },
+  });
+  expect(resumed.config.assistants.pi?.model).toBe('openai/native-model');
+  expect(getUserAiPrefs).toHaveBeenCalledTimes(1);
+  expect(provider.resolveCredentialModel).toHaveBeenCalledTimes(1);
+});
+
+test('AI-only inheritance uses the new actor and refuses conflicting adoption inputs', async () => {
+  const { deps } = fixture();
+  const workflow = makeTestResolvedWorkflow({ name: 'ai' });
+  const launch = await prepareRunAiConfiguration(deps, workflow, '/p');
+  const ancestor = {
+    ...savedRun({ ai_configuration: launch.aiConfigurationSnapshot }),
+    user_id: 'ancestor',
+  };
+  const adopted = await prepareRunAiConfiguration(deps, workflow, '/p', {
+    aiConfigurationRun: ancestor,
+    userId: 'new-actor',
+  });
+  expect(adopted.executionUserId).toBe('new-actor');
+  expect(adopted.aiConfigurationSnapshot).toEqual(launch.aiConfigurationSnapshot);
+  await expect(
+    prepareRunAiConfiguration(deps, workflow, '/p', {
+      aiConfigurationRun: ancestor,
+      modelOverrideLayer: { kind: 'raw', overrides: {} },
+    })
+  ).rejects.toThrow('Cannot override AI configuration');
 });

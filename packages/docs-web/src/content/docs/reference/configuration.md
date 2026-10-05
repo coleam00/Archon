@@ -53,6 +53,12 @@ Settings are loaded in this order (later overrides earlier):
 6. **Run config** - Sparse content selected for one fresh run
 7. **Explicit run model bindings** - Repeatable `--model` or HTTP `tiers`/`aliases`, per named binding
 
+New runs record their resolved Archon AI configuration at launch preparation: assistant, provider defaults, tiers, aliases, and model bindings. Resume and continuation reuse that record. New child runs inherit the parent's recorded AI base; existing children keep their own record. Editing configuration or user AI preferences affects new independent runs, not an existing run. Detached launches record the same values before handing the run to a child process; queued resource starts record them before admission.
+
+Adoption inherits the recorded AI configuration while the selected workflow still owns its graph and scripts. New model bindings or AI-bearing run config are rejected for this adoption. Supersession prepares fresh AI configuration. Older runs without a recorded configuration keep resolving from current configuration and their existing sparse run overrides.
+
+Credentials are checked and delivered freshly. Credential material, provider-native settings and guidance, and process-owned Pi environment and concurrency settings are not frozen in the AI record. Non-AI runtime settings continue to load through the normal configuration path.
+
 The last three layers exist only where their setting has a run-time consumer. Archon-managed GitHub and provider credentials remain protected and are injected after user-authored run environment values.
 
 ## Global Configuration
@@ -182,7 +188,7 @@ Run config accepts settings whose consumers still execute after the run is dispa
 
 Unknown keys, unregistered providers, invalid effort values, and alias names without `@` also fail instead of being ignored. CLI accepts a local path; the HTTP run API accepts inline validated content and never a caller-selected server path.
 
-Fresh runs seal the normalized layer before recording it. Run metadata exposes its source label and configured key paths, not plaintext `env` or provider-default values. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
+Fresh runs seal the normalized layer before recording it. The sealed layer exposes its source label and configured key paths, not plaintext `env` or raw provider-default values. The separate launch AI record stores resolved profiles and credential-free provider defaults. A continuation restores that sealed layer without rereading the original file, and child workflows inherit it. Detached CLI launches also transfer the already-validated sealed layer to the child instead of rereading the caller's file. This is why `--config` cannot be supplied with `--resume`.
 
 ## Repository Configuration
 
