@@ -1,5 +1,6 @@
+import type { PiExtensionPosture } from '@archon/provider-contract';
 import type { PiProviderDefaults, ProviderConfigScope } from '../../types';
-import { InvalidProviderRunConfigError } from '../../errors';
+import { InvalidProviderRunConfigError } from '@archon/provider-contract';
 import {
   assertKnownRunConfigKeys,
   invalidRunConfigValue,
@@ -17,16 +18,12 @@ export type { PiProviderDefaults };
  * plannotator's `plan` flag and a UI-capable context, while an `implement`
  * node runs headless without the planning-mode edit guard (issue #2073).
  *
- * The three fields are exactly the extension-posture subset of
- * `PiProviderDefaults`, so we derive rather than re-declare them.
+ * The overrides share the SDK-free `PiExtensionPosture` contract.
  * `extensionFlags` is shallow-merged over the assistant-level flags (node
  * wins); set a flag to `false` to negate an inherited `true`. Merge and
  * precedence semantics live in {@link resolvePiExtensionSettings}.
  */
-export type PiNodeOverride = Pick<
-  PiProviderDefaults,
-  'enableExtensions' | 'interactive' | 'extensionFlags'
->;
+export type PiNodeOverride = PiExtensionPosture;
 
 /** parsePiConfig output: assistant-level defaults plus optional per-node overrides. */
 export interface ParsedPiConfig extends PiProviderDefaults {

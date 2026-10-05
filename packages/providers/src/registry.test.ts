@@ -15,9 +15,8 @@ import {
 import { registerPiProvider } from './community/pi/registration';
 import { registerCopilotProvider } from './community/copilot/registration';
 import { registerOpencodeProvider } from './community/opencode/registration';
-import { UnknownProviderError } from './errors';
 import type { ProviderRegistration, IAgentProvider } from './types';
-import { EFFORT_LADDER } from '@archon/paths/effort';
+import { EFFORT_LADDER, UnknownProviderError } from '@archon/provider-contract';
 
 // The registry creates its logger on first use and keeps it; hand it one this file can
 // observe. Module scope, so the spy is in place before any test makes the registry log.
@@ -166,7 +165,7 @@ describe('registry', () => {
 
     test('returns Codex capabilities without instantiation', () => {
       const caps = getProviderCapabilities('codex');
-      expect(caps.sessionFork).toBe(false);
+      expect(caps.sessionFork).toBe(true);
       expect(caps.mcp).toBe(true);
       expect(caps.hooks).toBe(false);
       expect(caps.envInjection).toBe(true);

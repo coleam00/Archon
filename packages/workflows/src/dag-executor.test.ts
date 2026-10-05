@@ -74,13 +74,13 @@ import {
   getProviderCapabilities,
 } from '@archon/providers';
 import type { ProviderFailure } from '@archon/provider-contract';
-import type { SendQueryOptions } from '@archon/providers';
+import type { SendQueryOptions } from '@archon/provider-contract';
 import {
   mergeTokenUsage,
   type MessageChunk,
   type ProviderEvent,
   type TokenUsage,
-} from '@archon/providers/types';
+} from '@archon/provider-contract';
 clearRegistry();
 registerBuiltinProviders();
 // Pi is a community provider (best-effort structured output) — register it so the
@@ -5747,16 +5747,26 @@ nodes:
         prompt: "You are concise. Return JSON { summary }."
         model: haiku
         tools: [Bash, Read]
+        disallowedTools: [Write]
+        skills: [codebase-search]
+        maxTurns: 5
 `;
     const result = parseWorkflow(yaml, 'agents.yaml');
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
     const node = wf.nodes[0] as DagNode;
-    expect(node.agents).toBeDefined();
-    expect(node.agents!['brief-gen'].description).toBe('Summarises an issue');
-    expect(node.agents!['brief-gen'].model).toBe('haiku');
-    expect(node.agents!['brief-gen'].tools).toEqual(['Bash', 'Read']);
+    expect(node.agents).toEqual({
+      'brief-gen': {
+        description: 'Summarises an issue',
+        prompt: 'You are concise. Return JSON { summary }.',
+        model: 'haiku',
+        tools: ['Bash', 'Read'],
+        disallowedTools: ['Write'],
+        skills: ['codebase-search'],
+        maxTurns: 5,
+      },
+    });
   });
 
   it('rejects an agent missing description', () => {
@@ -6258,7 +6268,7 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(2);
   });
 
-  it('reconciles total usage across a failed run and its resume', async () => {
+  it('seeds a resumed run with prior usage and accumulates the resumed pass', async () => {
     const store = createMockStore();
     const mockDeps = createMockDeps(store);
     const platform = createMockPlatform();
@@ -6318,42 +6328,12 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
     ]);
     (store.updateWorkflowRun as ReturnType<typeof mock>).mockClear();
 
-    const firstExecutionEvents = (
-      store.createWorkflowEvent as ReturnType<typeof mock>
-    ).mock.calls.map(
-      (call: unknown[]) =>
-        call[0] as {
-          event_type: string;
-          step_name?: string;
-          data?: Record<string, unknown>;
-        }
-    );
-    const priorCompletedNodes = new Map<string, PersistedNodeOutput>();
-    const priorUsage = { tokens: { input: 0, output: 0 }, costUsd: 0 };
-    for (const event of firstExecutionEvents) {
-      if (event.event_type !== 'node_completed' || !event.step_name) continue;
-      if (typeof event.data?.node_output === 'string') {
-        priorCompletedNodes.set(event.step_name, { output: event.data.node_output });
-      }
-      const eventTokens = event.data?.tokens as { input?: unknown; output?: unknown } | undefined;
-      if (
-        typeof eventTokens?.input === 'number' &&
-        typeof eventTokens.output === 'number' &&
-        Number.isFinite(eventTokens.input) &&
-        Number.isFinite(eventTokens.output)
-      ) {
-        priorUsage.tokens.input += eventTokens.input;
-        priorUsage.tokens.output += eventTokens.output;
-      }
-      const eventCost = event.data?.cost_usd;
-      if (typeof eventCost === 'number' && Number.isFinite(eventCost)) {
-        priorUsage.costUsd += eventCost;
-      }
-    }
-    expect(priorCompletedNodes).toEqual(new Map([['step1', { output: 'first execution output' }]]));
-    // Both axes are reconstructable from the event log — this mirrors what
-    // getDagResumeSnapshot does, and cost is now among them (#2469).
-    expect(priorUsage).toEqual({ tokens: { input: 40, output: 4 }, costUsd: 0.02 });
+    // The resume snapshot is the store's to build (covered in core's workflow-events
+    // tests); here it is fixed data matching what pass 1 persisted.
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+      ['step1', { output: 'first execution output' }],
+    ]);
+    const priorUsage = { tokens: { input: 40, output: 4 }, costUsd: 0.02 };
 
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'resumed execution output' };
@@ -14194,6 +14174,69 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(errMsg).toContain('failed schema validation');
   });
 
+  it.each([
+    ['claude', 1],
+    ['pi', 4],
+  ] as const)(
+    '%s rejects a schema-echo and fails instead of completing the producer',
+    async (provider, attempts) => {
+      const echo = {
+        type: 'object',
+        properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+        verdict: '...',
+      };
+      mockSendQueryDag.mockImplementation(async function* () {
+        yield { type: 'agent_message_chunk', text: JSON.stringify(echo) };
+        yield { type: 'result', sessionId: 's', structuredOutput: echo };
+      });
+      const store = createMockStore();
+
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(),
+          workflowProvider: provider,
+          config: { ...minimalConfig, assistant: provider },
+          workflow: {
+            name: 'schema-echo',
+            nodes: [
+              {
+                id: 'classify',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'classify it' },
+                provider,
+                output_format: {
+                  type: 'object',
+                  properties: { verdict: { type: 'string', enum: ['review', 'skip'] } },
+                  required: ['verdict'],
+                },
+                retry: { max_attempts: 0 },
+              },
+              {
+                id: 'review',
+                kind: 'agent',
+                source: { kind: 'inline', prompt: 'review it' },
+                depends_on: ['classify'],
+                when: "$classify.output.verdict == 'review'",
+              },
+            ],
+          },
+        })
+      );
+
+      expect(mockSendQueryDag).toHaveBeenCalledTimes(attempts);
+      const events = persistedEvents(store);
+      expect(events.filter(event => event.event_type === 'node_completed')).toHaveLength(0);
+      expect(
+        events.find(event => event.event_type === 'node_failed' && event.step_name === 'classify')
+          ?.data?.error
+      ).toContain('failed schema validation');
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+      expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+    }
+  );
+
   it('output_format that ajv cannot compile → node_failed, never an unenforced pass (#2453)', async () => {
     // The provider returned a perfectly shaped object. It still fails: the schema
     // is uncompilable, so "valid" here would only mean nothing was checked. The
@@ -16928,8 +16971,13 @@ describe('executeDagWorkflow -- env var injection', () => {
         workflowRun,
         config: {
           ...minimalConfig,
-          envVars: { MY_SECRET: 'abc123', ANTHROPIC_API_KEY: 'acting-user-secret' },
-          protectedEnvKeys: ['ANTHROPIC_API_KEY'],
+          envVars: {
+            MY_SECRET: 'abc123',
+            ANTHROPIC_API_KEY: 'acting-user-secret',
+            GIT_AUTHOR_NAME: 'connected-author',
+            GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
+          },
+          protectedEnvKeys: ['ANTHROPIC_API_KEY', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL'],
         },
       })
     );
@@ -16939,8 +16987,14 @@ describe('executeDagWorkflow -- env var injection', () => {
     expect(optionsArg?.env).toEqual({
       MY_SECRET: 'abc123',
       ANTHROPIC_API_KEY: 'acting-user-secret',
+      GIT_AUTHOR_NAME: 'connected-author',
+      GIT_AUTHOR_EMAIL: '42+connected-author@users.noreply.github.com',
     });
-    expect(optionsArg?.protectedEnvKeys).toEqual(['ANTHROPIC_API_KEY']);
+    expect(optionsArg?.protectedEnvKeys).toEqual([
+      'ANTHROPIC_API_KEY',
+      'GIT_AUTHOR_NAME',
+      'GIT_AUTHOR_EMAIL',
+    ]);
   });
 
   it('does not set env on claudeOptions when config.envVars is empty', async () => {
@@ -29345,6 +29399,8 @@ describe('subprocess credential redaction', () => {
     const projectSecret = 'project-secret-with-no-known-shape';
     const databaseUrl = 'postgres://user:password@db.internal/archon';
     const fileDeliveredSecret = 'oauth-token-only-present-in-auth-file';
+    const authorName = 'connected-author';
+    const authorEmail = '42+connected-author@users.noreply.github.com';
     const logDir = join(testDir, 'logs');
     const workflowRun = makeWorkflowRun('container-redaction-run', {
       workflow_name: 'container-redaction',
@@ -29401,9 +29457,17 @@ describe('subprocess credential redaction', () => {
               CUSTOM_AUTH: otherInjectedSecret,
               PROJECT_SECRET: projectSecret,
               DATABASE_URL: databaseUrl,
+              GIT_AUTHOR_NAME: authorName,
+              GIT_AUTHOR_EMAIL: authorEmail,
               BASE_BRANCH: 'main',
             },
-            protectedEnvKeys: ['OPENAI_API_KEY', 'CUSTOM_AUTH', 'DATABASE_URL'],
+            protectedEnvKeys: [
+              'OPENAI_API_KEY',
+              'CUSTOM_AUTH',
+              'DATABASE_URL',
+              'GIT_AUTHOR_NAME',
+              'GIT_AUTHOR_EMAIL',
+            ],
             protectedCredentialValues: [fileDeliveredSecret],
           },
           execContext,
@@ -29417,6 +29481,9 @@ describe('subprocess credential redaction', () => {
       expect(dockerArgs.join(' ')).toContain(otherInjectedSecret);
       expect(dockerArgs.join(' ')).toContain(projectSecret);
       expect(dockerArgs.join(' ')).toContain(databaseUrl);
+      expect(dockerArgs).toContain(`GIT_AUTHOR_NAME=${authorName}`);
+      expect(dockerArgs).toContain(`GIT_AUTHOR_EMAIL=${authorEmail}`);
+      expect(dockerArgs.join(' ')).not.toContain('GIT_COMMITTER_');
 
       expect(rejection).toBeDefined();
       expect(rejection?.code).toBe(1);
@@ -29429,6 +29496,8 @@ describe('subprocess credential redaction', () => {
         rejection?.stdout,
         rejection?.stderr,
       ].join('\n');
+      expect(rejectionText).not.toContain(authorName);
+      expect(rejectionText).not.toContain(authorEmail);
       expect(rejectionText).not.toContain(openAiSecret);
       expect(rejectionText).not.toContain(otherInjectedSecret);
       expect(rejectionText).not.toContain(projectSecret);

@@ -26,6 +26,7 @@ import type { LoginAccountResponse } from '../codex/protocol/v2/LoginAccountResp
 import type { McpToolCallStatus } from '../codex/protocol/v2/McpToolCallStatus';
 import type { RateLimitWindow } from '../codex/protocol/v2/RateLimitWindow';
 import type { Thread } from '../codex/protocol/v2/Thread';
+import type { ThreadForkResponse } from '../codex/protocol/v2/ThreadForkResponse';
 import type { ThreadItem } from '../codex/protocol/v2/ThreadItem';
 import type { ThreadResumeResponse } from '../codex/protocol/v2/ThreadResumeResponse';
 import type { ThreadStartResponse } from '../codex/protocol/v2/ThreadStartResponse';
@@ -111,6 +112,8 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
   processes: FakeProcess[];
 } {
   const processes: FakeProcess[] = [];
+  // Across processes, as Codex's thread ids are: every fork gets a thread id of its own.
+  let forks = 0;
   const spawner = ((
     command: string,
     args: string[],
@@ -224,6 +227,12 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
               result: threadResumeResponse((message.params as { threadId: string }).threadId),
             });
             break;
+          case 'thread/fork': {
+            forks += 1;
+            const source = (message.params as { threadId: string }).threadId;
+            send({ id, result: threadForkResponse(`${source}-fork-${String(forks)}`, source) });
+            break;
+          }
           case 'turn/start':
             send({ id, result: { turn: turnOf('inProgress', null) } satisfies TurnStartResponse });
             for (const frame of turn.notifications ?? []) send(frame);
@@ -361,6 +370,11 @@ function threadResumeResponse(id: string): ThreadResumeResponse {
     turnsBackwardsCursor: null,
     itemsBackwardsCursor: null,
   };
+}
+
+function threadForkResponse(id: string, source: string): ThreadForkResponse {
+  const response = threadStartResponse(id);
+  return { ...response, thread: { ...response.thread, forkedFromId: source } };
 }
 
 function configReadResponse(servers: string[]): ConfigReadResponse {

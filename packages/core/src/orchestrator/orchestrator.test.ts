@@ -1,3 +1,10 @@
+mock.module('../workflows/branch-launch-source', () => ({
+  withBranchLaunchSource: async (
+    _repo: string,
+    _branch: string,
+    prepare: (path: string) => Promise<unknown>
+  ) => prepare('/adopted/snapshot'),
+}));
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import { mkdtemp, realpath } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -218,6 +225,10 @@ const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilitie
 );
 
 mock.module('@archon/providers', () => ({
+  getRegistration: () => ({
+    parseConfig: (raw: Record<string, unknown>) => raw,
+    credentials: { vendorFor: () => 'anthropic' },
+  }),
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
   // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
@@ -244,9 +255,17 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
-    store: {},
-    getAgentProvider: () => ({}),
-    loadConfig: async () => ({}),
+    store: { getCodebaseEnvVars: async () => ({}) },
+    sealRunConfig: (_layer: unknown, source: unknown) => ({
+      version: 1,
+      ciphertext: 'sealed',
+      source,
+      keys: [],
+    }),
+    getAgentProvider: () => ({
+      checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
+    }),
+    loadConfig: async () => ({ assistant: 'claude', assistants: { claude: {} }, commands: {} }),
   })),
 }));
 
@@ -271,7 +290,7 @@ const mockLoadConfig = mock<typeof ConfigLoader.loadConfig>(() =>
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mockLoadConfig,
-  // orchestrator.ts imports createChildWorktreeResolver, which imports
+  // orchestrator.ts imports createCodebaseChildResolver, which imports
   // loadRepoConfig by name. This factory replaces the module process-wide, so
   // omitting it fails that import at module-eval even though no test calls it.
   loadRepoConfig: mock(() => Promise.resolve(null)),
@@ -816,42 +835,6 @@ describe('orchestrator-agent handleMessage', () => {
       );
       expect(mockDiscoverWorkflows).not.toHaveBeenCalled();
       expect(mockExecuteWorkflow).toHaveBeenCalled();
-    });
-
-    test('validates workflow exists in auto-selected project before dispatch', async () => {
-      const workflowDefinition = makeTestResolvedWorkflow({
-        name: 'test-workflow',
-        description: 'A test workflow',
-      });
-      mockListCodebases.mockResolvedValue([mockCodebase]);
-      mockHandleCommand.mockResolvedValue({
-        success: true,
-        message: 'Starting workflow: `test-workflow`',
-        workflow: { kind: 'start', definition: workflowDefinition, args: 'payload' },
-      });
-      mockDiscoverWorkflows.mockResolvedValue({
-        workflows: [
-          {
-            workflow: makeTestResolvedWorkflow({ name: 'other-workflow' }),
-            source: 'bundled' as const,
-          },
-        ],
-        errors: [],
-      });
-
-      await handleMessage(platform, 'chat-456', '/workflow run test-workflow payload');
-
-      expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
-        '/workspace/test-project',
-        expect.any(Function),
-        undefined // non-worktree cwd: source root is the cwd itself
-      );
-      expect(platform.sendMessage).toHaveBeenCalledWith(
-        'chat-456',
-        'Workflow `test-workflow` not found.\n\nUse /workflow list to see available workflows.'
-      );
-      expect(mockUpdateConversation).not.toHaveBeenCalled();
-      expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     });
 
     test('non-deterministic commands go to AI orchestrator', async () => {

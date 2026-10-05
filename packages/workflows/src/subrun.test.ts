@@ -1,5 +1,4 @@
-import type { DeclaredOutputPaths } from './output-ref';
-import { readNodeRecordEvent } from './node-record-reader';
+import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
  * End-to-end tests for the `workflow:` sub-run primitive (#2121 Phase 2).
@@ -209,16 +208,9 @@ const holdsPathLock = (status: WorkflowRun['status']): boolean =>
 // getRunAncestry), and the ancestor-aware path lock.
 // ---------------------------------------------------------------------------
 
-interface StoreEvent {
-  workflow_run_id: string;
-  event_type: string;
-  step_name?: string;
-  data?: Record<string, unknown>;
-}
-
 class InMemoryStore implements IWorkflowStore {
   runs = new Map<string, WorkflowRun>();
-  events: StoreEvent[] = [];
+  events: InMemoryStoreEvent[] = [];
   private seq = 0;
 
   private clone(r: WorkflowRun): WorkflowRun {
@@ -501,71 +493,8 @@ class InMemoryStore implements IWorkflowStore {
 
   listProviderEvents: IWorkflowStore['listProviderEvents'] = () => Promise.resolve([]);
 
-  getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId => {
-    const completedNodeOutputs = new Map<
-      string,
-      {
-        output: string;
-        structuredOutput?: unknown;
-        declaredOutputPaths?: DeclaredOutputPaths;
-      }
-    >();
-    const tokens = { input: 0, output: 0 };
-    let costUsd = 0;
-    for (const e of this.events) {
-      if (
-        e.workflow_run_id === workflowRunId &&
-        (e.event_type === 'node_completed' || e.event_type === 'node_skipped_prior_success') &&
-        typeof e.step_name === 'string'
-      ) {
-        // Mirrors the real store (#2637): the logical value rides beside the text, and
-        // (#2453) the field contract the node completed under rides beside both, read
-        // through the real record reader.
-        const declaredOutputPaths = readNodeRecordEvent({ ...e, data: e.data })?.data
-          .declared_output_paths;
-        completedNodeOutputs.set(e.step_name, {
-          output: String(e.data?.node_output ?? ''),
-          ...(declaredOutputPaths !== undefined ? { declaredOutputPaths } : {}),
-          ...(e.data?.structured_output !== undefined
-            ? { structuredOutput: e.data.structured_output }
-            : {}),
-        });
-        // Mirrors the real store: a derived row (loop_group roll-up) restates usage
-        // other rows already carry, so it contributes output but never usage (#2469).
-        if (e.data?.aggregate === true) continue;
-        const eventTokens = e.data?.tokens;
-        if (
-          e.event_type === 'node_completed' &&
-          typeof eventTokens === 'object' &&
-          eventTokens !== null &&
-          'input' in eventTokens &&
-          'output' in eventTokens &&
-          typeof eventTokens.input === 'number' &&
-          typeof eventTokens.output === 'number' &&
-          Number.isFinite(eventTokens.input) &&
-          Number.isFinite(eventTokens.output)
-        ) {
-          tokens.input += eventTokens.input;
-          tokens.output += eventTokens.output;
-        }
-        const eventCost = e.data?.cost_usd;
-        if (
-          e.event_type === 'node_completed' &&
-          typeof eventCost === 'number' &&
-          Number.isFinite(eventCost)
-        ) {
-          costUsd += eventCost;
-        }
-      }
-    }
-    return Promise.resolve({
-      completedNodeOutputs,
-      fanOutSnapshots: new Map(),
-      unresolvedNodeStarts: new Set(),
-      tokens,
-      costUsd,
-    });
-  };
+  getDagResumeSnapshot: IWorkflowStore['getDagResumeSnapshot'] = workflowRunId =>
+    Promise.resolve(inMemoryDagResumeSnapshot(this.events, workflowRunId));
 
   getCodebase = (): Promise<null> => Promise.resolve(null);
   getCodebaseEnvVars = (): Promise<Record<string, string>> => Promise.resolve({});
@@ -1805,145 +1734,73 @@ nodes:
     );
   });
 
-  it.each([false, true])(
-    'preserves child setup cancellation result (rollback=%s)',
-    async rollback => {
+  it.each(['configuration', 'credential'] as const)(
+    'fails child %s preflight before creating a child row or isolation',
+    async failure => {
       await writeWorkflow(
         'child-plain',
-        `
-name: child-plain
-description: child with no gate
+        `name: child-plain
+description: child
 nodes:
   - id: work
-    prompt: "do work for $ARGUMENTS"
+    prompt: work
+    provider: codex
+    model: gpt-5.4
 `
       );
       await writeWorkflow(
         'parent-plain',
-        `
-name: parent-plain
-description: parent that spawns a child
+        `name: parent-plain
+description: parent
 nodes:
   - id: sub
     workflow: child-plain
-    input: "x"
+    isolation: worktree
 `
       );
-
       const store = new InMemoryStore();
-      if (rollback)
-        store.cancelWorkflowRun = async () => {
-          throw new Error('child setup cancellation rolled back');
-        };
-      const deps = makeDeps(store);
-      // The child inherits the parent's codebase_id, so its executeWorkflow early setup
-      // calls getCodebaseEnvVars. Make the SECOND call (the child's — the parent's is
-      // first) throw, sabotaging the child's setup BEFORE its own status→running flip
-      // and catch-all. Without the wedge guard the pre-created child stays 'pending',
-      // holding the path lock.
       let envCalls = 0;
-      store.getCodebaseEnvVars = () => {
-        envCalls++;
-        return envCalls >= 2
-          ? Promise.reject(new Error('env lookup exploded'))
-          : Promise.resolve({});
+      store.getCodebaseEnvVars = async () => {
+        if (++envCalls === 2 && failure === 'configuration') throw new Error('env lookup exploded');
+        return {};
       };
-
-      const parent = await discover('parent-plain');
-      const execution = executeWorkflow(
+      const deps = makeDeps(store);
+      if (failure === 'credential') {
+        deps.isPerUserProviderKeysEnabled = () => true;
+        deps.getUserProviderCredentialStatus = async () => ({
+          state: 'unusable',
+          source: 'archon',
+          evidence: 'credential cannot be decrypted',
+        });
+      }
+      const resolve = mock(async () => ({ cwd: '/never', envId: 'never', branchName: 'never' }));
+      const result = await executeWorkflow(
         deps,
         makePlatform(),
-        'conv-plat',
+        'conv',
         cwd,
-        parent,
+        await discover('parent-plain'),
         'goal',
-        'conv-db',
-        { codebaseId: 'cb-1' }
+        'db',
+        {
+          codebaseId: 'cb',
+          userId: 'originating-user',
+          resolveChildIsolation: { resolve },
+        }
       );
-
-      if (rollback) {
-        await expect(execution).rejects.toThrow(
-          'Failed to persist terminal workflow status: child setup cancellation rolled back'
-        );
-        expect(
-          [...store.runs.values()].find(run => run.workflow_name === 'child-plain')?.status
-        ).toBe('pending');
-        expect(
-          [...store.runs.values()].find(run => run.workflow_name === 'parent-plain')?.status
-        ).toBe('running');
-        return;
-      }
-      const result = await execution;
       expect(result.success).toBe(false);
-      const child = [...store.runs.values()].find(r => r.workflow_name === 'child-plain');
-      expect(child).toBeDefined();
-      if (!child) throw new Error('Expected child run');
-      // The child must be TERMINAL — not a 'pending'/'running' zombie holding the lock.
-      expect(['cancelled', 'failed']).toContain(child.status);
-      const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-plain');
-      expect(parentRun?.status).toBe('failed');
+      if (failure === 'credential') {
+        const nodeFailed = store.events.find(
+          e => e.event_type === 'node_failed' && e.step_name === 'sub'
+        );
+        expect(String(nodeFailed?.data?.error)).toContain(
+          "Credential preflight failed for provider 'codex' (vendor 'openai')"
+        );
+      }
+      expect(resolve).not.toHaveBeenCalled();
+      expect([...store.runs.values()].some(r => r.workflow_name === 'child-plain')).toBe(false);
     }
   );
-
-  it('does not start another serial child after setup cancellation rolls back', async () => {
-    await writeWorkflow(
-      'child-setup-failure',
-      `
-name: child-setup-failure
-description: child whose setup fails
-nodes:
-  - id: work
-    prompt: "do work"
-`
-    );
-    await writeWorkflow(
-      'parent-setup-failure',
-      `
-name: parent-setup-failure
-description: serial fan-out with inherited isolation
-nodes:
-  - id: sub
-    workflow: child-setup-failure
-    isolation: inherit
-    fan_out:
-      items: '["x", "y"]'
-      max_parallel: 1
-      join: all_done
-`
-    );
-    const store = new InMemoryStore();
-    store.cancelWorkflowRun = async () => {
-      throw new Error('child setup cancellation rolled back');
-    };
-    let envCalls = 0;
-    store.getCodebaseEnvVars = async () => {
-      if (++envCalls >= 2) throw new Error('child setup failed');
-      return {};
-    };
-    const parent = await discover('parent-setup-failure');
-    await expect(
-      executeWorkflow(
-        makeDeps(store),
-        makePlatform(),
-        'conv-plat',
-        cwd,
-        parent,
-        'goal',
-        'conv-db',
-        { codebaseId: 'cb-1' }
-      )
-    ).rejects.toThrow(
-      'Failed to persist terminal workflow status: child setup cancellation rolled back'
-    );
-    const children = [...store.runs.values()].filter(
-      run => run.workflow_name === 'child-setup-failure'
-    );
-    expect(children).toHaveLength(1);
-    expect(children[0].status).toBe('pending');
-    expect(
-      [...store.runs.values()].find(run => run.workflow_name === 'parent-setup-failure')?.status
-    ).toBe('running');
-  });
 
   it('rejects a CASE-VARIANT self-reference by resolving the name before the cycle check (I3)', async () => {
     // The node names its own workflow in a different case; resolveWorkflowName resolves

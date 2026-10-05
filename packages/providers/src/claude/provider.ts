@@ -85,13 +85,13 @@ import {
   readClaudePluginIds,
   withPluginScopeCheck,
 } from './plugins';
-import { clampEffort, type AssertNever } from '@archon/paths/effort';
+import { clampEffort, type AssertNever } from '@archon/provider-contract';
 import {
   claudeSkillSearchRoots,
   findInstalledSkillNames,
   resolveClaudeSkillDirectories,
   skillSearchRoots,
-} from '../shared/skills';
+} from '@archon/paths/skills';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;

@@ -7,16 +7,13 @@
  */
 
 import type { RepoPath, BranchName } from '@archon/git';
+import type { ExecutionContext } from '@archon/provider-contract';
 import type {
-  ExecutionContext,
   WriteBackFinalizeResult,
   WriteBackApplySummary,
-} from '@archon/providers/types';
+} from '@archon/workflows/container-context';
 
-// Re-exported so isolation consumers can source the execution-context contract
-// (and the write-back result shapes) from `@archon/isolation` alongside the
-// backend types that produce them, without reaching into
-// `@archon/providers/types` directly.
+// Isolation backends implement the engine-owned write-back port.
 export type { ExecutionContext, WriteBackFinalizeResult, WriteBackApplySummary };
 
 // --- Provider Types ---
@@ -77,15 +74,6 @@ interface IsolationRequestBase {
   baseOverride?: BranchName;
 
   description?: string;
-
-  /**
-   * Optional git author identity to stamp on the new worktree (`git config
-   * user.email`/`user.name`). Populated from the originating user's connected
-   * GitHub no-reply email so workflow commits attribute to the human. Absent in
-   * solo installs and for unconnected users — the worktree then inherits the
-   * ambient git identity (unchanged behavior).
-   */
-  gitIdentity?: { email: string; name?: string };
 }
 
 export interface IssueIsolationRequest extends IsolationRequestBase {
@@ -397,12 +385,6 @@ export interface ResolveRequest {
   platformType: string;
   /** Archon user UUID; populated by chat/forge adapter handlers. */
   userId?: string;
-  /**
-   * Git author identity to stamp on a newly-created worktree (no-reply email of
-   * the originating user's connected GitHub account). Forwarded into the
-   * IsolationRequest passed to the provider. Absent → ambient git identity.
-   */
-  gitIdentity?: { email: string; name?: string };
 }
 
 export type ResolutionMethod =

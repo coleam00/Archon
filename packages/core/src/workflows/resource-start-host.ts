@@ -1,3 +1,9 @@
+import {
+  prepareRunAiConfiguration,
+  assertRunCredentials,
+  WorkflowCredentialPreflightError,
+} from '@archon/workflows/run-preflight';
+import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-write';
 /**
  * The host side of resource starts: prepare accepted receipt bindings, drain queued
  * requests, and start admitted runs through the engine port.
@@ -77,7 +83,7 @@ import { registerRepository } from '../handlers/clone';
 import { ensureIsolationConfigured } from '../orchestrator/orchestrator';
 import { findCodebaseForCheckoutPath } from '../services/codebase-checkout-resolver';
 import { startRunLiveOwner, type RunLiveOwner } from '../services/run-live-owner';
-import { createChildWorktreeResolver } from './child-isolation-resolver';
+import { createCodebaseChildResolver } from './child-isolation-resolver';
 import { createWorkflowDeps } from './store-adapter';
 
 const log = createLogger('resource-start-host');
@@ -424,8 +430,8 @@ export interface StartAdmittedResourceStartInput {
  * is the execution fence: if another starter already claimed the run, or its request
  * was withdrawn from the slot, the engine refuses before any node runs.
  *
- * A failure before submission leaves the run pending and holding its slot. Only the
- * operator can tell whether to retry it or abandon it, so this never marks it failed.
+ * Credential refusals fail under live ownership before isolation. Other failures
+ * before submission leave the run pending for an explicit retry or abandonment.
  */
 export async function startAdmittedResourceStart(
   input: StartAdmittedResourceStartInput
@@ -448,31 +454,56 @@ export async function startAdmittedResourceStart(
     conversationId: launch.execution.conversationId,
     conversationDbId: run.conversation_id,
   });
-  const lane = launch.execution.isolation;
-  const execution =
-    lane.kind === 'worktree'
-      ? await worktreeLane(
-          lane,
-          codebase,
-          `${run.workflow_name}-${run.id.slice(0, 8)}`,
-          platform.getPlatformType(),
-          launch.run.user_id
-        )
-      : { cwd: launch.execution.cwd, envId: undefined, cutFromCommit: undefined };
-  await conversationDb.updateConversation(run.conversation_id, {
-    cwd: execution.cwd,
-    codebase_id: codebase.id,
-    isolation_env_id: execution.envId ?? null,
-  });
-
   const sealed = readWorkflowRunConfigMetadata(run.metadata);
-  const baseBranch = codebase.default_branch?.trim() || undefined;
   const liveOwner = await startRunLiveOwner(run.id, {
     detachedProcessPid: input.detachedProcessPid,
   });
   let releaseGuard: (() => void) | undefined;
   try {
     releaseGuard = input.guardOwnedRun?.({ runId: run.id, liveOwner });
+    const deps = createWorkflowDeps();
+    const preparedAiConfiguration = await prepareRunAiConfiguration(
+      deps,
+      frozen.workflow,
+      launch.execution.cwd,
+      {
+        userId: run.user_id ?? undefined,
+        codebaseId: codebase.id,
+        ...(sealed
+          ? { runConfig: { layer: unsealWorkflowRunConfig(sealed), source: sealed.source } }
+          : {}),
+      }
+    );
+    try {
+      await assertRunCredentials(deps, preparedAiConfiguration);
+    } catch (error) {
+      if (error instanceof WorkflowCredentialPreflightError) {
+        await requireTerminalStatusWrite(deps.store.failWorkflowRun(run.id, error.message), {
+          workflowRunId: run.id,
+          site: 'resource_start.credential_preflight_failed',
+        });
+        return { success: false, workflowRunId: run.id, error: error.message };
+      }
+      throw error;
+    }
+    const lane = launch.execution.isolation;
+    const execution =
+      lane.kind === 'worktree'
+        ? await worktreeLane(
+            lane,
+            codebase,
+            `${run.workflow_name}-${run.id.slice(0, 8)}`,
+            platform.getPlatformType(),
+            launch.run.user_id
+          )
+        : { cwd: launch.execution.cwd, envId: undefined, cutFromCommit: undefined };
+    await conversationDb.updateConversation(run.conversation_id, {
+      cwd: execution.cwd,
+      codebase_id: codebase.id,
+      isolation_env_id: execution.envId ?? null,
+    });
+
+    const baseBranch = codebase.default_branch?.trim() || undefined;
     return await input.engine.submit({
       platform,
       conversationId: launch.execution.conversationId,
@@ -482,6 +513,7 @@ export async function startAdmittedResourceStart(
       conversationDbId: run.conversation_id,
       options: {
         preCreatedRun: run,
+        preparedAiConfiguration,
         codebaseId: codebase.id,
         userId: launch.run.user_id,
         baseBranch,
@@ -491,17 +523,11 @@ export async function startAdmittedResourceStart(
         ...(lane.kind === 'worktree' && lane.baseOverride
           ? { baseOverride: lane.baseOverride }
           : {}),
-        resolveChildIsolation:
-          codebase.kind === 'folder'
-            ? undefined
-            : createChildWorktreeResolver({
-                codebaseId: codebase.id,
-                codebaseName: codebase.name,
-                canonicalRepoPath: codebase.default_cwd,
-                baseBranch,
-                createdByPlatform: platform.getPlatformType(),
-                createdByUserId: launch.run.user_id,
-              }),
+        resolveChildIsolation: createCodebaseChildResolver(codebase, {
+          baseBranch,
+          createdByPlatform: platform.getPlatformType(),
+          createdByUserId: launch.run.user_id,
+        }),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed
           ? { runConfig: { layer: unsealWorkflowRunConfig(sealed), source: sealed.source } }

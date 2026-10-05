@@ -1,5 +1,15 @@
 import type { IsolationBlockReason } from './types';
 
+export class MissingProjectDirectoryError extends Error {
+  constructor(repoPath: string, project: string) {
+    super(
+      `Project '${project}' directory is missing: ${repoPath}. ` +
+        'Restore the directory or re-register the project with its current path.'
+    );
+    this.name = 'MissingProjectDirectoryError';
+  }
+}
+
 /**
  * Error thrown when isolation is required but cannot be provided.
  * This error signals that ALL message handling should stop - not just workflows.
@@ -190,6 +200,8 @@ export function recordCleanupFailure(err: Error, detail: string): void {
  * Classify isolation creation errors into user-friendly messages.
  */
 export function classifyIsolationError(err: Error): string {
+  if (err instanceof MissingProjectDirectoryError) return `**Error:** ${err.message}`;
+
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';
   const errorLower = `${err.message} ${stderr}`.toLowerCase();
 
@@ -213,6 +225,8 @@ export function classifyIsolationError(err: Error): string {
  * so they are visible as crashes rather than silent workspace failures.
  */
 export function isKnownIsolationError(err: Error): boolean {
+  if (err instanceof MissingProjectDirectoryError) return true;
+
   const stderr = (err as Error & { stderr?: string }).stderr ?? '';
   const errorLower = `${err.message} ${stderr}`.toLowerCase();
 

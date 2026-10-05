@@ -48,7 +48,8 @@
     "validate": "bun run scripts/validate.ts",
     "prepare": "husky",
     "setup-auth": "bun --filter @archon/server setup-auth",
-    "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts"
+    "check:cli-import-boundary": "bun run scripts/check-cli-import-boundary.ts",
+    "check:package-edges": "bun run scripts/check-package-edges.ts"
   },
   "devDependencies": {
     "@archon/core": "workspace:*",

@@ -12,8 +12,8 @@
  * replacing it, so any export omitted from a factory below keeps its REAL
  * implementation. The `@archon/core/db/users` mock below prevents a real
  * SQLite database from being opened.
- * To re-audit, run this file with `ARCHON_HOME` pointed at an empty temp dir
- * and assert nothing appears in it.
+ * The package-cwd test preload checks its own temporary ARCHON_HOME after each
+ * test (src/test/no-archon-home-writes.ts).
  */
 import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
 import { createHmac } from 'crypto';
