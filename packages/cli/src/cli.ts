@@ -14,6 +14,7 @@ import '@archon/paths/strip-cwd-env-boot';
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
 import { loadArchonEnv } from '@archon/paths/env-loader';
+import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
 import {
   captureDetachedInstallContext,
   getPluginsPath,
@@ -29,25 +30,25 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
+// Inside a run, a GitHub key the engine set (a token, or '' to scrub it) is the run's
+// identity; neither Archon env file may replace or restore it. An absent key is no
+// opinion, so the env files still supply it (see github-token-policy).
 const runGithubCredentials = process.env.WORKFLOW_ID
-  ? (await import('@archon/workflows/utils/github-token-policy')).GITHUB_TOKEN_KEYS.map(
-      key => [key, process.env[key]] as const
-    )
+  ? GITHUB_TOKEN_KEYS.flatMap(key => {
+      const value = process.env[key];
+      return value === undefined ? [] : [[key, value] as const];
+    })
   : [];
 let forgeTrustedEnv: NodeJS.ProcessEnv = {};
 loadArchonEnv(process.cwd(), {
   afterUserLoad: () => {
-    // User defaults cannot replace the run's identity or restore a scrubbed token.
-    for (const [key, value] of runGithubCredentials) {
-      if (value === undefined) Reflect.deleteProperty(process.env, key);
-      else process.env[key] = value;
-    }
     // Forge plugin processes run with the environment as the user scope left it, so
     // the repository's `.archon/.env` can supply a credential (passed separately) but
     // cannot change the environment an executable plugin runs in.
     forgeTrustedEnv = { ...process.env };
   },
 });
+for (const [key, value] of runGithubCredentials) process.env[key] = value;
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
