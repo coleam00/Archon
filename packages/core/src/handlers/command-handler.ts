@@ -443,12 +443,6 @@ async function handleWorktreeCommand(
             message: 'Failed to create worktree: conversation state changed. Please try again.',
           };
         }
-        if (err.message.includes('already exists')) {
-          return {
-            success: false,
-            message: `Branch '${branchName}' already exists. Use a different name.`,
-          };
-        }
         // Classified, not raw: the note an isolation failure carries about a
         // leftover workspace lives outside `err.message`.
         return { success: false, message: classifyIsolationError(err) };

@@ -2,11 +2,8 @@
  * Worktree creation against a real git repository.
  *
  * `worktree.test.ts` replaces `node:fs/promises` and `@archon/paths` for its whole
- * process, so this file gets its own `testGroups` entry. What it proves needs real
- * git: after setup fails, the directory is gone, git no longer lists the worktree,
- * the branch survives, and the next run cannot adopt what is no longer there. The
- * setup lock is real git state too — git's own refusal to remove or prune a locked
- * worktree is half of what makes it a usable marker.
+ * process, so this file gets its own `testGroups` entry. Real Git is needed to
+ * prove failed-add ownership, cleanup, and preservation of hidden changes.
  */
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { existsSync } from 'node:fs';
@@ -232,6 +229,166 @@ describe('WorktreeProvider against real git', () => {
     );
   });
 
+  test.each(['assume-unchanged', 'skip-worktree'])(
+    'preserves tracked edits hidden by %s',
+    async flag => {
+      await writeFile(
+        join(repoPath, '.git', 'hooks', 'post-checkout'),
+        `#!/bin/sh\ngit update-index --${flag} README.md\nprintf hidden-work > README.md\necho hidden-hook-failure >&2\nexit 42\n`,
+        { mode: 0o755 }
+      );
+      await expect(provider.create(request)).rejects.toThrow('hidden-hook-failure');
+      expect(await readFile(join(worktreePath, 'README.md'), 'utf-8')).toBe('hidden-work');
+      expect(await lockReasonOf(worktreePath)).toMatch(/^archon: worktree setup in progress: .+/);
+    }
+  );
+
+  test.each(['uninitialized', 'initialized-ignored'])(
+    'preserves hidden files in an %s submodule',
+    async kind => {
+      await addUnreachableSubmodule();
+      let submoduleSetup = 'mkdir -p sub\n';
+      if (kind === 'initialized-ignored') {
+        const subRepo = join(root, 'sub-repo');
+        await mkdir(subRepo);
+        await git(subRepo, 'init', '-q');
+        await git(subRepo, 'config', 'user.email', 'test@example.com');
+        await git(subRepo, 'config', 'user.name', 'Archon Test');
+        await git(subRepo, 'config', 'commit.gpgsign', 'false');
+        await writeFile(join(subRepo, '.gitignore'), 'hook-output\n');
+        await git(subRepo, 'add', '.gitignore');
+        await git(subRepo, 'commit', '-qm', 'ignore hook output');
+        await git(repoPath, 'checkout', '-q', TASK_BRANCH);
+        await writeFile(
+          join(repoPath, '.gitmodules'),
+          `[submodule "sub"]\n\tpath = sub\n\turl = ${subRepo}\n`
+        );
+        const head = (await git(subRepo, 'rev-parse', 'HEAD')).trim();
+        await git(repoPath, 'update-index', '--cacheinfo', `160000,${head},sub`);
+        await git(repoPath, 'add', '.gitmodules');
+        await git(repoPath, 'commit', '-qm', 'use local submodule');
+        await git(repoPath, 'checkout', '-q', 'main');
+        submoduleSetup =
+          'git -c protocol.file.allow=always submodule update --init >/dev/null 2>&1 || exit 99\n';
+      }
+      await writeFile(
+        join(repoPath, '.git', 'hooks', 'post-checkout'),
+        '#!/bin/sh\n' +
+          submoduleSetup +
+          'printf nested-work > sub/hook-output\necho nested-hook-failure >&2\nexit 42\n',
+        { mode: 0o755 }
+      );
+      await expect(provider.create(request)).rejects.toThrow('nested-hook-failure');
+      expect(await readFile(join(worktreePath, 'sub', 'hook-output'), 'utf-8')).toBe('nested-work');
+      expect(await registeredWorktrees()).toContain(resolve(worktreePath));
+    }
+  );
+
+  test('removes the owned registration when a failing hook removes its checkout', async () => {
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\nrm -rf "$PWD"\necho vanished-hook-failure >&2\nexit 42\n',
+      { mode: 0o755 }
+    );
+    const error = await provider.create(request).catch((error: unknown) => error);
+    if (!(error instanceof Error)) throw new Error('Expected hook failure');
+    expect(error.message).toContain('vanished-hook-failure');
+    expect(classifyIsolationError(error)).not.toContain('was left behind');
+    expect(await registeredWorktrees()).not.toContain(resolve(worktreePath));
+    expect(existsSync(worktreePath)).toBe(false);
+  });
+
+  test.each(['another-attempt', 'unlocked'])(
+    'preserves a missing checkout registration whose lock is %s',
+    async reason => {
+      const changeLock =
+        reason === 'unlocked'
+          ? 'rm "$gd/locked"'
+          : 'printf "archon: worktree setup in progress: another-attempt" > "$gd/locked"';
+      await writeFile(
+        join(repoPath, '.git', 'hooks', 'post-checkout'),
+        `#!/bin/sh\ngd=$(git rev-parse --absolute-git-dir)\n${changeLock}\nrm -rf "$PWD"\necho unowned-hook-failure >&2\nexit 42\n`,
+        { mode: 0o755 }
+      );
+      const error = await provider.create(request).catch((error: unknown) => error);
+      if (!(error instanceof Error)) throw new Error('Expected hook failure');
+      expect(error.message).toContain('unowned-hook-failure');
+      expect(classifyIsolationError(error)).toContain('not owned by this attempt');
+      expect(await registeredWorktrees()).toContain(resolve(worktreePath));
+      expect(await lockReasonOf(worktreePath)).toBe(
+        reason === 'unlocked' ? null : 'archon: worktree setup in progress: another-attempt'
+      );
+    }
+  );
+
+  test.each([
+    'existing-task',
+    'new-task',
+    'existing-new-task',
+    'same-repo-pr',
+    'existing-same-repo-pr',
+    'fork-sha',
+    'fork-no-sha',
+  ])('failed adds preserve the error and ownership across %s', async kind => {
+    const remotePath = join(root, 'remote.git');
+    await git(root, 'init', '--bare', '-q', remotePath);
+    await git(repoPath, 'remote', 'add', 'origin', remotePath);
+    await git(
+      repoPath,
+      'push',
+      '-q',
+      'origin',
+      'main',
+      'main:refs/pull/42/head',
+      'main:refs/heads/pr-feature'
+    );
+    if (kind === 'existing-new-task') await git(repoPath, 'branch', 'new-task');
+    if (kind === 'existing-same-repo-pr') await git(repoPath, 'branch', 'pr-feature');
+    const attempt: IsolationRequest = kind.includes('task')
+      ? {
+          ...request,
+          workflowType: 'task',
+          baseBranch: toBranchName('main'),
+          taskBranch:
+            kind === 'existing-task'
+              ? { kind: 'existing', branch: toBranchName(TASK_BRANCH) }
+              : { kind: 'new', branch: toBranchName('new-task') },
+        }
+      : {
+          codebaseId: request.codebaseId,
+          codebaseName: request.codebaseName,
+          canonicalRepoPath: request.canonicalRepoPath,
+          workflowType: 'pr',
+          identifier: '42',
+          baseBranch: toBranchName('main'),
+          prBranch: toBranchName('pr-feature'),
+          isForkPR: kind.startsWith('fork'),
+          ...(kind === 'fork-sha'
+            ? { prSha: (await git(repoPath, 'rev-parse', 'main')).trim() }
+            : {}),
+        };
+    const path = provider.getWorktreePath(attempt, provider.generateBranchName(attempt));
+    const marker = join(repoPath, '.git', 'hook-failed');
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      `#!/bin/sh\nif test ! -f "${marker}"; then touch "${marker}"; echo 'hook-failure already exists' >&2; exit 42; fi\n`,
+      { mode: 0o755 }
+    );
+    await expect(provider.create(attempt)).rejects.toThrow('hook-failure already exists');
+    expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
+    expect(existsSync(path)).toBe(false);
+
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\ngit update-index --assume-unchanged README.md\nprintf hidden-work > README.md\necho hidden-hook-failure >&2\nexit 42\n',
+      { mode: 0o755 }
+    );
+    await expect(provider.create(attempt)).rejects.toThrow('hidden-hook-failure');
+    expect(await readFile(join(path, 'README.md'), 'utf-8')).toBe('hidden-work');
+    expect(await registeredWorktrees()).toContain(resolve(path));
+    expect(await lockReasonOf(path)).toMatch(/^archon: worktree setup in progress: .+/);
+  });
+
   test.each(['tracked', 'untracked', 'ignored'])(
     'preserves %s changes left by a failing hook',
     async kind => {
@@ -254,6 +411,34 @@ describe('WorktreeProvider against real git', () => {
       await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
     }
   );
+
+  test('a fork review-branch hook failure is preserved after a successful add', async () => {
+    const remotePath = join(root, 'remote.git');
+    await git(root, 'init', '--bare', '-q', remotePath);
+    await git(repoPath, 'remote', 'add', 'origin', remotePath);
+    await git(repoPath, 'push', '-q', 'origin', 'main', 'main:refs/pull/42/head');
+    const attempt: IsolationRequest = {
+      codebaseId: request.codebaseId,
+      codebaseName: request.codebaseName,
+      canonicalRepoPath: request.canonicalRepoPath,
+      workflowType: 'pr',
+      identifier: '42',
+      baseBranch: toBranchName('main'),
+      prBranch: toBranchName('pr-feature'),
+      isForkPR: true,
+      prSha: (await git(repoPath, 'rev-parse', 'main')).trim(),
+    };
+    const path = provider.getWorktreePath(attempt, provider.generateBranchName(attempt));
+    await writeFile(
+      join(repoPath, '.git', 'hooks', 'post-checkout'),
+      '#!/bin/sh\nif test "$(git symbolic-ref --short -q HEAD)" = pr-42-review; then git update-index --skip-worktree README.md; printf hidden-work > README.md; echo "review-hook-failure already exists" >&2; exit 42; fi\n',
+      { mode: 0o755 }
+    );
+    await expect(provider.create(attempt)).rejects.toThrow('review-hook-failure already exists');
+    expect(await readFile(join(path, 'README.md'), 'utf-8')).toBe('hidden-work');
+    expect(await registeredWorktrees()).toContain(resolve(path));
+    expect(await lockReasonOf(path)).toMatch(/^archon: worktree setup in progress: .+/);
+  });
 
   test('a dirty fork-PR hook failure keeps the original error through adoption fallback', async () => {
     const remotePath = join(root, 'remote.git');
@@ -321,21 +506,17 @@ describe('WorktreeProvider against real git', () => {
     expect(await registeredWorktrees()).toEqual([resolve(repoPath)]);
   });
 
-  test('a setup failure after `git worktree add` leaves nothing for the next run to adopt', async () => {
+  test('a setup failure preserves a checkout whose submodules can hide changes', async () => {
     await addUnreachableSubmodule();
     const branchHead = (await git(repoPath, 'rev-parse', TASK_BRANCH)).trim();
-
-    await expect(provider.create(request)).rejects.toThrow(/Submodule initialization failed/);
-
-    expect(existsSync(worktreePath)).toBe(false);
-    expect(await registeredWorktrees()).not.toContain(resolve(worktreePath));
-    // The branch predates this attempt: rolling back the checkout must not touch it.
+    const error = await provider.create(request).catch((error: unknown) => error);
+    if (!(error instanceof Error)) throw new Error('Expected setup failure');
+    expect(error.message).toContain('Submodule initialization failed');
+    expect(classifyIsolationError(error)).toContain('submodules or index flags');
+    expect(existsSync(worktreePath)).toBe(true);
+    expect(await registeredWorktrees()).toContain(resolve(worktreePath));
     expect((await git(repoPath, 'rev-parse', TASK_BRANCH)).trim()).toBe(branchHead);
-
-    // The next run must hit the same setup failure rather than adopt a checkout
-    // whose submodules were never initialized.
-    await expect(provider.create(request)).rejects.toThrow(/Submodule initialization failed/);
-    expect(existsSync(worktreePath)).toBe(false);
+    await expect(provider.create(request)).rejects.toThrow('its setup did not finish');
   });
 
   test('a later setup failure preserves changes from a successful checkout hook', async () => {

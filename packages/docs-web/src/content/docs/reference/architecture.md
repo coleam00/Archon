@@ -708,14 +708,16 @@ checkout. Existing directories that are not adoptable worktrees are refused and 
 
 If add fails after creating the checkout (for example, a failing `post-checkout` hook), or
 later setup fails, rollback removes it only while its lock still matches this attempt and
-Git reports no tracked, untracked, ignored, or submodule changes. Branches are preserved.
+Git reports no tracked, untracked, or ignored changes and the index has no submodules or
+flags that can hide changes. Branches are preserved. An owned registration can also be
+removed when a failing hook has already removed its checkout directory.
 A dirty checkout or one whose ownership cannot be proved stays in place; the original error
 includes the leftover path and cleanup failure. Inspect it and preserve any changes before
 removing it.
 
 A worktree still carrying an Archon setup lock is refused rather than adopted: another run
 may still be setting it up, or setup may have failed. This includes locks created by older
-Archon versions. The operator decides whether to wait, complete setup, or remove the checkout.
+Archon versions. The operator decides whether to wait, finish setup and unlock it for reuse, or remove the checkout.
 
 ```typescript
 // Inside create()

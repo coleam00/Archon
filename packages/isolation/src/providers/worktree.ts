@@ -1037,7 +1037,26 @@ export class WorktreeProvider implements IIsolationProvider {
     );
   }
 
-  // Double force is required for Git's setup lock and partially initialized submodules.
+  private async readWorktreeRegistration(
+    repoPath: RepoPath,
+    worktreePath: string
+  ): Promise<{ lockReason: string | null } | null> {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
+      { timeout: GIT_OPERATION_TIMEOUT_MS }
+    );
+    for (const record of stdout.split('\0\0')) {
+      const fields = record.split('\0');
+      const path = fields.find(field => field.startsWith('worktree '));
+      if (!path || resolve(path.slice(9)) !== resolve(worktreePath)) continue;
+      const locked = fields.find(field => field === 'locked' || field.startsWith('locked '));
+      return { lockReason: locked === undefined ? null : locked.slice(7) };
+    }
+    return null;
+  }
+
+  // Double force is required to remove a locked worktree.
   // Ownership alone does not authorize discarding changes made by hooks or another writer.
   private async removeIncompleteWorktree(
     repoPath: RepoPath,
@@ -1045,7 +1064,26 @@ export class WorktreeProvider implements IIsolationProvider {
     setupLockReason: string
   ): Promise<string | null> {
     try {
-      if (!(await this.directoryExists(worktreePath))) return null;
+      const directoryExists = await this.directoryExists(worktreePath);
+      if (!directoryExists) {
+        const registration = await this.readWorktreeRegistration(repoPath, worktreePath);
+        if (registration === null) return null;
+        if (registration.lockReason !== setupLockReason) {
+          return 'the checkout directory is missing and its registration is not owned by this attempt';
+        }
+        const current = await this.readWorktreeRegistration(repoPath, worktreePath);
+        if (current?.lockReason !== setupLockReason || (await this.directoryExists(worktreePath))) {
+          return 'the missing checkout changed during cleanup, so ownership is no longer proven';
+        }
+        await execFileAsync(
+          'git',
+          ['-C', repoPath, 'worktree', 'remove', '--force', '--force', worktreePath],
+          { timeout: GIT_OPERATION_TIMEOUT_MS }
+        );
+        return (await this.readWorktreeRegistration(repoPath, worktreePath)) === null
+          ? null
+          : 'Git left the missing checkout registered';
+      }
       const lock = await readWorktreeLock(toWorktreePath(worktreePath));
       if (lock?.reason !== setupLockReason) {
         return lock === null
@@ -1068,6 +1106,23 @@ export class WorktreeProvider implements IIsolationProvider {
       if (stdout.length > 0) {
         return 'the checkout contains changes; inspect and preserve them before removing it';
       }
+      // Parent status omits ignored/uninitialized submodule contents and index-hidden edits.
+      // Preserve these checkouts rather than double-force past Git's remaining safeguards.
+      const { stdout: index } = await execFileAsync(
+        'git',
+        ['-C', worktreePath, 'ls-files', '-v', '--stage', '-z'],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
+      if (
+        index
+          .split('\0')
+          .some(
+            entry =>
+              entry.startsWith('160000 ', 2) || entry.startsWith('S ') || /^[a-z] /.test(entry)
+          )
+      ) {
+        return 'the checkout has submodules or index flags that can hide changes; inspect and preserve them before removing it';
+      }
       const currentLock = await readWorktreeLock(toWorktreePath(worktreePath));
       if (currentLock?.reason !== setupLockReason) {
         return 'the setup lock changed during cleanup, so ownership is no longer proven';
@@ -1080,7 +1135,9 @@ export class WorktreeProvider implements IIsolationProvider {
       if (await this.directoryExists(worktreePath)) {
         return 'Git removed the worktree registration but the directory remains';
       }
-      return null;
+      return (await this.readWorktreeRegistration(repoPath, worktreePath)) === null
+        ? null
+        : 'Git left the checkout registered';
     } catch (error) {
       return error instanceof Error ? error.message : String(error);
     }
@@ -1361,6 +1418,20 @@ export class WorktreeProvider implements IIsolationProvider {
     );
   }
 
+  private async localBranchExists(repoPath: string, branchName: string): Promise<boolean> {
+    try {
+      const { stdout } = await execFileAsync(
+        'git',
+        ['-C', repoPath, 'rev-parse', '--verify', '--quiet', `refs/heads/${branchName}`],
+        { timeout: GIT_OPERATION_TIMEOUT_MS }
+      );
+      return stdout.trim().length > 0;
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 1) return false;
+      throw error;
+    }
+  }
+
   /**
    * Create worktree for same-repo PR using the actual branch
    */
@@ -1391,27 +1462,10 @@ export class WorktreeProvider implements IIsolationProvider {
       throw new Error(`Fetch ${remote}/${prBranch} failed: ${original}`);
     }
 
-    // Try to create worktree with the branch
-    try {
-      // If branch doesn't exist locally, create it tracking remote
-      await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
-        worktreePath,
-        '-b',
-        prBranch,
-        `${remote}/${prBranch}`,
-      ]);
-    } catch (error) {
-      const err = error as Error & { stderr?: string };
-      // Branch already exists locally - use it directly
-      if (err.stderr?.includes('already exists')) {
-        await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
-          worktreePath,
-          prBranch,
-        ]);
-      } else {
-        throw error;
-      }
-    }
+    const args = (await this.localBranchExists(repoPath, prBranch))
+      ? [worktreePath, prBranch]
+      : [worktreePath, '-b', prBranch, `${remote}/${prBranch}`];
+    await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, args);
 
     // Set up tracking for push/pull (non-fatal - worktree is usable without it)
     try {
@@ -1454,16 +1508,20 @@ export class WorktreeProvider implements IIsolationProvider {
 
       await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [worktreePath, prSha]);
 
-      await this.rollBackOnFailure(toRepoPath(repoPath), worktreePath, setupLockReason, () =>
-        // Create a local tracking branch so it's not detached HEAD
-        this.createBranchWithStaleRetry(
-          repoPath,
-          () =>
-            execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
+      await this.rollBackOnFailure(
+        toRepoPath(repoPath),
+        worktreePath,
+        setupLockReason,
+        async () => {
+          if (await this.localBranchExists(repoPath, reviewBranch)) {
+            await execFileAsync('git', ['-C', repoPath, 'branch', '-D', reviewBranch], {
               timeout: GIT_OPERATION_TIMEOUT_MS,
-            }),
-          reviewBranch
-        )
+            });
+          }
+          await execFileAsync('git', ['-C', worktreePath, 'checkout', '-b', reviewBranch, prSha], {
+            timeout: GIT_OPERATION_TIMEOUT_MS,
+          });
+        }
       );
     } else {
       // No SHA: fetch and create review branch. The refspec's destination is the
@@ -1570,9 +1628,30 @@ export class WorktreeProvider implements IIsolationProvider {
         ? (request.taskBranch.fromBranch ?? `${remote}/${baseBranch}`)
         : `${remote}/${baseBranch}`;
 
-    try {
-      // `--no-track` keeps `branch.<name>.merge` unset; otherwise `gh pr view`
-      // (no PR number) resolves to the base branch's PR via upstream config.
+    if (await this.localBranchExists(repoPath, branchName)) {
+      const taskFromBranch =
+        request.workflowType === 'task' && request.taskBranch?.kind === 'new'
+          ? request.taskBranch.fromBranch
+          : undefined;
+      if (taskFromBranch) {
+        throw new Error(
+          `Branch "${branchName}" already exists. Cannot create it from "${taskFromBranch}". ` +
+            'Either choose a different --branch name or omit --from.'
+        );
+      }
+      getLog().warn(
+        { branchName, startPoint, repoPath },
+        'worktree.branch_exists_resetting_to_start_point'
+      );
+      await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
+        timeout: 10000,
+      });
+      await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
+        worktreePath,
+        branchName,
+      ]);
+    } else {
+      // --no-track prevents gh from resolving this branch to the base branch's PR.
       await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
         '--no-track',
         worktreePath,
@@ -1580,40 +1659,6 @@ export class WorktreeProvider implements IIsolationProvider {
         branchName,
         startPoint,
       ]);
-    } catch (error) {
-      const err = error as Error & { stderr?: string };
-      // Branch already exists - reset to intended start-point and use it
-      if (err.stderr?.includes('already exists')) {
-        const taskFromBranch =
-          request.workflowType === 'task' && request.taskBranch?.kind === 'new'
-            ? request.taskBranch.fromBranch
-            : undefined;
-        if (taskFromBranch) {
-          // Branch already exists but caller specified an explicit start point.
-          // Adopting the existing branch would silently ignore the start point.
-          throw new Error(
-            `Branch "${branchName}" already exists. Cannot create it from "${taskFromBranch}". ` +
-              'Either choose a different --branch name or omit --from.'
-          );
-        }
-
-        // Branch exists but no explicit start-point override — reset it to the
-        // intended start-point before checking out, so we don't inherit stale
-        // commits from a previous run or external tool.
-        getLog().warn(
-          { branchName, startPoint, repoPath },
-          'worktree.branch_exists_resetting_to_start_point'
-        );
-        await execFileAsync('git', ['-C', repoPath, 'branch', '-f', branchName, startPoint], {
-          timeout: 10000,
-        });
-        await this.addLockedWorktree(repoPath, worktreePath, setupLockReason, [
-          worktreePath,
-          branchName,
-        ]);
-      } else {
-        throw error;
-      }
     }
     // The branch was created at its start point a moment ago and nothing has written to
     // it since, so its commit IS the cut-from commit -- read from the branch itself rather

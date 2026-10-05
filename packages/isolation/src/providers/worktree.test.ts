@@ -561,14 +561,7 @@ describe('WorktreeProvider', () => {
     });
 
     test('throws when branch already exists and fromBranch is specified', async () => {
-      const alreadyExistsError = new Error('fatal: branch already exists') as Error & {
-        stderr: string;
-      };
-      alreadyExistsError.stderr =
-        "fatal: a branch named 'archon/task-test-adapters' already exists";
-
-      // First call (worktree add -b) fails with "already exists"
-      execSpy.mockRejectedValueOnce(alreadyExistsError);
+      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       const request: IsolationRequest = {
         ...baseRequest,
@@ -586,16 +579,7 @@ describe('WorktreeProvider', () => {
     });
 
     test('resets and reuses existing branch when it already exists and no fromBranch', async () => {
-      const alreadyExistsError = new Error('fatal: branch already exists') as Error & {
-        stderr: string;
-      };
-      alreadyExistsError.stderr =
-        "fatal: a branch named 'archon/task-test-adapters' already exists";
-
-      // First call fails (worktree add -b), second succeeds (branch -f), third succeeds (worktree add)
-      execSpy.mockRejectedValueOnce(alreadyExistsError);
-      execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
-      execSpy.mockResolvedValueOnce({ stdout: '', stderr: '' });
+      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       const request: IsolationRequest = {
         ...baseRequest,
@@ -1035,39 +1019,9 @@ describe('WorktreeProvider', () => {
     });
 
     test('resets stale branch to start-point when it already exists', async () => {
-      let callCount = 0;
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        callCount++;
-        // First worktree add call fails (branch exists)
-        if (callCount === 1 && args.includes('-b')) {
-          const error = new Error(
-            'fatal: A branch named archon/issue-42 already exists.'
-          ) as Error & {
-            stderr?: string;
-          };
-          error.stderr = 'fatal: A branch named archon/issue-42 already exists.';
-          throw error;
-        }
-        return { stdout: '', stderr: '' };
-      });
+      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       await provider.create(baseRequest);
-
-      // Verify first call attempted new branch
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        expect.arrayContaining([
-          '-C',
-          '/workspace/repo',
-          'worktree',
-          'add',
-          '--no-track',
-          expect.any(String),
-          '-b',
-          'archon/issue-42',
-        ]),
-        expect.any(Object)
-      );
 
       // Verify branch was reset to start-point before checkout
       expect(execSpy).toHaveBeenCalledWith(
@@ -1106,14 +1060,7 @@ describe('WorktreeProvider', () => {
 
     test('propagates error if branch -f reset fails (protected branch, etc.)', async () => {
       execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        // First worktree add call fails (branch exists)
-        if (args.includes('worktree') && args.includes('add') && args.includes('-b')) {
-          const error = new Error(
-            'fatal: A branch named archon/issue-42 already exists.'
-          ) as Error & { stderr?: string };
-          error.stderr = 'fatal: A branch named archon/issue-42 already exists.';
-          throw error;
-        }
+        if (args.includes('--verify')) return { stdout: 'existing-branch-sha\n', stderr: '' };
         // Reset call fails (e.g., branch checked out elsewhere, update hook refused)
         if (args.includes('branch') && args.includes('-f')) {
           const error = new Error('fatal: cannot force update the branch') as Error & {
@@ -1339,23 +1286,11 @@ describe('WorktreeProvider', () => {
         isForkPR: false,
       };
 
-      let callCount = 0;
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        callCount++;
-        // First worktree add fails (branch already exists)
-        if (callCount === 2 && args.includes('-b') && args.includes('feature/auth')) {
-          const error = new Error('fatal: A branch named feature/auth already exists.') as Error & {
-            stderr?: string;
-          };
-          error.stderr = 'fatal: A branch named feature/auth already exists.';
-          throw error;
-        }
-        return { stdout: '', stderr: '' };
-      });
+      execSpy.mockResolvedValueOnce({ stdout: 'existing-branch-sha\n', stderr: '' });
 
       await provider.create(request);
 
-      // Should have called worktree add without -b flag after failure
+      // The existing local branch is selected before add runs.
       expect(execSpy).toHaveBeenCalledWith(
         'git',
         expect.arrayContaining([
@@ -1380,21 +1315,10 @@ describe('WorktreeProvider', () => {
         isForkPR: true,
       };
 
-      let checkoutAttempts = 0;
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        // First checkout -b attempt fails with "already exists"
-        if (args.includes('checkout') && args.includes('-b')) {
-          checkoutAttempts++;
-          if (checkoutAttempts === 1) {
-            const error = new Error(
-              'fatal: A branch named pr-42-review already exists.'
-            ) as Error & { stderr?: string };
-            error.stderr = 'fatal: A branch named pr-42-review already exists.';
-            throw error;
-          }
-        }
-        return { stdout: '', stderr: '' };
-      });
+      execSpy.mockImplementation(async (_cmd: string, args: string[]) => ({
+        stdout: args.includes('--quiet') ? 'existing-review-sha\n' : '',
+        stderr: '',
+      }));
 
       await provider.create(request);
 
@@ -1405,8 +1329,8 @@ describe('WorktreeProvider', () => {
         expect.any(Object)
       );
 
-      // Verify checkout was retried
-      expect(checkoutAttempts).toBe(2);
+      const checkouts = execSpy.mock.calls.filter(([, args]) => args.includes('checkout'));
+      expect(checkouts).toHaveLength(1);
     });
 
     test('removes the locked checkout when reading its cut-from commit fails', async () => {
