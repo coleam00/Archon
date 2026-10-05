@@ -59,7 +59,7 @@ async function initRepo(path: string): Promise<void> {
 }
 
 /** Insert a run that uses `path`, as a run reusing the checkout would. */
-async function seedRunAt(path: string, status: string): Promise<string> {
+async function seedRunAt(path: string | null, status: string): Promise<string> {
   const id = randomUUID();
   await db.query(
     `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
@@ -302,6 +302,38 @@ describe('owned worktree release', () => {
     expect(existsSync(env.working_path)).toBe(true);
     expect(await status()).toBe('active');
     expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
+  });
+
+  test('a detached adoption row without a path cannot claim the checkout once release begins', async () => {
+    // `run --detach --adopt` pre-creates its row with no working_path and claims it
+    // before stamping the inherited checkout, so the claim must carry the path.
+    const adopter = await seedRunAt(null, 'pending');
+    const originalExec = gitModule.execFileAsync;
+    let claimed: unknown;
+    const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
+      async (file, args, options) => {
+        if (file === 'git' && args.includes('worktree') && args.includes('remove'))
+          claimed = await claimPendingWorkflowRun(adopter, env.working_path);
+        return originalExec(file, args, options);
+      }
+    );
+    try {
+      await reclaimRunWorktree(run, store);
+    } finally {
+      exec.mockRestore();
+    }
+    expect(claimed).toBeNull();
+    expect(existsSync(env.working_path)).toBe(false);
+  });
+
+  test('a detached adoption that claimed first is seen by the claimant check', async () => {
+    const adopter = await seedRunAt(null, 'pending');
+    expect((await claimPendingWorkflowRun(adopter, env.working_path))?.working_path).toBe(
+      env.working_path
+    );
+    await expect(reclaimRunWorktree(run, store)).rejects.toThrow(`claimable run ${adopter}`);
+    expect(existsSync(env.working_path)).toBe(true);
+    expect(await status()).toBe('active');
   });
 
   test('a run that reuses the checkout during removal can neither start nor adopt it', async () => {
