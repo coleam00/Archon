@@ -132,6 +132,9 @@
       "src/db/workflows.resume-cas.integration.test.ts"
     ],
     [
+      "src/db/workflow-gate-deferral.integration.test.ts"
+    ],
+    [
       "src/db/workflow-terminal-telemetry.integration.test.ts"
     ],
     [
