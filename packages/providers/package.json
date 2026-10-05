@@ -38,6 +38,7 @@
     "@openai/codex": "0.160.0",
     "@sinclair/typebox": "^0.34.41",
     "jsonrepair": "^3.14.0",
+    "undici": "8.10.2",
     "zod": "^4.0.0"
   },
   "devDependencies": {
@@ -143,6 +144,12 @@
     ],
     [
       "src/community/pi/provider-bedrock-register.test.ts"
+    ],
+    [
+      "src/community/pi/provider-oauth-register.test.ts"
+    ],
+    [
+      "src/community/pi/pi-sdk-instance.test.ts"
     ],
     [
       "src/community/pi/ui-context-stub.test.ts"
