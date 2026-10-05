@@ -205,7 +205,7 @@ test('uses trusted discovery/runtime values while retaining repo credential valu
 
   expect(dispatchedOptions).toMatchObject({
     env: { ARCHON_HOME: '/trusted', PATH: '/trusted/bin' },
-    pluginsDir: getPluginsPath(),
+    pluginsDir: getPluginsPath('/trusted'),
     credentialEnv: {
       ARCHON_HOME: '/repo-controlled',
       PATH: '/repo-controlled/bin',
