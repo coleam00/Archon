@@ -9,6 +9,7 @@ import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import { streamSSE } from 'hono/streaming';
 import { cors } from 'hono/cors';
 import type { WebAdapter } from '../adapters/web';
+import { DASHBOARD_STREAM } from '../adapters/web/transport';
 import { boundMetadataToolOutputs } from '../adapters/web/truncate';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
 import { rm, readFile, writeFile, unlink, mkdir, readdir, realpath, stat } from 'fs/promises';
@@ -3053,20 +3054,20 @@ export function registerApiRoutes(
     return c.json(result);
   });
 
-  // GET /api/stream/__dashboard__ — multiplexed dashboard SSE (all workflow events)
+  // GET /api/stream/__dashboard__ — dashboard SSE (workflow lifecycle events)
   // IMPORTANT: Must be registered before /api/stream/:conversationId to avoid param capture.
-  app.get('/api/stream/__dashboard__', async c => {
+  app.get(`/api/stream/${DASHBOARD_STREAM}`, async c => {
     return streamSSE(c, async stream => {
       await stream.writeSSE({
         data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
       });
 
-      webAdapter.registerStream('__dashboard__', stream);
-      getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_opened');
+      webAdapter.registerStream(DASHBOARD_STREAM, stream);
+      getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_opened');
 
       stream.onAbort(() => {
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_disconnected');
-        webAdapter.removeStream('__dashboard__', stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_disconnected');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
       });
 
       try {
@@ -3084,8 +3085,8 @@ export function registerApiRoutes(
           getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
         }
       } finally {
-        webAdapter.removeStream('__dashboard__', stream);
-        getLog().debug({ streamId: '__dashboard__' }, 'dashboard_sse_closed');
+        webAdapter.removeStream(DASHBOARD_STREAM, stream);
+        getLog().debug({ streamId: DASHBOARD_STREAM }, 'dashboard_sse_closed');
       }
     });
   });
@@ -4154,23 +4155,7 @@ export function registerApiRoutes(
       if (respondBlocker) {
         return c.json(respondBlocker, 400);
       }
-      const rawBody = await c.req.text();
-      let body: { decision?: string; text?: string } = {};
-      if (rawBody.trim().length > 0) {
-        try {
-          body = JSON.parse(rawBody) as { decision?: string; text?: string };
-        } catch (parseError) {
-          getLog().warn({ err: parseError, runId }, 'api.respond_body_parse_failed');
-          return apiError(
-            c,
-            400,
-            'Request body is not valid JSON — send {"decision": "...", "text": "..."}'
-          );
-        }
-      }
-      if (!body.decision) {
-        return apiError(c, 400, 'Request body must include a non-empty "decision"');
-      }
+      const body = getValidatedBody(c, respondWorkflowRunBodySchema);
       const decision = body.decision;
 
       // Pre-validate a non-default decision so an undeclared id is a 400 naming the
@@ -4192,7 +4177,7 @@ export function registerApiRoutes(
       // Only for decision === 'reject' — every other decision (including 'approve',
       // which stays optional/undefined) is unaffected.
       const text = body.text ?? (decision === 'reject' ? 'Rejected' : undefined);
-      const result = await respondToWorkflow(runId, decision, text);
+      const result = await respondToWorkflow(runId, decision, text, body.expectedGate);
 
       if ('cancelled' in result && result.cancelled) {
         return c.json({
@@ -5242,7 +5227,7 @@ export function registerApiRoutes(
     const lockActiveSet = new Set(stats.activeConversationIds);
     const backgroundConversationIds = runningWorkflowRows
       .map(r => r.conversation_id)
-      .filter(id => !lockActiveSet.has(id));
+      .filter((id): id is string => id !== null && !lockActiveSet.has(id));
     const allActiveIds = [...stats.activeConversationIds, ...backgroundConversationIds];
     const wslDistro = getWSLDistroName();
 

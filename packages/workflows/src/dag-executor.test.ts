@@ -204,6 +204,7 @@ type MockWorkflowStore = {
 
 function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-mock' },
     id,
     workflow_name: 'mock',
     conversation_id: 'conv-mock',
@@ -678,6 +679,7 @@ async function readAllArtifacts(artifactsDir: string) {
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-dag' },
     id,
     workflow_name: 'dag-test',
     conversation_id: 'conv-dag',
@@ -4871,7 +4873,10 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       );
       const publishNode: ExecNode = {
         ...publish,
-        timeout: 1000,
+        // The first attempt must reach the create before this fires. Getting there starts
+        // three Bun processes (the script, then the client for view and for create): about
+        // 0.5 s on a loaded Mac, and over 1 s on a Windows runner.
+        timeout: 3000,
         retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
         script: `process.env.ARCHON_SDLC_FORGE = ${JSON.stringify(source)};
           process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify([process.execPath, client]))};
@@ -16628,12 +16633,74 @@ describe('executeDagWorkflow -- approval node', () => {
 
     // Nobody was told how to approve, so the run must not wait for an approval.
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(store.failPausedApproval).toHaveBeenCalled();
+    // The store fails the gate only on an exact match of the persisted context,
+    // so the caller must pass the paused context, minted pauseId included.
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(failed?.data?.error).toBe(
       "Approval message failed to deliver for node 'review' — cannot pause safely"
     );
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: 'loop',
+      node: {
+        id: 'refine',
+        kind: 'loop',
+        loop: {
+          fresh_context: false,
+          prompt: 'Refine.',
+          until: 'APPROVED',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+        },
+      },
+    },
+    {
+      kind: 'loop_group',
+      node: {
+        id: 'refine',
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+          nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'draft' } }],
+        },
+      },
+    },
+  ])('fails the persisted $kind gate when its prompt cannot be delivered', async ({ node }) => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Draft.' };
+      yield { type: 'result', sessionId: 'undelivered-loop' };
+    });
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
+      if (message.includes('Input required')) throw new Error('401 unauthorized');
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        conversationId: 'conv-loop',
+        cwd: testDir,
+        workflow: { name: 'loop-undelivered', nodes: [node] as DagNode[] },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
   });
 
   it('delivers the nested proposal action at the approval gate, including legacy local resumes', async () => {
@@ -17296,6 +17363,56 @@ describe('executeDagWorkflow -- approval node', () => {
       expect(text).toContain('Approve: `/archon-workflow approve gate-run`');
       expect(text).toContain('Reject: `/archon-workflow reject gate-run`');
       expectSlackSpelling(text);
+    });
+
+    it('renders declared choices and emits the persisted vocabulary', async () => {
+      const platform = slackPlatform();
+      const deps = createMockDeps();
+      const decisions = [
+        { id: 'approve', label: 'Ship it' },
+        { id: 'revise', label: 'Try again' },
+        { id: 'cancel' },
+      ];
+      const emitted: WorkflowEmitterEvent[] = [];
+      const unsubscribe = getWorkflowEventEmitter().subscribe(event => emitted.push(event));
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('gate-run'),
+            workflow: {
+              name: 'declared-choices',
+              nodes: [
+                {
+                  id: 'review',
+                  kind: 'gate',
+                  message: 'Choose',
+                  decisions,
+                  decisionsAuthored: true,
+                  captureResponse: false,
+                },
+              ],
+            },
+          })
+        );
+      } finally {
+        unsubscribe();
+      }
+      const text = sentText(platform);
+      expect(text).toContain('Ship it');
+      expect(text).toContain(
+        'Try again (revise): `/archon-workflow respond gate-run revise [text]`'
+      );
+      expect(text).toContain('cancel: `/archon-workflow respond gate-run cancel [text]`');
+      expect(text).not.toContain('reject gate-run');
+      const pause = deps.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(emitted.find(event => event.type === 'approval_pending')).toMatchObject({
+        decisions: pause?.decisions,
+        pauseId: pause?.pauseId,
+      });
+      expect(pause?.decisions).toEqual(decisions);
     });
 
     it('interactive loop gate prompt', async () => {
@@ -30087,7 +30204,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30217,7 +30334,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30303,7 +30420,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30363,7 +30480,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30423,7 +30540,7 @@ describe('subprocess credential redaction', () => {
       dagOptions({
         deps: createMockDeps(store),
         platform,
-        conversationId: workflowRun.conversation_id,
+        conversationId: workflowRun.conversation_id ?? workflowRun.id,
         cwd: testDir,
         workflow: {
           name: workflowRun.workflow_name,
@@ -35155,6 +35272,8 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const store = createEscalationStore('run-escalation-1');
     const platform = createMockPlatform();
 
+    const emitted: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => emitted.push(event));
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
@@ -35165,6 +35284,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       })
     );
 
+    unsubscribe();
     // Only 'work' ran once — proves the loop did NOT barrel through remaining
     // iterations re-running the body every time the gate re-paused.
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
@@ -35172,11 +35292,19 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
 
     const pauseCalls = store.pauseWorkflowRun.mock.calls;
     expect(pauseCalls).toHaveLength(1);
-    expect(pauseCalls[0][1]).toMatchObject({
+    const approval = pauseCalls[0][1];
+    expect(store.getState().metadata.approval).toEqual(approval);
+    expect(approval).toMatchObject({
       nodeId: 'grp',
       bodyGateId: 'check',
       type: 'approval',
       iteration: 1,
+      pauseId: expect.any(String),
+    });
+    expect(emitted.find(event => event.type === 'approval_pending')).toMatchObject({
+      nodeId: 'grp',
+      pauseId: approval?.pauseId,
+      decisions: approval?.decisions,
     });
     const groupSuspension = (
       store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>

@@ -231,17 +231,16 @@ async function prepareBinding(
         : {}),
     };
     const launch: PreparedWorkflowLaunch = {
-      version: 1,
+      version: 2,
       run: {
         id: source.runId,
         workflow_name: workflow.name,
-        conversation_id: conversation.id,
+        origin: { conversationId: conversation.id, userId: intent.runAsUserId },
         codebase_id: codebase.id,
         // Provenance is `metadata.resource_start`; a trigger supplies no user message.
         user_message: '',
         metadata,
         ...(isolation.kind === 'in-place' ? { working_path: cwd } : {}),
-        user_id: intent.runAsUserId,
       },
       execution: { cwd, conversationId, isolation },
     };
@@ -349,7 +348,7 @@ async function worktreeLane(
   codebase: Codebase,
   identifier: string,
   platformType: string,
-  userId: string
+  userId: string | undefined
 ): Promise<{ cwd: string; envId: string; cutFromCommit?: string; ownedWorktree?: OwnedWorktree }> {
   ensureIsolationConfigured();
   const provider = getIsolationProvider();
@@ -390,7 +389,7 @@ async function worktreeLane(
     working_path: env.workingPath,
     branch_name: env.branchName,
     created_by_platform: platformType,
-    created_by_user_id: userId,
+    ...(userId ? { created_by_user_id: userId } : {}),
     metadata: { ...worktreeRegistrationMetadata(env.metadata) },
   });
   return {
@@ -412,7 +411,7 @@ export interface StartAdmittedResourceStartInput {
   /** Builds the host's platform for this run's conversation. */
   createPlatform: (conversation: {
     conversationId: string;
-    conversationDbId: string;
+    conversationDbId: string | null;
   }) => IWorkflowPlatform;
   /**
    * Called once this process holds the run's exact live-owner lock, before the engine
@@ -498,7 +497,7 @@ export async function startAdmittedResourceStart(
             codebase,
             `${run.workflow_name}-${run.id.slice(0, 8)}`,
             platform.getPlatformType(),
-            launch.run.user_id
+            run.user_id ?? undefined
           )
         : {
             cwd: launch.execution.cwd,
@@ -506,11 +505,12 @@ export async function startAdmittedResourceStart(
             cutFromCommit: undefined,
             ownedWorktree: undefined,
           };
-    await conversationDb.updateConversation(run.conversation_id, {
-      cwd: execution.cwd,
-      codebase_id: codebase.id,
-      isolation_env_id: execution.envId ?? null,
-    });
+    if (run.conversation_id)
+      await conversationDb.updateConversation(run.conversation_id, {
+        cwd: execution.cwd,
+        codebase_id: codebase.id,
+        isolation_env_id: execution.envId ?? null,
+      });
 
     const baseBranch = codebase.default_branch?.trim() || undefined;
     return await input.engine.submit({
@@ -519,12 +519,11 @@ export async function startAdmittedResourceStart(
       cwd: execution.cwd,
       workflow: frozen.workflow,
       userMessage: run.user_message ?? '',
-      conversationDbId: run.conversation_id,
+      origin: run.origin ?? undefined,
       options: {
         preCreatedRun: run,
         preparedAiConfiguration,
         codebaseId: codebase.id,
-        userId: launch.run.user_id,
         baseBranch,
         ownedWorktree: execution.ownedWorktree,
         ...(execution.cutFromCommit !== undefined
@@ -536,7 +535,7 @@ export async function startAdmittedResourceStart(
         resolveChildIsolation: createCodebaseChildResolver(codebase, {
           baseBranch,
           createdByPlatform: platform.getPlatformType(),
-          createdByUserId: launch.run.user_id,
+          createdByUserId: run.user_id ?? undefined,
         }),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed

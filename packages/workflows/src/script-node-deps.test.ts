@@ -79,6 +79,7 @@ function createMockStore(): IWorkflowStore {
     }),
     createWorkflowRun: mock(() =>
       Promise.resolve({
+        origin: { conversationId: 'conv-mock' },
         id: 'mock-run-id',
         workflow_name: 'mock',
         conversation_id: 'conv-mock',
@@ -110,6 +111,7 @@ function createMockStore(): IWorkflowStore {
     findResumableRun: mock(() => Promise.resolve(null)),
     resumeWorkflowRun: mock(() =>
       Promise.resolve({
+        origin: { conversationId: 'conv-mock' },
         id: 'mock-run-id',
         workflow_name: 'mock',
         conversation_id: 'conv-mock',
@@ -237,6 +239,7 @@ function createMockPlatform(): IWorkflowPlatform {
 
 function makeWorkflowRun(id: string): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-deps' },
     id,
     workflow_name: 'deps-test',
     conversation_id: 'conv-deps',

@@ -27,6 +27,7 @@ afterEach(() => {
 
 test('routes a scheduled continuation to its execution destination and delivers the settled result', async () => {
   const due: WorkflowRun = {
+    origin: { conversationId: 'worker-conversation', parentConversationId: 'parent-conversation' },
     id: 'scheduled-run',
     workflow_name: 'deliver',
     conversation_id: 'worker-conversation',

@@ -20,7 +20,7 @@
 import { describe, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
-import { testTimeout } from '@archon/paths/test-utils';
+import ts from 'typescript';
 import { ROOT_TEST_PLAN } from './repo-tests';
 
 interface InventoryMismatch {
@@ -382,26 +382,29 @@ describe('repository test inventory', () => {
 });
 
 describe('compiler test inventory', () => {
-  async function expectProgramToInclude(
-    packageName: string,
-    expectedFiles: string[]
-  ): Promise<void> {
+  /**
+   * Resolves the project's root files the way `tsc` does, in process. Every expected file
+   * reaches the program through the project's `include`, so the resolved root set answers
+   * the question without spawning `tsc` to parse the whole program, a cold run a loaded
+   * Windows runner could not finish inside the test budget.
+   */
+  function expectProgramToInclude(packageName: string, expectedFiles: string[]): void {
     const projectPath = join(REPO_ROOT, 'packages', packageName, 'tsconfig.json');
-    const process = Bun.spawn(
-      ['bun', 'x', 'tsc', '--noEmit', '--listFilesOnly', '--project', projectPath],
-      { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' }
-    );
-    const [exitCode, stdout, stderr] = await Promise.all([
-      process.exited,
-      new Response(process.stdout).text(),
-      new Response(process.stderr).text(),
-    ]);
-
-    if (exitCode !== 0) {
-      throw new Error(`Could not list the ${packageName} TypeScript program:\n${stderr}`);
+    const configErrors: ts.Diagnostic[] = [];
+    const parsed = ts.getParsedCommandLineOfConfigFile(projectPath, undefined, {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic: diagnostic => configErrors.push(diagnostic),
+    });
+    const errors = [...configErrors, ...(parsed?.errors ?? [])];
+    if (parsed === undefined || errors.length > 0) {
+      throw new Error(
+        `Could not read the ${packageName} TypeScript project:\n${errors
+          .map(error => ts.flattenDiagnosticMessageText(error.messageText, '\n'))
+          .join('\n')}`
+      );
     }
 
-    const programFiles = new Set(stdout.split(/\r?\n/).map(normalizePath));
+    const programFiles = new Set(parsed.fileNames.map(normalizePath));
     const missingFiles = expectedFiles.filter(
       (expectedFile): boolean => !programFiles.has(normalizePath(expectedFile))
     );
@@ -413,49 +416,33 @@ describe('compiler test inventory', () => {
     }
   }
 
-  test(
-    "core's normal TypeScript project includes test files",
-    () => {
-      return expectProgramToInclude('core', [
-        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-      ]);
-    },
-    testTimeout(15_000)
-  );
+  test("core's normal TypeScript project includes test files", () => {
+    expectProgramToInclude('core', [
+      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+    ]);
+  });
 
-  test(
-    "adapters' normal TypeScript project includes its own and imported core test files",
-    () => {
-      return expectProgramToInclude('adapters', [
-        join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-      ]);
-    },
-    testTimeout(15_000)
-  );
+  test("adapters' normal TypeScript project includes its own and imported core test files", () => {
+    expectProgramToInclude('adapters', [
+      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
+      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+    ]);
+  });
 
-  test(
-    "server's normal TypeScript project includes its own, core, and adapter test files",
-    () => {
-      return expectProgramToInclude('server', [
-        join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
-        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-        join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-      ]);
-    },
-    testTimeout(15_000)
-  );
+  test("server's normal TypeScript project includes its own, core, and adapter test files", () => {
+    expectProgramToInclude('server', [
+      join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
+      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
+    ]);
+  });
 
-  test(
-    "cli's normal TypeScript project includes its own, core, adapter, and server test files",
-    () => {
-      return expectProgramToInclude('cli', [
-        join(REPO_ROOT, 'packages', 'cli', 'src', 'cli.test.ts'),
-        join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
-        join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
-        join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
-      ]);
-    },
-    testTimeout(15_000)
-  );
+  test("cli's normal TypeScript project includes its own, core, adapter, and server test files", () => {
+    expectProgramToInclude('cli', [
+      join(REPO_ROOT, 'packages', 'cli', 'src', 'cli.test.ts'),
+      join(REPO_ROOT, 'packages', 'core', 'src', 'utils', 'conversation-lock.test.ts'),
+      join(REPO_ROOT, 'packages', 'adapters', 'src', 'forge', 'github', 'adapter.test.ts'),
+      join(REPO_ROOT, 'packages', 'server', 'src', 'routes', 'api.health.test.ts'),
+    ]);
+  });
 });

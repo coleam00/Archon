@@ -93,7 +93,7 @@ const { createWorkflowOperations } = await import('../operations/workflow-operat
 const { createIsolationStore } = await import('./isolation-environments');
 const { requestDetachedRunStop } = await import('../services/run-owner-stop');
 const { isRunOwnedByThisProcess, isRunOwnerAnswering } = await import('../services/run-live-owner');
-const { approveWorkflow, rejectWorkflow } = createWorkflowOperations({
+const operationDeps = {
   store: {
     ...workflowDb,
     listWorkflowRuns: workflowDb.listDashboardRuns,
@@ -110,7 +110,8 @@ const { approveWorkflow, rejectWorkflow } = createWorkflowOperations({
   reclaimContainerEnv: async () => {
     throw new Error('Unexpected container cleanup');
   },
-});
+};
+const { approveWorkflow, rejectWorkflow } = createWorkflowOperations(operationDeps);
 
 // workflow_runs.conversation_id is NOT NULL with an enforced FK — seed a parent.
 await db.query(
@@ -738,28 +739,40 @@ describe('terminal workflow transitions — real SQLite', () => {
   );
 
   test.each([
-    { label: 'object', raw: '{"kept":true}', expected: { kept: true } },
-    { label: 'JSON null', raw: 'null', expected: null },
-    { label: 'SQL null', raw: null, expected: null },
-  ])('preserves $label metadata when reading and terminating', async ({ label, raw, expected }) => {
-    const runId = `terminal-valid-${label}`;
-    await seed(runId, 'running', "datetime('now')");
-    await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
-      raw,
-      runId,
-    ]);
-    const metadataBefore: unknown = (await getWorkflowRun(runId))?.metadata;
-    expect(metadataBefore).toEqual(expected);
-    await cancelWorkflowRun(runId);
-    const metadataAfter: unknown = (await getWorkflowRun(runId))?.metadata;
-    expect(metadataAfter).toEqual(expected);
-    expect((await terminalRecord(runId)).status).toBe('cancelled');
-    const stored = await db.query<{ metadata: string | null }>(
-      'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
-      [runId]
-    );
-    expect(stored.rows[0]?.metadata).toBe(raw);
-  });
+    { label: 'object', raw: '{"kept":true}', expected: { kept: true }, warned: false },
+    // A stored null is not rewritten, but reads as the empty object WorkflowRun promises.
+    // JSON that is not an object is unexpected and logged; SQL NULL stored nothing.
+    { label: 'JSON null', raw: 'null', expected: {}, warned: true },
+    { label: 'SQL null', raw: null, expected: {}, warned: false },
+  ])(
+    'preserves $label metadata when reading and terminating',
+    async ({ label, raw, expected, warned }) => {
+      const runId = `terminal-valid-${label}`;
+      workflowWarnings.mockClear();
+      await seed(runId, 'running', "datetime('now')");
+      await db.query('UPDATE remote_agent_workflow_runs SET metadata = $1 WHERE id = $2', [
+        raw,
+        runId,
+      ]);
+      const metadataBefore: unknown = (await getWorkflowRun(runId))?.metadata;
+      expect(metadataBefore).toEqual(expected);
+      await cancelWorkflowRun(runId);
+      const metadataAfter: unknown = (await getWorkflowRun(runId))?.metadata;
+      expect(metadataAfter).toEqual(expected);
+      expect((await terminalRecord(runId)).status).toBe('cancelled');
+      const stored = await db.query<{ metadata: string | null }>(
+        'SELECT metadata FROM remote_agent_workflow_runs WHERE id = $1',
+        [runId]
+      );
+      expect(stored.rows[0]?.metadata).toBe(raw);
+      const notObjectWarning = [
+        { workflowRunId: runId, valueType: 'object' },
+        'db.workflow_run_metadata_not_object',
+      ];
+      if (warned) expect(workflowWarnings).toHaveBeenCalledWith(...notObjectWarning);
+      else expect(workflowWarnings.mock.calls).not.toContainEqual(notObjectWarning);
+    }
+  );
 
   test('commits completion and its matching event together', async () => {
     await seed('terminal-complete', 'running', "datetime('now')");
@@ -1228,6 +1241,98 @@ describe('durable wait continuation races — real SQLite', () => {
   });
 });
 
+describe('stale gate actions — real SQLite', () => {
+  test.each(['resolve', 'cancel'] as const)(
+    '%s requires the current pause occurrence',
+    async mode => {
+      const runId = `occurrence-${mode}`;
+      const approval = { nodeId: 'review', pauseId: 'current', message: 'Choose' };
+      await seedPausedRun(runId, 'wf-occurrence', approval);
+      const resolve = (expected: string | { nodeId: string; pauseId: string }) =>
+        mode === 'resolve'
+          ? resolveApprovalGate(
+              runId,
+              { approval: { ...approval, resolved: 'approved' } },
+              [],
+              expected
+            )
+          : resolveAndCancelApprovalGate(runId, [], { step_name: 'review' }, expected);
+      expect(await resolve('review')).toEqual({ resolved: false });
+      expect(await resolve({ nodeId: 'review', pauseId: 'old' })).toEqual({ resolved: false });
+      expect((await getWorkflowRun(runId))?.metadata.approval).toEqual(approval);
+      expect(await resolve({ nodeId: 'review', pauseId: 'current' })).toEqual({ resolved: true });
+    }
+  );
+
+  test.each([
+    { name: 'approve', decision: 'approve', extra: {} },
+    { name: 'declared reject', decision: 'reject', extra: {} },
+    { name: 'custom', decision: 'revise', extra: {} },
+    { name: 'writeback reject', decision: 'reject', extra: { type: 'writeback' } },
+    {
+      name: 'rework reject',
+      decision: 'reject',
+      extra: { decisionsAuthored: false, onRejectPrompt: 'Improve it' },
+    },
+    { name: 'terminal reject', decision: 'reject', extra: { decisionsAuthored: false } },
+  ])(
+    'a $name action cannot resolve a gate opened after its read',
+    async ({ name, decision, extra }) => {
+      const runId = `stale-${name}`;
+      const earlier = {
+        nodeId: 'earlier',
+        pauseId: 'pause-one',
+        message: 'Choose',
+        type: 'approval',
+        decisionsAuthored: true,
+        decisions: [{ id: 'approve' }, { id: 'reject' }, { id: 'revise' }],
+        ...extra,
+      };
+      const later = {
+        nodeId: 'earlier',
+        pauseId: 'pause-two',
+        message: 'Next choice',
+        type: 'approval' as const,
+      };
+      await seedPausedRun(runId, 'wf-stale', earlier);
+      const operations = createWorkflowOperations({
+        ...operationDeps,
+        store: {
+          ...operationDeps.store,
+          getWorkflowRun: async id => {
+            const snapshot = await getWorkflowRun(id);
+            expect(
+              (
+                await resolveApprovalGate(
+                  id,
+                  { approval: { ...earlier, resolved: 'approved' } },
+                  []
+                )
+              ).resolved
+            ).toBe(true);
+            await resumeWorkflowRun(id);
+            await pauseWorkflowRun(id, later);
+            return snapshot;
+          },
+        },
+      });
+
+      await expect(
+        operations.respondToWorkflow(runId, decision, 'feedback', {
+          nodeId: 'earlier',
+          pauseId: 'pause-one',
+        })
+      ).rejects.toThrow('no longer paused at the expected gate');
+      const current = await getWorkflowRun(runId);
+      expect(current?.status).toBe('paused');
+      expect(current?.metadata.approval).toEqual(later);
+      expect(await countEvents(runId, 'approval_received')).toBe(0);
+      expect(await countEvents(runId, 'node_completed')).toBe(0);
+      expect(await countEvents(runId, 'workflow_cancelled')).toBe(0);
+    }
+  );
+});
+
 describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
   test('wins once on an open gate and merges the resolution metadata', async () => {
     await seedPausedRun(
@@ -1244,7 +1349,8 @@ describe('resolveApprovalGate — CAS at the DB layer (#2113)', () => {
         approval_response: 'approved',
         rejection_reason: '',
       },
-      [approvalEvent('approved')]
+      [approvalEvent('approved')],
+      'review'
     );
     expect(outcome.resolved).toBe(true);
 
@@ -1427,7 +1533,8 @@ describe('resolveAndCancelApprovalGate — atomic reject+cancel CAS (#2113)', ()
     const outcome = await resolveAndCancelApprovalGate(
       'rc-open',
       [approvalEvent('rejected')],
-      gateCancellation
+      gateCancellation,
+      'review'
     );
     expect(outcome.resolved).toBe(true);
 

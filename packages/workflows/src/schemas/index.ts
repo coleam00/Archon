@@ -306,3 +306,6 @@ export type {
 export type { WorkflowDefinition as DagWorkflow } from './workflow';
 
 export * from './workflow-run-listing';
+
+export { workflowRunOriginSchema } from './workflow-run';
+export type { WorkflowRunOrigin } from './workflow-run';

@@ -1,6 +1,6 @@
 ---
 title: Approval Nodes
-description: Pause workflow execution for human review with approve/reject gates and optional AI rework on rejection.
+description: Pause workflows for human review with declared decisions or legacy approve/reject gates.
 category: guides
 area: workflows
 audience: [user]
@@ -10,8 +10,8 @@ sidebar:
 ---
 
 DAG workflow nodes support an `approval` field that pauses workflow execution
-until a human approves or rejects the gate. Use approval nodes to insert human
-review steps between AI-driven nodes — for example, reviewing a generated plan
+until a human selects one of the gate's declared decisions. Use approval nodes to
+insert human review steps between AI-driven nodes — for example, reviewing a generated plan
 before committing to expensive implementation work.
 
 ## Quick Start
@@ -45,7 +45,7 @@ When execution reaches `review-gate`, the workflow pauses and sends a message
 to the user on whatever platform they're using (CLI, Slack, GitHub, etc.). On the
 **Web UI**, `interactive: true` is required for the message to appear in your chat.
 
-## How It Works
+## How legacy approve/reject gates work
 
 1. **Pause**: The executor sets the workflow run status to `paused` and stores
    the approval context (node ID and message) in the run's metadata.
@@ -79,10 +79,12 @@ children as they finish.
 - id: gate-name
   approval:
     message: "Human-readable prompt shown to the user"
-    capture_response: true    # optional: store comment as $gate-name.output
-    on_reject:                # optional: AI rework on rejection instead of cancel
-      prompt: "Fix based on feedback: $REJECTION_REASON"
-      max_attempts: 3         # optional: default 3, range 1–10
+    decisions:
+      - id: approve
+        label: Ship it
+      - id: revise
+        label: Try again
+      - id: cancel
   depends_on: [upstream-node]  # optional
   when: "$plan.output.ready == 'true'"  # optional condition (see note below)
   trigger_rule: all_success    # optional (default: all_success)
@@ -93,9 +95,20 @@ children as they finish.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `approval.message` | string | Yes | The message shown to the user when the workflow pauses |
-| `approval.capture_response` | boolean | No | When `true`, the user's approval comment is stored as `$<node-id>.output` for downstream nodes. Default: `false` |
+| `approval.decisions` | array of `{id, label?}` | No | The choices shown in chat, Slack, CLI detail and the console. Must include `approve`; IDs must be unique. Cannot be combined with `on_reject` |
+| `approval.decisions[].id` | string | Yes | Exact wire value: lowercase letters and digits separated by single hyphens, such as `needs-revision`. No spaces |
+| `approval.decisions[].label` | string | No | Nonempty display label; selection always sends the ID |
+| `approval.capture_response` | boolean | No | For legacy gates, when `true`, the user's approval comment is stored as `$<node-id>.output` for downstream nodes. Default: `false` |
 | `approval.on_reject.prompt` | string | No | Prompt template run via AI when the user rejects. `$REJECTION_REASON` is substituted with the reject reason. After running, the workflow re-pauses at the same gate |
 | `approval.on_reject.max_attempts` | integer | No | Max times the on_reject prompt runs before the workflow is cancelled. Range: 1–10. Default: 3 |
+
+When `decisions` is absent, Archon synthesizes the legacy **Approve**/**Reject**
+pair. The legacy `capture_response` and `on_reject` behavior described below remains
+available. Explicit decisions produce structured output, `{decision, text}`;
+`capture_response` does not change that output. Every declared decision completes
+the gate and lets the authored graph determine what happens next. An ID such as `cancel` does not cancel by itself; wire it to a
+`cancel:` node when that is the intended outcome. There is no per-decision
+required-text rule.
 
 Approval nodes do not support AI-specific fields (`model`, `provider`, `context`,
 `output_format`, `allowed_tools`, `denied_tools`, `hooks`, `mcp`, `skills`,
@@ -109,10 +122,31 @@ as above. See
 [`when:` Condition Syntax](/guides/authoring-workflows/#when-condition-syntax).
 `retry` is accepted by the schema but has **no effect** on an approval
 node — the approval dispatch path never enters the retry loop. To rework a
-rejected gate, use `on_reject` (see [Rejection with AI Rework](#rejection-with-ai-rework-on_reject)),
-not `retry`.
+rejected gate, route its declared decision to your own rework node, or use legacy
+`on_reject` (see [Rejection with AI Rework](#rejection-with-ai-rework-on_reject)).
 
 ## Approving and Rejecting
+
+### Declared decisions
+
+The displayed label is presentation. Use the exact ID to respond:
+
+```text
+/workflow respond <run-id> revise Please add tests
+```
+
+Slack uses `/archon-workflow respond`. It renders buttons when the choices fit
+its transport limits; otherwise it posts respond commands. The CLI equivalent is:
+
+```bash
+archon workflow respond <run-id> revise "Please add tests"
+```
+
+Text is optional and passes through to `$gate-name.output.text`. The selected ID
+is available as `$gate-name.output.decision`. Use these fields to wire the next
+step. CLI run detail lists the available IDs and commands; the console displays
+the labels and sends the IDs. Older gates without `decisions` retain the legacy
+commands and output described below.
 
 ### Explicit Commands (all platforms)
 
@@ -221,6 +255,10 @@ curl -X POST http://localhost:3090/api/workflows/runs/<run-id>/reject \
 ```
 
 ## Downstream Output
+
+With declared decisions, read `$<node-id>.output.decision` and
+`$<node-id>.output.text`. The following `capture_response` examples apply to
+legacy gates without `decisions`.
 
 By default, the user's approval comment is **not** available downstream —
 `$<node-id>.output` will be an empty string. To capture the comment as node

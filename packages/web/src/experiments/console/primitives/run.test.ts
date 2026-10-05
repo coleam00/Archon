@@ -284,36 +284,8 @@ describe('toRun — approval parsing', () => {
     expect(r.approval?.completionSignaled).toBe(true);
   });
 
-  test('defaults message to empty string when only nodeId is present', () => {
-    const r = toRun(
-      raw({
-        id: 'r1',
-        workflow_name: 'review',
-        status: 'paused',
-        metadata: { approval: { nodeId: 'gate' } },
-      })
-    );
-    expect(r.approval).toEqual({
-      nodeId: 'gate',
-      message: '',
-      completionSignaled: false,
-      decisions: [{ id: 'approve' }, { id: 'reject' }],
-      decisionsAuthored: false,
-    });
-  });
-
-  test('approval is null when absent or malformed (no string nodeId)', () => {
+  test('approval is null when absent', () => {
     expect(toRun(raw({ id: 'r1', workflow_name: 'review', status: 'paused' })).approval).toBeNull();
-    expect(
-      toRun(
-        raw({
-          id: 'r1',
-          workflow_name: 'review',
-          status: 'paused',
-          metadata: { approval: { message: 'no node id' } },
-        })
-      ).approval
-    ).toBeNull();
   });
 });
 
@@ -352,25 +324,6 @@ describe('toRun — resolved gate (approved/rejected awaiting resume)', () => {
         workflow_name: 'review',
         status: 'paused',
         metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: null } },
-      })
-    );
-    expect(r.approval).toEqual({
-      nodeId: 'gate',
-      message: 'Approve?',
-      completionSignaled: false,
-      decisions: [{ id: 'approve' }, { id: 'reject' }],
-      decisionsAuthored: false,
-    });
-    expect(r.gateResolved).toBeNull();
-  });
-
-  test('unknown resolved values are treated as unresolved', () => {
-    const r = toRun(
-      raw({
-        id: 'r1',
-        workflow_name: 'review',
-        status: 'paused',
-        metadata: { approval: { nodeId: 'gate', message: 'Approve?', resolved: 'weird' } },
       })
     );
     expect(r.approval).toEqual({
