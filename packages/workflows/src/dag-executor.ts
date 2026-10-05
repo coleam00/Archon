@@ -2466,8 +2466,10 @@ async function executeNodeInternal(
           throw new Error(`Node '${node.id}' failed: SDK returned ${subtype}${errorsDetail}`);
         }
       } else if (msg.type === 'settled') {
-        streamSettled = true;
-        break; // The provider says the turn is over and nothing more runs for it.
+        streamSettled =
+          aiClient.getCapabilities().backgroundWork !== 'reported' ||
+          providerEvents.liveSubtaskIds().length === 0;
+        break;
       } else {
         await providerEvents.handle(msg);
       }
@@ -5937,8 +5939,10 @@ async function executeLoopNode(
               // A result is not the end of the iteration; `settled` is. See the
               // AI-node stream loop for the full rationale.
             } else if (msg.type === 'settled') {
-              iterationSettled = true;
-              break; // The provider says the turn is over and nothing more runs for it.
+              iterationSettled =
+                aiClient.getCapabilities().backgroundWork !== 'reported' ||
+                providerEvents.liveSubtaskIds().length === 0;
+              break;
             } else {
               await providerEvents.handle(msg);
             }

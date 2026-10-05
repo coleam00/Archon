@@ -1322,6 +1322,7 @@ async function* streamClaudeMessages(
           if (sysMsg.task_type !== undefined) started.taskType = sysMsg.task_type;
           if (sysMsg.tool_use_id !== undefined) started.parentToolCallId = sysMsg.tool_use_id;
           visibleTaskIds.add(sysMsg.task_id);
+          backgroundObserved = true;
           yield started;
         }
       } else if (subtype === 'task_progress' && sysMsg.task_id) {
@@ -1333,6 +1334,7 @@ async function* streamClaudeMessages(
           continue;
         }
         visibleTaskIds.add(sysMsg.task_id);
+        backgroundObserved = true;
         const progress: ProviderEvent = {
           type: 'subtask',
           taskId: sysMsg.task_id,

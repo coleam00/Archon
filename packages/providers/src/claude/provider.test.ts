@@ -3775,6 +3775,34 @@ describe('typed failures (#1797, #3524)', () => {
     ).toEqual(['started', 'completed']);
   });
 
+  for (const subtype of ['task_started', 'task_progress']) {
+    for (const finalIdle of [false, true]) {
+      test(`direct ${subtype} requires a later idle after completion (final idle: ${String(finalIdle)})`, async () => {
+        mockQuery.mockImplementation(async function* () {
+          yield { type: 'system', subtype, task_id: 'direct' };
+          yield { type: 'result', subtype: 'success', session_id: 's', result: 'first' };
+          yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+          yield {
+            type: 'system',
+            subtype: 'task_notification',
+            task_id: 'direct',
+            status: 'completed',
+          };
+          if (finalIdle) {
+            yield { type: 'system', subtype: 'session_state_changed', state: 'running' };
+            yield { type: 'result', subtype: 'success', session_id: 's', result: 'final' };
+            yield { type: 'system', subtype: 'session_state_changed', state: 'idle' };
+          }
+        });
+        const stream = await collect(client.sendQuery('test', '/workspace'));
+        expect(stream.chunks.some(chunk => chunk.type === 'settled')).toBe(finalIdle);
+        expect(stream.chunks.filter(chunk => chunk.type === 'result').at(-1)?.text).toBe(
+          finalIdle ? 'final' : 'first'
+        );
+      });
+    }
+  }
+
   test('lost observation leaves a live task open and never settles', async () => {
     mockQuery.mockImplementation(async function* () {
       yield {

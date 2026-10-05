@@ -7496,9 +7496,63 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       expect(completed!.data.cost_usd).toBe(0.4);
       expect(completed!.data.tokens).toMatchObject({ input: 30, output: 3 });
       expect(completed!.data.session_id).toBe('final-session');
+      expect(completed!.data.structured_output).toBeUndefined();
       // Clean drain → no incompleteness recorded
       expect(completed!.data.background_tasks_incomplete).toBeUndefined();
     });
+
+    for (const kind of ['agent', 'loop'] as const) {
+      for (const backgroundWork of ['reported', 'unobserved'] as const) {
+        it(`handles ${backgroundWork} settlement with live work in a ${kind} node`, async () => {
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'subtask', taskId: 'still-live', status: 'started' };
+            yield { type: 'result', sessionId: 's', text: 'Done. <promise>COMPLETE</promise>' };
+            yield { type: 'settled' };
+          });
+          const store = createMockStore();
+          const deps = createMockDeps(store);
+          deps.getAgentProvider = () => ({
+            ...mockGetAgentProviderDag('claude'),
+            getCapabilities: () => ({ ...mockClaudeCapabilities(), backgroundWork }),
+          });
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              platform: createMockPlatform(),
+              cwd: testDir,
+              workflow: {
+                name: 'contradictory-settlement',
+                nodes: [
+                  kind === 'agent'
+                    ? { id: 'step1', kind, source: { kind: 'command', name: 'step1' } }
+                    : {
+                        id: 'step1',
+                        kind,
+                        loop: {
+                          prompt: 'Finish the work.',
+                          fresh_context: false,
+                          until: 'COMPLETE',
+                          max_iterations: 1,
+                        },
+                      },
+                ],
+              },
+              workflowRun: makeWorkflowRun(`contradictory-${kind}-${backgroundWork}`),
+            })
+          );
+          if (backgroundWork === 'reported') {
+            const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
+            expect(failed?.data?.failure_kind).toBe('unknown');
+            expect(failed?.data?.error).toContain('Subtask(s) still running: still-live.');
+            expect(findCompletedEvent(store)).toBeUndefined();
+            expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+          } else {
+            expect(findCompletedEvent(store)).toBeDefined();
+            expect(store.failWorkflowRun).not.toHaveBeenCalled();
+          }
+        });
+      }
+    }
 
     it('keeps a quiet live task running beyond the node idle timeout', async () => {
       mockSendQueryDag.mockImplementation(async function* () {
