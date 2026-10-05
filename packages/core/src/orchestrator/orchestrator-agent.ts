@@ -3342,7 +3342,7 @@ async function handleRegisterProject(
   const alreadyExists = existing.find(c => c.name.toLowerCase() === projectName.toLowerCase());
 
   if (alreadyExists && !isAbsolute(alreadyExists.stored_default_cwd)) {
-    await codebaseDb.updateCodebase(alreadyExists.id, { default_cwd: canonicalPath });
+    await codebaseDb.updateCodebase(alreadyExists, { default_cwd: canonicalPath });
     return `Project "${projectName}" re-registered successfully!\nPath: ${canonicalPath}\nID: ${alreadyExists.id}`;
   }
 
@@ -3441,7 +3441,7 @@ async function handleUpdateProject(message: string): Promise<string> {
   }
 
   try {
-    await codebaseDb.updateCodebase(codebase.id, { default_cwd: newPath });
+    await codebaseDb.updateCodebase(codebase, { default_cwd: newPath });
   } catch (err) {
     getLog().warn({ err: err as Error, codebaseId: codebase.id, newPath }, 'project.update_failed');
     // Row gone (deleted between the fetch above and the UPDATE) is the only

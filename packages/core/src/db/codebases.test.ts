@@ -56,9 +56,12 @@ describe('codebases', () => {
         await expect(createCodebase({ name: 'project', default_cwd: path })).rejects.toBeInstanceOf(
           InvalidCodebaseDefaultCwdError
         );
-        await expect(updateCodebase('id', { default_cwd: path })).rejects.toBeInstanceOf(
-          InvalidCodebaseDefaultCwdError
-        );
+        await expect(
+          updateCodebase({ id: 'id', name: 'project' }, { default_cwd: path })
+        ).rejects.toBeInstanceOf(InvalidCodebaseDefaultCwdError);
+        await expect(
+          updateCodebase({ id: 'id', name: 'project' }, { default_cwd: path })
+        ).rejects.toThrow('/register-project ' + quoteCommandArg('project') + ' <absolute-path>');
         expect(mockQuery).not.toHaveBeenCalled();
       });
     }
@@ -544,7 +547,7 @@ describe('codebases', () => {
     test('updates default_cwd only', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', { default_cwd: '/new/path' });
+      await updateCodebase(mockCodebase, { default_cwd: '/new/path' });
 
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET default_cwd = $1, updated_at = NOW() WHERE id = $2',
@@ -555,7 +558,7 @@ describe('codebases', () => {
     test('updates repository_url only', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', { repository_url: 'https://github.com/owner/repo' });
+      await updateCodebase(mockCodebase, { repository_url: 'https://github.com/owner/repo' });
 
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET repository_url = $1, updated_at = NOW() WHERE id = $2',
@@ -566,7 +569,7 @@ describe('codebases', () => {
     test('updates both default_cwd and repository_url', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', {
+      await updateCodebase(mockCodebase, {
         default_cwd: '/new/path',
         repository_url: 'https://github.com/owner/repo',
       });
@@ -580,7 +583,7 @@ describe('codebases', () => {
     test('updates default_branch', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
 
-      await updateCodebase('codebase-123', { default_branch: 'develop' });
+      await updateCodebase(mockCodebase, { default_branch: 'develop' });
 
       expect(mockQuery).toHaveBeenCalledWith(
         'UPDATE remote_agent_codebases SET default_branch = $1, updated_at = NOW() WHERE id = $2',
@@ -591,7 +594,10 @@ describe('codebases', () => {
     test('throws CodebaseNotFoundError when codebase not found', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([], 0));
 
-      const error = await updateCodebase('nonexistent', { default_cwd: '/path' }).catch(e => e);
+      const error = await updateCodebase(
+        { id: 'nonexistent', name: 'project' },
+        { default_cwd: '/path' }
+      ).catch(e => e);
 
       expect(error).toBeInstanceOf(CodebaseNotFoundError);
       expect(error.message).toBe('Codebase nonexistent not found');
@@ -601,7 +607,7 @@ describe('codebases', () => {
     test('does not wrap operational DB errors in CodebaseNotFoundError', async () => {
       mockQuery.mockRejectedValueOnce(new Error('connection refused'));
 
-      const error = await updateCodebase('codebase-123', { default_cwd: '/path' }).catch(e => e);
+      const error = await updateCodebase(mockCodebase, { default_cwd: '/path' }).catch(e => e);
 
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(CodebaseNotFoundError);
@@ -609,7 +615,7 @@ describe('codebases', () => {
     });
 
     test('no-ops when no fields provided', async () => {
-      await updateCodebase('codebase-123', {});
+      await updateCodebase(mockCodebase, {});
 
       expect(mockQuery).not.toHaveBeenCalled();
     });

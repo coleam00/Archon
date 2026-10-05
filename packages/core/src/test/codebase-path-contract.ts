@@ -1,6 +1,7 @@
 import { expect } from 'bun:test';
 import { resolve } from 'node:path';
 import { toBranchName } from '@archon/git';
+import { quoteCommandArg } from '../utils/command-args';
 import { setPlatformPolicies } from '../platforms/registry';
 import type { IDatabase } from '../db/adapters/types';
 
@@ -37,9 +38,9 @@ export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
     '2000-01-01 00:00:00',
     env.id,
   ]);
-  await expect(
-    codebases.updateCodebase(project.id, { default_cwd: './repo' })
-  ).rejects.toBeInstanceOf(codebases.InvalidCodebaseDefaultCwdError);
+  await expect(codebases.updateCodebase(project, { default_cwd: './repo' })).rejects.toThrow(
+    '/register-project ' + quoteCommandArg(project.name) + ' <absolute-path>'
+  );
   expect((await codebases.getCodebase(project.id))?.default_cwd).toBe(absolutePath);
   await db.query('UPDATE remote_agent_codebases SET default_cwd = $1 WHERE id = $2', [
     'projects/repo',
@@ -70,7 +71,7 @@ export async function verifyCodebasePathContract(db: IDatabase): Promise<void> {
     [project.id]
   );
   expect(stored.rows[0]?.default_cwd).toBe('projects/repo');
-  await codebases.updateCodebase(project.id, { default_cwd: absolutePath });
+  await codebases.updateCodebase(project, { default_cwd: absolutePath });
   expect(await codebases.getCodebase(project.id)).toMatchObject({
     id: project.id,
     name: project.name,

@@ -5547,9 +5547,12 @@ describe('handleMessage — /update-project dispatch', () => {
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/update-project my-app /');
 
-    expect(mockUpdateCodebase).toHaveBeenCalledWith('id-my-app', {
-      default_cwd: await canonicalizeProjectPath('/'),
-    });
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
+      {
+        default_cwd: await canonicalizeProjectPath('/'),
+      }
+    );
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('updated');
     expect(msg).toContain('/repos/my-app');
@@ -6789,9 +6792,12 @@ describe('handleMessage — legacy registration recovery', () => {
     ]);
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/register-project My-App /');
-    expect(mockUpdateCodebase).toHaveBeenCalledWith('id-my-app', {
-      default_cwd: await canonicalizeProjectPath('/'),
-    });
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
+      {
+        default_cwd: await canonicalizeProjectPath('/'),
+      }
+    );
     expect(mockCreateCodebase).not.toHaveBeenCalled();
     expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(
       're-registered'
@@ -6805,9 +6811,12 @@ describe('handleMessage — legacy registration recovery', () => {
     mockParseCommand.mockReturnValue({ command: 'update-project', args: ['my-app', '/'] });
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/update-project my-app /');
-    expect(mockUpdateCodebase).toHaveBeenCalledWith('id-my-app', {
-      default_cwd: await canonicalizeProjectPath('/'),
-    });
+    expect(mockUpdateCodebase).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
+      {
+        default_cwd: await canonicalizeProjectPath('/'),
+      }
+    );
     mockDeleteCodebase.mockClear();
     mockParseCommand.mockReturnValue({ command: 'remove-project', args: ['my-app'] });
     await handleMessage(platform, 'conv-1', '/remove-project my-app');

@@ -183,10 +183,10 @@ export class CodebaseNotFoundError extends Error {
 }
 
 export async function updateCodebase(
-  id: string,
+  target: Pick<Codebase, 'id' | 'name'>,
   data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
 ): Promise<void> {
-  if (data.default_cwd !== undefined) assertAbsoluteDefaultCwd(data.default_cwd, id);
+  if (data.default_cwd !== undefined) assertAbsoluteDefaultCwd(data.default_cwd, target.name);
   const dialect = getDialect();
   const updates: string[] = [];
   const values: (string | null)[] = [];
@@ -210,14 +210,14 @@ export async function updateCodebase(
   if (updates.length === 0) return;
 
   updates.push(`updated_at = ${dialect.now()}`);
-  values.push(id);
+  values.push(target.id);
 
   const result = await pool.query(
     `UPDATE remote_agent_codebases SET ${updates.join(', ')} WHERE id = $${paramIndex}`,
     values
   );
   if ((result.rowCount ?? 0) === 0) {
-    throw new CodebaseNotFoundError(id);
+    throw new CodebaseNotFoundError(target.id);
   }
 }
 
