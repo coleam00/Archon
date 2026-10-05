@@ -738,8 +738,9 @@ describe('terminal workflow transitions — real SQLite', () => {
 
   test.each([
     { label: 'object', raw: '{"kept":true}', expected: { kept: true } },
-    { label: 'JSON null', raw: 'null', expected: null },
-    { label: 'SQL null', raw: null, expected: null },
+    // A stored null is not rewritten, but reads as the empty object WorkflowRun promises.
+    { label: 'JSON null', raw: 'null', expected: {} },
+    { label: 'SQL null', raw: null, expected: {} },
   ])('preserves $label metadata when reading and terminating', async ({ label, raw, expected }) => {
     const runId = `terminal-valid-${label}`;
     await seed(runId, 'running', "datetime('now')");

@@ -41,8 +41,9 @@ function getLog(): ReturnType<typeof createLogger> {
 
 /**
  * Normalize a workflow-run row from the database into a public `WorkflowRun`, keeping
- * any extra projected columns. Malformed or SQL NULL metadata reads as {}. Timestamp hydration prevents raw SQLite strings reaching Date readers such as
- * resolveWorkflowAdoption (#2845). The public conversation columns are projected from
+ * any extra projected columns, without rewriting stored values. Metadata that is not a
+ * JSON object (malformed text, JSON null or SQL NULL) reads as {}. Timestamp hydration
+ * prevents raw SQLite strings reaching Date readers such as resolveWorkflowAdoption (#2845). The public conversation columns are projected from
  * the origin, so the compatibility anchor never leaves this module.
  */
 export function normalizeWorkflowRun<T extends WorkflowRunRow>(
@@ -65,18 +66,22 @@ export function normalizeWorkflowRun<T extends WorkflowRunRow>(
 }
 
 function readMetadata(row: WorkflowRunRow): Record<string, unknown> {
-  if (row.metadata === null) return {};
-  if (typeof row.metadata !== 'string') return row.metadata;
-  try {
-    return JSON.parse(row.metadata) as Record<string, unknown>;
-  } catch (error) {
-    // SyntaxError messages can quote metadata contents; record only the class.
-    getLog().warn(
-      { workflowRunId: row.id, errorType: error instanceof Error ? error.name : typeof error },
-      'db.workflow_run_metadata_parse_failed'
-    );
-    return {};
+  let value: unknown = row.metadata;
+  if (typeof value === 'string') {
+    try {
+      value = JSON.parse(value);
+    } catch (error) {
+      // SyntaxError messages can quote metadata contents; record only the class.
+      getLog().warn(
+        { workflowRunId: row.id, errorType: error instanceof Error ? error.name : typeof error },
+        'db.workflow_run_metadata_parse_failed'
+      );
+      return {};
+    }
   }
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 export function readWorkflowRunOrigin(
