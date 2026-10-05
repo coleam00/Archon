@@ -133,6 +133,9 @@
       "src/validator.test.ts"
     ],
     [
+      "src/workflow-corpus.test.ts"
+    ],
+    [
       "src/script-discovery.test.ts"
     ],
     [
