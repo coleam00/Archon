@@ -31,7 +31,7 @@ interface Check {
   argv: string[];
 }
 
-interface Discovery {
+export interface Discovery {
   checks: Check[];
   notes: string;
 }

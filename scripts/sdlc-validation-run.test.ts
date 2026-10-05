@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { EXEC_NODE_ENVIRONMENT_NAMES } from '../packages/workflows/src/exec-environment';
 import { NODE_CONTRACT_ENV } from '../.archon/workflows/sdlc/.shared/node-env';
+import type { Discovery } from '../.archon/workflows/sdlc/validate/scripts/run-checks';
 
 /**
  * archon-validate's runner and result scripts, run as the engine runs them: a Bun
@@ -17,10 +18,7 @@ const track = trackTempRoots();
 const PACK = join(import.meta.dir, '..', '.archon', 'workflows', 'sdlc', 'validate', 'scripts');
 const execFileAsync = promisify(execFile);
 
-interface Check {
-  name: string;
-  argv: string[];
-}
+type Check = Discovery['checks'][number];
 
 function checkout(): { cwd: string; artifacts: string } {
   const root = track(mkdtempSync(join(tmpdir(), 'validation-run-')));
