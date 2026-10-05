@@ -1,11 +1,14 @@
 /**
- * Integration test: a `null` in a run-metadata patch clears the key on a REAL Postgres
- * server, the way SQLite's json_patch already does.
+ * Integration tests: workflow-run queries that behave differently on a REAL Postgres
+ * server than on SQLite.
  *
  * The unit suite mocks the pg driver and the other real-database suites run SQLite, so
- * the Postgres merge operator only executes here. Plain `||` stores the null instead of
- * removing the key, which leaves `metadata.stop_reason: null` on a resumed run and
- * breaks the API contract that declares the key absent-or-object.
+ * Postgres-only semantics execute only here:
+ * - a `null` in a run-metadata patch must clear the key, as SQLite's json_patch does.
+ *   Plain `||` stores the null, which leaves `metadata.stop_reason: null` on a resumed
+ *   run and breaks the API contract that declares the key absent-or-object.
+ * - run ids are a uuid column, so a short-id prefix lookup must compare them as text;
+ *   Postgres has no LIKE operator for uuid.
  *
  * Opt-in via ARCHON_TEST_PG_URL (postgres://user:pass@host:port/db). The test creates
  * and drops its own scratch database; the database named in the URL is only used to
@@ -31,9 +34,9 @@ mock.module('@archon/paths', () => ({
 }));
 
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
-const SCRATCH_DB = 'archon_pg_metadata_merge_test';
+const SCRATCH_DB = 'archon_pg_workflows_test';
 
-describe.skipIf(!baseUrl)('run metadata merge — real Postgres behavior', () => {
+describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
   let admin: PgPool;
   let db: import('./adapters/postgres').PostgresAdapter;
   let workflows: typeof import('./workflows');
@@ -118,6 +121,7 @@ describe.skipIf(!baseUrl)('run metadata merge — real Postgres behavior', () =>
     expect(Object.keys(await storedMetadata(id))).not.toContain('writeback_apply_claimed');
     expect(await workflows.claimWriteback(id)).toEqual({ claimed: true });
   });
+
   test('concurrent gate pauses keep one owner and an undelivered prompt cannot fail its successor', async () => {
     const id = await seed('running', { unrelated: 'keep' });
     const first = { nodeId: 'first', type: 'approval' as const, message: 'Review first' };
@@ -166,5 +170,20 @@ describe.skipIf(!baseUrl)('run metadata merge — real Postgres behavior', () =>
     );
     expect(audit.rows).toHaveLength(1);
     expect(audit.rows[0].data).toMatchObject({ error: 'undelivered', exit_reason: 'node_error' });
+  });
+
+  test('a run is found by the short id shown in listings', async () => {
+    const { rows } = await db.query<{ id: string }>(
+      `INSERT INTO remote_agent_codebases (name, default_cwd) VALUES ('prefix', '/tmp') RETURNING id`
+    );
+    const id = await seed('paused', {});
+    await db.query('UPDATE remote_agent_workflow_runs SET codebase_id = $1 WHERE id = $2', [
+      rows[0].id,
+      id,
+    ]);
+
+    const runs = await workflows.findWorkflowRunsByIdPrefix(id.slice(0, 8), rows[0].id);
+
+    expect(runs.map(r => r.id)).toEqual([id]);
   });
 });

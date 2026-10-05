@@ -55,6 +55,12 @@
   },
   "testGroups": [
     [
+      "src/db/codebase-paths.integration.test.ts"
+    ],
+    [
+      "src/db/codebase-paths.postgres.integration.test.ts"
+    ],
+    [
       "src/workflows/branch-launch-source.test.ts"
     ],
     [
@@ -165,7 +171,7 @@
       "src/db/resource-slots.postgres.integration.test.ts"
     ],
     [
-      "src/db/workflows.metadata-merge.postgres.integration.test.ts"
+      "src/db/workflows.postgres.integration.test.ts"
     ],
     [
       "src/db/workflows.adoption-timestamp.integration.test.ts"
