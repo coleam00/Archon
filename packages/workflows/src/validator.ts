@@ -955,6 +955,7 @@ export async function validateWorkflowResources(
 // Shell slots share the executor's size-dependent substitution contract. This is a
 // line-local lint, not a shell parser: preserve operand-boundary quote tracking and
 // leave heredoc contents alone, including refs inside a quoted $(cat <<EOF) wrapper.
+// `#` starts a comment only at a word start, and `<<` inside `((...))` is a shift.
 function shellOutputRefWarnings(body: string): { quoted: boolean; bare: boolean } {
   let quoted = false;
   let bare = false;
@@ -974,11 +975,13 @@ function shellOutputRefWarnings(body: string): { quoted: boolean; bare: boolean 
     const words: string[] = [];
     let escaped = false;
     let commandSubstitutions = 0;
+    let arithmetic = 0;
     for (let index = 0; index < line.length; index += 1) {
       const character = line[index];
       const previous = line[index - 1];
       const operandBoundary = previous === undefined || previous === '=' || /\s/.test(previous);
-      if (!escaped && quote === undefined && character === '#' && operandBoundary) break;
+      const wordBoundary = previous === undefined || /[\s;&|(]/.test(previous);
+      if (!escaped && quote === undefined && character === '#' && wordBoundary) break;
       if (!escaped && (quote === undefined || !openedAtBoundary)) {
         if (/[;&|()]/.test(character)) {
           words.length = 0;
@@ -991,12 +994,16 @@ function shellOutputRefWarnings(body: string): { quoted: boolean; bare: boolean 
       if (!escaped && quote !== "'") {
         if (character === '$' && line[index + 1] === '(') commandSubstitutions += 1;
         else if (character === ')' && commandSubstitutions > 0) commandSubstitutions -= 1;
+        if (character === '(' && line[index + 1] === '(' && previous !== '(') arithmetic += 1;
+        else if (character === ')' && line[index + 1] === ')' && previous !== ')' && arithmetic > 0)
+          arithmetic -= 1;
       }
       if (
         !escaped &&
         character === '<' &&
         line[index + 1] === '<' &&
         line[index - 1] !== '<' &&
+        arithmetic === 0 &&
         (quote === undefined || (quote === '"' && commandSubstitutions > 0))
       ) {
         const opener = /^<<(-?)[ \t]*(?:'([^']+)'|"([^"\n]+)"|\\?([a-zA-Z_][a-zA-Z0-9_]*))/.exec(

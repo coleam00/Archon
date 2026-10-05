@@ -1039,6 +1039,9 @@ describe('validateWorkflowResources — bash output-ref lint', () => {
     'value=$emit.output/suffix',
     'echo \\;value=$emit.output',
     'echo "literal <<EOF"\necho $emit.output',
+    'echo value=#$emit.output',
+    'echo $((1 << MASK))\necho $emit.output',
+    '(( flags << SHIFT ))\necho $emit.output',
   ])('warns on unsafe shell position: %s', async script => {
     const workflow = makeWorkflow('test', [{ id: 'check', kind: 'exec', runtime: 'sh', script }]);
     const issues = await validateWorkflowResources(workflow, tmpDir);
