@@ -138,30 +138,37 @@ export async function checkBackgroundSettle(
     const observed = new Set<string>();
     let resultWhileLive = false;
     let settled = false;
-    for await (const raw of turn.run()) {
-      const parsed = providerChunkSchema.safeParse(raw);
-      if (!parsed.success) continue;
-      const chunk = parsed.data;
-      if (chunk.type === 'subtask') {
-        observed.add(chunk.taskId);
-        if (
-          TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
-          turn.runtimeStatus(chunk.taskId) !== chunk.status
-        ) {
-          violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
-        }
-      } else if (chunk.type === 'result') {
-        resultWhileLive ||= [...observed].some(
-          id => !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')
-        );
-      } else if (chunk.type === 'settled') {
-        settled = true;
-        for (const id of observed) {
-          if (!TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')) {
-            violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
+    try {
+      for await (const raw of turn.run()) {
+        const parsed = providerChunkSchema.safeParse(raw);
+        if (!parsed.success) continue;
+        const chunk = parsed.data;
+        if (chunk.type === 'subtask') {
+          observed.add(chunk.taskId);
+          if (
+            TERMINAL_SUBTASK_STATUSES.has(chunk.status) &&
+            turn.runtimeStatus(chunk.taskId) !== chunk.status
+          ) {
+            violations.push(`${turn.name}: invented ${chunk.status} for ${chunk.taskId}`);
+          }
+        } else if (chunk.type === 'result') {
+          resultWhileLive ||= [...observed].some(
+            id => !TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')
+          );
+        } else if (chunk.type === 'settled') {
+          settled = true;
+          for (const id of observed) {
+            if (!TERMINAL_SUBTASK_STATUSES.has(turn.runtimeStatus(id) ?? '')) {
+              violations.push(`${turn.name}: runtime still reports ${id} live at settled`);
+            }
           }
         }
       }
+    } catch (error) {
+      violations.push(
+        `${turn.name}: threw before its background work settled (${(error as Error).message})`
+      );
+      continue;
     }
     if (!settled || observed.size === 0 || !resultWhileLive) {
       violations.push(`${turn.name}: background case must settle after a result with live work`);

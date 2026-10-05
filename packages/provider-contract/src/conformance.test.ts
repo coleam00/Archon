@@ -564,6 +564,26 @@ describe('runtime-backed background settlement', () => {
       })
     ).toEqual(['reported provider has no background conformance cases']);
   });
+  test('a background case that throws is a violation, not a rejected run', async () => {
+    const violations = await runProviderConformance({
+      capabilities: { sessionResume: false, backgroundWork: 'reported' },
+      turns: [],
+      failureCases: [],
+      backgroundCases: [
+        {
+          name: 'throwing',
+          runtimeStatus: () => 'running',
+          run: async function* () {
+            yield { type: 'subtask', taskId: 't', status: 'started' };
+            throw new Error('stream broke');
+          },
+        },
+      ],
+    });
+    expect(violations).toContain(
+      'throwing: threw before its background work settled (stream broke)'
+    );
+  });
   test.each(['early settle', 'invented stop', 'runtime completion'] as const)('%s', async mode => {
     let status: 'running' | 'completed' = 'running';
     const violations = await checkBackgroundSettle([
