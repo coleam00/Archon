@@ -41,6 +41,7 @@ import {
   isRunBlockedOnChild,
   reRunsOwnNodeOnResume,
   isWorkflowWaitContext,
+  pendingWorkflowWaitDeadline,
   isScheduledWorkflowResume,
   isWaitNode,
   isIncludeDirective,
@@ -2383,8 +2384,8 @@ export async function executeWorkflow(
         let stateLine: string;
         let actionLines: string;
         if (activeWorkflow.status === 'paused') {
-          const wait = activeWorkflow.metadata.wait;
-          if (isWorkflowWaitContext(wait) && wait.kind !== 'attention') {
+          const wait = pendingWorkflowWaitDeadline(activeWorkflow);
+          if (wait) {
             const waitingFor =
               wait.kind === 'event' ? `for event \`${wait.event}\` until` : 'until';
             stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
