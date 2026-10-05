@@ -144,83 +144,17 @@ describe('withIdleTimeout', () => {
     expect(result).toEqual([1, 2]);
   });
 
-  // These two tests exercise the optional shouldResetTimer parameter.
-  // dag-executor omits it (all messages reset the timer by default).
-  test('shouldResetTimer predicate: does not reset timer on filtered events', async () => {
+  test('times out after tool events stop', async () => {
     type Msg = { type: string };
     const onTimeout = mock(() => {});
     const result: Msg[] = [];
 
-    // Generator yields an assistant event, then a tool event, then hangs
-    async function* toolThenHang(): AsyncGenerator<Msg> {
-      yield { type: 'assistant' };
-      yield { type: 'tool' };
-      // Hang — simulates a tool call that never completes
-      await new Promise<void>(() => {});
-    }
-
-    // Timeout is 100ms; shouldResetTimer returns false for 'tool'
-    // After 'assistant', timer resets (100ms). After 'tool', timer does NOT reset.
-    // So total elapsed from 'assistant' reset = time-for-tool-yield + hang.
-    // Timer fires within ~100ms of the 'assistant' event.
-    for await (const v of withIdleTimeout(
-      toolThenHang(),
-      100,
-      onTimeout,
-      msg => msg.type !== 'tool'
-    )) {
-      result.push(v);
-    }
-
-    expect(result).toEqual([{ type: 'assistant' }, { type: 'tool' }]);
-    expect(onTimeout).toHaveBeenCalledTimes(1);
-  });
-
-  test('shouldResetTimer predicate: resets timer on non-filtered events', async () => {
-    type Msg = { type: string };
-    const onTimeout = mock(() => {});
-    const result: Msg[] = [];
-
-    // Generator: assistant (resets timer), tool (no reset), assistant (resets timer),
-    // then hangs longer than timeout
-    async function* toolThenRecover(): AsyncGenerator<Msg> {
-      yield { type: 'assistant' };
-      yield { type: 'tool' };
-      // Simulate quick tool result (comes as next assistant)
-      await new Promise(r => setTimeout(r, 20));
-      yield { type: 'assistant' };
-      // Now hang — but timer should have been reset by second assistant
-      await new Promise<void>(() => {});
-    }
-
-    for await (const v of withIdleTimeout(
-      toolThenRecover(),
-      150,
-      onTimeout,
-      msg => msg.type !== 'tool'
-    )) {
-      result.push(v);
-    }
-
-    expect(result).toEqual([{ type: 'assistant' }, { type: 'tool' }, { type: 'assistant' }]);
-    expect(onTimeout).toHaveBeenCalledTimes(1);
-  });
-
-  test('without shouldResetTimer, tool events reset timer (original behavior)', async () => {
-    type Msg = { type: string };
-    const onTimeout = mock(() => {});
-    const result: Msg[] = [];
-
-    // Without shouldResetTimer, tool events reset the timer — hang after tool
-    // does NOT fire within the original window (it fires in a fresh window)
     async function* toolThenHang(): AsyncGenerator<Msg> {
       yield { type: 'assistant' };
       yield { type: 'tool' };
       await new Promise<void>(() => {});
     }
 
-    // With no shouldResetTimer, timer resets on 'tool' → 100ms fresh window
-    // Hang fires after 100ms from the 'tool' event
     for await (const v of withIdleTimeout(toolThenHang(), 100, onTimeout)) {
       result.push(v);
     }
@@ -229,28 +163,31 @@ describe('withIdleTimeout', () => {
     expect(onTimeout).toHaveBeenCalledTimes(1);
   });
 
-  test('reports the value and timestamp only when the timer resets', async () => {
-    type Msg = { type: 'assistant' | 'tool' };
+  test('every value resets the timer and reports its value and timestamp once', async () => {
+    type Msg = { type: 'assistant' | 'tool' | 'thinking' };
     const resets: Array<{ type: Msg['type']; resetAt: number }> = [];
     const before = Date.now();
+    const messages: Msg[] = [{ type: 'assistant' }, { type: 'tool' }, { type: 'thinking' }];
+    const onTimeout = mock(() => {});
 
     const values: Msg[] = [];
     for await (const value of withIdleTimeout(
-      fromValues<Msg>([{ type: 'assistant' }, { type: 'tool' }]),
-      1000,
-      undefined,
-      msg => msg.type !== 'tool',
+      fromValues(messages, 30),
+      50,
+      onTimeout,
       (msg, resetAt) => resets.push({ type: msg.type, resetAt })
     )) {
       values.push(value);
     }
 
     const after = Date.now();
-    expect(values).toEqual([{ type: 'assistant' }, { type: 'tool' }]);
-    expect(resets).toHaveLength(1);
-    expect(resets[0]?.type).toBe('assistant');
-    expect(resets[0]?.resetAt).toBeGreaterThanOrEqual(before);
-    expect(resets[0]?.resetAt).toBeLessThanOrEqual(after);
+    expect(values).toEqual(messages);
+    expect(onTimeout).not.toHaveBeenCalled();
+    expect(resets.map(reset => reset.type)).toEqual(messages.map(msg => msg.type));
+    for (const reset of resets) {
+      expect(reset.resetAt).toBeGreaterThanOrEqual(before);
+      expect(reset.resetAt).toBeLessThanOrEqual(after);
+    }
   });
 
   describe('on a fake clock', () => {
@@ -336,14 +273,7 @@ test('quiet live work suspends the watchdog, then silence times out after it end
     await new Promise<void>(() => {});
   }
   const values: string[] = [];
-  for await (const value of withIdleTimeout(
-    work(),
-    30,
-    timedOut,
-    undefined,
-    undefined,
-    () => live
-  )) {
+  for await (const value of withIdleTimeout(work(), 30, timedOut, undefined, () => live)) {
     values.push(value);
     live = value === 'started';
   }

@@ -10,6 +10,29 @@ sidebar:
 
 Common issues and their solutions when running Archon.
 
+## Project uses an unexpected provider
+
+New projects follow the configured provider when a conversation is created: repository
+`.archon/config.yaml` `assistant:`, global `defaultAssistant`, `DEFAULT_AI_ASSISTANT`,
+then the first registered built-in provider. `.claude` and `.codex` directories no
+longer select a provider. Set `assistant:` in repository configuration to choose one.
+
+Projects registered by older versions retain their stored provider. Upgrades cannot
+distinguish an explicit choice from a registration-time snapshot, so they preserve
+all stored values. To let one of these projects follow configuration, find its ID
+and clear only that project's choice in your SQLite or PostgreSQL database:
+
+```sql
+SELECT id, name, ai_assistant_type FROM remote_agent_codebases;
+UPDATE remote_agent_codebases
+SET ai_assistant_type = NULL
+WHERE id = '<project-id>';
+```
+
+This affects new conversations. Existing conversations retain the provider recorded
+when they were created. Older Archon binaries can still open the database, but resolve
+a project's `NULL` choice to Claude instead of the configured default on downgrade.
+
 ## Bot Not Responding
 
 **Check if the application is running:**

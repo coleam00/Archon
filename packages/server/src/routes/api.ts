@@ -106,7 +106,7 @@ import {
   isValidWorkflowFolderSegment,
 } from '@archon/workflows/workflow-discovery';
 import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
-import { parseWorkflow } from '@archon/workflows/loader';
+import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import { isValidCommandName, isValidWorkflowName } from '@archon/workflows/command-validation';
 import { BUNDLED_WORKFLOWS, BUNDLED_COMMANDS, isBinaryBuild } from '@archon/workflows/defaults';
@@ -162,10 +162,10 @@ async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflow
  * The workflow as authored: the YAML mapping before the engine's normalizing
  * transform. The builder edits this shape, and the normalized `workflow` cannot
  * be sent back (validate rejects it), so GET returns both. Parsed with the same
- * `Bun.YAML` the loader uses; undefined when the top level is not a mapping.
+ * parser the loader uses; undefined when the top level is not a mapping.
  */
 function authoredForm(content: string): Record<string, unknown> | undefined {
-  const raw: unknown = Bun.YAML.parse(content);
+  const raw = parseYaml(content);
   return raw !== null && typeof raw === 'object' && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : undefined;
@@ -375,6 +375,7 @@ import {
   updateAliasesBodySchema,
   codebaseEnvironmentsResponseSchema,
 } from './schemas/config.schemas';
+import { validateAliasName } from './alias-name';
 import {
   TIER_NAMES,
   isTierName,
@@ -2176,17 +2177,6 @@ export function registerApiRoutes(
           `Valid: ${validEfforts.join(', ')}`
         );
       }
-    }
-    return null;
-  }
-
-  /** Validate a custom alias name: must start with '@' and not shadow a tier keyword. */
-  function validateAliasName(name: string): string | null {
-    if ((TIER_NAMES as readonly string[]).includes(name)) {
-      return `Alias name '${name}' is reserved (small/medium/large are tier keywords). Use a different name.`;
-    }
-    if (!name.startsWith('@')) {
-      return `Alias name '${name}' must start with '@' (e.g. '@${name}').`;
     }
     return null;
   }

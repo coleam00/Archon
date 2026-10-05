@@ -160,6 +160,12 @@ describe('buildAliasesUpdate / seedAliasRows', () => {
     expect(Object.keys(body.aliases)).toEqual([]);
   });
 
+  test('a complete row without the @ prefix is rejected with the server message', () => {
+    expect(() =>
+      buildAliasesUpdate([{ name: 'fast', provider: 'claude', model: 'haiku', effort: '' }], [])
+    ).toThrow("Alias name 'fast' must start with '@' (e.g. '@fast').");
+  });
+
   test('seedAliasRows sorts by name and fills effort with empty string', () => {
     const rows = seedAliasRows({
       '@z': { provider: 'codex', model: 'gpt-5.5' },

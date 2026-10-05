@@ -16,6 +16,7 @@ import { errorDetail } from '../lib/http';
 import { SettingsSection } from './SettingsSection';
 import { SELECT_CLASS_COMPACT, SelectShell } from './SettingsFormPrimitives';
 import { ModelPickerField } from './ModelPickerField';
+import { UserPrefsLoadFailed, userScopeStatus } from './ScopeToggle';
 
 const WEB_SEARCH_MODES = ['disabled', 'cached', 'live'] as const;
 
@@ -51,8 +52,8 @@ export function AssistantConfigPanel(): ReactElement {
   const { data: config, error: configError } = useEntity(K.config, skill.getConfig);
   const { data: providers, error: providersError } = useEntity(K.providers, skill.listProviders);
   // Per-user default assistant (Phase 3): a "Just me" select that overrides the
-  // install default for runs/chats this user starts. Hidden when the per-user
-  // prefs read fails (no web identity — solo-PAT or logged out).
+  // install default for runs/chats this user starts. Hidden on a 401 (no web
+  // identity — solo-PAT or logged out); any other prefs read failure is shown.
   const { data: userPrefs, error: userPrefsError } = useEntity<UserAiPrefs>(
     K.userAiPrefs,
     skill.getUserAiPrefs
@@ -65,7 +66,7 @@ export function AssistantConfigPanel(): ReactElement {
     skill.listProviderKeys
   );
   const { data: piModels } = useEntity<PiModelInfo[]>(K.piModels, skill.listPiModels);
-  const userScopeAvailable = userPrefsError === undefined;
+  const userScope = userScopeStatus(userPrefsError);
   const [savingUserDefault, setSavingUserDefault] = useState(false);
   const [userDefaultError, setUserDefaultError] = useState<string | null>(null);
 
@@ -202,7 +203,12 @@ export function AssistantConfigPanel(): ReactElement {
         />
       </label>
 
-      {userScopeAvailable && userDraft !== null ? (
+      {userScope.kind === 'load-failed' ? (
+        <div className="mb-5">
+          <UserPrefsLoadFailed error={userScope.error} />
+        </div>
+      ) : null}
+      {userScope.kind === 'available' && userDraft !== null ? (
         <div className="mb-5 flex flex-wrap items-center gap-[18px]">
           <span className="w-[150px] shrink-0 text-[13.5px] font-semibold text-text-secondary">
             Chat runs on{' '}

@@ -60,7 +60,7 @@ The project rail is the main navigation surface:
 - **Chat** at `/console/p/:projectId/chat` opens the operator conversation for
   that project.
 - **Settings** at `/console/settings` manages assistant defaults, model tiers,
-  aliases, provider credentials, system status, and GitHub identity.
+  aliases, provider credentials, system status, GitHub identity, and alerts.
 - **Workflow builder** at `/console/builder` opens the experimental visual
   authoring surface. Select a project before opening or creating a workflow.
 
@@ -80,6 +80,13 @@ A run can be opened from a project at
 `/console/r/:runId`. Direct links also work for runs that have no registered
 project. Run details include the event log and artifacts; a graph is shown when
 the run has the project context needed to load its workflow definition.
+
+Turn on **Alerts** in Settings to hear a sound, and see a browser notification
+where the browser allows it, when a run stops at an approval gate or an
+action-required wait, or when it completes, fails, or is cancelled. The setting
+is saved in the current browser and is off by default. Runs that were already
+waiting or finished when the console loaded do not alert. Settings shows when
+the browser blocks the sound or notifications.
 
 Old settings, workflow-list, workflow-builder, and run bookmarks redirect to the
 closest console route. Old chat and other retired pages land on the console
