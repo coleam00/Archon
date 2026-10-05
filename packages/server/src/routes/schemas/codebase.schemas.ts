@@ -21,16 +21,18 @@ export const codebaseListResponseSchema = z.array(codebaseSchema).openapi('Codeb
 /** Path params for routes with :id (codebase ID). */
 export const codebaseIdParamsSchema = z.object({ id: z.string() });
 
-/** POST /api/codebases request body. Exactly one of url or path must be provided. */
-export const addCodebaseBodySchema = z
+const codebaseSourceSchema = z
   .object({
     url: z.string().min(1).optional(),
     path: z.string().min(1).optional(),
-    base_branch: z.string().trim().min(1).nullable().optional(),
   })
   .refine(b => (b.url !== undefined) !== (b.path !== undefined), {
     message: 'Provide either "url" or "path", not both and not neither',
-  })
+  });
+
+/** POST /api/codebases request body. Exactly one of url or path must be provided. */
+export const addCodebaseBodySchema = codebaseSourceSchema
+  .safeExtend({ base_branch: z.string().trim().min(1).nullable().optional() })
   .openapi('AddCodebaseBody');
 
 /** DELETE /api/codebases/:id response. */
@@ -64,15 +66,7 @@ export const envVarMutationResponseSchema = z
   .object({ success: z.boolean() })
   .openapi('EnvVarMutationResponse');
 
-export const inspectBaseBranchBodySchema = z
-  .object({
-    url: z.string().min(1).optional(),
-    path: z.string().min(1).optional(),
-  })
-  .refine(b => (b.url !== undefined) !== (b.path !== undefined), {
-    message: 'Provide either "url" or "path", not both and not neither',
-  })
-  .openapi('InspectBaseBranchBody');
+export const inspectBaseBranchBodySchema = codebaseSourceSchema.openapi('InspectBaseBranchBody');
 
 export const inspectBaseBranchResponseSchema = projectBaseBranchInspectionSchema.openapi(
   'InspectBaseBranchResponse'
