@@ -63,7 +63,7 @@ if (process.argv[3] === 'metadata') {
   console.log(JSON.stringify({ protocol: 1, name: 'marker', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['checks.state'], token_env: [${JSON.stringify(key)}] }));
 } else {
   const token = process.env.ARCHON_FORGE_TOKEN;
-  writeFileSync(process.argv[2], token === 'engine-test-token' ? 'engine' : token === 'home-test-token' ? 'home' : 'absent-or-other');
+  writeFileSync(process.argv[2], token === 'engine-test-token' ? 'engine' : token === 'home-test-token' ? 'home' : token === 'repo-test-token' ? 'repo' : 'absent-or-other');
   const request = JSON.parse(await Bun.stdin.text());
   console.log(JSON.stringify({ operationId: request.operationId, ok: true, result: { op: 'checks.state', value: { ref: request.ref, revision: 'marker', units: [], required: null, summary: { state: 'none', counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 } } } } }));
 }
@@ -85,7 +85,11 @@ if (process.argv[3] === 'metadata') {
         } finally {
           await db.close();
         }
-        for (const state of ['absent', 'empty', 'engine', 'outside'] as const) {
+        for (const state of ['absent', 'empty', 'engine', 'outside', 'repo'] as const) {
+          if (state === 'repo') {
+            mkdirSync(join(repo, '.archon'));
+            writeFileSync(join(repo, '.archon', '.env'), `${key}=repo-test-token\n`);
+          }
           const env: NodeJS.ProcessEnv = {
             PATH: process.env.PATH,
             HOME: root,
@@ -96,7 +100,7 @@ if (process.argv[3] === 'metadata') {
             WORKFLOW_ID: state === 'outside' ? '' : 'credential-run',
           };
           if (state === 'engine') env[key] = 'engine-test-token';
-          if (state === 'empty') env[key] = '';
+          if (state === 'empty' || state === 'repo') env[key] = '';
           const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
           const result = spawnSync(
             process.execPath,
@@ -118,7 +122,7 @@ if (process.argv[3] === 'metadata') {
           } else {
             expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
             await expect(Bun.file(marker).text()).resolves.toBe(
-              state === 'engine' ? 'engine' : 'home'
+              state === 'engine' ? 'engine' : state === 'repo' ? 'repo' : 'home'
             );
           }
         }

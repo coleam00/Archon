@@ -626,7 +626,7 @@ Archon keys env loading on **directory ownership, not filename**. `.archon/` (at
 **Load order at boot** (every entry point — CLI and server):
 
 1. Strip keys Bun auto-loaded from `<cwd>/.env`, `.env.local`, `.env.development`, `.env.production` (prevents target-repo env from leaking into Archon).
-2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars).
+2. Load `~/.archon/.env` with `override: true` (archon config wins over shell-inherited vars). Inside a workflow, the CLI preserves the delivered `GH_TOKEN`, `GITHUB_TOKEN` and `COPILOT_GITHUB_TOKEN` values, including empty or absent credentials, across this load. See [GitHub credentials](/reference/forge/#github-credentials-and-check-observations).
 3. Load `<cwd>/.archon/.env` with `override: true` (repo scope wins over user scope).
 
 A repository's `<cwd>/.archon/.env` cannot set `ARCHON_HOME`, `HOME`, `USERPROFILE`, `ARCHON_DOCKER`, `WORKSPACE_PATH` or `PATH`. If it does, Archon refuses to start and names the file and the key. Those keys decide which Archon home and which executables Archon uses, so a repository could otherwise choose which plugins run. Set them in your shell, your scheduler or `~/.archon/.env` instead.
