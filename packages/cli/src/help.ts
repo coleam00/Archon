@@ -85,6 +85,11 @@ const commandHelp: HelpEntry[] = [
     ],
   },
   {
+    command: 'user',
+    spec: 'user <list|role>',
+    description: 'List users and manage roles as the operator',
+  },
+  {
     command: 'trigger',
     spec: 'trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>',
     description: 'Start configured workflows and inspect durable resource admission',
@@ -452,6 +457,18 @@ const scopedOnlyHelp: HelpEntry[] = [
       },
     ],
   })),
+  {
+    command: 'user',
+    subcommand: 'list',
+    spec: 'user list',
+    description: 'List user ids, roles, display names and identities',
+  },
+  {
+    command: 'user',
+    subcommand: 'role',
+    spec: 'user role <id> <admin|member>',
+    description: 'Set a user role using the full user id',
+  },
   {
     command: 'trigger',
     subcommand: 'list',

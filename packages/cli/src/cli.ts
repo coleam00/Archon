@@ -380,6 +380,7 @@ async function main(): Promise<number> {
     'doctor',
     'telemetry',
     'auth',
+    'user',
     'ai',
   ];
   const requiresGitRepo = !noGitCommands.includes(command ?? '');
@@ -1136,6 +1137,28 @@ async function main(): Promise<number> {
               `${problem}\nAvailable: list, run, test, status, get, logs, wait, runs, resume, cancel, abandon, approve, reject, respond, cleanup, reset-sessions, event, wake, signal`
             );
           }
+        }
+        break;
+      }
+
+      case 'user': {
+        const { userListCommand, userRoleCommand } = await loadRoute(
+          () => import('./commands/user'),
+          { database: true }
+        );
+        switch (subcommand) {
+          case 'list':
+            if (positionals.length !== 2) return await fail(jsonFlag, 'Usage: archon user list');
+            await userListCommand();
+            break;
+          case 'role':
+            if (positionals.length !== 4) {
+              return await fail(jsonFlag, 'Usage: archon user role <id> <admin|member>');
+            }
+            await userRoleCommand(positionals[2] ?? '', positionals[3] ?? '');
+            break;
+          default:
+            return await fail(jsonFlag, 'Usage: archon user <list|role>');
         }
         break;
       }

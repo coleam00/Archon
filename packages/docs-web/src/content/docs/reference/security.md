@@ -9,6 +9,27 @@ sidebar:
 
 This page covers Archon's security model: how AI permissions work, how platform access is controlled, how webhooks are verified, and what data is and is not logged.
 
+## Users and roles
+
+Archon creates new users as `member`, including first-seen chat, forge, web and CLI identities. Roles are stored on the Archon user; identities are per platform, so a Slack identity and a web identity usually refer to separate users. The local operator manages roles through the CLI using the full Archon user id shown by `list`:
+
+```bash
+archon user list
+archon user role <id> admin
+archon user role <id> member
+```
+
+Use the database configured for the install you want to manage (`DATABASE_URL` for PostgreSQL, or `ARCHON_HOME` for SQLite). For Docker:
+
+```bash
+docker compose exec app bun run cli user list
+docker compose exec app bun run cli user role <id> admin
+```
+
+Upgrading preserves existing roles, which defaulted to `admin`. The database default remains `admin` so older binaries can still insert users without a role. To prepare an existing multi-user install, keep intended admins and deliberately demote other users with `archon user role <id> member`.
+
+**Role-based run-action enforcement ships separately.** This release changes role creation and management only; it does not restrict run actions. Existing multi-user installs remain unprotected until enforcement ships and the operator demotes users who should not be admins. The CLI is the local operator with direct database access and can change roles even when no admins remain.
+
 ## Permission Model
 
 Archon runs the Claude Code SDK in `bypassPermissions` mode. This means the AI agent can read, write, and execute files without interactive confirmation prompts.
