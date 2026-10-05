@@ -19,16 +19,17 @@ inputs:
       What to investigate — an issue reference, a symptom, a failing command, or
       a question. When empty, the run's trigger message is the target.
 
-# rooted:false is a valid completion (see the investigate node): the run succeeds
-# with an authored outcome of false — lifecycle status and work outcome are separate facts.
-returns: investigate
+# Only `rooted` owes delivery. `refuted` and `inconclusive` are valid completions
+# with an authored outcome of false — lifecycle status and work outcome are separate
+# facts. The boolean is derived from the verdict by the verdict node, never declared
+# a second time by the agent.
+returns: verdict
 outcome_field: rooted
 
 nodes:
 
-  # Inconclusive is a valid outcome, not a failure: rooted:false with the gaps
-  # named honestly beats a confident guess. Consumers gate on
-  # $investigate.output.rooted before building on the chain.
+  # Inconclusive is a valid outcome, not a failure: the gaps named honestly beat a
+  # confident guess. Consumers gate on the verdict before building on the chain.
   - id: investigate
     command: investigate
     # Advisory on both counts, and the engine holds both: it fails this node with
@@ -39,8 +40,9 @@ nodes:
     output_format:
       type: object
       properties:
-        rooted:
-          type: boolean
+        verdict:
+          type: string
+          enum: [rooted, refuted, inconclusive]
         summary:
           type: string
         report:
@@ -54,4 +56,27 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [investigation.md] }
           required: [type, run_id, path]
-      required: [rooted, summary, report]
+      required: [verdict, summary, report]
+
+  - id: verdict
+    script: verdict
+    runtime: bun
+    depends_on: [investigate]
+    with:
+      verdict: "$investigate.output.verdict"
+      summary: "$investigate.output.summary"
+      report: { from: "$investigate.output.report" }
+    output_format:
+      type: object
+      properties:
+        verdict: { type: string, enum: [rooted, refuted, inconclusive] }
+        rooted: { type: boolean }
+        summary: { type: string }
+        report:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [investigation.md] }
+          required: [type, run_id, path]
+      required: [verdict, rooted, summary, report]

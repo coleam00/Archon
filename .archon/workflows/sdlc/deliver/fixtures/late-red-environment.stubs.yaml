@@ -1,16 +1,18 @@
 # Dry-run fixture: CI concludes red after review convergence on a flake: a test
 # in a file the PR does not change failed once and passed when re-run. The real
 # ci-cause accepts the environment claim, no correction pass runs, and the run
-# reaches the same explicit rerun-and-resume pause as inherited red, with the PR
-# left draft and flip-ready unreached.
+# reaches the same explicit rerun-and-resume pause as inherited red, with the
+# ready pull request converted back to draft first.
 impl__implement:
   done: true
   green: true
   red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-pr__pr: { intent: "/fixture/pr-intent.json" }
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 11, url: "https://github.com/example/repo/pull/11", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
@@ -21,31 +23,39 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
-review__coverage: { full: true }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 11 }
 review__code: "0 findings"
 review__simplify__simplify: { findings: false }
+review__simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__seams: "0 findings"
 shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__tests: "0 findings"
+review__lens-status: { required: [seams, code, tests, simplify], completed: [seams, code, tests, simplify], missing: [] }
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 review__publish:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review; CI still running"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"] }], notes: "stub: the project's aggregate gate" }
+  discoveries: []
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"hosted runner lost network (fail)"}'
 ci-verdict: '{"state":"red","detail":"hosted runner lost network (fail)"}'
+ci-rerun: { requested: false, reason: "stub: no re-run warranted" }
+ci-reverdict: '{"state":"red","detail":"hosted runner lost network (fail)"}'
 ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
 ci-classify:
   failing_checks: ["test (windows-latest)"]
@@ -56,11 +66,15 @@ ci-classify:
   evidence: "stub: a timing test this branch does not touch failed once and passed when re-run"
 fix-ci-probe: '{"state":"red","detail":"hosted runner lost network (fail)"}'
 attention-ci-probe: '{"state":"red","detail":"hosted runner lost network (fail)"}'
-file-discoveries: '{"issues":[]}'
+file-discoveries: '{"records":[]}'
+match-discoveries: { matches: [] }
 fork: '{"fork":true}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/11" }
+mark-draft: "mark-draft: the pull request is a draft while CI stays red"
+publish-pr-body: {}
 fixture:
   expect: paused
-  reached: [review__synthesize, gate-validated, ci-verdict, ci-cause, gate-ci-fix, fix-ci-probe, ci-attention-route, attention-ci-probe]
+  reached: [review__synthesize, gate-validated, ci-verdict, ci-cause, gate-ci-fix, fix-ci-probe, ci-attention-route, mark-draft, attention-ci-probe]
   resolved-text-contains:
     attention-ci-pause: "pull request #11 after Archon classified the failure as environment: hosted runner lost network (fail) Re-run the failing check, then resume this run."
 exec-code: true

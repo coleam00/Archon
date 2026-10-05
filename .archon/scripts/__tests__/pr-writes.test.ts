@@ -6,6 +6,7 @@
  * not read back is reported as a failure rather than a delivery.
  */
 import { describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -14,6 +15,7 @@ import {
   forgeOperation,
   forgeFailure,
   forgePrRecord,
+  gitCheckout,
   runPackScript,
   type ScriptOptions,
   type ScriptRun,
@@ -22,28 +24,43 @@ import {
 const MARKER = '<!-- archon-review-report -->';
 const REPORT = 'Round 1: ready';
 
-const intent = {
-  repo: PR.repo,
-  headRepo: PR.repo,
-  head: 'feature',
-  headRevision: 'deadbeef',
-  base: 'dev',
-  title: 'A title',
-  bodyPath: '{ARTIFACTS}/pr-body.md',
-  draft: true,
-};
+/** The engine's typed-artifact listing for a run with no typed artifacts yet. */
+const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 
-function publishPr(options: ScriptOptions & { intent?: object } = {}): ScriptRun {
-  const { intent: supplied, ...rest } = options;
-  return runPackScript('pr/scripts/publish-pr', {
+interface Target {
+  readonly headRepo?: { host: string; path: string };
+  readonly head?: string;
+  readonly existing?: number | null;
+}
+
+/**
+ * Run publish-pr in a real checkout whose `upstream` remote is the recorded
+ * repository (a local bare repository behind `url.insteadOf`), so the push it makes
+ * first lands and reads back. The fake forge reports that pushed commit as the head.
+ */
+function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun & { head: string } {
+  const { target = {}, ...rest } = options;
+  const cwd = gitCheckout();
+  const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
+  const run = runPackScript('pr/scripts/publish-pr', {
     ...rest,
-    inputs: { INPUTS_INTENT: '{ARTIFACTS}/pr-intent.json', ...rest.inputs },
-    artifacts: {
-      'pr-intent.json': JSON.stringify(supplied ?? intent),
-      'pr-body.md': 'A body',
-      ...rest.artifacts,
+    cwd,
+    gh: { ...rest.gh, pr: { headRefOid: head, ...rest.gh?.pr } },
+    inputs: {
+      INPUTS_REPO: JSON.stringify(PR.repo),
+      INPUTS_HEAD_REPO: JSON.stringify(target.headRepo ?? PR.repo),
+      INPUTS_HEAD: target.head ?? 'feature',
+      INPUTS_BASE: 'dev',
+      INPUTS_EXISTING: JSON.stringify(target.existing ?? null),
+      INPUTS_TITLE: 'A title',
+      INPUTS_BODY: '{ARTIFACTS}/pr-body.md',
+      INPUTS_DRAFT: 'true',
+      TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
+      ...rest.inputs,
     },
+    artifacts: { 'pr-body.md': 'A body', 'listing.json': EMPTY_LISTING, ...rest.artifacts },
   });
+  return { ...run, head };
 }
 
 describe('publish-pr opens the pull request at most once', () => {
@@ -52,7 +69,7 @@ describe('publish-pr opens the pull request at most once', () => {
     source => {
       const result = publishPr({
         source,
-        artifacts: { 'pr-intent.json.create-started': JSON.stringify({ repo: PR.repo }) },
+        artifacts: { 'pr-create-started': JSON.stringify({ repo: PR.repo }) },
         gh: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
       });
@@ -69,7 +86,7 @@ describe('publish-pr opens the pull request at most once', () => {
     source => {
       const result = publishPr({
         source,
-        artifacts: { 'pr-intent.json.create-started': JSON.stringify({ repo: PR.repo }) },
+        artifacts: { 'pr-create-started': JSON.stringify({ repo: PR.repo }) },
         gh: { pr: { headRefName: 'feature' } },
         forge: { kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord() }) },
       });
@@ -153,7 +170,7 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain('refused');
     expect(result.stderr).toContain('the base branch does not exist');
     // Nothing was written, so a retry may create.
-    expect(existsSync(join(result.artifacts, 'pr-intent.json.create-started'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
   });
 
   it.each(['outcome_unknown', 'verification_failed'] as const)(
@@ -170,13 +187,13 @@ describe('publish-pr opens the pull request at most once', () => {
         },
       });
       expect(result.code).not.toBe(0);
-      expect(existsSync(join(result.artifacts, 'pr-intent.json.create-started'))).toBe(true);
+      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(true);
     }
   );
 
   it('reuses the open pull request when the head repository differs only in case', () => {
     const result = publishPr({
-      intent: { ...intent, headRepo: { host: PR.repo.host, path: 'Example/Repo' } },
+      target: { headRepo: { host: PR.repo.host, path: 'Example/Repo' } },
       gh: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
@@ -208,7 +225,7 @@ describe('publish-pr opens the pull request at most once', () => {
 
   it('reads back the pull request the run was launched onto instead of creating one', () => {
     const result = publishPr({
-      intent: { repo: PR.repo, headRepo: PR.repo, head: 'feature', existing: 42 },
+      target: { existing: 42 },
       gh: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
@@ -219,12 +236,7 @@ describe('publish-pr opens the pull request at most once', () => {
 
   it('adopts a named pull request whose head repository differs only in case', () => {
     const result = publishPr({
-      intent: {
-        repo: PR.repo,
-        headRepo: { host: PR.repo.host, path: 'Example/Repo' },
-        head: 'feature',
-        existing: 42,
-      },
+      target: { headRepo: { host: PR.repo.host, path: 'Example/Repo' }, existing: 42 },
       gh: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
@@ -233,7 +245,7 @@ describe('publish-pr opens the pull request at most once', () => {
 
   it('refuses a named pull request whose head is not the recorded branch', () => {
     const result = publishPr({
-      intent: { repo: PR.repo, headRepo: PR.repo, head: 'feature', existing: 42 },
+      target: { existing: 42 },
       gh: { pr: { headRefName: 'somebody-elses-branch' } },
     });
     expect(result.code).not.toBe(0);
@@ -250,14 +262,18 @@ describe('publish-pr opens the pull request at most once', () => {
 
 function publishBody(options: ScriptOptions & { change?: boolean } = {}): ScriptRun {
   const { change = true, ...rest } = options;
+  const pointer = { type: 'archon_artifact', run_id: 'run', path: 'pr-body-final.md' };
   return runPackScript('deliver/scripts/publish-pr-body', {
     ...rest,
-    inputs: { INPUTS_INTENT: '{ARTIFACTS}/pr-body-intent.json', ...rest.inputs },
+    inputs: {
+      // A declared null binds as empty text.
+      INPUTS_BODY: change ? JSON.stringify(pointer) : '',
+      TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
+      ...rest.inputs,
+    },
     artifacts: {
-      'pr-body-intent.json': JSON.stringify(
-        change ? { change: true, bodyPath: '{ARTIFACTS}/pr-body-final.md' } : { change: false }
-      ),
       'pr-body-final.md': 'The corrected body',
+      'listing.json': EMPTY_LISTING,
       ...rest.artifacts,
     },
   });
@@ -280,11 +296,62 @@ describe('publish-pr-body applies the resync and proves it landed', () => {
     expect(result.stderr).toContain('does not match what was written');
   });
 
-  it('writes nothing at all when the body was already accurate', () => {
+  it('rebuilds the red-cause block from the gates instead of keeping a stale one', () => {
+    const gate = { gate: 'green', red_cause: 'inherited', stage: 'The project gate', summary: 'e2e was red on dev', head: null };
+    const result = publishBody({
+      source: 'forge',
+      inputs: { INPUTS_PR: record },
+      artifacts: {
+        'pr-body-final.md':
+          '<!-- archon-red-causes -->\nan old disclosure\n<!-- /archon-red-causes -->\n\nThe corrected body',
+        'nodes/gate.md': JSON.stringify(gate),
+        'listing.json': JSON.stringify({
+          runId: 'run',
+          artifactsByType: { 'green-gate': [{ nodeId: 'gate', path: 'nodes/gate.md' }] },
+          errors: [],
+        }),
+      },
+      forge: {
+        kind: 'fake',
+        response: forgeOperation('pr.edit-body', {
+          target: PR,
+          outcome: 'applied',
+          changed: true,
+          pr: forgePrRecord(),
+          bodyDigest: 'digest',
+        }),
+      },
+    });
+    expect(result.code).toBe(0);
+    const body = JSON.parse(result.forgeRequests[0]).body as string;
+    expect(body.startsWith('<!-- archon-red-causes -->')).toBe(true);
+    expect(body).toContain('The project gate: inherited red');
+    expect(body).not.toContain('an old disclosure');
+    expect(body.endsWith('The corrected body')).toBe(true);
+  });
+
+  it('writes nothing when the body was already accurate and no gate passed red', () => {
     const result = publishBody({ change: false, inputs: { INPUTS_PR: record } });
     expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
-    expect(result.forge).toEqual([]);
+    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
+  });
+
+  it('adds the red-cause block to an accurate body when a gate passed red after it opened', () => {
+    const gate = { gate: 'green', red_cause: 'inherited', stage: 'The project gate', summary: 'e2e was red on dev', head: null };
+    const result = publishBody({
+      change: false,
+      inputs: { INPUTS_PR: record },
+      artifacts: {
+        'nodes/gate.md': JSON.stringify(gate),
+        'listing.json': JSON.stringify({
+          runId: 'run',
+          artifactsByType: { 'green-gate': [{ nodeId: 'gate', path: 'nodes/gate.md' }] },
+          errors: [],
+        }),
+      },
+    });
+    expect(result.code).toBe(0);
+    expect(result.gh.some(call => call.startsWith('pr edit 42'))).toBe(true);
   });
 
   it('edits through the plugin on the opt-in path, with the body in the request file', () => {
@@ -343,9 +410,11 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
         run_id: 'fixture-run',
         path: 'review/report.md',
       }),
+      INPUTS_DISCOVERIES: '[]',
+      INPUTS_MISSING: '[]',
       ...options.inputs,
     },
-    artifacts: { 'review-report.md': `${REPORT}\nReviewed head SHA: ${REVIEWED}`, ...options.artifacts },
+    artifacts: { 'review-report.md': REPORT, ...options.artifacts },
   });
 }
 
@@ -465,6 +534,8 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(request.marker).toBe(MARKER);
     expect(request.body.split('\n')[0]).toBe(MARKER);
     expect(request.body).toContain(REPORT);
+    // The comment names the commit it reviewed from the round's own record, not the report text.
+    expect(request.body.split('\n')[1]).toBe(`Reviewed commit: \`${REVIEWED}\``);
     expect(result.forge.join(' ')).not.toContain(REPORT);
   });
 
@@ -532,7 +603,6 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
         INPUTS_HEAD: STALE,
         ARCHON_NODE_EXECUTION: atCommit(STALE),
       },
-      artifacts: { 'review-report.md': `Reviewed head SHA: ${STALE}` },
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain(`this round reviewed ${STALE}, but`);
@@ -541,14 +611,19 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
   });
 
-  it('refuses a report that names a different commit than the one reviewed', () => {
-    const result = publishReview({
-      inputs: report,
-      artifacts: { 'review-report.md': `Reviewed head SHA: ${STALE}` },
-    });
+  it('refuses a ready verdict while an enabled lens did not complete', () => {
+    const result = publishReview({ inputs: { ...report, INPUTS_MISSING: JSON.stringify(['code']) } });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain(`does not name ${REVIEWED}`);
+    expect(result.stderr).toContain('enabled lenses did not complete: code');
     expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+  });
+
+  it('publishes a not-ready verdict that names a missing lens', () => {
+    const result = publishReview({
+      inputs: { ...report, INPUTS_READY: 'false', INPUTS_ACTION: 'correct', INPUTS_MISSING: JSON.stringify(['code']) },
+    });
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ ready: false });
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {

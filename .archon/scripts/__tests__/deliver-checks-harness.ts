@@ -60,8 +60,8 @@ export interface GhFake {
   readonly checks?: readonly GhCheckRow[] | 'fail';
   /** `statusCheckRollup | length`; 'fail' exits 1. */
   readonly rollup?: number | 'fail';
-  /** Active Actions workflow count, printed one id per line; 'fail' exits 1. */
-  readonly workflows?: number | 'fail';
+  /** Workflow runs for the head commit that concluded `action_required`; 'fail' exits 1. */
+  readonly approvalRuns?: number | 'fail';
   /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
   readonly readyFail?: string;
   /** The pull request every `gh pr view`/`gh pr list` read reports. */
@@ -74,6 +74,18 @@ export interface GhFake {
   readonly writeFail?: string;
   /** Drop the write instead of applying it, so the read-back disagrees. */
   readonly writeLost?: boolean;
+  /** Existing tracker issues; `issue create` appends to them. */
+  readonly issues?: readonly GhIssue[];
+  /** stderr for a failed `issue list` search. */
+  readonly issueSearchFail?: string;
+}
+
+/** One tracker issue the fake gh knows. */
+export interface GhIssue {
+  readonly number: number;
+  readonly title: string;
+  readonly body: string;
+  readonly state: 'OPEN' | 'CLOSED';
 }
 
 export type ForgeFake =
@@ -104,6 +116,8 @@ export interface ScriptRun {
   readonly forge: readonly string[];
   /** Every JSON request body the fake CLI was handed through `--data-file`. */
   readonly forgeRequests: readonly string[];
+  /** Every issue the fake gh created, in order. */
+  readonly createdIssues: readonly GhIssue[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
 }
@@ -123,6 +137,7 @@ const pr = {
   maintainerCanModify: null, ...(fake.pr ?? {}),
 };
 let comments = (fake.comments ?? []).map(row => ({ ...row }));
+const issues = (fake.issues ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
@@ -147,6 +162,33 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     };
     return Object.fromEntries(fields.map(field => [field, row[field]]));
   };
+  if (text.startsWith('issue ')) {
+    const issueUrl = (n) => 'https://' + host + '/' + path + '/issues/' + String(n);
+    if (text.startsWith('issue list')) {
+      if (fake.issueSearchFail !== undefined) return result(1, '', fake.issueSearchFail);
+      const search = argv[argv.indexOf('--search') + 1];
+      const token = search.split('"')[1];
+      const hits = issues.filter(row => row.state === 'OPEN' && row.body.includes(token));
+      return result(0, JSON.stringify(hits.map(row => ({ url: issueUrl(row.number) }))));
+    }
+    if (text.startsWith('issue view')) {
+      const wanted = Number(argv[3].split('/').pop());
+      const row = issues.find(candidate => candidate.number === wanted);
+      if (row === undefined) return result(1, '', 'GraphQL: Could not resolve to an issue');
+      return result(0, JSON.stringify({ title: row.title, state: row.state, url: issueUrl(row.number) }));
+    }
+    if (text.startsWith('issue create')) {
+      const number = 100 + issues.length;
+      issues.push({
+        number,
+        title: argv[argv.indexOf('--title') + 1],
+        body: readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8'),
+        state: 'OPEN',
+      });
+      appendFileSync(${JSON.stringify(ghLog)} + '.issues', JSON.stringify(issues[issues.length - 1]) + '\\n');
+      return result(0, issueUrl(number));
+    }
+  }
   if (text.startsWith('pr checks')) {
     if (fake.checks === undefined || fake.checks === 'fail')
       return result(1, '', fake.checks === 'fail' ? 'HTTP 502' : 'no checks reported');
@@ -164,7 +206,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
   if (text.startsWith('pr ready')) {
     if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
-    if (!fake.writeLost) pr.isDraft = false;
+    if (!fake.writeLost) pr.isDraft = argv.includes('--undo');
     return result(0, 'ready');
   }
   if (text.startsWith('pr create')) {
@@ -190,15 +232,13 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const listed = exists && pr.state === 'OPEN' && pr.headRefName === argv[argv.indexOf('--head') + 1];
     return result(0, JSON.stringify(listed ? [project()] : []));
   }
+  if (text.startsWith('pr view') && argv.includes('--jq')) return result(0, String(pr.headRefOid));
   if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
   if (text.startsWith('api')) {
     const endpoint = argv.find(part => part.startsWith('repos/'));
     if (endpoint === undefined) return result(95, '', 'unexpected gh api call');
-    if (endpoint.includes('/actions/workflows'))
-      return fake.workflows === 'fail' || fake.workflows === undefined
-        ? result(1, '', 'HTTP 404')
-        // With --paginate, gh applies --jq to each page; the fake prints one id per active workflow.
-        : result(0, Array.from({ length: fake.workflows }, (_, index) => index + 1 + '\\n').join(''));
+    if (endpoint.includes('/actions/runs?head_sha='))
+      return fake.approvalRuns === 'fail' ? result(1, '', 'HTTP 502') : result(0, String(fake.approvalRuns ?? 0));
     // gh api names its host with --hostname and its repository in the endpoint.
     const apiHost = argv[argv.indexOf('--hostname') + 1];
     const apiPath = endpoint.split('/').slice(1, 3).join('/');
@@ -263,7 +303,9 @@ export function runPackScript(relative: string, options: ScriptOptions = {}): Sc
 
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    INPUTS_PR: JSON.stringify(PR),
+    INPUTS_PR: JSON.stringify(forgePrRecord()),
+    INPUTS_EXPECTED: '[]',
+    INPUTS_REVIEW_ACTION: 'none',
     ARTIFACTS_DIR: artifacts,
     ARCHON_SDLC_FORGE: options.source ?? '',
     ARCHON_CLI_COMMAND: '',
@@ -330,15 +372,61 @@ else {
     gh: lines(ghLog),
     forge: lines(forgeLog),
     forgeRequests: lines(requestLog),
+    createdIssues: lines(`${ghLog}.issues`).map(line => JSON.parse(line) as GhIssue),
     artifacts,
   };
 }
 
 export function runDeliverScript(
-  script: 'check-ci' | 'ci-note' | 'flip-ready',
+  script: 'check-ci' | 'flip-ready' | 'confirm-ready' | 'mark-draft',
   options: ScriptOptions = {}
 ): ScriptRun {
-  return runPackScript(`deliver/scripts/${script}`, options);
+  // The flip checks mergeability against the base in a real checkout.
+  const cwd = options.cwd ?? (script === 'flip-ready' ? gitCheckout() : undefined);
+  return runPackScript(`deliver/scripts/${script}`, { ...options, cwd });
+}
+
+function git(cwd: string, ...args: string[]): string {
+  const result = spawnSync('git', args, { cwd, encoding: 'utf8' });
+  if (result.status !== 0) throw new Error(`git ${args.join(' ')}: ${result.stderr}`);
+  return result.stdout.trim();
+}
+
+/**
+ * A checkout on a feature branch whose remote, named `upstream` and configured with
+ * the recorded repository's URL, is a local bare repository (`url.insteadOf`), so a
+ * script finds the remote by URL and fetches the base without a network. With
+ * `conflict`, the base has since changed the same line the feature changed. `track`
+ * owns the temp root's removal; by default it is removed after the current test.
+ */
+export function gitCheckout(
+  options: { readonly conflict?: boolean } = {},
+  track: (root: string) => string = trackTempRoot
+): string {
+  const root = track(mkdtempSync(join(tmpdir(), 'archon-pack-git-')));
+  const bare = join(root, 'remote.git');
+  const work = join(root, 'work');
+  spawnSync('git', ['init', '-q', '--bare', '-b', 'dev', bare]);
+  spawnSync('git', ['init', '-q', '-b', 'dev', work]);
+  git(work, 'config', 'user.email', 'test@example.com');
+  git(work, 'config', 'user.name', 'Test');
+  git(work, 'remote', 'add', 'upstream', `https://${PR.repo.host}/${PR.repo.path}.git`);
+  git(work, 'config', `url.${bare}.insteadOf`, `https://${PR.repo.host}/${PR.repo.path}.git`);
+  writeFileSync(join(work, 'a.txt'), 'base\n');
+  git(work, 'add', 'a.txt');
+  git(work, 'commit', '-q', '-m', 'base');
+  git(work, 'push', '-q', 'upstream', 'dev');
+  git(work, 'checkout', '-q', '-b', 'feature');
+  writeFileSync(join(work, 'a.txt'), 'feature\n');
+  git(work, 'commit', '-q', '-am', 'feature');
+  if (options.conflict === true) {
+    git(work, 'checkout', '-q', 'dev');
+    writeFileSync(join(work, 'a.txt'), 'moved base\n');
+    git(work, 'commit', '-q', '-am', 'base moved');
+    git(work, 'push', '-q', 'upstream', 'dev');
+    git(work, 'checkout', '-q', 'feature');
+  }
+  return work;
 }
 
 type ForgeState = 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown';

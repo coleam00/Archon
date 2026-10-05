@@ -26,13 +26,15 @@ Issue bodies, linked comments, and earlier reports often contain analysis. Treat
 
 Start with the cheapest observation that separates the live hypotheses. Prefer a focused test, exact code path, named CI job or step, and narrow log window over broad repository or run output. Do not load an entire CI log when one failing test and its surrounding lines answer the question; do not enumerate unrelated history or edge cases merely because they are available.
 
-After each observation, name what uncertainty remains and choose the next observation that could eliminate it. If that observation requires unavailable external state, a different platform, prohibitive cost, or authority you do not have, stop. Record the exact missing evidence and declare `rooted: false`; do not compensate with broader reading or additional plausible theories.
+After each observation, name what uncertainty remains and choose the next observation that could eliminate it. If that observation requires unavailable external state, a different platform, prohibitive cost, or authority you do not have, stop. Record the exact missing evidence and declare `verdict: inconclusive`; do not compensate with broader reading or additional plausible theories. A check you could have run here and did not, or a source you did not finish reading, is unfinished work, never an unknown: do it before you declare.
 
 ## Reproduce, then explain
 
 Trigger the symptom yourself whenever reasonably possible, using the project's own commands or a minimal script. Save any repro script under `$ARTIFACTS_DIR/repro/` so the fixer can rerun it. When reproduction is not reasonable — external state, prohibitive cost, timing you cannot control — say so in the report and establish the chain by other concrete evidence instead: code reading with exact locations, logs, git history. Never describe a reproduction you did not actually run.
 
 A reproduction that needs a real service creates it: a scratch database you create and drop, a temp file, an in-memory instance. A configured live DSN is read-only at most, and DDL or writes never touch a resource you did not create. If only a live resource could reproduce the symptom, treat it as unavailable external state and record the gap.
+
+Before concluding that the reported behavior does not reproduce, or that its cause lies outside this repository, list every condition that could differ between your probe and the reported path — the runtime and how it installs or resolves dependencies, the invocation mode, versions, the platform — and either control each one in your probe or name it as unknown. A conclusion that rests on an uncontrolled condition is `inconclusive`, not `refuted`.
 
 Compete only the hypotheses that remain plausible after grounding the symptom. Design the observation that separates them and rule each out with evidence. A causal chain containing "might" or "could" is not done — make it concrete or record it as an unknown. Every link in the chain cites its evidence: a file and line, a command you ran and its output, a log line, or a commit.
 
@@ -46,7 +48,7 @@ An investigation ends implementation-ready, in this same session: the verified c
 
 - Weigh the plausible fix options against the boundary you established. Name each option, its blast radius, and why the chosen one wins — a rejected option with its reason stops the fixer from relitigating it.
 - Decide the fix: ordered steps anchored to concrete files, functions, and existing tests; the validation that proves it; and what the change must NOT touch.
-- An engineering decision is yours to make — make it. A product decision — two coherent directions whose choice belongs to the owner — is a stop: name the decision precisely and declare `rooted: false`. A proven cause with an undecided fix is not a safe fix boundary yet.
+- An engineering decision is yours to make — make it. A product decision — two coherent directions whose choice belongs to the owner — is a stop: name the decision precisely and declare `verdict: inconclusive`. A proven cause with an undecided fix is not a safe fix boundary yet.
 
 ## The report
 
@@ -73,7 +75,10 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
 
 ## Declare the verdict
 
-- `rooted` — true only when the causal chain is proven end to end AND the implementation plan is decided. False when anything load-bearing remains unknown, or when the fix hinges on a product decision that is not yours to make — the report is still written, with the gap or the decision named. An honest inconclusive beats a confident guess.
+- `verdict` — what the investigation established, by its consequence. The report is written in every case.
+  - `rooted` — a change is owed in this repository: the causal chain is proven end to end, the fix and its boundary are decided, and every acceptance item has a planned proof.
+  - `refuted` — no change is owed in this repository: the premise does not hold, or the cause is owned elsewhere. It carries the same evidence bar as `rooted`, with the conditions above controlled, and names the owner when there is one. Declining the work is not a refutation.
+  - `inconclusive` — the cause is not established, the evidence is unavailable, or the fix hinges on a decision that is not yours. Name the gap and what would close it. An honest inconclusive beats a confident guess.
 - `summary` — a few sentences: the cause (or the decisive gap), and that the full report is at `$ARTIFACTS_DIR/investigation.md`.
 - `report` — a pointer to the report you just wrote, copied exactly:
 

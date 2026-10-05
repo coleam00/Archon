@@ -67,13 +67,25 @@ function tryGit(...args: string[]): string | undefined {
   return result.exitCode === 0 ? result.stdout.toString().trim() : undefined;
 }
 
-/** Commits this branch carries beyond the base, or `undefined` if neither ref resolves. */
+/**
+ * Commits this branch carries beyond the base, or `undefined` when no base ref resolves.
+ *
+ * Every copy of the base counts — the local branch and the same branch on each
+ * remote, whatever the remotes are named — and the fewest commits ahead wins, so a
+ * stale fork's base never makes base commits look like this branch's work.
+ */
 function commitsAheadOfBase(base: string): { readonly ref: string; readonly ahead: number } | undefined {
-  for (const ref of [`origin/${base}`, base]) {
+  const remotes = (tryGit('for-each-ref', '--format=%(refname:short)', `refs/remotes/*/${base}`) ?? '')
+    .split('\n')
+    .filter(ref => ref !== '');
+  let best: { readonly ref: string; readonly ahead: number } | undefined;
+  for (const ref of [...remotes, base]) {
     const ahead = tryGit('rev-list', '--count', `${ref}..HEAD`);
-    if (ahead !== undefined) return { ref, ahead: Number.parseInt(ahead, 10) };
+    if (ahead === undefined) continue;
+    const count = Number.parseInt(ahead, 10);
+    if (best === undefined || count < best.ahead) best = { ref, ahead: count };
   }
-  return undefined;
+  return best;
 }
 
 // --- The engine's checkout observation, as this consumer reads it --------------------
@@ -314,11 +326,21 @@ function decide(): Decision {
     };
   }
 
+  // A loop that stopped on a blocker it declared is not unexplained red: name it.
+  if (green !== 'true' && declaredCause === '' && summary !== '' && unknownReason === undefined) {
+    return {
+      refusal:
+        `implement declared a blocker: ${summary}\n` +
+        'It changed no content since this invocation started, and the branch carries no ' +
+        'verified work ahead of the base.',
+    };
+  }
+
   return {
     refusal:
       (unknownReason !== undefined
         ? `implement's new work cannot be established: ${unknownReason}. `
-        : 'implement changed no content outside .archon/ since this invocation started ' +
+        : 'implement changed no content since this invocation started ' +
           '(pre-existing uncommitted changes are part of that start), ') +
       'and the branch carries no verified work ahead of the base ' +
       `(green=${green || 'unknown'}, red_cause=${declaredCause || 'unknown'}).\n` +

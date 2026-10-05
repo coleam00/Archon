@@ -2,16 +2,20 @@
  * The one judgment this pack makes about a red gate: whether the declared cause is
  * one the change cannot have introduced.
  *
- * The vocabulary itself (`introduced`, `inherited`, `environment`, `interaction`,
- * `incomplete`, or the empty string for "not declared") is an enum on the producing
+ * The vocabulary itself (`introduced`, `inherited`, `environment`, `unavailable`,
+ * `interaction`, `incomplete`, or the empty string for "not declared") is an enum on the producing
  * nodes' `output_format`, where the engine certifies it. Nothing here re-checks
  * membership: a value that reaches a script through a `with:` binding already passed
  * that gate.
  */
 
-export const PASSES_RED = ['inherited', 'environment'] as const;
+export const PASSES_RED = ['inherited', 'environment', 'unavailable'] as const;
 
-/** Red that the change did not cause: the base was already red, or the environment was. */
+/**
+ * Red that the change is not shown to cause: the base was already red, the environment
+ * was, or the evidence that would attribute it (CI logs, the base's result) cannot be
+ * read from this run. None of them is fixed in the change; each reaches the operator.
+ */
 export function passesRed(cause: string): boolean {
   return (PASSES_RED as readonly string[]).includes(cause);
 }

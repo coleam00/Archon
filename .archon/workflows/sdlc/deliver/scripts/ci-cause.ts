@@ -9,6 +9,8 @@
  *   whatever the claim. It cannot be inherited from a base that lacks the file.
  * - `inherited` stands only when the same check fails on the base commit.
  * - `environment` stands only when no re-run reproduced the failure.
+ * - `unavailable` (the evidence could not be read from this run) stands as claimed:
+ *   it attributes nothing, so it goes to the operator, never to a fix.
  * - Anything else is `introduced`, and goes to the CI correction pass.
  *
  * The decision and every fact it rests on are this node's result, kept as a
@@ -19,7 +21,7 @@
  * - INPUTS_FAILING_CHECKS / INPUTS_FAILING_PATHS: JSON string arrays.
  * - INPUTS_BASE: `fails`, `passes`, or `unknown`.
  * - INPUTS_RERUN: `fails`, `passes`, or `not_rerun`.
- * - INPUTS_CLAIM: `introduced`, `inherited`, or `environment`.
+ * - INPUTS_CLAIM: `introduced`, `inherited`, `environment`, or `unavailable`.
  * - INPUTS_EVIDENCE: the agent's account of what it read.
  */
 
@@ -64,11 +66,14 @@ try {
   const evidence = trimmed(process.env.INPUTS_EVIDENCE);
 
   const inChange = failingPaths.filter(path => changedFiles.some(file => touches(path, file)));
-  let cause: 'introduced' | 'inherited' | 'environment';
+  let cause: 'introduced' | 'inherited' | 'environment' | 'unavailable';
   let reason: string;
   if (inChange.length > 0) {
     cause = 'introduced';
     reason = `the failure is in ${inChange.join(', ')}, which this pull request changes`;
+  } else if (claim === 'unavailable') {
+    cause = 'unavailable';
+    reason = 'the evidence that would attribute the failure could not be read from this run';
   } else if (claim === 'inherited' && base === 'fails') {
     cause = 'inherited';
     reason = 'the same check fails on the base commit, in files this pull request does not change';

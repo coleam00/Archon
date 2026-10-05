@@ -76,11 +76,6 @@ describe('review-round', () => {
       head: newer,
       cursor: '',
       risks: FULL_REVIEW_RISKS,
-      execution: {
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: newer } },
-      },
     });
   });
 
@@ -93,11 +88,6 @@ describe('review-round', () => {
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      execution: {
-        path: 'review__mode',
-        invocation: { loopPath: [{ groupId: 'delivery', iteration: 2 }] },
-        attempt: { checkoutStart: { kind: 'git', commit: newer } },
-      },
     });
   });
 

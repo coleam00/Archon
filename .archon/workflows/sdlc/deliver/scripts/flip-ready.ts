@@ -1,58 +1,56 @@
 /**
- * The ready flip: the one irreversible step, so it re-verifies CI itself instead of
- * trusting the loop above. It reads through the pack's check reader (`gh` by
- * default, `archon forge checks` with `ARCHON_SDLC_FORGE=forge`) and refuses any
- * pending, red, gated or unknown check, and any failed read: a failed observation
- * is not evidence that no CI exists. Both the read and the flip target the recorded
- * qualified pull request, never the checkout's remote, and both go through the
- * source the run selected.
+ * Mark the pull request ready for review once the work is done: review converged and
+ * the local gate is green for the tree. CI is waited on after this, not before: a
+ * project whose CI skips draft pull requests only starts it here, and on one whose
+ * CI also runs on drafts this changes nothing. confirm-ready, at the end, certifies
+ * green on the final head and converts the pull request back to draft when it is not,
+ * so a red pull request never stays ready.
  *
- * A pull request that is already merged needs no flip and is reported as such; one
- * that is closed without a merge has no delivery to report and refuses.
+ * Before the flip it refuses a head that does not merge cleanly into its freshly
+ * fetched base (`git merge-tree`, git 2.38 or later), found through the remote that
+ * holds the recorded repository: a conflicting pull request is never handed to a
+ * maintainer as ready. The flip targets the recorded qualified pull request through
+ * the source the run selected, and reads the state back. A pull request already
+ * merged needs no flip; one closed without a merge refuses.
+ *
+ * Bound inputs (`with:` bindings, canonical text in env):
+ * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
  */
-import { atRevision, describeUnits, gateState, readPrChecks } from '../../.shared/checks.ts';
-import { forgeSource, parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
+import { forgeSource, parsePrRecord, type PrRecord } from '../../.shared/forge.ts';
+import { git } from '../../.shared/git.ts';
 import { markPrReady, viewPr } from '../../.shared/pr.ts';
-import { emit, note, refuse } from '../../.shared/io.ts';
+import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { remoteRefFor } from '../../.shared/remote.ts';
 
-const boundPr = process.env.INPUTS_PR;
-
-function preflight(): QualifiedPr | undefined {
-  try {
-    const pr = parseQualifiedPr(boundPr);
-    const read = readPrChecks(pr);
-    const state = gateState(read.units);
-    if (state !== 'green' && state !== 'none') {
-      const notGreen = read.units.filter(unit => unit.state !== 'green');
-      throw new Error(
-        `refusing to flip with ${state} checks${atRevision(read)}: ${describeUnits(notGreen)}`
-      );
-    }
-    return pr;
-  } catch (error) {
-    refuse(`flip-ready: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
+function mergesCleanly(pr: PrRecord): void {
+  const base = remoteRefFor(pr.repo, pr.base);
+  const result = git('merge-tree', '--write-tree', '--name-only', base, 'HEAD');
+  if (result.code === 1) {
+    // Output: the tree id, then the conflicted paths, then a blank line and messages.
+    const conflicted = result.stdout.split('\n\n')[0].split('\n').slice(1).filter(Boolean);
+    throw new Error(`the head does not merge cleanly into ${base}: ${conflicted.join(', ')}`);
   }
+  if (result.code !== 0) throw new Error(`mergeability could not be computed: ${result.stderr}`);
 }
 
 function flipReady(): void {
-  const pr = preflight();
-  if (pr === undefined) return;
-  try {
-    const source = forgeSource();
-    const observed = viewPr(pr, source).pr;
-    if (observed.state === 'merged') {
-      note('flip-ready: the PR was already merged, so no flip was needed.');
-      emit({ pr_url: observed.url });
-      return;
-    }
-    if (observed.state === 'closed') {
-      refuse('flip-ready: the PR is CLOSED without a merge, so there is no delivery to report.');
-      return;
-    }
-    emit({ pr_url: observed.is_draft ? markPrReady(pr, source).url : observed.url });
-  } catch (error) {
-    refuse(`flip-ready: ${error instanceof Error ? error.message : String(error)}`);
+  const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
+  const source = forgeSource();
+  const observed = viewPr(pr, source).pr;
+  if (observed.state === 'merged') {
+    note('flip-ready: the PR was already merged, so no flip was needed.');
+    emit({ pr_url: observed.url });
+    return;
   }
+  if (observed.state === 'closed') {
+    throw new Error('the PR is CLOSED without a merge, so there is no delivery to report.');
+  }
+  mergesCleanly(pr);
+  emit({ pr_url: observed.is_draft ? markPrReady(pr, source).url : observed.url });
 }
-flipReady();
+
+try {
+  flipReady();
+} catch (error) {
+  refuse(`flip-ready: ${error instanceof Error ? error.message : String(error)}`);
+}

@@ -65,4 +65,14 @@ describe('ci-cause', () => {
     expect(evidence).toContain('Re-run: passes. Claimed: environment.');
     expect(evidence).toContain('stub evidence');
   });
+  it('passes an unavailable claim through to the operator, unless a changed file fails', () => {
+    expect(decide({ claim: 'unavailable' }).cause).toBe('unavailable');
+    expect(decide({ paths: ['src/feature.ts'], claim: 'unavailable' }).cause).toBe('introduced');
+  });
+
+  it('accepts environment for a failure outside the change that passed when re-run', () => {
+    expect(decide({ paths: ['src/other.test.ts'], base: 'passes', rerun: 'passes', claim: 'environment' }).cause).toBe(
+      'environment'
+    );
+  });
 });

@@ -1,0 +1,19 @@
+# Dry-run fixture: the investigation establishes that no change is owed in this
+# repository (run with --default-stubs --exec-code). gate-rooted and the delivery
+# tail stay skipped, and the real outcome node reports no work owed in the
+# investigator's words, completing with delivered: false rather than failing.
+triage__triage:
+  decision: { contract: READY, route: investigate, design_first: false }
+  complexity: risky
+  item: { repository: "", number: 0 }
+  area_labels: []
+  summary: "stub: reported failure still needs a proven cause"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
+inv__investigate:
+  verdict: refuted
+  summary: "stub: the cause is owned upstream; the provider SDK drops the flag"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "investigation.md" }
+fixture:
+  expect: completed
+  reached: [inv__verdict, outcome]
+exec-code: true

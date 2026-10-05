@@ -9,15 +9,19 @@ the rule do its job.
 
 The failing checks, as the CI probe reported them:
 
-$ci-verdict.output.detail
+$INPUTS.detail
 
-The pull request is the current branch's, opened by an earlier node; the `gh`
-CLI is available to read it, its base branch, and its checks. Do not modify any
-file, and do not re-run, cancel, or otherwise change any check.
+What this project's CI is, as discovered earlier in the run:
+
+$INPUTS.ci
+
+The pull request is the current branch's, opened by an earlier node. Do not
+modify any file, and do not re-run, cancel, or otherwise change any check.
 
 ## What to find
 
-1. **Where each failure lives.** Read the failing jobs' logs (for GitHub,
+1. **Where each failure lives.** Read the failing jobs' logs through whatever
+   CI system ran them (on GitHub Actions,
    `gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs`; `gh pr checks`
    names the runs). For every failing test or check, record the source file the
    failure points at: the failing test's file, or the file a compile, lint, or
@@ -40,12 +44,14 @@ Then claim a cause:
   the base commit.
 - `environment` — the failure is the CI infrastructure's, not the code's: a
   runner or network failure, or a flake that passed when re-run.
+- `unavailable` — the evidence that would attribute it cannot be read from this
+  run: the logs or the base's result are out of reach.
 
 The decision script holds every claim to its evidence. `inherited` stands only
 when the base fails, `environment` only when no re-run reproduced the failure,
-and neither stands when any failing path is a file the pull request changed.
-When you cannot tell, claim `introduced`: a correction pass that finds nothing
-to fix costs less than shipping a real defect as "re-run CI".
+and none of them stands when any failing path is a file the pull request changed.
+A failure in no changed file, on a base that passes, that a re-run did not
+reproduce is `environment`; one a re-run reproduced is `introduced`.
 
 ## Output
 
@@ -53,6 +59,6 @@ to fix costs less than shipping a real defect as "re-run CI".
 - `failing_paths`: every source file a failure points at, as above.
 - `base`: `fails`, `passes`, or `unknown`.
 - `rerun`: `fails`, `passes`, or `not_rerun`.
-- `claim`: `introduced`, `inherited`, or `environment`.
+- `claim`: `introduced`, `inherited`, `environment`, or `unavailable`.
 - `evidence`: two to four sentences naming the log lines, runs, and commits you
   read for each of the above.

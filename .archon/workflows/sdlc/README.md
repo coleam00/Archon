@@ -45,10 +45,12 @@ The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixtu
 could ever run. All three copies are gone.
 
 The ready preflight re-reads checks for the recorded qualified PR itself. It refuses
-pending, red, gated and unknown checks and any failed read, because a failed
-observation is not evidence that no CI exists. The flip targets that same qualified
-PR and reads the draft state back afterwards, because a successful exit is not proof
-the state changed.
+pending, red, gated and unknown checks, any failed read, and any check `discover-ci`
+expected that never registered, because a failed or empty observation is not
+evidence that no CI gates the merge. It also refuses a head that does not merge
+cleanly into the freshly fetched base. The flip targets that same qualified PR and
+reads the draft state back afterwards, because a successful exit is not proof the
+state changed.
 
 The rule is not "never defend against what has not happened" — the two Keep cases
 above have not happened either, and both are worth their few lines. The question is
@@ -74,23 +76,31 @@ return the same shapes from either source, so one policy classifies both:
 
 The source is never picked from what happens to be installed. When `forge` is
 selected and cannot answer (no host command, no plugin for the host, a failed
-operation), the node refuses and `ci-note` reports the failure on stderr; none of
-them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
+operation), the node refuses; none of them falls back to `gh`. Any other value of `ARCHON_SDLC_FORGE` refuses too. The
 forge source is for host execution: a container execution receives neither
 `ARCHON_SDLC_FORGE` nor `ARCHON_CLI_COMMAND`, so a containerized run uses `gh`.
 
 ## Public writes belong to a script
 
 An agent judges and authors; the node after it performs the one public write and
-proves it landed. `publish-pr` opens or reuses the pull request, `publish-pr-body`
-applies the resync, `publish-review` upserts the one marked review comment,
-`flip-ready` flips it out of draft, and `file-discoveries` files each discovery
-the review accepted as a tracker issue. The forge contract has no issue
-operation yet, so that one — like triage's labels — goes through `gh` whichever
-source the run selected. Each takes a recorded intent from the agent
-before it, writes through the selected source, and fails unless the result reads
-back — so "the write failed" and "the write may have landed" stay different
-outcomes, in the pack as in the forge contract.
+proves it landed. `publish-pr` pushes the branch and opens or reuses the pull
+request, `push-head` pushes each fix pass's commits, `publish-pr-body` applies the
+resync, `publish-review` upserts the one marked review comment, `flip-ready` marks it
+ready once the work is done, `mark-draft` and `confirm-ready` put it back in draft
+when CI stays red, and `file-discoveries` files each discovery the review accepted as
+a tracker issue, reusing an open issue the matching agent found for it. The forge
+contract has no issue operation yet, so that one — like triage's labels — goes
+through `gh` whichever source the run selected. Each acts on the values the agent
+before it declared in its typed output, which the engine certified, writes through
+the selected source, and fails unless the result reads back — so "the write
+failed" and "the write may have landed" stay different outcomes, in the pack as in
+the forge contract. No agent pushes, and no script reads an agent-written file to
+find out what to write.
+
+Which remote holds a repository is decided by its configured URL, never by the
+remote's name (`.shared/remote.ts`), so a fork checkout whose `origin` is the fork
+and whose `upstream` is the canonical repository fetches the base and pushes the
+head where they belong.
 
 That split is also what keeps the source switch out of the prompts. A prompt that
 branched on `ARCHON_SDLC_FORGE` would be an invented protocol; `forge.ts` reads it

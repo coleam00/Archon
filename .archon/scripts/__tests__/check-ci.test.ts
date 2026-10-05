@@ -70,33 +70,69 @@ describe('check-ci on the default gh source', () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toEqual({
       state: 'concluded',
-      detail: 'checks gated: deploy (action_required)',
+      detail: "checks gated on a maintainer's approval: deploy (action_required)",
     });
   });
 
   it('refuses a failed read instead of concluding there is no CI', () => {
-    const result = probe({ gh: { checks: 'fail', rollup: 'fail', workflows: 0 } });
+    const result = probe({ gh: { checks: 'fail', rollup: 'fail' } });
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('check-ci: could not read check state: HTTP 502');
   });
 
-  it('concludes without the grace wait when the repository has no active workflow', () => {
-    const result = probe({ gh: { rollup: 0, workflows: 0 } });
+  it('concludes at once when no checks are expected and none registered', () => {
+    const result = probe({ gh: { rollup: 0 } });
     expect(JSON.parse(result.stdout)).toEqual({
       state: 'concluded',
-      detail: 'no checks configured on this repository — nothing to await',
+      detail: 'no checks are expected to gate this merge, and none registered',
+    });
+    expect(result.gh.some(call => call.includes('actions/'))).toBe(false);
+  });
+
+  it('keeps waiting while an expected check has not registered, whatever CI posts it', () => {
+    const result = probe({
+      inputs: { INPUTS_EXPECTED: JSON.stringify(['ci/circleci: test']) },
+      gh: { rollup: 0 },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'pending',
+      detail: 'expected check(s) not registered yet: ci/circleci: test',
+    });
+  });
+
+  it('waits for a missing expected check even when the others are green', () => {
+    const result = probe({
+      inputs: { INPUTS_EXPECTED: JSON.stringify(['build', 'e2e']) },
+      gh: { checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }] },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'pending',
+      detail: 'expected check(s) not registered yet: e2e',
+    });
+  });
+
+  it('reports gated only from a workflow run the forge says awaits approval', () => {
+    const result = probe({
+      inputs: { INPUTS_EXPECTED: JSON.stringify(['build']) },
+      gh: { rollup: 0, approvalRuns: 1 },
+    });
+    expect(JSON.parse(result.stdout)).toEqual({
+      state: 'concluded',
+      detail: "checks gated on a maintainer's approval; not yet run: build",
     });
     expect(result.gh).toContain(
-      'api --hostname ghe.example.com repos/example/repo/actions/workflows --paginate --jq .workflows[] | select(.state == "active") | .id'
+      'api --hostname ghe.example.com repos/example/repo/actions/runs?head_sha=deadbeef --jq [.workflow_runs[] | select(.conclusion == "action_required")] | length'
     );
   });
 
-  it('gives configured CI one registration grace read, then names the maintainer gate', () => {
-    const result = probe({ gh: { rollup: 0, workflows: 2 } });
-    expect(JSON.parse(result.stdout).state).toBe('concluded');
-    expect(result.stdout).toContain("awaiting a maintainer's approval");
-    expect(result.gh.filter(call => call.startsWith('pr checks'))).toHaveLength(2);
+  it('refuses when the approval state cannot be read, instead of waiting blind', () => {
+    const result = probe({
+      inputs: { INPUTS_EXPECTED: JSON.stringify(['build']) },
+      gh: { rollup: 0, approvalRuns: 'fail' },
+    });
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('could not read workflow runs for the head commit');
   });
 
   it('refuses an unrecognized check source instead of guessing one', () => {
@@ -144,23 +180,21 @@ describe('check-ci on the opt-in forge source', () => {
     const result = probe({ source: 'forge', forge: forge(forgeResponse([{ name: 'build', state: 'gated' }])) });
     expect(JSON.parse(result.stdout)).toEqual({
       state: 'concluded',
-      detail: 'checks gated at deadbeef: build (failure)',
+      detail: "checks gated on a maintainer's approval at deadbeef: build (failure)",
     });
   });
 
-  it('gives an empty observation one grace read without the Actions probe', () => {
+  it('keeps an expected check pending on an empty observation, without any workflow-run read', () => {
     const result = probe({
       source: 'forge',
-      forge: forge([
-        forgeResponse([], { revision: 'first' }),
-        forgeResponse([{ name: 'build', state: 'green' }], { revision: 'second' }),
-      ]),
+      inputs: { INPUTS_EXPECTED: JSON.stringify(['build']) },
+      forge: forge(forgeResponse([], { revision: 'first' })),
     });
     expect(JSON.parse(result.stdout)).toEqual({
-      state: 'concluded',
-      detail: 'all 1 observed check(s) green at second',
+      state: 'pending',
+      detail: 'expected check(s) not registered yet at first: build',
     });
-    expect(result.forge).toHaveLength(2);
+    expect(result.forge).toHaveLength(1);
     expect(result.gh).toEqual([]);
   });
 

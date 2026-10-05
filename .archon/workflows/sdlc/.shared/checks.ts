@@ -1,7 +1,7 @@
 /**
  * The deliver pack's one pull-request check reader and its gate policy.
  *
- * Both sources return the same units, so `check-ci`, `ci-note` and `flip-ready`
+ * Both sources return the same units, so `check-ci` and `flip-ready`
  * classify one shape whichever source read it. ./forge.ts owns which source a
  * run selected; this file owns how a read is performed and how it gates.
  */
@@ -154,27 +154,36 @@ export function readPrChecks(pr: QualifiedPr): CheckRead {
   }
 }
 
+/** The expected checks that have not registered on the pull request, by exact name. */
+export function missingChecks(units: readonly CheckUnit[], expected: readonly string[]): string[] {
+  const present = new Set(units.map(unit => unit.unit.name));
+  return expected.filter(name => !present.has(name));
+}
+
 /**
- * Whether the repository has any active GitHub Actions workflow; undefined when
- * that could not be read, which counts as configured. Only the gh source asks
- * this: it lets a repository without CI skip the registration grace.
+ * Whether the forge reports CI on the pull request's head waiting for a maintainer's
+ * approval: a workflow run for that commit concluded `action_required`. GitHub
+ * starts no check for such a run, so silence alone never says this; the run's own
+ * conclusion does. Only the gh source can read workflow runs; the forge contract
+ * has no such read, so there approval gating is recognized from an
+ * `action_required` check alone. A failed read refuses rather than guessing.
  */
-export function hasActiveWorkflows(pr: QualifiedPr): boolean | undefined {
-  // Every page: the default read stops at thirty workflows, and an active one on a
-  // later page would otherwise read as "no CI configured". gh applies --jq to each
-  // page and refuses --slurp with --jq, so the filter prints one id per active
-  // workflow and the lines are counted here.
-  const result = gh(
+export function approvalPending(pr: QualifiedPr, read: CheckRead): boolean {
+  if (read.source !== 'gh') return false;
+  const head = gh('pr', 'view', String(pr.number), '--repo', ghRepo(pr), '--json', 'headRefOid', '--jq', '.headRefOid');
+  if (!head.ok || head.stdout.trim() === '') {
+    throw new Error(`could not read the pull request's head commit: ${head.stderr.trim()}`);
+  }
+  const runs = gh(
     'api',
     '--hostname',
     pr.repo.host,
-    `repos/${pr.repo.path}/actions/workflows`,
-    '--paginate',
+    `repos/${pr.repo.path}/actions/runs?head_sha=${head.stdout.trim()}`,
     '--jq',
-    '.workflows[] | select(.state == "active") | .id'
+    '[.workflow_runs[] | select(.conclusion == "action_required")] | length'
   );
-  if (!result.ok) return undefined;
-  return result.stdout.split('\n').some(line => line.trim() !== '');
+  if (!runs.ok) throw new Error(`could not read workflow runs for the head commit: ${runs.stderr.trim()}`);
+  return Number.parseInt(runs.stdout.trim(), 10) > 0;
 }
 
 /** `name (result)` for each unit, as the operator reads it. */

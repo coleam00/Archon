@@ -1,0 +1,87 @@
+# Dry-run fixture: a re-run reproduces red on a test this pull request does not
+# change, with the base passing, so the classifier attributes it to the branch and
+# the one CI fix pass runs. The fixer finds the failure outside the change, cannot
+# reproduce it, and declares green: false with that evidence instead of changing
+# unrelated code; the real gate then refuses, and the pull request goes back to draft.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+# The gates are deliberately unstubbed: the real gate scripts decide.
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: { recorded: true }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 10, url: "https://github.com/example/repo/pull/10", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
+review-policy: { risks: "fixture-owned-policy" }
+classify:
+  tier: full
+  errors: false
+  docs: false
+  reasons:
+    tier: "stub: touches persisted state"
+    errors: "stub: no failure paths"
+    docs: "stub: no doc-facing changes"
+resolve-scope: '{"errors":"false"}'
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 10 }
+review__code: "0 findings"
+review__simplify__simplify: { findings: false }
+review__simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__seams: "0 findings"
+shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__tests: "0 findings"
+review__lens-status: { required: [seams, code, tests, simplify], completed: [seams, code, tests, simplify], missing: [] }
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+review__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: clean on initial review; CI still running"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
+ci-probe: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
+ci-verdict: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
+ci-rerun: { requested: true, reason: "stub: the failing test is outside the change and passes on the base; one re-run requested" }
+rerun-probe: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
+ci-reverdict: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
+ci-changed: '{"files":["packages/core/src/feature.ts"]}'
+ci-classify:
+  failing_checks: ["test (ubuntu-latest)"]
+  failing_paths: ["packages/adapters/src/other.test.ts"]
+  base: passes
+  rerun: fails
+  claim: introduced
+  evidence: "stub: the re-run failed the same way and the base passes"
+ci-fix__implement:
+  done: true
+  green: false
+  red_cause: introduced
+  summary: "stub: the failing test is outside this change and does not reproduce locally; no unrelated code was changed"
+ci-fix__assert-changed: "no new changes this run; the remaining red is declared introduced"
+file-discoveries: '{"records":[]}'
+match-discoveries: { matches: [] }
+fork: '{"fork":true}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/10" }
+# The final confirmation finds CI red on the ready pull request: it converts it
+# back to draft and refuses (a string stub fails its schema, as the refusal does).
+confirm-ready: "confirm-ready: the pull request is back in draft"
+publish-pr-body: {}
+fixture:
+  expect: failed
+  fail-node: [gate-ci-fix, confirm-ready]
+  reached: [ci-rerun, ci-reverdict, ci-cause, ci-fix__implement]
+exec-code: true

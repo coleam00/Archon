@@ -10,8 +10,8 @@
 # fails this fixture instead of passing quietly. The judgment itself — which
 # surface earns a re-evaluation, and whether the finding resolves as a follow-up —
 # is model reasoning that no fixture can assert.
-mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
-coverage: { full: false }
+mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy"}'
+coverage: { full: false, errors: false, docs: false, lenses: [] }
 scope:
   docs: true
   # A standalone review of the working diff: no pull request to publish to.
@@ -22,11 +22,15 @@ synthesize:
   action: none
   findings_summary: "stub: prior findings verified against the delta; nothing open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 publish:
   ready: true
   action: none
   findings_summary: "stub: prior findings verified against the delta; nothing open"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+lens-status: { required: [], completed: [], missing: [] }
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed
   reached: [synthesize]

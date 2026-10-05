@@ -11,11 +11,13 @@ impl__implement:
   red_cause: ""
   summary: "stub: implemented and green"
 impl__assert-changed: "3 files changed"
-gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { intent: "/fixture/pr-intent.json" }
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":"","head":null}'
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 2, url: "https://github.com/example/repo/pull/2", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
-review__coverage: { full: false }
+discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+review__coverage: { full: false, errors: false, docs: false, lenses: [seams, focused] }
 review__scope:
   # PR diff in scope; head sha stubbed
   docs: false
@@ -23,22 +25,28 @@ review__scope:
 review__focused: { full_review: false, reason: "stub: no engaged full-review risk" }
 review__seams: "0 findings"
 shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__review-complete: "settled"
+review__lens-status: { required: [seams, focused], completed: [seams, focused], missing: [] }
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__synthesize:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 review__publish:
   ready: true
   action: none
   findings_summary: "stub: clean on initial review"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 gate-ready: '{"ready":"true"}'
 ci-probe: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-verdict: '{"state":"concluded","detail":"no checks configured on this repository — nothing to await"}'
 ci-attention-route: '{"attention":false,"red_cause":""}'
 flip-ready: { pr_url: "https://github.com/example/repo/pull/2" }
+confirm-ready: { pr_url: "https://github.com/example/repo/pull/2" }
 outcome: { pr_url: "https://github.com/example/repo/pull/2", summary: "https://github.com/example/repo/pull/2" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
@@ -50,8 +58,10 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no doc-facing changes"
 resolve-scope: '{"errors":"false"}'
-file-discoveries: '{"issues":[]}'
+file-discoveries: '{"records":[]}'
+match-discoveries: { matches: [] }
 fork: '{"fork":false}'
+publish-pr-body: {}
 fixture:
   expect: completed
   # The review round is handed the verified PR record, not a bare number: the

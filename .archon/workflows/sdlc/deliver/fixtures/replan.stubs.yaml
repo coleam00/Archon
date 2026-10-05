@@ -8,9 +8,11 @@ impl__implement:
   red_cause: ""
   summary: "stub: implemented inside the accepted contract"
 impl__assert-changed: "2 files changed"
-gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":""}'
-pr__pr: { intent: "/fixture/pr-intent.json" }
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":"","head":null}'
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: { recorded: true }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 3, url: "https://github.com/example/repo/pull/3", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
 review-policy: { risks: "fixture-owned-policy" }
 classify:
   tier: full
@@ -21,28 +23,36 @@ classify:
     errors: "stub: no failure paths"
     docs: "stub: no docs changes"
 resolve-scope: '{"errors":"false"}'
-review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"review__mode","invocation":{"loopPath":[]}}}'
-review__coverage: { full: true }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+review__coverage: { full: true, errors: false, docs: false, lenses: [seams, code, tests, simplify] }
 review__scope:
   # accepted contract and scope conflict recorded
   docs: false
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 3 }
 review__code: "1 blocking scope conflict"
 review__simplify__simplify: { findings: false }
+review__simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__seams: "0 findings"
 shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__tests: "0 findings"
+review__lens-status: { required: [seams, code, tests, simplify], completed: [seams, code, tests, simplify], missing: [] }
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__synthesize:
   ready: false
   action: replan
   findings_summary: "stub: requested outcome requires crossing an explicit boundary"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 review__publish:
   ready: false
   action: replan
   findings_summary: "stub: requested outcome requires crossing an explicit boundary"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
-file-discoveries: '{"issues":["https://github.com/example/repo/issues/9"]}'
+  discoveries: []
+file-discoveries: '{"records":[{"title":"stub: the scope conflict","issue":"https://github.com/example/repo/issues/9"}]}'
+match-discoveries: { matches: [] }
+publish-pr-body: {}
 fixture:
   expect: failed
   fail-node: gate-ready

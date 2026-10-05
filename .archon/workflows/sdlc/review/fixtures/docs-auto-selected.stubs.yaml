@@ -1,8 +1,8 @@
 # Dry-run fixture: archon-review called directly, not through delivery. `docs` is left
 # at its `auto` default, so the docs lens is gated on the scope node's own selection —
 # the branch archon-deliver never reaches, because it always binds a resolved boolean.
-mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","execution":{"path":"mode","invocation":{"loopPath":[]}}}'
-coverage: { full: true }
+mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+coverage: { full: true, errors: false, docs: true, lenses: [seams, code, tests, simplify, docs] }
 scope:
   docs: true
   # A standalone review of the working diff: no pull request to publish to.
@@ -18,11 +18,15 @@ synthesize:
   action: none
   findings_summary: "stub: clean, docs lens included"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
 publish:
   ready: true
   action: none
   findings_summary: "stub: clean, docs lens included"
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+lens-status: { required: [seams, code, tests, simplify, docs], completed: [seams, code, tests, simplify, docs], missing: [] }
+prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 fixture:
   expect: completed
   reached: [code, seams, simplify__simplify, tests, docs]

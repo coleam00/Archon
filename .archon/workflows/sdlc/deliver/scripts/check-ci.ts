@@ -1,112 +1,86 @@
 /**
  * Classify the recorded pull request's check state, once.
  *
- * This is the single-shot probe inside the `await-checks` loop_group: the engine's
- * durable `wait:` node owns the time between probes, so this script reads the state,
+ * This is the single-shot probe inside the CI wait loops: the engine's durable
+ * `wait:` node owns the time between probes, so this script reads the state,
  * declares it, and exits. The checks come from the pack's one reader
  * (`.shared/checks.ts`): `gh` by default, `archon forge checks` when the operator
  * opts in with `ARCHON_SDLC_FORGE=forge`.
  *
- * States, declared through this node's `output_format` so `when:` and `until_bash`
- * branch on a certified field rather than on prose:
- *   pending    some check is still running
- *   concluded  green, no CI configured, or CI gated on a maintainer's approval (fork
- *              or first contribution) — a gate only a maintainer can open, named,
- *              never blocked on and never called green
+ * Which checks gate a merge is a project fact discover-ci recorded; this acts on
+ * that record and never guesses from silence. States, declared through this node's
+ * `output_format` so `when:` and `until_bash` branch on a certified field:
+ *   pending    a check is running, or an expected check has not registered yet
+ *   concluded  green; no checks expected and none registered; or CI gated on a
+ *              maintainer's approval, which the forge reports structurally (an
+ *              `action_required` conclusion) — named, never blocked on, never green
  *   red        concluded with non-green checks, named. A cancelled or unrecognized
  *              check is not a green check.
  *
  * Red is a report, never a verdict: the deliver tail's convergence pass decides what
  * it means. A failed read refuses: it is never evidence that no CI exists.
  *
- * The one in-process wait: when nothing has registered yet, registration gets a
- * single 60 s grace before the maintainer-gated skip is declared. The gh source first
- * asks whether the repository has any active workflow, so a repository without CI
- * skips the wait.
+ * Bound inputs (`with:` bindings, canonical text in env):
+ * - INPUTS_PR: `$pr.output`, the run's verified pull-request record.
+ * - INPUTS_EXPECTED: JSON list of the check names discover-ci expects to gate.
  */
 
 import {
+  approvalPending,
   atRevision,
   describeUnits,
   gateState,
-  hasActiveWorkflows,
+  missingChecks,
   readPrChecks,
-  type CheckRead,
 } from '../../.shared/checks.ts';
 import { parseQualifiedPr } from '../../.shared/forge.ts';
-import { emit, refuse } from '../../.shared/io.ts';
-
-/** The recorded pull request, so no read ever falls back to the ambient branch. */
-const boundPr = process.env.INPUTS_PR;
-
-function classify(read: CheckRead): void {
-  const at = atRevision(read);
-  const units = read.units;
-  switch (gateState(units)) {
-    case 'pending': {
-      const count = units.filter(unit => unit.state === 'pending').length;
-      emit({ state: 'pending', detail: `${count} check(s) running${at}` });
-      return;
-    }
-    case 'red': {
-      const parts: string[] = [];
-      const red = units.filter(unit => unit.state === 'red');
-      const unknown = units.filter(unit => unit.state === 'unknown');
-      if (red.length > 0) parts.push(`non-green checks${at}: ${describeUnits(red)}`);
-      if (unknown.length > 0) parts.push(`checks have unknown state${at}: ${describeUnits(unknown)}`);
-      emit({ state: 'red', detail: parts.join('; ') });
-      return;
-    }
-    case 'gated':
-      emit({
-        state: 'concluded',
-        detail: `checks gated${at}: ${describeUnits(units.filter(unit => unit.state === 'gated'))}`,
-      });
-      return;
-    case 'green': {
-      const skipped = units.filter(unit => unit.result === 'skipped');
-      const note =
-        skipped.length > 0
-          ? `; skipped (non-blocking): ${skipped.map(unit => unit.unit.name).join(', ')}`
-          : '';
-      emit({
-        state: 'concluded',
-        detail: `all ${units.length} observed check(s) green${at}${note}`,
-      });
-      return;
-    }
-    case 'none':
-      return;
-  }
-}
+import { emit, refuse, text } from '../../.shared/io.ts';
 
 function probe(): void {
-  const pr = parseQualifiedPr(boundPr);
-  const first = readPrChecks(pr);
-  if (first.units.length > 0) {
-    classify(first);
+  const pr = parseQualifiedPr(process.env.INPUTS_PR);
+  const expected = JSON.parse(text(process.env.INPUTS_EXPECTED)) as string[];
+  const read = readPrChecks(pr);
+  const at = atRevision(read);
+  const units = read.units;
+  const state = gateState(units);
+  if (state === 'pending') {
+    const count = units.filter(unit => unit.state === 'pending').length;
+    emit({ state: 'pending', detail: `${count} check(s) running${at}` });
     return;
   }
-  if (first.source === 'gh' && hasActiveWorkflows(pr) === false) {
-    emit({ state: 'concluded', detail: 'no checks configured on this repository — nothing to await' });
+  if (state === 'red') {
+    const parts: string[] = [];
+    const red = units.filter(unit => unit.state === 'red');
+    const unknown = units.filter(unit => unit.state === 'unknown');
+    if (red.length > 0) parts.push(`non-green checks${at}: ${describeUnits(red)}`);
+    if (unknown.length > 0) parts.push(`checks have unknown state${at}: ${describeUnits(unknown)}`);
+    emit({ state: 'red', detail: parts.join('; ') });
     return;
   }
-  // CI exists (or could not be ruled out) but nothing started. Give registration one
-  // grace interval, then skip with the reason: starting gated CI is a maintainer's
-  // power, not this run's.
-  Bun.sleepSync(60_000);
-  const second = readPrChecks(pr);
-  if (second.units.length > 0) {
-    classify(second);
+  const missing = missingChecks(units, expected);
+  if (state === 'gated' || (missing.length > 0 && approvalPending(pr, read))) {
+    const gated = units.filter(unit => unit.state === 'gated');
+    emit({
+      state: 'concluded',
+      detail:
+        `checks gated on a maintainer's approval${at}` +
+        (gated.length > 0 ? `: ${describeUnits(gated)}` : '') +
+        (missing.length > 0 ? `; not yet run: ${missing.join(', ')}` : ''),
+    });
     return;
   }
-  emit({
-    state: 'concluded',
-    detail:
-      `CI is configured but no checks started on this PR${atRevision(second)} — most likely ` +
-      "awaiting a maintainer's approval to run (fork or first contribution), or path " +
-      'filters. Skipping the CI gate; running and verifying checks stays with the maintainer.',
-  });
+  if (missing.length > 0) {
+    emit({ state: 'pending', detail: `expected check(s) not registered yet${at}: ${missing.join(', ')}` });
+    return;
+  }
+  if (state === 'none') {
+    emit({ state: 'concluded', detail: 'no checks are expected to gate this merge, and none registered' });
+    return;
+  }
+  const skipped = units.filter(unit => unit.result === 'skipped');
+  const note =
+    skipped.length > 0 ? `; skipped (non-blocking): ${skipped.map(unit => unit.unit.name).join(', ')}` : '';
+  emit({ state: 'concluded', detail: `all ${units.length} observed check(s) green${at}${note}` });
 }
 
 try {

@@ -4761,7 +4761,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
     ['forge', true],
     ['gh', true],
   ] as const)(
-    'publish reconciles a hung %s create (delayed visibility: %s) without repeating the push or create',
+    'publish reconciles a hung %s create (delayed visibility: %s) without repeating the create',
     async (source, delayed) => {
       const pack = join(import.meta.dir, '../../../.archon/workflows/sdlc/pr');
       const parsed = parseWorkflow(
@@ -4777,7 +4777,6 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       const client = join(testDir, 'forge-client.ts');
       const preload = join(testDir, 'gh-preload.ts');
       const clientPid = join(testDir, 'client-pid');
-      const intentPath = join(testDir, 'intent.json');
       const repo = { host: 'github.com', path: 'example/repo' };
       const pr = {
         schemaVersion: 1,
@@ -4793,18 +4792,6 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         base_revision: null,
         maintainer_can_modify: null,
       };
-      await writeFile(
-        intentPath,
-        JSON.stringify({
-          repo,
-          head: 'feature',
-          headRevision: 'deadbeef',
-          base: 'dev',
-          title: 'A title',
-          bodyPath: join(testDir, 'body.md'),
-          draft: true,
-        })
-      );
       await writeFile(join(testDir, 'body.md'), 'A body');
       const ghPr = {
         number: 42,
@@ -4820,13 +4807,26 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         headRepositoryOwner: { login: 'example' },
         maintainerCanModify: null,
       };
+      // publish pushes before it creates: git answers as a checkout whose recorded
+      // remote already has the head, and each push is counted.
       await writeFile(
         preload,
-        `const original = Bun.spawnSync.bind(Bun);
+        `import { appendFileSync } from 'node:fs';
+        const original = Bun.spawnSync.bind(Bun);
+        const git = (args) => {
+          const out = (stdout) => ({ exitCode: 0, stdout: Buffer.from(stdout), stderr: Buffer.from('') });
+          if (args[0] === 'rev-parse') return out('deadbeef');
+          if (args[0] === 'config') return out('remote.upstream.url https://github.com/example/repo.git');
+          if (args[0] === 'push') { appendFileSync(${JSON.stringify(pushed)}, 'push\\n'); return out(''); }
+          if (args[0] === 'ls-remote') return out('deadbeef\\trefs/heads/feature');
+          return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('unexpected git call') };
+        };
         Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) =>
-          argv[0] === 'gh'
-            ? original([process.execPath, ${JSON.stringify(client)}, ...argv.slice(1)], settings)
-            : original(argv, settings)
+          argv[0] === 'git'
+            ? git(argv.slice(1))
+            : ${JSON.stringify(source)} === 'gh' && argv[0] === 'gh'
+              ? original([process.execPath, ${JSON.stringify(client)}, ...argv.slice(1)], settings)
+              : original(argv, settings)
         });`
       );
       let releaseWrite: () => void = () => {};
@@ -4871,28 +4871,29 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       );
       const publishNode: ExecNode = {
         ...publish,
+        depends_on: ['prepare'],
+        trigger_rule: undefined,
         timeout: 1000,
         retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
+        with: {
+          repo: JSON.stringify(repo),
+          head_repo: JSON.stringify(repo),
+          head: 'feature',
+          base: 'dev',
+          existing: 'null',
+          title: 'A title',
+          body: join(testDir, 'body.md'),
+          draft: 'true',
+        },
         script: `process.env.ARCHON_SDLC_FORGE = ${JSON.stringify(source)};
           process.env.ARCHON_CLI_COMMAND = ${JSON.stringify(JSON.stringify([process.execPath, client]))};
-          ${source === 'gh' ? `await import(${JSON.stringify(preload)});` : ''}
+          await import(${JSON.stringify(preload)});
           await import(${JSON.stringify(join(pack, 'scripts/publish-pr.ts'))});`,
       };
       let mockDeps: WorkflowDeps;
       try {
         ({ mockDeps } = await runNodes([
-          {
-            id: 'pr',
-            kind: 'exec',
-            runtime: 'bun',
-            script: `require('fs').appendFileSync(${JSON.stringify(pushed)}, 'push\\n');
-            console.log(JSON.stringify({ intent: ${JSON.stringify(intentPath)} }));`,
-            output_format: {
-              type: 'object',
-              properties: { intent: { type: 'string' } },
-              required: ['intent'],
-            },
-          },
+          { id: 'prepare', kind: 'exec', runtime: 'bun', script: `console.log('prepared')` },
           publishNode,
         ]));
       } finally {
@@ -4918,7 +4919,9 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       };
       for (let attempt = 0; attempt < 500 && clientAlive(); attempt++) await Bun.sleep(10);
       expect(clientAlive()).toBe(false);
-      expect(await readFile(pushed, 'utf8')).toBe('push\n');
+      // The push is idempotent and reads back, so each attempt repeats it; the create is
+      // what must never repeat.
+      expect(await readFile(pushed, 'utf8')).toBe('push\npush\n');
       expect(
         (await readFile(calls, 'utf8'))
           .trim()
@@ -4942,13 +4945,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         expect(JSON.stringify(terminals[1].data)).toContain('a previous PR create is unresolved');
         expect(mockDeps.store.failWorkflowRun).toHaveBeenCalled();
         expect(mockDeps.store.completeWorkflowRun).not.toHaveBeenCalled();
-        const resumed = await runNodes([
-          {
-            ...publishNode,
-            depends_on: [],
-            with: { intent: intentPath },
-          },
-        ]);
+        const resumed = await runNodes([{ ...publishNode, depends_on: [] }]);
         expect(resumed.mockDeps.store.failWorkflowRun).not.toHaveBeenCalled();
         expect(resumed.mockDeps.store.completeWorkflowRun).toHaveBeenCalled();
         expect((await readFile(calls, 'utf8')).trim().split('\n')).toEqual([
@@ -4957,7 +4954,7 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
           '"pr.view"',
           '"pr.view"',
         ]);
-        expect(await readFile(pushed, 'utf8')).toBe('push\n');
+        expect(await readFile(pushed, 'utf8')).toBe('push\npush\npush\n');
       } else {
         expect(terminals[1].event_type).toBe('node_completed');
         expect(JSON.stringify(terminals[1].data)).toContain(pr.url);
@@ -35484,11 +35481,11 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
-  it('loads archon-deliver and reaches flip-ready only after a resumed green CI probe', async () => {
+  it('loads archon-deliver and confirms the ready claim only after a resumed green CI probe', async () => {
     const repoRoot = join(import.meta.dir, '..', '..', '..');
     const probeCountPath = join(testDir, 'deliver-attention-probe-count');
     const greenMarkerPath = join(testDir, 'deliver-attention-green');
-    const flipMarkerPath = join(testDir, 'deliver-flip-ready');
+    const confirmMarkerPath = join(testDir, 'deliver-confirm-ready');
     const discovered = await discoverWorkflows(repoRoot, {
       loadDefaults: false,
       loadDefaultCommands: false,
@@ -35532,14 +35529,14 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
           },
         };
       }
-      if (node.id === 'flip-ready') {
+      if (node.id === 'confirm-ready') {
         return {
           ...node,
           runtime: 'sh' as const,
-          // Both stand-ins print the shape their real node declares: the flip and the
-          // terminal report certify their own stdout, so a bare URL here would fail
-          // certification rather than the node under test.
-          script: `printf '%s' flipped > ${JSON.stringify(flipMarkerPath)}; printf '%s' '{"pr_url":"https://github.com/example/repo/pull/3115"}'`,
+          // Both stand-ins print the shape their real node declares: the confirmation
+          // and the terminal report certify their own stdout, so a bare URL here would
+          // fail certification rather than the node under test.
+          script: `printf '%s' confirmed > ${JSON.stringify(confirmMarkerPath)}; printf '%s' '{"pr_url":"https://github.com/example/repo/pull/3115"}'`,
           deps: undefined,
           with: undefined,
         };
@@ -35560,7 +35557,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       return node;
     });
     const workflow = resolveWorkflow({ ...loaded.workflow, nodes });
-    const activeNodeIds = new Set(['ci-attention', 'flip-ready', 'outcome']);
+    const activeNodeIds = new Set(['ci-attention', 'ci-settled', 'confirm-ready', 'outcome']);
     // One persisted value stands in for every completed ancestor. Resume re-checks an
     // include's `when:` even for a cached descendant, so the value carries every field
     // a conditional include reads, set so each one was active: the pre-PR simplify
@@ -35577,6 +35574,11 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       continuation: false,
       full: true,
       state: 'red',
+      // CI facts discover-ci records, the base sync's recorded-green answer, and the
+      // re-run request: each conditional reader sees a value it can bind or compare.
+      expected_checks: [],
+      recorded: false,
+      requested: true,
     };
     const inheritedRouteText = JSON.stringify(inheritedRoute);
     const completedBeforeAttention = new Map<string, PersistedNodeOutput>(
@@ -35600,7 +35602,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
 
     expect(await Bun.file(probeCountPath).exists()).toBe(true);
     expect(await Bun.file(probeCountPath).text()).toBe('1');
-    expect(await Bun.file(flipMarkerPath).exists()).toBe(false);
+    expect(await Bun.file(confirmMarkerPath).exists()).toBe(false);
     const firstWait = initialStore.getState().metadata.wait as WorkflowWaitContext;
     expect(firstWait).toMatchObject({
       owner: 'loop_group',
@@ -35643,7 +35645,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
         result: expect.objectContaining({ status: 'satisfied' }),
       })
     );
-    expect(await Bun.file(flipMarkerPath).text()).toBe('flipped');
+    expect(await Bun.file(confirmMarkerPath).text()).toBe('confirmed');
     expect(resumedStore.completeWorkflowRun).toHaveBeenCalledTimes(1);
   });
 

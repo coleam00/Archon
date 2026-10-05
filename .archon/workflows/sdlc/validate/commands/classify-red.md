@@ -1,14 +1,14 @@
 # Classify a red gate
 
-The project's gate ran and a check failed. `$ARTIFACTS_DIR/validation.md` is the record: every check that ran, its exit status, the failing check's output tail, and the path of each check's full output log. Decide why the failed check failed. You fix nothing, re-run nothing to make it pass, and change nothing in the checkout.
+The project's gate ran and at least one check failed. `$ARTIFACTS_DIR/validation.md` is the record: every check that ran, its group, its exit status, each failing check's output tail, and the path of each check's full output log. Decide why the failed checks failed, judging every one the record names. You fix nothing, re-run nothing to make it pass, and change nothing in the checkout.
 
 ## Declare
 
-- `red_cause` — why the gate is red:
+- `red_cause` — why the gate is red; when several checks failed, the cause that most needs action (`introduced` over `inherited` over `environment`):
   - `introduced` — the change under validation caused the failure.
   - `inherited` — the same check was already failing at the base this branch came from.
   - `environment` — the machine caused it, not any code: a database or port a parallel process holds, a missing credential, a network fault, a process killed for memory.
-- `summary` — a few sentences: the failing check by name, what failed in it, and the evidence for the cause. A fixer reads this first.
+- `summary` — a few sentences: every failing check by name, what failed in each, and the evidence for each cause. A fixer reads this first.
 
 ## Evidence
 

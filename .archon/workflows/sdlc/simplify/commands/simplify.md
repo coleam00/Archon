@@ -1,11 +1,11 @@
 # Simplify — The Smallest Coherent Shape
 
-Writing code is cheap; maintaining it and recovering option value are not. Hunt one defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree (`git worktree add --detach "$(mktemp -d)" HEAD`, removed when you are done), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
+Writing code is cheap; maintaining it and recovering option value are not. Hunt one defect: **the change delivers its required outcome through more structure than that outcome needs.** Preserve meaningful invariants, supported behavior, and useful foundations — not accidental implementation shape. Read-only: never modify files, commit, or post anywhere. Never edit this checkout, not even to revert: sibling reviewers read it at the same time, and the engine fails a reviewer that leaves it changed. Try a mutation in a scratch worktree under this run (`git worktree add --detach "$(mkdir -p "$ARTIFACTS_DIR/scratch/simplify" && mktemp -d "$ARTIFACTS_DIR/scratch/simplify/XXXXXX")" HEAD`; the workflow removes it), and before running anything there, install its dependencies with the project's own package manager in locked mode, never updating a lockfile.
 
 Stage: **$INPUTS.stage**.
 
 - `review` — you are one lens of a review round. Read `$ARTIFACTS_DIR/review/scope.md` first: it names the diff, its base, and the accepted contract.
-- `pre-pr` — delivery runs you on the committed implementation before its pull request opens, so no scope.md exists. The diff is this branch's commits over its base: fetch `origin $BASE_BRANCH` and read `git diff origin/$BASE_BRANCH...HEAD`. The accepted contract is the work order below, and `$ARTIFACTS_DIR/implementation.md` records what the implementation claims. This is the cheapest moment to change the shape: nothing is published and no other reviewer has read the code yet.
+- `pre-pr` — delivery runs you on the committed implementation before its pull request opens, so no scope.md exists. The diff is this branch's commits over its base: fetch `$BASE_BRANCH` from the remote of the repository this work is proposed to (`git remote -v`; in a fork setup, the upstream, whatever it is named) and read `git diff <that remote>/$BASE_BRANCH...HEAD`. The accepted contract is the work order below — judge against its required outcome, not against the plan or design the implementation followed: a mechanism the plan chose is a claim to test, not a requirement — and `$ARTIFACTS_DIR/implementation.md` records what the implementation claims. This is the cheapest moment to change the shape: nothing is published and no other reviewer has read the code yet.
 
 Accepted work order (may be empty in `review`, where scope.md carries it):
 
@@ -46,9 +46,9 @@ Report a simplification only when the evidence establishes:
 - the required outcome and invariant;
 - the avoidable machinery and its concrete maintenance or correctness cost;
 - an existing or smaller primitive that carries the same behavior; and
-- callers, tests, contracts, or focused validation that support the replacement.
+- callers, tests, contracts, or focused validation that support the replacement. Tests the change added for its own machinery are not evidence for keeping that machinery.
 
-Try to falsify the smaller shape against concurrency, ordering, persistence, compatibility, and error semantics where relevant. Do not replace explicit code with clever code, move complexity into a helper, invent a new abstraction for hypothetical reuse, or broaden the review into unrelated cleanup. Report a proved defect of another kind too — a wrong outcome, an unprotected behavior, a missing type at a boundary; in `review` the synthesizer merges what overlaps with other lenses.
+Try to falsify the smaller shape against concurrency, ordering, persistence, compatibility, and error semantics where relevant. A finding never proposes added state, locks, protocols, or operator or API surface: a simplification removes structure. Do not replace explicit code with clever code, move complexity into a helper, invent a new abstraction for hypothetical reuse, or broaden the review into unrelated cleanup. Report a proved defect of another kind too — a wrong outcome, an unprotected behavior, a missing type at a boundary; in `review` the synthesizer merges what overlaps with other lenses.
 
 When execution is practical, run the smallest command that can falsify a replacement. Invoke it the way this repository documents its own commands — the package scripts and invocation rules its steering files name, never an ad-hoc variant one of them warns against.
 

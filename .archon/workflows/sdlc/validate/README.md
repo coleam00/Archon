@@ -4,17 +4,20 @@
 checkout. Its `scope` input narrows that ordinary path, which has three steps:
 
 1. `discover` (agent) reads the repository and declares the checks to run, in the
-   project's own order, as argv lists. It prefers an aggregate gate script over its
-   parts, puts a locked-mode install first when dependencies are missing, and lists
-   any untracked run scaffolding under `.archon/` that the gate would refuse.
+   project's own order, as argv lists, each in a group: independent gates (a
+   service and a web app built separately, per-module gates) are separate groups.
+   It prefers an aggregate gate script over its parts and puts a locked-mode
+   install first when dependencies are missing.
 2. `run` (script) runs those checks with no agent involved, so a gate that takes
-   longer than an agent's shell tool allows still finishes. It stops at the first
-   failing check and writes `validation.md`: each command, its exit status, how long
-   it took, and the output tail of a failure. Full output stays in `validation/`.
+   longer than an agent's shell tool allows still finishes. Each group stops at its
+   first failing check, but every group runs, so one gate's failure never hides
+   another's. It writes `validation.md`: each command, its group, its exit status,
+   how long it took, and the output tail of a failure. Full output stays in
+   `validation/`.
    The checks run without the node's run contract (`WORKFLOW_ID`, `ARTIFACTS_DIR`,
    `INPUTS_*` and the rest): they are the project's gate, not part of the run.
-3. `classify` (agent) runs only when a check failed. It decides whether the change
-   caused it (`introduced`), the base already had it (`inherited`) or the machine
+3. `classify` (agent) runs only when a check failed, and judges every failure the
+   record names. It decides whether the change caused it (`introduced`), the base already had it (`inherited`) or the machine
    did (`environment`).
 
 Green comes from exit statuses alone: every declared check exited 0. When no check

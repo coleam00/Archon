@@ -9,11 +9,18 @@
  * those steps calls `gh`.
  */
 import { describe, expect, it } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { PR, runPackScript, type ScriptOptions, type ScriptRun } from './deliver-checks-harness';
+import {
+  PR,
+  gitCheckout,
+  runPackScript,
+  type ScriptOptions,
+  type ScriptRun,
+} from './deliver-checks-harness';
 import { FAKE_HOST, initialState, type FakeGitHubState } from './fake-github-fetch';
 
 const trackTempRoot = trackTempRoots();
@@ -23,7 +30,11 @@ const GITHUB_PLUGIN = join(REPO_ROOT, 'packages/adapters/src/forge/github/plugin
 const FAKE_GITHUB = join(import.meta.dir, 'fake-github-fetch.ts');
 
 const MARKER = '<!-- archon-review-report -->';
-const HEAD_SHA = 'feedface00000000000000000000000000000000';
+// A real checkout whose recorded remote is a local bare repository: publish-pr pushes
+// it before it creates, and flip-ready merges it against the base.
+const CHECKOUT = gitCheckout();
+const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: CHECKOUT, encoding: 'utf8' }).stdout.trim();
+const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
 const RESYNCED_BODY = 'Resynced body: the change adds a guard and its test.';
 const ROUND_ONE = `Round one at ${HEAD_SHA}: one finding still open.`;
@@ -96,6 +107,7 @@ describe('the forge opt-in delivers through plugin operations', () => {
     const host = forgeHost();
     const through = (relative: string, options: ScriptOptions = {}): ScriptRun => {
       const run = runPackScript(relative, {
+        cwd: CHECKOUT,
         ...options,
         source: 'forge',
         forge: { kind: 'command', argv: host.argv },
@@ -122,6 +134,8 @@ describe('the forge opt-in delivers through plugin operations', () => {
           INPUTS_ACTION: ready ? 'none' : 'correct',
           INPUTS_SUMMARY: 'summary',
           INPUTS_REPORT_POINTER: JSON.stringify({ path: 'review/report.md' }),
+          INPUTS_DISCOVERIES: '[]',
+          INPUTS_MISSING: '[]',
         },
         artifacts: { 'report.md': report },
       });
@@ -129,20 +143,18 @@ describe('the forge opt-in delivers through plugin operations', () => {
 
     // 1. The draft pull request.
     const created = through('pr/scripts/publish-pr', {
-      inputs: { INPUTS_INTENT: '{ARTIFACTS}/pr-intent.json' },
-      artifacts: {
-        'pr-intent.json': JSON.stringify({
-          repo: PR.repo,
-          headRepo: PR.repo,
-          head: 'feature',
-          headRevision: HEAD_SHA,
-          base: 'dev',
-          title: 'Add a guard',
-          bodyPath: '{ARTIFACTS}/pr-body.md',
-          draft: true,
-        }),
-        'pr-body.md': OPENING_BODY,
+      inputs: {
+        INPUTS_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD_REPO: JSON.stringify(PR.repo),
+        INPUTS_HEAD: 'feature',
+        INPUTS_BASE: 'dev',
+        INPUTS_EXISTING: 'null',
+        INPUTS_TITLE: 'Add a guard',
+        INPUTS_BODY: '{ARTIFACTS}/pr-body.md',
+        INPUTS_DRAFT: 'true',
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
+      artifacts: { 'pr-body.md': OPENING_BODY, 'listing.json': EMPTY_LISTING },
     });
     const record = JSON.parse(created.stdout) as Record<string, unknown>;
     expect(record).toMatchObject({ number: 42, is_draft: true, head_revision: HEAD_SHA });
@@ -157,24 +169,27 @@ describe('the forge opt-in delivers through plugin operations', () => {
     const current = JSON.parse(read.stdout) as { body: string };
     expect(readFileSync(current.body, 'utf8')).toBe(OPENING_BODY);
     through('deliver/scripts/publish-pr-body', {
-      inputs: { INPUTS_PR: created.stdout, INPUTS_INTENT: '{ARTIFACTS}/intent.json' },
-      artifacts: {
-        'intent.json': JSON.stringify({ change: true, bodyPath: '{ARTIFACTS}/final.md' }),
-        'final.md': RESYNCED_BODY,
+      inputs: {
+        INPUTS_PR: created.stdout,
+        INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'final.md' }),
+        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
+      artifacts: { 'final.md': RESYNCED_BODY, 'listing.json': EMPTY_LISTING },
     });
 
     // 4. The second round edits the same comment rather than adding one.
     review(ROUND_TWO, true);
 
     // 5. The ready flip reads checks, then flips.
-    const flipped = through('deliver/scripts/flip-ready');
+    const flipped = through('deliver/scripts/flip-ready', { inputs: { INPUTS_PR: created.stdout } });
     expect(JSON.parse(flipped.stdout)).toEqual({ pr_url: record.url });
 
     const state = github();
     expect(state.pulls).toHaveLength(1);
     expect(state.pulls[0]).toMatchObject({ draft: false, body: RESYNCED_BODY });
-    expect(state.comments).toEqual([{ id: 900, body: `${MARKER}\n${ROUND_TWO}` }]);
+    expect(state.comments).toEqual([
+      { id: 900, body: `${MARKER}\nReviewed commit: \`${HEAD_SHA}\`\n\n${ROUND_TWO}` },
+    ]);
     const writes = state.calls.filter(call => !call.startsWith('GET '));
     expect(writes.map(call => call.replace(/\?.*$/, ''))).toEqual([
       `POST https://${FAKE_HOST}/api/v3/repos/example/repo/pulls`,

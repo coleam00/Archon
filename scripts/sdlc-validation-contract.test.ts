@@ -30,8 +30,9 @@ const discoverySchema = {
         properties: {
           name: { type: 'string' },
           argv: { type: 'array', items: { type: 'string' }, minItems: 1 },
+          group: { type: 'string' },
         },
-        required: ['name', 'argv'],
+        required: ['name', 'argv', 'group'],
       },
     },
     notes: { type: 'string' },

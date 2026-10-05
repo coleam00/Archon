@@ -253,7 +253,7 @@ describe('three-tree project gate evidence', () => {
   });
 
   it('keeps interaction out of every shared accepted-red route', () => {
-    expect(PASSES_RED).toEqual(['inherited', 'environment']);
+    expect(PASSES_RED).toEqual(['inherited', 'environment', 'unavailable']);
     expect(passesRed('interaction')).toBe(false);
     expect(passesRed('')).toBe(false);
   });
@@ -355,9 +355,15 @@ describe('the green gate on a validation that did not finish', () => {
   });
 
   it('still refuses red with no declared cause as unexplained red', () => {
-    const result = gate('', 'tests failed');
+    const result = gate('', '');
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('is red and declared no red_cause');
+  });
+
+  it('names a blocker the declaring node stopped on instead of calling it unexplained', () => {
+    const result = gate('', 'the plan names a file that does not exist');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('stopped on a blocker it declared: the plan names a file');
   });
 });
 

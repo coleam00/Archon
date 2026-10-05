@@ -2,8 +2,9 @@ name: archon-pr
 description: |
   Open a pull request for the committed work on the current branch — draft by
   default when composed, template-aware, with the body built from the run's
-  artifacts. Verifies by reading the created PR back. Never sweeps unrelated
-  changes and never force-pushes.
+  artifacts. Brings the branch up to date with its base by merge first, gates
+  the merged tree once, then pushes and verifies by reading the created PR
+  back. Never sweeps unrelated changes, never rebases and never force-pushes.
 
   Use when: committed work on a branch needs a PR — "open a PR", "create a
   draft PR for this branch".
@@ -20,30 +21,101 @@ inputs:
 returns: publish
 
 nodes:
-  # The agent establishes the target, writes the body, pushes, and decides
-  # whether this work already has a pull request. It performs no forge write:
-  # publish below owns that, so the same intent is published the same way
-  # whichever source the run selected.
-  - id: pr
+  # The agent judges: which repository the work is proposed to, the base, whether
+  # the run continues an existing pull request, how to merge the latest base in,
+  # and what the title and body say. It performs no push and no forge write.
+  - id: prepare
     command: pr
     output_type: pull-request-intent
     output_format:
       type: object
       properties:
-        intent: { type: string }
-      required: [intent]
+        repo: &repo
+          type: object
+          properties:
+            host: { type: string, pattern: '\S' }
+            path: { type: string, pattern: '\S' }
+          required: [host, path]
+        head_repo: *repo
+        head: { type: string, pattern: '\S' }
+        base: { type: string, pattern: '\S' }
+        existing: { type: [integer, 'null'], minimum: 1 }
+        title: { type: string, pattern: '\S' }
+        body:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [pr-body.md] }
+          required: [type, run_id, path]
+        # Paths the agent could not merge with confidence; empty after a clean merge.
+        conflicts: { type: array, items: { type: string } }
+        summary: { type: string }
+      required: [repo, head_repo, head, base, existing, title, body, conflicts, summary]
 
-  # This is the durable ownership record for every later public action in
-  # delivery and inbound forge event. Consumers use this qualified identity,
+  # Holds the merge to its invariants and answers one question: is a green gate
+  # already recorded for this exact tree? A merge that changed nothing keeps the
+  # implementation's recorded green; a new tree is gated once below.
+  - id: synced
+    script: verify-sync
+    runtime: bun
+    depends_on: [prepare]
+    with:
+      repo: { from: "$prepare.output.repo" }
+      base: "$prepare.output.base"
+      conflicts: { from: "$prepare.output.conflicts" }
+      summary: "$prepare.output.summary"
+    output_format:
+      type: object
+      properties:
+        recorded: { type: boolean }
+      required: [recorded]
+
+  - id: validate
+    include: archon-validate
+    depends_on: [synced]
+    when: "$synced.output.recorded == false"
+
+  - id: gate
+    script: gate-green
+    runtime: bun
+    output_type: green-gate
+    output_format:
+      type: object
+      properties:
+        gate: { type: string, enum: [green] }
+        red_cause: { type: string }
+        stage: { type: string }
+        summary: { type: string }
+        head: { type: [string, 'null'] }
+      required: [gate, red_cause, stage, summary, head]
+    depends_on: [validate]
+    with:
+      green: "$validate.output.green"
+      red_cause: "$validate.output.red_cause"
+      summary: "$validate.output.summary"
+      stage: "The merged tree"
+
+  # The durable ownership record for every later public action in delivery and
+  # inbound forge event. It pushes the branch, then opens the pull request, or
+  # reuses the one this work already has; consumers use this qualified identity,
   # never gh's ambient branch lookup.
   - id: publish
     script: publish-pr
     runtime: bun
     timeout: 30000
     retry: { max_attempts: 2, delay_ms: 20000 }
-    depends_on: [pr]
+    depends_on: [synced, gate]
+    trigger_rule: none_failed_min_one_success
     with:
-      intent: "$pr.output.intent"
+      repo: { from: "$prepare.output.repo" }
+      head_repo: { from: "$prepare.output.head_repo" }
+      head: "$prepare.output.head"
+      base: "$prepare.output.base"
+      existing: { from: "$prepare.output.existing" }
+      title: "$prepare.output.title"
+      body: "$ARTIFACTS_DIR/pr-body.md"
+      draft: "$INPUTS.draft"
     output_type: pull-request
     output_format:
       type: object

@@ -8,10 +8,14 @@
  * what makes a review true.
  *
  * A report goes public only about the commit its round fixed at the start
- * (review-round): the checkout must still be at it, the pull request's remote
- * head must be it, and the report must name it. Any mismatch refuses, so a
- * verdict about one commit can never stand as the verdict on another. Once
- * published, the commit is recorded beside the report as the next round's cursor.
+ * (review-round): the checkout must still be at it and the pull request's remote
+ * head must be it. Any mismatch refuses, so a verdict about one commit can never
+ * stand as the verdict on another. This node stamps that commit on the comment
+ * itself rather than trusting the report's text to name it. Once published, the
+ * commit is recorded beside the report as the next round's cursor.
+ *
+ * A ready verdict while an enabled lens did not complete (lens-status) refuses:
+ * readiness without the coverage the round required is not a verdict to publish.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
@@ -20,8 +24,10 @@
  *   or `null` for a working diff. It names the target of a standalone review.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
- * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER: the
- *   certified verdict fields this node forwards.
+ * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
+ *   INPUTS_DISCOVERIES: the certified verdict fields this node forwards.
+ * - INPUTS_MISSING: the enabled lenses that did not complete; `[]` on a
+ *   continuation round.
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -73,7 +79,14 @@ try {
     action: text(process.env.INPUTS_ACTION),
     findings_summary: text(process.env.INPUTS_SUMMARY),
     report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
+    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
   };
+  const missing = JSON.parse(text(process.env.INPUTS_MISSING)) as string[];
+  if (verdict.ready && missing.length > 0) {
+    throw new Error(
+      `the review declared ready while enabled lenses did not complete: ${missing.join(', ')}`
+    );
+  }
   const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
   const declared = declaredPr(text(process.env.INPUTS_PR));
   if (
@@ -93,9 +106,6 @@ try {
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  if (!report.includes(head)) {
-    throw new Error(`the review report does not name ${head}, the commit this round reviewed`);
-  }
   if (!pr) {
     note('publish-review: the review scope is a working diff, so no comment was published.');
   } else {
@@ -108,7 +118,7 @@ try {
     const directory = mkdtempSync(join(tmpdir(), 'archon-review-'));
     try {
       const marked = join(directory, 'comment.md');
-      writeFileSync(marked, `${MARKER}\n${report}`);
+      writeFileSync(marked, `${MARKER}\nReviewed commit: \`${head}\`\n\n${report}`);
       const comment = upsertComment(pr, MARKER, marked, source);
       note(`publish-review: canonical review comment at ${comment.url}`);
     } finally {

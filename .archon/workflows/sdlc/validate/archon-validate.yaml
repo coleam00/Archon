@@ -81,7 +81,8 @@ nodes:
       type: object
       properties:
         # The commands to run, in order. Each is an argv, never a shell string;
-        # a check that needs a shell names one as its first element.
+        # a check that needs a shell names one as its first element. Checks in
+        # one group stop at the group's first failure; every group runs.
         checks:
           type: array
           items:
@@ -92,7 +93,8 @@ nodes:
                 type: array
                 items: { type: string }
                 minItems: 1
-            required: [name, argv]
+              group: { type: string }
+            required: [name, argv, group]
         notes: { type: string }
       required: [checks, notes]
 

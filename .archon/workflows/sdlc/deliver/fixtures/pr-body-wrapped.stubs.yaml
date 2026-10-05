@@ -1,0 +1,102 @@
+# Guard fixture, seen red: the body-resync agent returns its pointer wrapped in a
+# JSON string instead of a certified artifact pointer. The node's schema rejects
+# it at sync-pr-body, where a provider can re-ask and a resume re-runs the node,
+# so publish-pr-body never reads a malformed value.
+impl__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: implemented and green"
+impl__assert-changed: "3 files changed"
+gate-green: '{"gate":"green","red_cause":"","stage":"The implementation","summary":"","head":null}'
+pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: null, title: "stub: title", body: { type: archon_artifact, run_id: "fixture-run", path: "pr-body.md" }, conflicts: [], summary: "stub: the base had not moved" }
+pr__synced: { recorded: true }
+pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
+discover-ci: { expected_checks: [], logs_reachable: true, evidence: "stub: no checks gate a merge here" }
+review__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy"}'
+review__coverage: { full: true, errors: true, docs: false, lenses: [seams, code, tests, simplify, errors] }
+review__scope:
+  # PR diff in scope; head sha stubbed
+  docs: false
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+review__code: "2 blocking findings"
+review__simplify__simplify: { findings: false }
+review__simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__seams: "0 findings"
+shape__simplify: { findings: false }
+shape__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__tests: "0 findings"
+review__errors: "0 findings"
+review__lens-status: { required: [seams, code, tests, simplify, errors], completed: [seams, code, tests, simplify, errors], missing: [] }
+review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+review__synthesize:
+  ready: false
+  action: correct
+  findings_summary: "stub: 3 blocking findings open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+review__publish:
+  ready: false
+  action: correct
+  findings_summary: "stub: 3 blocking findings open"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+fix__implement:
+  done: true
+  green: true
+  red_cause: ""
+  summary: "stub: findings fixed, pushed"
+fix__assert-changed: "2 files changed"
+gate-correction-green: '{"gate":"green","red_cause":"","stage":"The correction","summary":"","head":null}'
+push-fix: "push-head: fixture-branch is at fixturehead"
+recheck__mode: '{"continuation":true,"head":"fixturehead","cursor":"fixtureprior","risks":"fixture-owned-policy"}'
+recheck__coverage: { full: false, errors: false, docs: false, lenses: [] }
+recheck__scope:
+  # light mode; delta since cursor
+  docs: false
+# No recheck specialist stubs: continuation mode must skip the fan-out and let
+# the deciding agent review the prior report and correction delta itself.
+  pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+recheck__lens-status: { required: [], completed: [], missing: [] }
+recheck__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
+recheck__synthesize:
+  ready: true
+  action: none
+  findings_summary: "stub: no open blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+recheck__publish:
+  ready: true
+  action: none
+  findings_summary: "stub: no open blocking finding"
+  report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
+  discoveries: []
+# gate-ready is deliberately unstubbed: under --exec-code the real script runs,
+# proving the $corrections.output whole-ref binding on a completed loop_group.
+read-pr-body: { body: "/fixture/pr-body-current.md", url: "https://github.com/example/repo/pull/1" }
+publish-pr-body: {}
+sync-pr-body: { body: "{\"intent\": \"/fixture/pr-body-intent.json\"}", summary: "stub: wrapped" }
+validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
+validate__run: { status: green, summary: "stub: full gate green" }
+gate-validated: '{"gate":"green","red_cause":"","stage":"The project gate","summary":"","head":null}'
+ci-probe: '{"state":"concluded","detail":"all 2 check(s) green"}'
+ci-verdict: '{"state":"concluded","detail":"all 2 check(s) green"}'
+flip-ready: { pr_url: "https://github.com/example/repo/pull/1" }
+confirm-ready: { pr_url: "https://github.com/example/repo/pull/1" }
+outcome: { pr_url: "https://github.com/example/repo/pull/1", summary: "https://github.com/example/repo/pull/1" }
+review-policy: { risks: "fixture-owned-policy" }
+classify:
+  tier: full
+  errors: true
+  docs: false
+  reasons:
+    tier: "stub: touches persisted state"
+    errors: "stub: the diff adds a retry and a fallback"
+    docs: "stub: no doc-facing changes"
+file-discoveries: '{"records":[]}'
+match-discoveries: { matches: [] }
+fork: '{"fork":true}'
+fixture:
+  expect: failed
+  fail-node: sync-pr-body
+exec-code: true

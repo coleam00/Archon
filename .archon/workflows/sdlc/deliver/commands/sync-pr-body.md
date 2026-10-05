@@ -17,9 +17,10 @@ Its current description was read from the forge and written to
 **$INPUTS.current_body**. Confirm the recorded head branch equals the
 checked-out branch before judging anything.
 
-1. Read that body file and the full final diff against the recorded base
-   (`git fetch origin <base>`, then `git diff origin/<base>...HEAD`; a local
-   `<base>` branch can lag the pull request's base).
+1. Read that body file and the full final diff against the recorded base:
+   fetch the base from the remote whose URL is the pull request's repository
+   (`git remote -v`; it need not be named `origin`), then diff `<that
+   remote>/<base>...HEAD`. A local `<base>` branch can lag the pull request's base.
 2. Check every concrete claim in the body against the final diff: named
    functions and guards, described mechanics, file lists, "unchanged" claims.
    The Problem section describes the issue and rarely drifts; the Solution and
@@ -27,29 +28,18 @@ checked-out branch before judging anything.
 3. Change only what the diff falsifies. Preserve the body's structure, tone, and
    every claim that is still accurate. Do not rewrite from scratch, do not add
    sections, and do not narrate the correction history or this sync.
-4. When nothing is falsified, change nothing.
-   One exception to "add no sections": the gates record red they let through as
-   typed artifacts. Read the typed-artifact listing at `$TYPED_ARTIFACTS_FILE`,
-   take its `artifactsByType["green-gate"]` entries in the order the engine
-   recorded them, and open each entry's `path` relative to `$ARTIFACTS_DIR`; any
-   with a non-empty `red_cause` that the body does not already disclose gets that
-   disclosure — its `stage`, `red_cause`, and `summary`. Surface every listing
-   `errors` entry and every gate body you cannot read as a caveat, never as "no
-   gates". A correction round or the project gate can go red after the body was
-   written, and a reviewer must not have to discover that from a red badge.
+4. When nothing is falsified, change nothing. Red a gate let through is not
+   yours to disclose: the publishing node puts that section at the top of the
+   body from the gates' own records.
 
 Before finishing, re-read your intended final body once against the diff: every
 mechanism it describes must be one the diff actually contains.
 
-## Record the intent
+## Declare
 
-When nothing needed changing, write `$ARTIFACTS_DIR/pr-body-intent.json` as
-`{"change": false}`.
+When the body needed changing, write the **complete** intended body — not a
+patch — to `$ARTIFACTS_DIR/pr-body-final.md`, then declare:
 
-Otherwise write the **complete** intended body — not a patch — to
-`$ARTIFACTS_DIR/pr-body-final.md`, then write
-`$ARTIFACTS_DIR/pr-body-intent.json` as
-`{"change": true, "bodyPath": "$ARTIFACTS_DIR/pr-body-final.md"}`.
-
-Return only `{"intent": "$ARTIFACTS_DIR/pr-body-intent.json"}`, and report in
-your own words which claims you corrected, or that the body was already accurate.
+- `body`: `{"type": "archon_artifact", "run_id": "$WORKFLOW_ID", "path": "pr-body-final.md"}`,
+  copied exactly; or `null` when nothing needed changing.
+- `summary`: which claims you corrected, or that the body was already accurate.
