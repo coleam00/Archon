@@ -252,11 +252,20 @@ describe('provider admission wrapper', () => {
     await Promise.all([a.started, b.started]);
 
     await writeCaps({ [PROVIDER]: 1 });
-    const runC = drain(provider.sendQuery('c', '/tmp'));
     a.release();
     await runA;
-    await Bun.sleep(POLL_MS * 5);
-    // One live holder already meets the lowered cap.
+    // C starts once only B holds: one live holder already meets the lowered cap, so
+    // C's first poll is refused.
+    let markWaiting!: () => void;
+    const waiting = new Promise<void>(resolve => (markWaiting = resolve));
+    const runC = drain(
+      provider.sendQuery('c', '/tmp', undefined, {
+        onAdmission: event => {
+          if (event.state === 'waiting') markWaiting();
+        },
+      })
+    );
+    await waiting;
     expect(calls).toHaveLength(2);
     expect(await holderCount()).toBe(1);
 
