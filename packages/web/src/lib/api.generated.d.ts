@@ -3412,6 +3412,8 @@ export interface components {
               id: string;
               /** @enum {string} */
               kind: 'workflow';
+              /** @enum {boolean} */
+              fanOut?: true;
             }
           | {
               id: string;
