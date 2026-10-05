@@ -21,10 +21,10 @@
 import { createLogger } from '@archon/paths';
 import { listWorkflowEventsSince } from '@archon/core/db/workflow-events';
 import { mapWorkflowEventRow, DASHBOARD_SOURCE_EVENT_TYPES } from './workflow-bridge';
+import { DASHBOARD_STREAM } from './transport';
 
 const log = createLogger('adapter.web.dashboard-poller');
 
-const DASHBOARD_STREAM = '__dashboard__';
 /** Max rows per drain. With the event-type filter, a single second won't realistically overflow. */
 const DRAIN_LIMIT = 500;
 /** Escalate from warn → error after this many consecutive failed drains (a sustained outage). */

@@ -21,6 +21,7 @@ export function terminalRecord(
 
 export const detailFixture: Detail = {
   run: {
+    origin: { conversationId: 'conversation-1' },
     id: 'run-1',
     workflow_name: 'review',
     conversation_id: 'conversation-1',

@@ -181,6 +181,7 @@ COMMENT ON TABLE remote_agent_isolation_environments IS
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
+  origin JSONB,
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   workflow_name VARCHAR(255) NOT NULL,
   conversation_id UUID REFERENCES remote_agent_conversations(id) ON DELETE CASCADE,
@@ -665,6 +666,9 @@ CREATE TABLE IF NOT EXISTS remote_agent_auth_verification (
   "createdAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL,
   "updatedAt" timestamptz DEFAULT CURRENT_TIMESTAMP NOT NULL
 );
+
+-- Optional provenance leaves shipped conversation columns valid for older writers.
+ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 
 -- ============================================================================
 -- Indexes and column comments

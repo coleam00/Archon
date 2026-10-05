@@ -148,7 +148,7 @@ export function registerCommunityProviders(): void {
 }
 ```
 
-**That is the entire cross-cutting change.** No entrypoint edits, no config-type edits. The aggregator is already called from the CLI, server, and config-loader bootstrap paths.
+**That is the entire cross-cutting change.** No entrypoint edits, no config-type edits. The aggregator is already called from the CLI and server host bootstraps. Other hosts must register providers before loading configuration or workflows.
 
 ### 4. Tests
 

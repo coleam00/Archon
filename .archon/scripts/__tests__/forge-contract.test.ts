@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { expect, test } from 'bun:test';
 import {
   checksStateSchema,
@@ -143,7 +144,7 @@ test('gh and the GitHub forge plugin classify every GitHub check result identica
 // review ran, so the two must accept the same values.
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
   const file = join(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml');
-  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml');
+  const parsed = parseWorkflow(readFileSync(file, 'utf8'), 'archon-review.yaml', providerRegistry);
   if (parsed.workflow === null) throw new Error(parsed.error.error);
   const scope = parsed.workflow.nodes.find(node => node.id === 'scope');
   if (scope === undefined || !('output_format' in scope) || scope.output_format === undefined) {

@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { isApprovalContext } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
 import { readNodeRecordEvent, nodeInvocationKey } from './node-record-reader';
@@ -204,6 +205,7 @@ type MockWorkflowStore = {
 
 function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-mock' },
     id,
     workflow_name: 'mock',
     conversation_id: 'conv-mock',
@@ -420,6 +422,7 @@ function createMockDeps<TStore extends IWorkflowStore = MockWorkflowStore>(
 ): MockWorkflowDeps<TStore> {
   const store = storeOverride ?? createMockStore();
   return {
+    providers: providerRegistry,
     store: store as TStore,
     // Mock providers settle like real ones; see settlingProvider.
     getAgentProvider: provider => settlingProvider(mockGetAgentProviderDag(provider)),
@@ -678,6 +681,7 @@ async function readAllArtifacts(artifactsDir: string) {
 
 function makeWorkflowRun(id = 'dag-test-run-id', overrides?: Partial<WorkflowRun>): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-dag' },
     id,
     workflow_name: 'dag-test',
     conversation_id: 'conv-dag',
@@ -1181,7 +1185,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/cycle/i);
   });
@@ -1202,7 +1209,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/nonexistent/);
   });
@@ -1224,7 +1234,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/duplicate/i);
   });
@@ -1245,7 +1258,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/mutually exclusive/i);
   });
@@ -1265,7 +1281,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/must have either/i);
   });
@@ -1304,7 +1323,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows).toHaveLength(1);
 
@@ -1334,7 +1356,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows).toHaveLength(1);
 
@@ -1364,7 +1389,10 @@ prompt: "do something"
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows).toHaveLength(1);
     expect(result.workflows[0].workflow.name).toBe('extra-fields');
@@ -1389,7 +1417,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].error).toMatch(/trigger_rule/i);
   });
@@ -1416,7 +1447,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(testDir, { loadDefaults: false });
+    const result = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     const wf = result.workflows
       .map(ws => ws.workflow)
@@ -4766,7 +4800,8 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
       const pack = join(import.meta.dir, '../../../.archon/workflows/sdlc/pr');
       const parsed = parseWorkflow(
         await Bun.file(join(pack, 'archon-pr.yaml')).text(),
-        'archon-pr.yaml'
+        'archon-pr.yaml',
+        providerRegistry
       );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       const publish = parsed.workflow.nodes.find(node => node.id === 'publish');
@@ -4873,7 +4908,10 @@ describe('executeDagWorkflow -- retry on deterministic (bash/script) nodes (#208
         ...publish,
         depends_on: ['prepare'],
         trigger_rule: undefined,
-        timeout: 1000,
+        // The first attempt must reach the create before this fires. Getting there starts
+        // several processes (git for the push, then the client for view and for create):
+        // about 0.5 s on a loaded Mac, and over 1 s on a Windows runner.
+        timeout: 3000,
         retry: publish.retry ? { ...publish.retry, delay_ms: 1 } : undefined,
         with: {
           repo: JSON.stringify(repo),
@@ -5887,7 +5925,7 @@ nodes:
       - codebase-search
       - test-runner
 `;
-    const result = parseWorkflow(yaml, 'test.yaml');
+    const result = parseWorkflow(yaml, 'test.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
@@ -5905,7 +5943,7 @@ nodes:
     skills:
       - 123
 `;
-    const result = parseWorkflow(yaml, 'bad.yaml');
+    const result = parseWorkflow(yaml, 'bad.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('skills');
   });
@@ -5919,7 +5957,7 @@ nodes:
     prompt: "Review"
     skills: []
 `;
-    const result = parseWorkflow(yaml, 'empty.yaml');
+    const result = parseWorkflow(yaml, 'empty.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect((result.workflow?.nodes[0] as DagNode | undefined)?.skills).toEqual([]);
   });
@@ -5934,7 +5972,7 @@ nodes:
     skills:
       - should-be-ignored
 `;
-    const result = parseWorkflow(yaml, 'bash-skills.yaml');
+    const result = parseWorkflow(yaml, 'bash-skills.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
@@ -5951,7 +5989,7 @@ nodes:
   - id: basic
     prompt: "Do something"
 `;
-    const result = parseWorkflow(yaml, 'no-skills.yaml');
+    const result = parseWorkflow(yaml, 'no-skills.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect(wf.nodes).toBeDefined();
@@ -5981,7 +6019,7 @@ nodes:
         skills: [codebase-search]
         maxTurns: 5
 `;
-    const result = parseWorkflow(yaml, 'agents.yaml');
+    const result = parseWorkflow(yaml, 'agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     expect(result.workflow).not.toBeNull();
     const wf = result.workflow!;
@@ -6010,7 +6048,7 @@ nodes:
       brief-gen:
         prompt: "You are concise."
 `;
-    const result = parseWorkflow(yaml, 'missing-desc.yaml');
+    const result = parseWorkflow(yaml, 'missing-desc.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('agents');
   });
@@ -6026,7 +6064,7 @@ nodes:
       brief-gen:
         description: "A brief generator"
 `;
-    const result = parseWorkflow(yaml, 'missing-prompt.yaml');
+    const result = parseWorkflow(yaml, 'missing-prompt.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('agents');
   });
@@ -6040,7 +6078,7 @@ nodes:
     prompt: "p"
     agents: {}
 `;
-    const result = parseWorkflow(yaml, 'empty-agents.yaml');
+    const result = parseWorkflow(yaml, 'empty-agents.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('agents');
   });
@@ -6057,7 +6095,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'bad-id.yaml');
+    const result = parseWorkflow(yaml, 'bad-id.yaml', providerRegistry);
     expect(result.error).not.toBeNull();
     expect(result.error!.error).toContain('kebab-case');
   });
@@ -6074,7 +6112,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'bash-agents.yaml');
+    const result = parseWorkflow(yaml, 'bash-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -6093,7 +6131,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'script-agents.yaml');
+    const result = parseWorkflow(yaml, 'script-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -6114,7 +6152,7 @@ nodes:
         description: "d"
         prompt: "p"
 `;
-    const result = parseWorkflow(yaml, 'loop-agents.yaml');
+    const result = parseWorkflow(yaml, 'loop-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -6128,7 +6166,7 @@ nodes:
   - id: basic
     prompt: "Do something"
 `;
-    const result = parseWorkflow(yaml, 'no-agents.yaml');
+    const result = parseWorkflow(yaml, 'no-agents.yaml', providerRegistry);
     expect(result.error).toBeNull();
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
@@ -12467,7 +12505,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         writeFile(join(workflowDir, 'materialized-parent.yaml'), JSON.stringify(parentWorkflow)),
         writeFile(commandPath, 'ORIGINAL materialized command. USER=<<$LOOP_USER_INPUT>>'),
       ]);
-      const firstDiscovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      const firstDiscovery = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(firstDiscovery.errors).toHaveLength(0);
       const originalWorkflow = firstDiscovery.workflows.find(
         item => item.workflow.name === parentWorkflow.name
@@ -12499,7 +12540,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
       // workflow. Its engine-private compilation error blocks a fresh run, while
       // this resumed run can reach and reuse the persisted snapshot.
       unlinkSync(commandPath);
-      const rediscovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      const rediscovery = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(rediscovery.errors).toHaveLength(0);
       const rediscoveredWorkflow = rediscovery.workflows.find(
         item => item.workflow.name === parentWorkflow.name
@@ -12614,7 +12658,10 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         ),
         writeFile(join(testDir, '.archon', 'commands', 'empty-included-loop.md'), '  \n\t'),
       ]);
-      const discovery = await discoverWorkflows(testDir, { loadDefaults: false });
+      const discovery = await discoverWorkflows(testDir, {
+        providers: providerRegistry,
+        loadDefaults: false,
+      });
       expect(discovery.errors).toHaveLength(0);
       const workflow = discovery.workflows.find(
         item => item.workflow.name === 'empty-loop-parent'
@@ -16625,12 +16672,74 @@ describe('executeDagWorkflow -- approval node', () => {
 
     // Nobody was told how to approve, so the run must not wait for an approval.
     expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(store.failPausedApproval).toHaveBeenCalled();
+    // The store fails the gate only on an exact match of the persisted context,
+    // so the caller must pass the paused context, minted pauseId included.
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
     const failed = persistedEvents(store).find(event => event.event_type === 'node_failed');
     expect(failed?.data?.error).toBe(
       "Approval message failed to deliver for node 'review' — cannot pause safely"
     );
     expect(store.failWorkflowRun).toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      kind: 'loop',
+      node: {
+        id: 'refine',
+        kind: 'loop',
+        loop: {
+          fresh_context: false,
+          prompt: 'Refine.',
+          until: 'APPROVED',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+        },
+      },
+    },
+    {
+      kind: 'loop_group',
+      node: {
+        id: 'refine',
+        kind: 'loop_group',
+        loop_group: {
+          until: 'DONE',
+          max_iterations: 3,
+          interactive: true,
+          gate_message: 'Review.',
+          nodes: [{ id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'draft' } }],
+        },
+      },
+    },
+  ])('fails the persisted $kind gate when its prompt cannot be delivered', async ({ node }) => {
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'Draft.' };
+      yield { type: 'result', sessionId: 'undelivered-loop' };
+    });
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    platform.sendMessage = mock(async (_conversationId, message): Promise<void> => {
+      if (message.includes('Input required')) throw new Error('401 unauthorized');
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform,
+        conversationId: 'conv-loop',
+        cwd: testDir,
+        workflow: { name: 'loop-undelivered', nodes: [node] as DagNode[] },
+        workflowRun: makeWorkflowRun(),
+      })
+    );
+
+    expect(store.pauseWorkflowRun).toHaveBeenCalledTimes(1);
+    const paused = store.pauseWorkflowRun.mock.calls[0]?.[1];
+    expect(paused?.pauseId).toEqual(expect.any(String));
+    expect(store.failPausedApproval.mock.calls[0]?.[1]).toEqual(paused);
   });
 
   it('delivers the nested proposal action at the approval gate, including legacy local resumes', async () => {
@@ -17293,6 +17402,56 @@ describe('executeDagWorkflow -- approval node', () => {
       expect(text).toContain('Approve: `/archon-workflow approve gate-run`');
       expect(text).toContain('Reject: `/archon-workflow reject gate-run`');
       expectSlackSpelling(text);
+    });
+
+    it('renders declared choices and emits the persisted vocabulary', async () => {
+      const platform = slackPlatform();
+      const deps = createMockDeps();
+      const decisions = [
+        { id: 'approve', label: 'Ship it' },
+        { id: 'revise', label: 'Try again' },
+        { id: 'cancel' },
+      ];
+      const emitted: WorkflowEmitterEvent[] = [];
+      const unsubscribe = getWorkflowEventEmitter().subscribe(event => emitted.push(event));
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps,
+            platform,
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('gate-run'),
+            workflow: {
+              name: 'declared-choices',
+              nodes: [
+                {
+                  id: 'review',
+                  kind: 'gate',
+                  message: 'Choose',
+                  decisions,
+                  decisionsAuthored: true,
+                  captureResponse: false,
+                },
+              ],
+            },
+          })
+        );
+      } finally {
+        unsubscribe();
+      }
+      const text = sentText(platform);
+      expect(text).toContain('Ship it');
+      expect(text).toContain(
+        'Try again (revise): `/archon-workflow respond gate-run revise [text]`'
+      );
+      expect(text).toContain('cancel: `/archon-workflow respond gate-run cancel [text]`');
+      expect(text).not.toContain('reject gate-run');
+      const pause = deps.store.pauseWorkflowRun.mock.calls[0]?.[1];
+      expect(emitted.find(event => event.type === 'approval_pending')).toMatchObject({
+        decisions: pause?.decisions,
+        pauseId: pause?.pauseId,
+      });
+      expect(pause?.decisions).toEqual(decisions);
     });
 
     it('interactive loop gate prompt', async () => {
@@ -22788,7 +22947,9 @@ describe('executeDagWorkflow -- terminal reasons and failure kinds', () => {
   });
 
   afterEach(async () => {
-    await rm(testDir, { recursive: true, force: true });
+    // The bash-timeout case can leave its killed shell's `sleep` holding the directory on
+    // Windows; a raw rm fails that passing test with EBUSY.
+    await removeTempTree(testDir);
   });
 
   async function runDag(
@@ -29540,27 +29701,44 @@ describe('collectContainerIncompatibleProviders', () => {
   const bashNode = (id: string): DagNode =>
     ({ id, kind: 'exec', runtime: 'sh', script: 'echo hi' }) as unknown as DagNode;
 
+  it('capability preflight follows the supplied descriptor rather than host registrations', () => {
+    const claude = providerRegistry.get('claude');
+    if (!claude) throw new Error('test registry must contain Claude');
+    const blocked = { ...claude, capabilities: { ...claude.capabilities, containerExec: false } };
+    const providers = {
+      get: (id: string) => (id === blocked.id ? blocked : undefined),
+      list: () => [blocked],
+    };
+    const nodes = [promptNode('a', 'claude')];
+    expect([...collectContainerIncompatibleProviders(providers, nodes, 'claude')]).toEqual([
+      'claude',
+    ]);
+    expect([...collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude')]).toEqual(
+      []
+    );
+  });
+
   it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude');
     expect([...bad]).toEqual([]);
   });
 
   it('flags a node whose provider lacks containerExec (codex)', () => {
     const nodes = [promptNode('a'), promptNode('b', 'codex')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'claude');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude');
     expect([...bad]).toEqual(['codex']);
   });
 
   it('flags the workflow-level provider when a node does not override it', () => {
     const nodes = [promptNode('a')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex');
     expect([...bad]).toEqual(['codex']);
   });
 
   it('ignores bash/script nodes (deterministic, no provider)', () => {
     const nodes = [bashNode('a'), bashNode('b')];
-    const bad = collectContainerIncompatibleProviders(nodes, 'codex');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex');
     expect([...bad]).toEqual([]);
   });
 
@@ -29570,7 +29748,7 @@ describe('collectContainerIncompatibleProviders', () => {
       kind: 'loop_group',
       loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
     } as unknown as DagNode;
-    const bad = collectContainerIncompatibleProviders([group], 'claude');
+    const bad = collectContainerIncompatibleProviders(providerRegistry, [group], 'claude');
     expect([...bad]).toEqual(['codex']);
   });
 });
@@ -29741,9 +29919,9 @@ describe('container preflight provider equivalence with dispatch', () => {
       });
       expect([...new Set(preflightProviders)]).toEqual([...new Set(dispatched)]);
       const incompatible = dispatched.filter(p => !getProviderCapabilities(p).containerExec);
-      expect(collectContainerIncompatibleProviders([node], workflowProvider, aiProfile)).toEqual(
-        new Set(incompatible)
-      );
+      expect(
+        collectContainerIncompatibleProviders(providerRegistry, [node], workflowProvider, aiProfile)
+      ).toEqual(new Set(incompatible));
     } finally {
       await removeTempTree(cwd);
     }
@@ -29755,7 +29933,9 @@ describe('container preflight provider equivalence with dispatch', () => {
       gate({ provider: 'codex', decisions: [{ id: 'approve' }, { id: 'reject' }] }),
       agent({ provider: 'unknown-provider' }),
     ];
-    expect(collectContainerIncompatibleProviders(nodes, 'codex', aiProfile)).toEqual(new Set());
+    expect(
+      collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex', aiProfile)
+    ).toEqual(new Set());
   });
 });
 
@@ -29776,6 +29956,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('flags an agent under Codex workflow-level provider with loose schema', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [agentNode('a', { output_format: looseSchema })],
       'codex'
     );
@@ -29791,6 +29972,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('flags a nested bare object with its exact schema path', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [
         agentNode('scope', {
           output_format: {
@@ -29815,6 +29997,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('is empty under Claude workflow-level provider', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [agentNode('a', { output_format: looseSchema })],
       'claude'
     );
@@ -29823,6 +30006,7 @@ describe('collectStrictSchemaViolations', () => {
 
   it('is empty when node pins provider: claude under Codex workflow', () => {
     const violations = collectStrictSchemaViolations(
+      providerRegistry,
       [agentNode('a', { output_format: looseSchema, provider: 'claude' })],
       'codex'
     );
@@ -29838,7 +30022,7 @@ describe('collectStrictSchemaViolations', () => {
         nodes: [agentNode('inner', { output_format: looseSchema })],
       },
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([group], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [group], 'codex');
     expect(violations).toHaveLength(1);
     expect(violations[0].nodeId).toBe('inner');
   });
@@ -29854,7 +30038,7 @@ describe('collectStrictSchemaViolations', () => {
       },
     } as unknown as DagNode;
 
-    const violations = collectStrictSchemaViolations([group], 'claude');
+    const violations = collectStrictSchemaViolations(providerRegistry, [group], 'claude');
 
     expect(violations).toHaveLength(1);
     expect(violations[0]).toMatchObject({ provider: 'codex', nodeId: 'inner' });
@@ -29876,7 +30060,7 @@ describe('collectStrictSchemaViolations', () => {
       },
     } as unknown as DagNode;
 
-    expect(collectStrictSchemaViolations([group], 'claude')).toEqual([]);
+    expect(collectStrictSchemaViolations(providerRegistry, [group], 'claude')).toEqual([]);
   });
 
   it('skips loop_group inert output_format', () => {
@@ -29886,7 +30070,7 @@ describe('collectStrictSchemaViolations', () => {
       output_format: looseSchema,
       loop_group: { max_iterations: 1, nodes: [] },
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([group], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [group], 'codex');
     expect(violations).toEqual([]);
   });
 
@@ -29897,7 +30081,7 @@ describe('collectStrictSchemaViolations', () => {
       decisions: [{ rework: 'reassess' }],
       output_format: looseSchema,
     } as unknown as DagNode;
-    const violations = collectStrictSchemaViolations([gate], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [gate], 'codex');
     expect(violations).toEqual([]);
   });
 
@@ -29906,11 +30090,13 @@ describe('collectStrictSchemaViolations', () => {
       output_format: looseSchema,
       provider: 'unknown-provider',
     });
-    expect(() => collectStrictSchemaViolations([node], 'unknown-provider')).not.toThrow();
+    expect(() =>
+      collectStrictSchemaViolations(providerRegistry, [node], 'unknown-provider')
+    ).not.toThrow();
   });
 
   it('skips node without output_format entirely', () => {
-    const violations = collectStrictSchemaViolations([agentNode('a')], 'codex');
+    const violations = collectStrictSchemaViolations(providerRegistry, [agentNode('a')], 'codex');
     expect(violations).toEqual([]);
   });
 });
@@ -30084,7 +30270,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30214,7 +30400,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(store),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30300,7 +30486,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30360,7 +30546,7 @@ describe('subprocess credential redaction', () => {
         dagOptions({
           deps: createMockDeps(),
           platform,
-          conversationId: workflowRun.conversation_id,
+          conversationId: workflowRun.conversation_id ?? workflowRun.id,
           cwd: testDir,
           workflow: {
             name: workflowRun.workflow_name,
@@ -30420,7 +30606,7 @@ describe('subprocess credential redaction', () => {
       dagOptions({
         deps: createMockDeps(store),
         platform,
-        conversationId: workflowRun.conversation_id,
+        conversationId: workflowRun.conversation_id ?? workflowRun.id,
         cwd: testDir,
         workflow: {
           name: workflowRun.workflow_name,
@@ -31981,6 +32167,7 @@ describe('executeDagWorkflow -- a workflow runs as authored, standalone or compo
 
     const seen: { provider: string; options: SendQueryOptions }[] = [];
     const deps: WorkflowDeps = {
+      providers: providerRegistry,
       store: createMockStore(),
       getAgentProvider: mock<WorkflowDeps['getAgentProvider']>(
         (provider): ReturnType<WorkflowDeps['getAgentProvider']> => ({
@@ -32623,6 +32810,7 @@ describe('executeDagWorkflow -- composition governance survives the collapse', (
     const store = createMockStore();
     const seen: string[] = [];
     const deps: WorkflowDeps = {
+      providers: providerRegistry,
       store,
       getAgentProvider: mock<WorkflowDeps['getAgentProvider']>(
         (provider): ReturnType<WorkflowDeps['getAgentProvider']> => {
@@ -34748,7 +34936,10 @@ nodes:
 
   /** The flattened parent, exactly as discovery hands it to the executor. */
   async function expandedParent(): Promise<ResolvedWorkflow> {
-    const discovered = await discoverWorkflows(testDir, { loadDefaults: false });
+    const discovered = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(discovered.errors).toEqual([]);
     const parent = discovered.workflows.find(w => w.workflow.name === 'composed-parent');
     if (!parent) throw new Error('composed-parent was not discovered');
@@ -34874,7 +35065,10 @@ nodes:
 `
     );
 
-    const discovered = await discoverWorkflows(testDir, { loadDefaults: false });
+    const discovered = await discoverWorkflows(testDir, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     // The error names the include alias the author wrote, not the flattened sink id.
     expect(discovered.errors.map(e => e.error)).toEqual([
       expect.stringContaining("'$plan.output.tasks' references field 'tasks'"),
@@ -35152,6 +35346,8 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const store = createEscalationStore('run-escalation-1');
     const platform = createMockPlatform();
 
+    const emitted: WorkflowEmitterEvent[] = [];
+    const unsubscribe = getWorkflowEventEmitter().subscribe(event => emitted.push(event));
     await executeDagWorkflow(
       dagOptions({
         deps: createMockDeps(store),
@@ -35162,6 +35358,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
       })
     );
 
+    unsubscribe();
     // Only 'work' ran once — proves the loop did NOT barrel through remaining
     // iterations re-running the body every time the gate re-paused.
     expect(mockSendQueryDag.mock.calls.length).toBe(1);
@@ -35169,11 +35366,19 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
 
     const pauseCalls = store.pauseWorkflowRun.mock.calls;
     expect(pauseCalls).toHaveLength(1);
-    expect(pauseCalls[0][1]).toMatchObject({
+    const approval = pauseCalls[0][1];
+    expect(store.getState().metadata.approval).toEqual(approval);
+    expect(approval).toMatchObject({
       nodeId: 'grp',
       bodyGateId: 'check',
       type: 'approval',
       iteration: 1,
+      pauseId: expect.any(String),
+    });
+    expect(emitted.find(event => event.type === 'approval_pending')).toMatchObject({
+      nodeId: 'grp',
+      pauseId: approval?.pauseId,
+      decisions: approval?.decisions,
     });
     const groupSuspension = (
       store.createWorkflowEvent as Mock<IWorkflowStore['persistWorkflowEvent']>
@@ -35487,6 +35692,7 @@ describe('#2707 step 3: gate-terminated loop_group pause escalation', () => {
     const greenMarkerPath = join(testDir, 'deliver-attention-green');
     const confirmMarkerPath = join(testDir, 'deliver-confirm-ready');
     const discovered = await discoverWorkflows(repoRoot, {
+      providers: providerRegistry,
       loadDefaults: false,
       loadDefaultCommands: false,
     });

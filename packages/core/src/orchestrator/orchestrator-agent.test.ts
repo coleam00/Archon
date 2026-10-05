@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
     _repo: string,
@@ -372,7 +373,22 @@ const DEFAULT_PROVIDER_CAPS: ProviderCapabilities = {
   requiresAllPropertiesRequired: false,
 };
 
+const mockGetProviderCapabilities = mock(() => ({ ...DEFAULT_PROVIDER_CAPS }));
+
+const providerRegistry: ProviderRegistry = {
+  get: id => ({
+    id,
+    displayName: id,
+    builtIn: true,
+    capabilities: mockGetProviderCapabilities(),
+    parseConfig: raw => raw,
+    credentials: { kind: 'static', specs: [], vendorFor: () => 'anthropic' },
+  }),
+  list: () => [],
+};
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
   getRegistration: () => ({
     parseConfig: (raw: Record<string, unknown>) => raw,
     credentials: { vendorFor: () => 'anthropic' },
@@ -382,11 +398,7 @@ mock.module('@archon/providers', () => ({
     getType: mock(() => 'claude'),
     getCapabilities: mock(() => ({})),
   })),
-  // `effortControl` decides whether a tier's `effort` reaches the provider, and
-  // `isRegisteredProvider` gates that lookup — both read by
-  // `validEffortsForProvider` (@archon/workflows/model-validation, #2556).
-  // Omitting either lets the REAL implementation run against an empty registry.
-  getProviderCapabilities: mock(() => ({ ...DEFAULT_PROVIDER_CAPS })),
+  getProviderCapabilities: mockGetProviderCapabilities,
   isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // Vendor → env-var map consumed by credentials/delivery (#1955). A realistic
@@ -416,6 +428,7 @@ mock.module('../utils/error', () => ({
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
+    providers: providerRegistry,
     store: { getCodebaseEnvVars: async () => ({}) },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
@@ -670,6 +683,7 @@ function makeNamedCodebase(name: string, id = `id-${name}`): Codebase {
 /** The only `WorkflowRun` literal in this file. Every variant is an override of it. */
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'run-1',
     workflow_name: 'test-workflow',
     conversation_id: 'conv-1',
@@ -2262,6 +2276,7 @@ describe('workflow dispatch routing — interactive flag', () => {
   function makeResumableRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     return makeRun({
       id: 'resumable-run-1',
+      origin: { conversationId: 'conv-1', parentConversationId: 'conv-1' },
       parent_conversation_id: 'conv-1',
       status: 'failed',
       user_message: 'old failed prompt',
@@ -2323,15 +2338,14 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
     expect(mockWithRunLiveOwner).toHaveBeenCalledWith('prepared-run-id', {}, expect.any(Function));
-    // The interactive web dispatch must pass the caller conversation's DB id
-    // as opts.parentConversationId so the approve/reject API handlers can
-    // dispatch resume back through the orchestrator.
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as {
-      parentConversationId?: string;
       baseBranch?: string;
     };
-    expect(opts.parentConversationId).toBe('conv-1-db');
+    expect(callArgs[6]).toMatchObject({
+      conversationId: 'conv-1-db',
+      parentConversationId: 'conv-1-db',
+    });
     // The codebase's stored default branch rides along as the $BASE_BRANCH fallback.
     expect(opts.baseBranch).toBe('develop');
   });
@@ -2870,13 +2884,12 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
   });
 
-  test('foreground_resume_detected: passes parentConversationId to executeWorkflow when a paused run exists', async () => {
+  test('foreground_resume_detected: preserves origin when a paused run exists', async () => {
     // Regression for the foreground-resume branch: when
     // findResumableRunByParentConversation returns a paused run, the
     // orchestrator must hydrate it (single DB roundtrip — no second
     // findResumableRun) and hand the resumed run + priorCompletedNodes to
-    // executeWorkflow via opts. parentConversationId still flows so the API
-    // helpers keep dispatching resume on subsequent approvals.
+    // executeWorkflow via opts.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(
       Promise.resolve(makeCodebase({ default_branch: 'develop' }))
@@ -2900,12 +2913,14 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
     // Resume payload lives on the opts bag (the trailing arg).
     const opts = callArgs[callArgs.length - 1] as {
-      parentConversationId?: string;
       baseBranch?: string;
       preCreatedRun?: { id: string };
       priorCompletedNodes?: Map<string, string>;
     };
-    expect(opts.parentConversationId).toBe('conv-1-db');
+    expect(callArgs[6]).toMatchObject({
+      conversationId: 'conv-1',
+      parentConversationId: 'conv-1',
+    });
     // Resume dispatch carries the codebase default as the $BASE_BRANCH fallback too.
     expect(opts.baseBranch).toBe('develop');
     expect(opts.preCreatedRun?.id).toBe('resumable-run-1');
@@ -3000,13 +3015,15 @@ describe('workflow dispatch routing — interactive flag', () => {
     expect(callArgs[3]).toBe('/repos/test-repo/worktrees/feature');
     // Opts bag carries no resume payload — fresh run.
     const opts = callArgs[callArgs.length - 1] as {
-      parentConversationId?: string;
       baseBranch?: string;
       preCreatedRun?: unknown;
       priorCompletedNodes?: unknown;
       preparedSource?: { anchor?: { root?: string }; manifest?: { captured_at?: string } };
     };
-    expect(opts.parentConversationId).toBe('conv-1-db');
+    expect(callArgs[6]).toMatchObject({
+      conversationId: 'conv-1-db',
+      parentConversationId: 'conv-1-db',
+    });
     // The fresh-run-in-same-worktree branch still threads the codebase default.
     expect(opts.baseBranch).toBe('develop');
     expect(opts.preCreatedRun).toBeUndefined();
@@ -4155,7 +4172,8 @@ describe('paused approval gate routing', () => {
         rejection_reason: '',
         rejection_count: 0,
       },
-      expect.any(Array)
+      expect.any(Array),
+      undefined
     );
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'approved' });
     // Continuation: resolution without it would leave the run stranded (#2565).

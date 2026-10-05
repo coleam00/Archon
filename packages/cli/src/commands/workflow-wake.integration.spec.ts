@@ -30,8 +30,15 @@ interface RunRow {
   conversation_id: string;
   user_id: string | null;
 }
+/** Read-only handle that waits out a lock held by a live writer instead of throwing SQLITE_BUSY. */
+function openReadOnly(databasePath: string): Database {
+  const database = new Database(databasePath, { readonly: true });
+  database.run('PRAGMA busy_timeout = 5000');
+  return database;
+}
+
 function row(f: Fixture): RunRow {
-  const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+  const db = openReadOnly(join(f.home, 'archon.db'));
   try {
     const run = db
       .query<
@@ -110,16 +117,16 @@ const user = await findOrCreateUserByPlatformIdentity('cli', 'cold-operator');
 const conversation = await getOrCreateConversation('cli', 'cold-fixture', codebase.id, undefined, user.id);
 const deps = createWorkflowDeps();
 const source = await prepareWorkflowSource(deps, { sourceRoot: cwd });
-const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, source.roots);
+const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, deps.providers, source.roots);
 const workflow = discovery.workflows.find(entry => entry.workflow.name === 'cold')?.workflow;
 if (!workflow) throw new Error(JSON.stringify(discovery.errors));
 await recordSelectedWorkflow(source.anchor.root, workflow.name);
 const owner = await startRunLiveOwner(source.runId);
 try {
  const result = await new InProcessWorkflowEngine(deps).submit({
-  platform: new HeadlessPlatform(conversation.id), conversationId: conversation.id,
-  conversationDbId: conversation.id, cwd, workflow, userMessage: 'original request',
-  options: { codebaseId: codebase.id, preparedSource: source, userId: user.id, inputs: { proof: 'original-input' },
+  platform: new HeadlessPlatform(), conversationId: conversation.id,
+  origin: { conversationId: conversation.id, userId: user.id }, cwd, workflow, userMessage: 'original request',
+  options: { codebaseId: codebase.id, preparedSource: source, inputs: { proof: 'original-input' },
     runConfig: { layer: { envVars: { WAKE_CONFIG_PROOF: 'original-config' } }, source: { kind: 'cli', label: 'cold-fixture' } } }
  });
  if (!('paused' in result)) throw new Error(JSON.stringify(result));
@@ -143,7 +150,7 @@ async function due(f: Fixture): Promise<void> {
   if (deadline > Date.now()) await Bun.sleep(deadline - Date.now() + 10);
 }
 function events(f: Fixture, type: string): number {
-  const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+  const db = openReadOnly(join(f.home, 'archon.db'));
   try {
     return (
       db
@@ -224,7 +231,7 @@ describe('cold CLI continuation host', () => {
     expect(b.exitCode, b.stderr || b.stdout).toBe(0);
     expect(row(f).status).toBe('completed');
     expect(events(f, 'wait_signaled')).toBe(2);
-    const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+    const db = openReadOnly(join(f.home, 'archon.db'));
     try {
       expect(
         db

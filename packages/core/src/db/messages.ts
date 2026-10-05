@@ -3,6 +3,7 @@
  */
 import { pool, getDialect, getDatabaseType } from './connection';
 import type { MessageRow } from '../schemas/message';
+import { assertPublicConversation } from './workflow-origin-anchor';
 import { createLogger } from '@archon/paths';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -27,6 +28,7 @@ export async function addMessage(
   metadata?: Record<string, unknown>,
   userId?: string
 ): Promise<MessageRow> {
+  assertPublicConversation(conversationId);
   const dialect = getDialect();
   const result = await pool.query<MessageRow>(
     `INSERT INTO remote_agent_messages (conversation_id, role, content, metadata, user_id, created_at)
@@ -56,6 +58,7 @@ export async function listMessages(
   conversationId: string,
   limit = 200
 ): Promise<readonly MessageRow[]> {
+  assertPublicConversation(conversationId);
   const result = await pool.query<MessageRow>(
     `SELECT * FROM remote_agent_messages
      WHERE conversation_id = $1
@@ -75,6 +78,7 @@ export async function getRecentWorkflowResultMessages(
   conversationId: string,
   limit = 3
 ): Promise<readonly MessageRow[]> {
+  assertPublicConversation(conversationId);
   const dbType = getDatabaseType();
   const metadataFilter =
     dbType === 'postgresql'

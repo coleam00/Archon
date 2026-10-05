@@ -467,9 +467,11 @@ export function conversationDetachTests(
               user_message: '',
               codebase_id: projectId,
               metadata: {},
-              user_id: userId,
-              conversation_id: ownership === 'parent' ? workerId : conversationId,
-              ...(ownership === 'parent' ? { parent_conversation_id: conversationId } : {}),
+              origin: {
+                userId,
+                conversationId: ownership === 'parent' ? workerId : conversationId,
+                ...(ownership === 'parent' ? { parentConversationId: conversationId } : {}),
+              },
             };
             const gate = barrier();
             const insert = async (): Promise<unknown> =>
@@ -481,7 +483,7 @@ export function conversationDetachTests(
                     hostId: 'test',
                     overlap: 'queue',
                     launch: {
-                      version: 1,
+                      version: 2,
                       run,
                       execution: {
                         cwd: '/project',
