@@ -43,6 +43,7 @@ export interface Run {
   origin: RunOrigin;
   status: RunStatus;
   outcome: RunOutcome;
+  terminalRecord?: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
   startedAt: string;
   finishedAt: string | null;
   /** workflow_runs.working_path — used to join against worktrees. */
@@ -98,46 +99,35 @@ export function runDetailPath(run: Pick<Run, 'id' | 'projectId'>): string {
     : `/console/p/${encodeURIComponent(run.projectId)}/r/${runId}`;
 }
 
-// Server shapes we read from. These track the real server schema loosely —
-// fields we don't use are omitted. The normalizer defends against missing
-// optional fields.
+type WorkflowRun = components['schemas']['WorkflowRun'];
+type DashboardWorkflowRun = components['schemas']['DashboardWorkflowRun'];
+type DetailRun = components['schemas']['WorkflowRunDetail']['run'];
+type RawWorkflowRun = Pick<
+  WorkflowRun,
+  'id' | 'workflow_name' | 'codebase_id' | 'status' | 'started_at'
+> &
+  Partial<
+    Pick<
+      WorkflowRun,
+      | 'conversation_id'
+      | 'outcome'
+      | 'completed_at'
+      | 'working_path'
+      | 'user_message'
+      | 'metadata'
+      | 'parent_run_id'
+    >
+  > &
+  Partial<
+    Pick<
+      DashboardWorkflowRun,
+      'codebase_name' | 'platform_type' | 'active_nodes' | 'worker_platform_id'
+    >
+  > &
+  Partial<Pick<DetailRun, 'conversation_platform_id' | 'terminal_record'>>;
 
-interface RawWorkflowRun {
-  id: string;
-  workflow_name: string;
-  codebase_id: string | null;
-  conversation_id?: string | null;
-  /** Platform-level conversation id — exposed on the getRun response only. */
-  conversation_platform_id?: string | null;
-  /** Worker conversation platform id — getRun response only, web runs only. */
-  worker_platform_id?: string | null;
-  status: string;
-  outcome?: RunOutcome;
-  started_at: string;
-  completed_at?: string | null;
-  working_path?: string | null;
-  user_message?: string;
-  metadata?: WorkflowRunMetadata;
-  /** Only present on dashboard runs — enriched by server-side join. */
-  codebase_name?: string | null;
-  platform_type?: string | null;
-  active_nodes?: string[];
-  /** Run-tree parent id (#2121 Phase 2); null/absent for top-level runs. */
-  parent_run_id?: string | null;
-}
-
-const KNOWN_STATUSES: readonly RunStatus[] = [
-  'running',
-  'paused',
-  'failed',
-  'completed',
-  'cancelled',
-];
-
-function normalizeStatus(s: string): RunStatus {
-  // Treat 'pending' as 'running' for UI purposes — it's transient.
-  if (s === 'pending') return 'running';
-  return (KNOWN_STATUSES as readonly string[]).includes(s) ? (s as RunStatus) : 'running';
+function normalizeStatus(status: WorkflowRun['status']): RunStatus {
+  return status === 'pending' ? 'running' : status;
 }
 
 function normalizeWorkflowWait(wait: WorkflowWait): NormalizedWorkflowWait {
@@ -251,6 +241,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     origin: normalizeOrigin(raw.platform_type),
     status: normalizeStatus(raw.status),
     outcome: raw.outcome ?? null,
+    terminalRecord: raw.terminal_record ?? null,
     startedAt: raw.started_at,
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,
