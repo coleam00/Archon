@@ -44,7 +44,9 @@
     "./node-event-write": "./src/node-event-write.ts",
     "./logger": "./src/logger.ts",
     "./container-context": "./src/container-context.ts",
-    "./structured-output": "./src/structured-output.ts"
+    "./structured-output": "./src/structured-output.ts",
+    "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",
+    "./store-conformance": "./src/store-conformance.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -199,6 +201,9 @@
     ],
     [
       "src/structured-output.test.ts"
+    ],
+    [
+      "src/store-conformance.test.ts"
     ]
   ]
 }

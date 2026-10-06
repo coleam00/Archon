@@ -37,8 +37,8 @@ describe('workflow-run-node-sessions', () => {
         node_id: 'scope',
         provider: 'claude',
         provider_session_id: 'session-1',
-        created_at: '2026-08-19T00:00:00Z',
-        updated_at: '2026-08-19T00:00:00Z',
+        created_at: '2026-08-19T00:00:00.000Z',
+        updated_at: '2026-08-19T00:00:00.000Z',
       },
     ];
     mockQuery.mockResolvedValueOnce(createQueryResult(rows));

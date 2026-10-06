@@ -318,6 +318,12 @@
     ],
     [
       "src/services/cleanup-worktree.integration.test.ts"
+    ],
+    [
+      "src/db/workflow-store.conformance.integration.test.ts"
+    ],
+    [
+      "src/db/workflow-store.conformance.postgres.integration.test.ts"
     ]
   ]
 }

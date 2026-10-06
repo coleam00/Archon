@@ -12,7 +12,6 @@ import {
   executionMetadata,
 } from '@archon/workflows/node-execution';
 import { serializeNodeStateRecord } from '@archon/workflows/node-record-serialization';
-import { inMemoryDagResumeSnapshot } from '@archon/workflows/test-utils';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -1360,7 +1359,7 @@ describe('workflow-events', () => {
       }
     );
 
-    test('selects the same reusable outputs, unfinished invocations, and usage as the workflows in-memory store double', async () => {
+    test('selects reusable text outputs, unfinished invocations, and own usage', async () => {
       // Typed rows carry the scope in `accounting`, not the legacy `aggregate` marker.
       const typedUsage = (accounting: 'node' | 'aggregate', input: number, cost_usd: number) => ({
         node: { id: 'worker', kind: 'exec', runtime: 'sh' },
@@ -1427,21 +1426,13 @@ describe('workflow-events', () => {
       mockQuery.mockResolvedValueOnce(createQueryResult(rows));
 
       const production = await getDagResumeSnapshot('run-double');
-      const double = inMemoryDagResumeSnapshot(
-        rows.map(row => ({ workflow_run_id: 'run-double', ...row })),
-        'run-double'
-      );
 
       expect(production.completedNodeOutputs).toEqual(new Map([['text', { output: 'kept' }]]));
-      expect(double.completedNodeOutputs).toEqual(production.completedNodeOutputs);
       expect([...production.unfinishedInvocations!.values()]).toEqual([
         executionMetadata(failedFanOut),
       ]);
-      expect(double.unfinishedInvocations).toEqual(production.unfinishedInvocations);
       expect(production.tokens).toEqual({ input: 3, output: 1 });
       expect(production.costUsd).toBe(0.5);
-      expect(double.tokens).toEqual(production.tokens);
-      expect(double.costUsd).toBe(production.costUsd);
     });
 
     test('returns an empty snapshot when no events exist', async () => {

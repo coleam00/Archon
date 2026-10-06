@@ -18,6 +18,13 @@ import { createLogger } from '@archon/paths';
 import type { WorkflowNodeSession } from '@archon/workflows/schemas/workflow-node-session';
 import type { IWorkflowStore, WorkflowNodeSessionKey } from '@archon/workflows/store';
 
+import { toHydratedTimestamp } from './timestamps';
+
+type SessionRow = Omit<WorkflowNodeSession, 'created_at' | 'updated_at'> & {
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('db.workflow-node-sessions');
@@ -28,12 +35,16 @@ export async function listWorkflowNodeSessions(scope: {
   workflow_name: string;
   scope_key: string;
 }): Promise<readonly WorkflowNodeSession[]> {
-  const result = await pool.query<WorkflowNodeSession>(
+  const result = await pool.query<SessionRow>(
     `SELECT * FROM remote_agent_workflow_node_sessions
      WHERE workflow_name = $1 AND scope_key = $2`,
     [scope.workflow_name, scope.scope_key]
   );
-  return result.rows;
+  return result.rows.map(row => ({
+    ...row,
+    created_at: toHydratedTimestamp(row.created_at).toISOString(),
+    updated_at: toHydratedTimestamp(row.updated_at).toISOString(),
+  }));
 }
 
 export async function upsertWorkflowNodeSession(

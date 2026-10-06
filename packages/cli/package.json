@@ -134,6 +134,9 @@
     ],
     [
       "src/commands/workflow-store.integration.spec.ts"
+    ],
+    [
+      "src/test-support/workflow-store.conformance.test.ts"
     ]
   ]
 }
