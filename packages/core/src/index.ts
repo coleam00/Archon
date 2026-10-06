@@ -313,3 +313,6 @@ export { getPort } from './utils/port-allocation';
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
 
 export type { RunActor } from './operations/run-authorization';
+
+export { ProcessAgentProvider, ProviderPluginExitedError } from './providers/process-provider';
+export { processProviderRegistration } from './providers/process-registration';
