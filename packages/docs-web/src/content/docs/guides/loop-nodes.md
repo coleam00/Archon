@@ -665,6 +665,14 @@ nodes:
           depends_on: [test]
 ```
 
+The legacy prose `until:` channel cannot detect a signal when the body's sole
+terminal node produces non-string structured output. The loader rejects that
+combination when `until:` is the only completion channel. Use `until_bash` to read
+the terminal node's structured field instead. A terminal node without
+`output_format`, or with a string schema, keeps loading. Declaring `until_bash`
+alongside `until:` also keeps loading, with the existing prose-channel deprecation
+warning.
+
 ### How it works
 
 - From the **outer DAG's** perspective, `fix-loop` is one node. The cycle is
