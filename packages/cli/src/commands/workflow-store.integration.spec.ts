@@ -74,6 +74,7 @@ nodes:
     records,
     engine: new InProcessWorkflowEngine(deps),
     operations: createWorkflowOperations({
+      getUserRole: async userId => (await records.users.getUserById(userId))?.role,
       store,
       hostStore: records,
       requestDetachedRunStop: async () => {

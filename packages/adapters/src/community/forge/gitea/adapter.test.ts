@@ -1197,7 +1197,7 @@ describe('GiteaAdapter', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ userId: 'user-test-uuid' })
+        expect.objectContaining({ actor: { kind: 'user', userId: 'user-test-uuid' } })
       );
     });
 
@@ -1249,7 +1249,7 @@ describe('GiteaAdapter', () => {
         expect.anything(),
         expect.anything(),
         expect.anything(),
-        expect.objectContaining({ userId: undefined })
+        expect.objectContaining({ actor: { kind: 'unidentified' } })
       );
     });
   });

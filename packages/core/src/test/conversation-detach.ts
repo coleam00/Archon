@@ -522,17 +522,11 @@ export function conversationDetachTests(
             );
             try {
               if (db.dialect === 'sqlite') {
-                // bun:sqlite waits synchronously; a zero busy timeout surfaces contention
-                // without preventing the owning connection from releasing its transaction.
-                const result = await trailing;
-                expect(result).toHaveProperty('error');
-                expect(
-                  (
-                    await other.query('SELECT id FROM remote_agent_workflow_runs WHERE id = $1', [
-                      runId,
-                    ])
-                  ).rows
-                ).toHaveLength(0);
+                // The competing connection waits out SQLITE_BUSY until the leader commits.
+                // Its zero busy timeout keeps each attempt from blocking the event loop the
+                // paused leader shares, so the wait happens in the adapter's async backoff.
+                await Bun.sleep(100);
+                expect(settled).toBe(false);
               } else {
                 // Wait for PostgreSQL to prove the competing transaction is lock-blocked.
                 let waiting = false;

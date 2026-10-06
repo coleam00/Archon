@@ -34,6 +34,9 @@ export class ConversationNotFoundError extends Error {
   }
 }
 
+import type { RunActor } from '../operations/run-authorization';
+export type { RunActor } from '../operations/run-authorization';
+
 import type { IsolationHints } from '@archon/isolation';
 
 export interface AttachedFile {
@@ -50,13 +53,7 @@ export interface HandleMessageContext {
   readonly parentConversationId?: string;
   readonly isolationHints?: IsolationHints;
   readonly attachedFiles?: AttachedFile[];
-  /**
-   * Archon user UUID resolved from the inbound platform user identifier.
-   * Chat/forge adapters resolve this via findOrCreateUserByPlatformIdentity
-   * before calling handleMessage. Undefined for web/CLI surfaces until their
-   * own auth flows are wired.
-   */
-  readonly userId?: string;
+  readonly actor: RunActor;
   /**
    * Declared workflow inputs supplied by the caller (#2554), keyed by input name.
    *

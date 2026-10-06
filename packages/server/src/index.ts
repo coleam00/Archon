@@ -614,7 +614,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Discord', discordAdapter, conversationId));
@@ -691,7 +691,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
               threadContext,
               parentConversationId,
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Slack', slackAdapter, conversationId));
@@ -1004,7 +1004,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
           .acquireLock(conversationId, async () => {
             await handleMessage(telegramAdapter, conversationId, message, {
               isolationHints: { workflowType: 'thread', workflowId: conversationId },
-              userId,
+              actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
             });
           })
           .catch(createMessageErrorHandler('Telegram', telegramAdapter, conversationId));

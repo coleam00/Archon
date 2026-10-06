@@ -311,3 +311,5 @@ export { getPort } from './utils/port-allocation';
 
 // Worktree sync
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
+
+export type { RunActor } from './operations/run-authorization';

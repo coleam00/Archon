@@ -409,6 +409,42 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
 }
 
 /**
+ * A condition-skipped dependency is neither a success nor a failure, so a
+ * `none_failed_min_one_success` node whose ONLY dependency has a `when:` skips
+ * whenever that condition is false (#3783). Two or more conditional dependencies
+ * are usually mutually exclusive branches where one always runs, so they are not
+ * flagged. This judges the authored graph, not the expanded one: expansion copies
+ * an include's `when:` onto the block's entry nodes, where a whole block skipping
+ * together is the intent rather than a mistake.
+ */
+function collectConditionalJoinWarnings(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  warnings: string[]
+): void {
+  const conditional = new Set(nodes.filter(node => node.when !== undefined).map(node => node.id));
+  for (const node of nodes) {
+    const [dependency, ...rest] = node.depends_on ?? [];
+    if (
+      node.trigger_rule === 'none_failed_min_one_success' &&
+      dependency !== undefined &&
+      rest.length === 0 &&
+      conditional.has(dependency)
+    ) {
+      warnings.push(
+        `Node '${node.id}': its only dependency '${dependency}' has a 'when', and ` +
+          "'none_failed_min_one_success' needs a successful dependency, so this node skips " +
+          `whenever '${dependency}' is condition-skipped. To run after an optional gate, also ` +
+          "depend on an unconditional node that runs before it, or use 'all_done' to run even after " +
+          'a failure. See /guides/authoring-workflows/#trigger_rule-values.'
+      );
+    }
+    if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
+      collectConditionalJoinWarnings(node.loop_group.nodes, warnings);
+    }
+  }
+}
+
+/**
  * Loop-group sink-shape warnings, judged against the EXPANDED node graph (#2756).
  *
  * Both checks below read resolved nodes only — `depends_on` edges and node kinds —
@@ -1578,6 +1614,8 @@ export function parseWorkflow(
         error: { filename, error: outputFormatError, errorType: 'validation_error' },
       };
     }
+
+    collectConditionalJoinWarnings(dagNodes, parseWarnings);
 
     // Workflow-class placement (#2707 step 2) + the typed `interactive` field share
     // one raw-value coercion, computed here so the class check and the field the

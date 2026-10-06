@@ -33,6 +33,7 @@ export function createSqlWorkflowOperations(
   hostStore: IWorkflowHostStore = createWorkflowHostStore()
 ): WorkflowOperations {
   return createWorkflowOperations({
+    getUserRole: async userId => (await hostStore.users.getUserById(userId))?.role,
     store,
     hostStore,
     requestDetachedRunStop,
