@@ -1,4 +1,9 @@
-import { RunActionForbiddenError, type RunActor } from './run-authorization';
+import {
+  RUN_ACTIONS,
+  RunActionForbiddenError,
+  type RunAction,
+  type RunActor,
+} from './run-authorization';
 import {
   startNodeExecution,
   finishNodeExecution,
@@ -2796,17 +2801,7 @@ describe('abandon owned worktrees', () => {
 });
 
 describe('run action authorization precedes effects and state validation', () => {
-  const actions = [
-    'approve',
-    'reject',
-    'respond',
-    'resume',
-    'cancel',
-    'abandon',
-    'signal',
-    'delete',
-  ] as const;
-  for (const action of actions) {
+  for (const action of RUN_ACTIONS) {
     for (const actor of [
       { kind: 'user', userId: 'other' },
       { kind: 'unidentified' },
@@ -2849,7 +2844,7 @@ describe('run action authorization precedes effects and state validation', () =>
           signal: () =>
             operations.signalWorkflowWait(run.id, 'event', 'now', 'secret payload', actor),
           delete: () => operations.deleteWorkflowRun(run.id, actor),
-        };
+        } satisfies Record<RunAction, () => Promise<unknown>>;
         await expect(calls[action]()).rejects.toBeInstanceOf(RunActionForbiddenError);
         expect(write).not.toHaveBeenCalled();
         expect(stop).not.toHaveBeenCalled();
@@ -2921,16 +2916,7 @@ describe('starter, admin and operator can act through core', () => {
     { kind: 'user', userId: 'starter' },
     { kind: 'user', userId: 'admin' },
   ] satisfies RunActor[]) {
-    for (const action of [
-      'approve',
-      'reject',
-      'respond',
-      'cancel',
-      'abandon',
-      'resume',
-      'signal',
-      'delete',
-    ] as const) {
+    for (const action of RUN_ACTIONS) {
       test(`${action} allows ${JSON.stringify(actor)}`, async () => {
         const run = makePausedRun({
           user_id: 'starter',
@@ -2990,7 +2976,7 @@ describe('starter, admin and operator can act through core', () => {
               actor
             ),
           delete: () => operations.deleteWorkflowRun(run.id, actor),
-        };
+        } satisfies Record<RunAction, () => Promise<unknown>>;
         await calls[action]();
         if (action === 'resume') expect(write).not.toHaveBeenCalled();
         else expect(write).toHaveBeenCalledTimes(1);

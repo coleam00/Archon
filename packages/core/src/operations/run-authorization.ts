@@ -5,15 +5,18 @@ export type RunActor =
   | { kind: 'user'; userId: string }
   | { kind: 'unidentified' };
 
-export type RunAction =
-  | 'approve'
-  | 'reject'
-  | 'respond'
-  | 'cancel'
-  | 'abandon'
-  | 'resume'
-  | 'signal'
-  | 'delete';
+export const RUN_ACTIONS = [
+  'approve',
+  'reject',
+  'respond',
+  'cancel',
+  'abandon',
+  'resume',
+  'signal',
+  'delete',
+] as const;
+
+export type RunAction = (typeof RUN_ACTIONS)[number];
 
 export function authorizeRunAction(
   actor: RunActor,

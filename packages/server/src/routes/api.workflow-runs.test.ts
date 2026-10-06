@@ -1,3 +1,4 @@
+import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
 import { providerRegistry } from '@archon/providers';
 import {
   RUN_GRAPH_METADATA_KEY,
@@ -4561,17 +4562,7 @@ describe('starter or admin authorization on every HTTP run action', () => {
       requireRunIdentity = false;
     }
   });
-  const actions = [
-    'approve',
-    'reject',
-    'respond',
-    'cancel',
-    'abandon',
-    'resume',
-    'signal',
-    'delete',
-  ] as const;
-  for (const action of actions) {
+  for (const action of RUN_ACTIONS) {
     test(`${action} returns 403 and performs no mutation for another member`, async () => {
       sessionUserId = 'member-b';
       const run = { ...MOCK_COMPLETED_RUN, user_id: 'starter-a' };
