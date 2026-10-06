@@ -14,7 +14,6 @@ import '@archon/paths/strip-cwd-env-boot';
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
 import { loadArchonEnv } from '@archon/paths/env-loader';
-import { GITHUB_TOKEN_KEYS } from '@archon/workflows/utils/github-token-policy';
 import {
   captureDetachedInstallContext,
   getPluginsPath,
@@ -32,9 +31,10 @@ const inheritedInstallContext = hasDetachedRunConfigHandoff
   : undefined;
 // Inside a run, a GitHub key the engine set (a token, or '' to scrub it) is the run's
 // identity; neither Archon env file may replace or restore it. An absent key is no
-// opinion, so the env files still supply it (see github-token-policy).
+// opinion, so the env files still supply it (see github-token-policy). Imported only
+// inside a run: CLI startup must not load workflow modules (check:cli-import-boundary).
 const runGithubCredentials = process.env.WORKFLOW_ID
-  ? GITHUB_TOKEN_KEYS.flatMap(key => {
+  ? (await import('@archon/workflows/utils/github-token-policy')).GITHUB_TOKEN_KEYS.flatMap(key => {
       const value = process.env[key];
       return value === undefined ? [] : [[key, value] as const];
     })
