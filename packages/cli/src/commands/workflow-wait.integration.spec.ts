@@ -386,6 +386,18 @@ function readRunStatus(archonHome: string, runId: string): string | undefined {
          WHERE id = ?`
       )
       .get(runId)?.status;
+  } catch (error) {
+    // This helper is polled while the detached owner may be committing the pause.
+    // A transient lock means the status is not readable yet; waitFor will try again.
+    if (
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      error.code === 'SQLITE_BUSY'
+    ) {
+      return undefined;
+    }
+    throw error;
   } finally {
     database.close();
   }
@@ -679,43 +691,6 @@ async function waitForRunBoot<T>(
   console.log(`[boot] ${what}: ${String(elapsed)}ms of ${String(RUN_BOOT_DEADLINE_MS)}ms`);
   return value;
 }
-
-async function readObservedRunStatus(archonHome: string, runId: string): Promise<string> {
-  // Retry unreadable rows, never an unexpected status: lifecycle assertions must fail on it.
-  return waitFor('the run status to be readable', () => readRunStatus(archonHome, runId), 30_000);
-}
-
-describe('run status assertions', () => {
-  test('reads the first available status after a database lock is released', async () => {
-    const fixture = makeFixture('archon-wait-status-lock-', {});
-    mkdirSync(fixture.archonHome, { recursive: true });
-    const database = new Database(join(fixture.archonHome, 'archon.db'));
-    let release: ReturnType<typeof setTimeout> | undefined;
-    try {
-      database.run('CREATE TABLE remote_agent_workflow_runs (id TEXT, status TEXT)');
-      database.run("INSERT INTO remote_agent_workflow_runs VALUES ('run', 'cancelled')");
-      database.run('BEGIN EXCLUSIVE');
-      release = setTimeout(() => database.run('ROLLBACK'), 100);
-      expect(await readObservedRunStatus(fixture.archonHome, 'run')).toBe('cancelled');
-    } finally {
-      clearTimeout(release);
-      database.close();
-    }
-  });
-
-  test('returns a readable unexpected status without waiting for cancellation', async () => {
-    const fixture = makeFixture('archon-wait-status-running-', {});
-    mkdirSync(fixture.archonHome, { recursive: true });
-    const database = new Database(join(fixture.archonHome, 'archon.db'));
-    try {
-      database.run('CREATE TABLE remote_agent_workflow_runs (id TEXT, status TEXT)');
-      database.run("INSERT INTO remote_agent_workflow_runs VALUES ('run', 'running')");
-      expect(await readObservedRunStatus(fixture.archonHome, 'run')).toBe('running');
-    } finally {
-      database.close();
-    }
-  });
-});
 
 describe('foreground run discovery', () => {
   test('reports owner exit and both streams before the row-discovery deadline', async () => {
@@ -1046,13 +1021,13 @@ describe('archon workflow wait against a detached run', () => {
       result: 'owner_lost',
       observedStatus: 'running',
     });
-    expect(await readObservedRunStatus(fixture.archonHome, runId)).toBe('running');
+    expect(readRunStatus(fixture.archonHome, runId)).toBe('running');
 
     const abandoned = await runCli(fixture, ['workflow', 'abandon', runId]);
     if (abandoned.exitCode !== 0) {
       throw new Error(`abandon failed: ${abandoned.stderr || abandoned.stdout}`);
     }
-    expect(await readObservedRunStatus(fixture.archonHome, runId)).toBe('cancelled');
+    expect(readRunStatus(fixture.archonHome, runId)).toBe('cancelled');
     activeRunIds.delete(runId);
   }, 120_000);
 
@@ -1416,6 +1391,6 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     // or loses the resume's compare-and-swap, the released run must stay cancelled —
     // an owner that resurrects another process's terminal state is the defect.
     await Bun.sleep(9_000);
-    expect(await readObservedRunStatus(fixture.archonHome, runId)).toBe('cancelled');
+    expect(readRunStatus(fixture.archonHome, runId)).toBe('cancelled');
   }, 120_000);
 });
