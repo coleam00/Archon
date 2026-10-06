@@ -6,6 +6,7 @@
 import { describe, expect, test } from 'bun:test';
 import { join, relative } from 'node:path';
 import { testTimeout } from '@archon/paths/test-utils';
+import { ROUTING_PROBE } from '../.archon/scripts/__tests__/routing-probe';
 import { planRequestedRuns } from './repo-tests';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -179,19 +180,18 @@ describe('repo-tests exit codes', () => {
   });
 
   test(
-    'bun run test .archon/scripts/ collects the directory tests',
+    'bun run test .archon/scripts/ executes the directory tests',
     async () => {
-      // The directory argument is what routes. A name filter no test carries keeps bun
+      // The directory argument is what routes. Filtering to the probe test keeps bun
       // from running the directory's subprocess suites, which outlast any fixed budget
-      // on a Windows runner, while it still reports how many files the route collected.
-      const child = Bun.spawn(
-        ['bun', 'run', 'test', '.archon/scripts/', '-t', 'no test is named this'],
-        { cwd: REPO_ROOT, stdout: 'ignore', stderr: 'pipe' }
-      );
-      const [, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()]);
+      // on a Windows runner; the probe passing proves the route ran that directory.
+      const child = Bun.spawn(['bun', 'run', 'test', '.archon/scripts/', '-t', ROUTING_PROBE], {
+        cwd: REPO_ROOT,
+        stdout: 'ignore',
+        stderr: 'ignore',
+      });
 
-      const searched = /matched 0 tests\. Searched (\d+) files/.exec(stderr);
-      expect(Number(searched?.[1] ?? 0)).toBeGreaterThan(0);
+      expect(await child.exited).toBe(0);
     },
     testTimeout(60_000)
   );
