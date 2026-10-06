@@ -10,7 +10,17 @@ if (mode === 'mismatch') descriptor.version = '2';
 if (mode === 'record-pid') writeFileSync(process.argv[3], String(process.pid));
 async function closeOutput(): Promise<never> {
   writeFileSync(process.argv[3], String(process.pid));
-  closeSync(1);
+  // On Windows closeSync(1) leaves the standard output handle open, so the host would
+  // never see EOF; closing the handle itself does.
+  if (process.platform === 'win32') {
+    const ffi = await import('bun:ffi');
+    const kernel32 = ffi.dlopen('kernel32.dll', {
+      GetStdHandle: { args: [ffi.FFIType.i32], returns: ffi.FFIType.ptr },
+      CloseHandle: { args: [ffi.FFIType.ptr], returns: ffi.FFIType.bool },
+    });
+    const STD_OUTPUT_HANDLE = -11;
+    kernel32.symbols.CloseHandle(kernel32.symbols.GetStdHandle(STD_OUTPUT_HANDLE));
+  } else closeSync(1);
   setInterval(() => undefined, 1000);
   return await new Promise<never>(() => undefined);
 }

@@ -87,22 +87,30 @@ test('process conforms, including real background state and typed failure', asyn
   }
 });
 
+// Windows adds variables it needs to start a process (SYSTEMROOT and others) to a
+// minimal environment, so the child's environment is checked for what the shared
+// builder decides, not for exact equality.
 test.each(['host', 'container'] as const)('process uses the shared %s environment', async kind => {
   const options = {
     env: { PROCESS_CANARY: 'request-value' },
     execContext: kind === 'host' ? { kind } : { kind, containerId: 'test' },
   };
-  const result = await collect(provider('env').sendQuery('turn', tmpdir(), undefined, options));
-  expect(result[0].type).toBe('result');
-  if (result[0].type !== 'result') throw new Error('missing result');
-  const expected = buildProviderSubprocessEnv(options);
-  const actual: unknown = JSON.parse(result[0].text ?? '{}');
-  const expectedEntries = Object.entries(expected)
-    .filter(([, value]) => value !== undefined)
-    .sort();
-  const actualEntries =
-    typeof actual === 'object' && actual !== null ? Object.entries(actual).sort() : [];
-  expect(JSON.stringify(actualEntries) === JSON.stringify(expectedEntries)).toBe(true);
+  process.env.PROCESS_HOST_CANARY = 'host-value';
+  try {
+    const result = await collect(provider('env').sendQuery('turn', tmpdir(), undefined, options));
+    expect(result[0].type).toBe('result');
+    if (result[0].type !== 'result') throw new Error('missing result');
+    const expected = buildProviderSubprocessEnv(options);
+    const actual = JSON.parse(result[0].text ?? '{}') as Record<string, unknown>;
+    const missing = Object.entries(expected).filter(
+      ([key, value]) => value !== undefined && actual[key] !== value
+    );
+    expect(missing.map(([key]) => key)).toEqual([]);
+    expect(actual.PROCESS_CANARY).toBe('request-value');
+    expect('PROCESS_HOST_CANARY' in actual).toBe(kind === 'host');
+  } finally {
+    delete process.env.PROCESS_HOST_CANARY;
+  }
 });
 
 test(

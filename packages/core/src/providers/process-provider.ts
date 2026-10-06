@@ -22,11 +22,6 @@ import {
   type ProviderPluginDescriptor,
 } from '@archon/provider-contract/plugin';
 
-let log: ReturnType<typeof createLogger> | undefined;
-function getLog(): ReturnType<typeof createLogger> {
-  return (log ??= createLogger('core.provider-process'));
-}
-
 const EXIT_GRACE_MS = 10_000;
 
 export class ProviderPluginExitedError extends Error {
@@ -56,6 +51,9 @@ function startProcess(
   signal?.throwIfAborted();
   const invalid = validateCommand(argv[0]);
   if (invalid) throw new Error(`Provider plugin ${descriptor.id}: ${invalid}`);
+  // One logger per process, not a module cache: a logger cached by an earlier caller
+  // would outlive any test that replaces createLogger to observe these diagnostics.
+  const log = createLogger('core.provider-process');
   const env = buildProviderSubprocessEnv(options);
   const secrets = collectCredentialValues(
     env,
@@ -92,7 +90,7 @@ function startProcess(
   const closed = new Promise<void>(resolve => {
     child.once('close', () => {
       exited = true;
-      getLog().debug(
+      log.debug(
         {
           provider: descriptor.id,
           exitCode: child.exitCode,
@@ -120,7 +118,7 @@ function startProcess(
   let cancelTimer: ReturnType<typeof setTimeout> | undefined;
   const forceStop = (): void => {
     void kill().catch(error => {
-      getLog().error(
+      log.error(
         {
           provider: descriptor.id,
           error: redact(error instanceof Error ? error.message : String(error)),
