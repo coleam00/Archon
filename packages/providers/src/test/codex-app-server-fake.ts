@@ -95,6 +95,8 @@ export interface FakeProcess {
   notifications: string[];
   signals: string[];
   stdinEnded: boolean;
+  send: (notification: ServerNotification) => void;
+  exit: (code: number) => void;
   /** Request methods in the order the client sent them. */
   readonly methods: string[];
 }
@@ -124,6 +126,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     const stdin = new PassThrough();
     const stdout = new PassThrough();
     const stderr = new PassThrough();
+    let activeThreadId = THREAD_ID;
     const record: FakeProcess = {
       args,
       env: options.env,
@@ -132,6 +135,8 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
       notifications: [],
       signals: [],
       stdinEnded: false,
+      send: notification => send(notification),
+      exit: code => close(code, null),
       get methods() {
         return this.requests.map(request => request.method);
       },
@@ -177,7 +182,12 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
     }
 
     const send = (frame: OutgoingFrame): void => {
-      if (!closed) stdout.write(`${JSON.stringify(frame)}\n`);
+      if (closed) return;
+      const outgoing =
+        'method' in frame && 'threadId' in frame.params && frame.params.threadId === THREAD_ID
+          ? { ...frame, params: { ...frame.params, threadId: activeThreadId } }
+          : frame;
+      stdout.write(`${JSON.stringify(outgoing)}\n`);
     };
     const completeTurn = (status: TurnStatus, error: TurnError | null = null): void => {
       send(turnCompleted(status, error));
@@ -234,6 +244,7 @@ export function createFakeAppServer(script: () => FakeTurnScript = () => ({})): 
             break;
           }
           case 'turn/start':
+            activeThreadId = (message.params as { threadId: string }).threadId;
             send({ id, result: { turn: turnOf('inProgress', null) } satisfies TurnStartResponse });
             for (const frame of turn.notifications ?? []) send(frame);
             if (turn.exitCode !== undefined) {
@@ -507,25 +518,34 @@ function turnOf(status: TurnStatus, error: TurnError | null, id = TURN_ID): Turn
 export function turnCompleted(
   status: TurnStatus,
   error: TurnError | null = null,
-  turnId = TURN_ID
+  turnId = TURN_ID,
+  threadId = THREAD_ID
 ): ServerNotification {
   return {
     method: 'turn/completed',
-    params: { threadId: THREAD_ID, turn: turnOf(status, error, turnId) },
+    params: { threadId, turn: turnOf(status, error, turnId) },
   };
 }
 
-export function itemStarted(item: ThreadItem): ServerNotification {
+export function itemStarted(
+  item: ThreadItem,
+  threadId = THREAD_ID,
+  turnId = TURN_ID
+): ServerNotification {
   return {
     method: 'item/started',
-    params: { item, threadId: THREAD_ID, turnId: TURN_ID, startedAtMs: 0 },
+    params: { item, threadId, turnId, startedAtMs: 0 },
   };
 }
 
-export function itemCompleted(item: ThreadItem): ServerNotification {
+export function itemCompleted(
+  item: ThreadItem,
+  threadId = THREAD_ID,
+  turnId = TURN_ID
+): ServerNotification {
   return {
     method: 'item/completed',
-    params: { item, threadId: THREAD_ID, turnId: TURN_ID, completedAtMs: 0 },
+    params: { item, threadId, turnId, completedAtMs: 0 },
   };
 }
 
@@ -686,5 +706,18 @@ export function errorNotification(
       threadId: THREAD_ID,
       turnId: TURN_ID,
     },
+  };
+}
+
+export function subAgentActivity(
+  kind: Extract<ThreadItem, { type: 'subAgentActivity' }>['kind'],
+  agentThreadId = 'child-thread'
+): Extract<ThreadItem, { type: 'subAgentActivity' }> {
+  return {
+    type: 'subAgentActivity',
+    id: `activity-${kind}`,
+    kind,
+    agentThreadId,
+    agentPath: '/root/sleep_probe',
   };
 }

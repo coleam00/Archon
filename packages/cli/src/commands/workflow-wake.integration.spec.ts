@@ -30,8 +30,15 @@ interface RunRow {
   conversation_id: string;
   user_id: string | null;
 }
+/** Read-only handle that waits out a lock held by a live writer instead of throwing SQLITE_BUSY. */
+function openReadOnly(databasePath: string): Database {
+  const database = new Database(databasePath, { readonly: true });
+  database.run('PRAGMA busy_timeout = 5000');
+  return database;
+}
+
 function row(f: Fixture): RunRow {
-  const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+  const db = openReadOnly(join(f.home, 'archon.db'));
   try {
     const run = db
       .query<
@@ -110,16 +117,16 @@ const user = await findOrCreateUserByPlatformIdentity('cli', 'cold-operator');
 const conversation = await getOrCreateConversation('cli', 'cold-fixture', codebase.id, undefined, user.id);
 const deps = createWorkflowDeps();
 const source = await prepareWorkflowSource(deps, { sourceRoot: cwd });
-const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, source.roots);
+const discovery = await discoverWorkflowsWithConfig(cwd, loadConfig, deps.providers, source.roots);
 const workflow = discovery.workflows.find(entry => entry.workflow.name === 'cold')?.workflow;
 if (!workflow) throw new Error(JSON.stringify(discovery.errors));
 await recordSelectedWorkflow(source.anchor.root, workflow.name);
 const owner = await startRunLiveOwner(source.runId);
 try {
  const result = await new InProcessWorkflowEngine(deps).submit({
-  platform: new HeadlessPlatform(conversation.id), conversationId: conversation.id,
-  conversationDbId: conversation.id, cwd, workflow, userMessage: 'original request',
-  options: { codebaseId: codebase.id, preparedSource: source, userId: user.id, inputs: { proof: 'original-input' },
+  platform: new HeadlessPlatform(), conversationId: conversation.id,
+  origin: { conversationId: conversation.id, userId: user.id }, cwd, workflow, userMessage: 'original request',
+  options: { codebaseId: codebase.id, preparedSource: source, inputs: { proof: 'original-input' },
     runConfig: { layer: { envVars: { WAKE_CONFIG_PROOF: 'original-config' } }, source: { kind: 'cli', label: 'cold-fixture' } } }
  });
  if (!('paused' in result)) throw new Error(JSON.stringify(result));
@@ -143,7 +150,7 @@ async function due(f: Fixture): Promise<void> {
   if (deadline > Date.now()) await Bun.sleep(deadline - Date.now() + 10);
 }
 function events(f: Fixture, type: string): number {
-  const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+  const db = openReadOnly(join(f.home, 'archon.db'));
   try {
     return (
       db
@@ -224,7 +231,7 @@ describe('cold CLI continuation host', () => {
     expect(b.exitCode, b.stderr || b.stdout).toBe(0);
     expect(row(f).status).toBe('completed');
     expect(events(f, 'wait_signaled')).toBe(2);
-    const db = new Database(join(f.home, 'archon.db'), { readonly: true });
+    const db = openReadOnly(join(f.home, 'archon.db'));
     try {
       expect(
         db
@@ -317,7 +324,9 @@ describe('cold CLI continuation host', () => {
   }, 30_000);
 
   test('watch wakes a later deadline and SIGTERM exits during idle sleep', async () => {
-    const f = await seed('      duration_ms: 3000');
+    // The deadline must still be ahead at the watch's first pass. A short duration races
+    // the seed process, so wait out the first pass and only then make the deadline due.
+    const f = await seed('      duration_ms: 3600000');
     const child = Bun.spawn([process.execPath, cli, 'workflow', 'wake', '--watch', '--json'], {
       cwd: f.root,
       env: f.env,
@@ -325,8 +334,25 @@ describe('cold CLI continuation host', () => {
       stderr: 'pipe',
     });
     children.add(child);
-    const stdout = new Response(child.stdout).text();
     const stderr = new Response(child.stderr).text();
+    const reader = child.stdout.getReader();
+    const decoder = new TextDecoder();
+    let stdout = '';
+    while (!stdout.includes('\n')) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      stdout += decoder.decode(chunk.value, { stream: true });
+    }
+    expect(JSON.parse(stdout.split('\n')[0] ?? '')).toMatchObject({ accepted: 0 });
+    const db = new Database(join(f.home, 'archon.db'));
+    try {
+      db.run(
+        "UPDATE remote_agent_workflow_runs SET metadata = json_set(metadata, '$.wait.resumeAt', ?)",
+        [new Date(Date.now() - 1000).toISOString()]
+      );
+    } finally {
+      db.close();
+    }
     const deadline = Date.now() + 15_000;
     while (row(f).status !== 'completed' && Date.now() < deadline) await Bun.sleep(25);
     expect(row(f).status).toBe('completed');
@@ -336,7 +362,9 @@ describe('cold CLI continuation host', () => {
     // POSIX can prove the handler drains and exits cleanly.
     if (process.platform !== 'win32') expect(exitCode).toBe(0);
     children.delete(child);
-    const passes = (await stdout)
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read())
+      stdout += decoder.decode(chunk.value, { stream: true });
+    const passes = stdout
       .trim()
       .split('\n')
       .map(line => JSON.parse(line) as { accepted: number });

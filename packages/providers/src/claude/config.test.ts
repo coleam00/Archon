@@ -1,11 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 
-import {
-  parseClaudeConfig,
-  parseClaudeConfigStrict,
-  parseClaudeSettingSources,
-  type ClaudeProviderDefaults,
-} from './config';
+import { parseClaudeConfig, parseClaudeConfigStrict, type ClaudeProviderDefaults } from './config';
 
 // Exclude the opaque provider-config index signature, requiring every declared field.
 type CompleteClaudeConfig = {
@@ -24,38 +19,6 @@ describe('Claude config contract', () => {
 
     expect(parseClaudeConfigStrict(config)).toEqual(config);
     expect(parseClaudeConfig(config)).toEqual(config);
-  });
-});
-
-describe('parseClaudeSettingSources', () => {
-  test('returns undefined for a non-array value', () => {
-    expect(parseClaudeSettingSources(undefined)).toEqual({ invalid: [] });
-    expect(parseClaudeSettingSources('project')).toEqual({ invalid: [] });
-  });
-
-  test('keeps recognized entries in order', () => {
-    expect(parseClaudeSettingSources(['user', 'project'])).toEqual({
-      value: ['user', 'project'],
-      invalid: [],
-    });
-  });
-
-  test('preserves an explicitly empty list', () => {
-    expect(parseClaudeSettingSources([])).toEqual({ value: [], invalid: [] });
-  });
-
-  test('reports unrecognized entries instead of dropping them silently', () => {
-    expect(parseClaudeSettingSources(['project', 'local'])).toEqual({
-      value: ['project'],
-      invalid: ['local'],
-    });
-  });
-
-  test('serializes a non-string entry so the caller can name it', () => {
-    expect(parseClaudeSettingSources([{ nope: 1 }])).toEqual({
-      value: [],
-      invalid: ['{"nope":1}'],
-    });
   });
 });
 

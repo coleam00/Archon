@@ -80,10 +80,17 @@ async function runCli(
   return { exitCode, stdout, stderr };
 }
 
+/** Read-only handle that waits out a lock held by a live writer instead of throwing SQLITE_BUSY. */
+function openReadOnly(databasePath: string): Database {
+  const database = new Database(databasePath, { readonly: true });
+  database.run('PRAGMA busy_timeout = 5000');
+  return database;
+}
+
 function readRunId(archonHome: string, workflowName: string): string | undefined {
   const databasePath = join(archonHome, 'archon.db');
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     return database
       .query<{ id: string }, [string]>(

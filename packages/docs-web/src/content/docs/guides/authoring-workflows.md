@@ -311,8 +311,8 @@ Most of these fields map directly to Claude Agent SDK options. `maxBudgetUsd`, `
 The ladder is the union of every provider's vocabulary. Codex accepts all eight
 rungs. Other providers clamp an unsupported rung to the nearest weaker value;
 only when no weaker value exists do they use the shallowest stronger value.
-For example, `persistent` and `ultra` become `max` on Claude and Pi or `xhigh`
-on Copilot, while `minimal` becomes `low` on Claude and Copilot.
+For example, `persistent` and `ultra` become `max` on Claude, Pi,
+and Copilot, while `minimal` becomes `low` on Claude and Copilot.
 
 `thinking:` has been removed. A workflow, node, tier, or alias that still uses
 it fails validation with an error directing the author to `effort:`.
@@ -1035,6 +1035,8 @@ Run it once with `"add OAuth login"`, again with `"now add MFA"` — each role c
 
 Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The scope is the conversation that launched the run, so each chat thread has its own per-node memory. A run the Web UI or REST API starts in the background still belongs to the chat it was launched from, so runs from one chat continue each other's sessions.
 
+A run started without a conversation (for example, by code that calls the workflow engine or store with no origin) has no scope. Its `persist_session` nodes start fresh, save nothing for later runs, and get no scope artifacts. Resuming that run is unaffected: it continues from its own completed nodes like any other run.
+
 The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
 
 ### Concurrent runs
@@ -1103,7 +1105,7 @@ Codex does not fall back: a thread it cannot resume or fork fails the node as `u
 
 #### By-reference recovery via scope artifacts
 
-A lost session doesn't have to mean lost context. Workflows that use `persist_session` also get a **stable cross-invocation artifact scope** at `scopes/<workflow>/<scope>/` (a sibling of the per-run `runs/<id>/` directory, under the same artifacts root; the scope is the launching conversation's UUID — the same key sessions use). Whenever a persistence-participating node also declares an `output_type`, the engine mirrors its typed output sidecar (`nodes/<id>.md` + `nodes/<id>.meta.json`) into that scope directory in addition to the run directory.
+A lost session doesn't have to mean lost context. Workflows that use `persist_session` in a run launched from a conversation also get a **stable cross-invocation artifact scope** at `scopes/<workflow>/<scope>/` (a sibling of the per-run `runs/<id>/` directory, under the same artifacts root; the scope is the launching conversation's UUID — the same key sessions use). Whenever a persistence-participating node also declares an `output_type`, the engine mirrors its typed output sidecar (`nodes/<id>.md` + `nodes/<id>.meta.json`) into that scope directory in addition to the run directory.
 
 On a cold resume, the warning then goes further: if the scope directory holds typed artifacts from an *earlier* invocation, the message lists them **by reference** (file paths — never pasted content), so the recovered context can be read on demand:
 
@@ -2174,11 +2176,10 @@ statement about the children:
 | write to the repo | `isolation: worktree` on each **`workflow:` node** |
 | must not overlap at all | sequence them with `depends_on` |
 
-One constraint applies however the checkouts are arranged: **one blocking child gate at a
-time.** Two children in the same layer that both pause for approval contend for the parent
-run's single approval slot — the second pause is silently dropped, and that child stays
-unmentioned until a later resume re-pauses on it. Sequence gated sub-runs with `depends_on`
-until a later slice adds real concurrent gating.
+Each 1:1 child run presents its own approval gate independently, addressed by its own run
+ID. Concurrent children can both pause for approval; the parent stays blocked until its
+children finish. Within a single run, gates are presented one at a time, and deferred gates
+re-run when that run resumes.
 
 ### Fanning out over a list with `fan_out:`
 

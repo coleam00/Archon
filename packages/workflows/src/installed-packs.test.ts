@@ -6,6 +6,7 @@
  * Packs are written the way `archon plugin install` leaves them (a receipt under
  * `plugins/installed/` and a tree under `plugins/packs/`) into a temp ARCHON_HOME.
  */
+import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { cp, mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
@@ -127,7 +128,7 @@ nodes:
 }
 
 const discover = (): ReturnType<typeof discoverWorkflowsWithConfig> =>
-  discoverWorkflowsWithConfig(project, loadConfig);
+  discoverWorkflowsWithConfig(project, loadConfig, providerRegistry);
 const names = (entries: readonly { workflow: { name: string } }[]): string[] =>
   entries.map(entry => entry.workflow.name);
 
@@ -246,7 +247,7 @@ nodes:
 
     // Validation resolves the pack's own command and script.
     const review = resolveWorkflowName(REVIEW, definitions) as ResolvedWorkflow;
-    const issues = await validateWorkflowResources(review, project, {
+    const issues = await validateWorkflowResources(review, project, providerRegistry, {
       workflowSource: 'installed',
     });
     expect(issues.filter(issue => issue.level === 'error')).toEqual([]);
@@ -317,6 +318,7 @@ nodes:
     const { workflows } = await discoverWorkflowsWithConfig(
       project,
       loadConfig,
+      providerRegistry,
       capturedSourceRoots(child.anchor)
     );
     expect(workflows.find(entry => entry.workflow.name === REVIEW)?.workflow.description).toBe(
