@@ -107,13 +107,60 @@ describe('SqliteAdapter failure logging', () => {
       expect(record).toMatchObject({
         sql,
         paramCount: 3,
-        err: { code: failure.code, message: failure.message },
+        err: {
+          code: failure.code,
+          errno: failure.errno,
+          message: 'Query failed (error details withheld to protect bound values)',
+        },
       });
       expect(lines.join('')).not.toContain(secret);
       expect(lines.join('')).not.toContain('missing-conversation');
       expect(record).not.toHaveProperty('params');
     }
   );
+
+  test.each(
+    (['query', 'transaction'] as const).flatMap(mode =>
+      [
+        'SELECT json_extract($1, $2)',
+        'WITH value AS (SELECT json_extract($1, $2) AS result) SELECT * FROM value',
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('test', json_extract($1, $2), '/tmp')",
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ('test', json_extract($1, $2), '/tmp') RETURNING *",
+      ].map(sql => ({ mode, sql }))
+    )
+  )('withholds driver-echoed values for $mode: $sql', async ({ mode, sql }) => {
+    const db = new SqliteAdapter(await upgradeFixturePath());
+    const secret = 'recognizable-private-json-path-3809';
+    const output = spyOn(process.stdout, 'write').mockImplementation(() => true);
+    let failure: unknown;
+    let lines: string[];
+    try {
+      const query = (execute: SqliteAdapter['query']) => execute(sql, ['{}', secret]);
+      failure = await (
+        mode === 'query' ? query(db.query.bind(db)) : db.withTransaction(query)
+      ).catch((error: unknown) => error);
+      lines = output.mock.calls.map(call => String(call[0]));
+    } finally {
+      output.mockRestore();
+      await db.close();
+    }
+    expect(failure).toBeInstanceOf(SQLiteError);
+    if (!(failure instanceof SQLiteError)) throw new Error('Expected SQLite JSON-path failure');
+    expect(failure.message).toContain(secret);
+    const record = lines
+      .map(line => JSON.parse(line) as Record<string, unknown>)
+      .find(line => line.msg === 'db.sqlite_query_failed');
+    expect(record).toMatchObject({
+      sql,
+      paramCount: 2,
+      err: {
+        code: failure.code,
+        errno: failure.errno,
+        message: 'Query failed (error details withheld to protect bound values)',
+      },
+    });
+    expect(lines.join('')).not.toContain(secret);
+  });
 });
 
 describe('SqliteAdapter upgrade path', () => {
