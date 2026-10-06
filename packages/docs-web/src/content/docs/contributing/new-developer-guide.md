@@ -306,7 +306,7 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 
 ## Parallel Agents: The PR Review Example
 
-The `archon-review` workflow runs its review lenses simultaneously:
+On a full first round, `archon-review` runs specialist lenses in fresh sessions as shown below. The code lens uses the configured `large` model tier. A focused first round starts with seams and a general reviewer; an engaged full-review risk adds code, tests, and simplify before synthesis.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -332,8 +332,8 @@ The `archon-review` workflow runs its review lenses simultaneously:
 │   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
 │   │   │ tests        │  │ errors       │  │ docs         │         │  │
 │   │   │              │  │ (opt-in)     │  │ (when docs   │         │  │
-│   │   │ Missing      │  │ Silent       │  │  change)     │         │  │
-│   │   │ coverage     │  │ failures     │  │ Stale docs   │         │  │
+│   │   │ Missing      │  │ Visibility & │  │  change)     │         │  │
+│   │   │ coverage     │  │ containment  │  │ Stale docs   │         │  │
 │   │   └──────────────┘  └──────────────┘  └──────────────┘         │  │
 │   │                                                                 │  │
 │   └─────────────────────────────────────────────────────────────────┘  │

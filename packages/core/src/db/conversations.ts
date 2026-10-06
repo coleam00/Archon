@@ -1,10 +1,17 @@
 /**
  * Database operations for conversations
  */
-import { pool, getDialect } from './connection';
+import { lockConversationOwnership } from './conversation-ownership';
+import { listConversationDetachBlockers } from './workflows';
+import { pool, getDialect, getDatabase, getDatabaseType } from './connection';
 import type { Codebase, Conversation } from '../types';
 import { ConversationNotFoundError } from '../types';
 import { createLogger } from '@archon/paths';
+import {
+  assertPublicConversation,
+  assertPublicConversationIdentity,
+  notOriginAnchor,
+} from './workflow-origin-anchor';
 import { loadConfig } from '../config/config-loader';
 import { resolveProjectAssistant } from '../config/project-assistant';
 
@@ -19,6 +26,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * Get a conversation by its database ID
  */
 export async function getConversationById(id: string): Promise<Conversation | null> {
+  assertPublicConversation(id);
   const result = await pool.query<Conversation>(
     'SELECT * FROM remote_agent_conversations WHERE id = $1',
     [id]
@@ -35,7 +43,7 @@ export async function findConversationByPlatformId(
   platformId: string
 ): Promise<Conversation | null> {
   const result = await pool.query<Conversation>(
-    'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
+    `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND ${notOriginAnchor('id')}`,
     [platformId]
   );
   return result.rows[0] ?? null;
@@ -50,7 +58,7 @@ export async function getConversationByPlatformId(
   platformId: string
 ): Promise<Conversation | null> {
   const result = await pool.query<Conversation>(
-    'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+    `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
     [platformType, platformId]
   );
   return result.rows[0] ?? null;
@@ -63,6 +71,7 @@ export async function getOrCreateConversation(
   parentConversationId?: string,
   userId?: string
 ): Promise<Conversation> {
+  assertPublicConversationIdentity(platformType, platformId);
   const existing = await pool.query<Conversation>(
     'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
     [platformType, platformId]
@@ -82,7 +91,7 @@ export async function getOrCreateConversation(
 
   if (parentConversationId) {
     const parent = await pool.query<Conversation>(
-      'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+      `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
       [platformType, parentConversationId]
     );
     if (parent.rows[0]) {
@@ -131,6 +140,7 @@ export async function updateConversation(
     hidden?: boolean;
   }
 ): Promise<void> {
+  assertPublicConversation(id);
   const fields: string[] = [];
   const values: (string | number | null)[] = [];
   let i = 1;
@@ -246,6 +256,7 @@ export async function listConversations(
  * Update last_activity_at for staleness tracking
  */
 export async function touchConversation(id: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   await pool.query(
     `UPDATE remote_agent_conversations SET last_activity_at = ${dialect.now()} WHERE id = $1`,
@@ -257,6 +268,7 @@ export async function touchConversation(id: string): Promise<void> {
  * Update conversation title
  */
 export async function updateConversationTitle(id: string, title: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET title = $1, updated_at = ${dialect.now()} WHERE id = $2`,
@@ -271,6 +283,7 @@ export async function updateConversationTitle(id: string, title: string): Promis
  * Soft delete a conversation (sets deleted_at timestamp)
  */
 export async function softDeleteConversation(id: string): Promise<void> {
+  assertPublicConversation(id);
   const dialect = getDialect();
   const result = await pool.query(
     `UPDATE remote_agent_conversations SET deleted_at = ${dialect.now()}, updated_at = ${dialect.now()} WHERE id = $1`,
@@ -279,4 +292,77 @@ export async function softDeleteConversation(id: string): Promise<void> {
   if (result.rowCount === 0) {
     throw new ConversationNotFoundError(id);
   }
+}
+
+export type ConversationDetachResult =
+  | { status: 'detached'; projectName: string }
+  | {
+      status: 'refused';
+      reason: 'parent-bound' | 'parent-changed' | 'neutral' | 'name';
+    }
+  | {
+      status: 'blocked';
+      runs: Awaited<ReturnType<typeof listConversationDetachBlockers>>;
+      environmentId: string | null;
+    };
+
+export async function detachConversationProject(input: {
+  conversationId: string;
+  projectName: string;
+  platformType: string;
+  parentPlatformId?: string;
+}): Promise<ConversationDetachResult> {
+  return getDatabase().withTransaction(async query => {
+    // SQLite must acquire its writer lock before the parent lookup creates a read snapshot.
+    if (getDatabaseType() === 'sqlite') {
+      await lockConversationOwnership(query, [input.conversationId]);
+    }
+    const findParent = async (): Promise<Conversation | undefined> => {
+      if (!input.parentPlatformId) return undefined;
+      const result = await query<Conversation>(
+        `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND ${notOriginAnchor('id')}`,
+        [input.platformType, input.parentPlatformId]
+      );
+      return result.rows[0];
+    };
+    const parent = await findParent();
+    await lockConversationOwnership(query, [input.conversationId, ...(parent ? [parent.id] : [])]);
+    const currentParent = await findParent();
+    if (currentParent?.id !== parent?.id) return { status: 'refused', reason: 'parent-changed' };
+    if (currentParent?.codebase_id) return { status: 'refused', reason: 'parent-bound' };
+    const result = await query<Conversation>(
+      'SELECT * FROM remote_agent_conversations WHERE id = $1',
+      [input.conversationId]
+    );
+    const conversation = result.rows[0];
+    if (!conversation) throw new ConversationNotFoundError(input.conversationId);
+    if (!conversation.codebase_id) return { status: 'refused', reason: 'neutral' };
+    if (!input.projectName.trim()) return { status: 'refused', reason: 'name' };
+    const projects = await query<{ id: string; name: string }>(
+      'SELECT id, name FROM remote_agent_codebases WHERE name = $1',
+      [input.projectName]
+    );
+    // Both dialects compare names byte-for-byte, so case-only mismatches already miss here.
+    if (projects.rows.length !== 1 || projects.rows[0].id !== conversation.codebase_id) {
+      return { status: 'refused', reason: 'name' };
+    }
+    const runs = await listConversationDetachBlockers(query, conversation.id);
+    if (runs.length || conversation.isolation_env_id !== null) {
+      return { status: 'blocked', runs, environmentId: conversation.isolation_env_id };
+    }
+    await query(
+      `UPDATE remote_agent_sessions
+       SET active = false, ended_at = ${getDialect().now()}, ended_reason = 'project-changed'
+       WHERE conversation_id = $1 AND active = true`,
+      [conversation.id]
+    );
+    const cleared = await query(
+      `UPDATE remote_agent_conversations
+       SET codebase_id = NULL, cwd = NULL, isolation_env_id = NULL, updated_at = ${getDialect().now()}
+       WHERE id = $1`,
+      [conversation.id]
+    );
+    if (cleared.rowCount !== 1) throw new ConversationNotFoundError(conversation.id);
+    return { status: 'detached', projectName: projects.rows[0].name };
+  });
 }

@@ -59,7 +59,7 @@ describe('GitHub completed-check workflow signal — real SQLite', () => {
       await createWorkflowRun({
         id,
         workflow_name: 'archon-deliver',
-        conversation_id: 'check-signal-conversation',
+        origin: { conversationId: 'check-signal-conversation' },
         user_message: 'test check signal',
       });
       await updateWorkflowRun(id, { status: 'running' });

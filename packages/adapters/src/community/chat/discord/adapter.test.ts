@@ -94,6 +94,10 @@ function startThreadOptions(startThread: Mock<StartThread>): StartThreadOptions 
 }
 
 describe('DiscordAdapter', () => {
+  test('supports durable conversation project detachment', () => {
+    expect(new DiscordAdapter('fake-token-for-testing').capabilities.canDetachProject).toBe(true);
+  });
+
   beforeEach(() => {
     mockChannelSend.mockClear();
     mockChannelsFetch.mockClear();

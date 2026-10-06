@@ -107,7 +107,7 @@ export function RunDetailHeader({
         </span>
       </div>
 
-      <RunOutcomeBadge outcome={run.outcome} />
+      <RunOutcomeBadge outcome={run.outcome} terminalRecord={run.terminalRecord} />
 
       {/* Workflow name */}
       <span className="text-sm font-medium text-text-primary">{run.workflow}</span>

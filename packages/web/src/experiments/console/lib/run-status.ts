@@ -7,8 +7,9 @@
  * must never collide with the "running" signal.
  */
 import type { Run } from '../primitives/run';
+import type { components } from '@/lib/api.generated';
 
-export type RunStatus = 'running' | 'paused' | 'failed' | 'completed' | 'cancelled';
+export type RunStatus = Exclude<components['schemas']['WorkflowRun']['status'], 'pending'>;
 
 export const statusLabel: Record<RunStatus, string> = {
   running: 'Running',

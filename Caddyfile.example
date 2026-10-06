@@ -45,8 +45,12 @@
 	# }
 
 	# ── Option B: Basic auth (browser popup, no extra container) ─────────────
-	# Generate hash: docker run caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
-	# Then set in .env: CADDY_BASIC_AUTH=basicauth @protected { admin $$2a$$14$$<hash> }
+	# In the Compose .env, use a single-quoted multiline value (do not source it).
+	# Uncomment the whole assignment, replace admin, and paste the complete hash unchanged.
+	# Generate hash: docker run --rm caddy caddy hash-password --plaintext 'YOUR_PASSWORD'
+	# CADDY_BASIC_AUTH='basic_auth @protected {
+	#   admin REPLACE_WITH_COMPLETE_HASH_OUTPUT
+	# }'
 	@protected not path /internal/* /webhooks/* /api/health
 	{$CADDY_BASIC_AUTH:}
 

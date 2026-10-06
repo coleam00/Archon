@@ -3,6 +3,7 @@ import {
   registerBuiltinProviders,
   registerCommunityProviders,
   getRegisteredProviders,
+  providerRegistry,
 } from '@archon/providers';
 import { buildAiProfile } from './model-validation';
 import {
@@ -41,8 +42,9 @@ test('snapshot is an owned credential-free JSON record accepted by every provide
   const profile = buildAiProfile('claude', {
     repoAliases: { '@custom': { provider: 'claude', model: 'opus' } },
   });
-  const snapshot = createRunAiConfigurationSnapshot(current, profile, {});
+  const snapshot = createRunAiConfigurationSnapshot(providerRegistry, current, profile, {});
   const restored = readRunAiConfigurationSnapshot(
+    providerRegistry,
     JSON.parse(JSON.stringify({ ai_configuration: snapshot }))
   );
   expect(restored).toEqual(snapshot);
@@ -61,20 +63,25 @@ test('snapshot is an owned credential-free JSON record accepted by every provide
 });
 
 test('absence is legacy; malformed and unsupported snapshots fail without disclosing payloads', () => {
-  expect(readRunAiConfigurationSnapshot({})).toBeUndefined();
+  expect(readRunAiConfigurationSnapshot(providerRegistry, {})).toBeUndefined();
   for (const value of [undefined, null, { version: 2, credential: 'secret' }]) {
-    expect(() => readRunAiConfigurationSnapshot({ ai_configuration: value })).toThrow(
-      'Invalid recorded run AI configuration.'
-    );
+    expect(() =>
+      readRunAiConfigurationSnapshot(providerRegistry, { ai_configuration: value })
+    ).toThrow('Invalid recorded run AI configuration.');
   }
-  const snapshot = createRunAiConfigurationSnapshot(config(), buildAiProfile('claude'), {});
+  const snapshot = createRunAiConfigurationSnapshot(
+    providerRegistry,
+    config(),
+    buildAiProfile('claude'),
+    {}
+  );
   for (const defaults of [
     { env: { API_KEY: 'secret' } },
     { maxConcurrent: 3 },
     { apiKey: 'secret' },
   ]) {
     expect(() =>
-      readRunAiConfigurationSnapshot({
+      readRunAiConfigurationSnapshot(providerRegistry, {
         ai_configuration: { ...snapshot, assistants: { ...snapshot.assistants, pi: defaults } },
       })
     ).toThrow('invalid provider defaults');
@@ -83,12 +90,13 @@ test('absence is legacy; malformed and unsupported snapshots fail without disclo
 
 test('saved AI omissions remain omissions while native and process settings refresh', () => {
   const snapshot = createRunAiConfigurationSnapshot(
+    providerRegistry,
     { ...config(), assistants: { claude: {}, codex: {}, pi: {} } },
     buildAiProfile('claude'),
     {}
   );
   const current = config();
-  restoreRunAiConfigurationDefaults(current, snapshot);
+  restoreRunAiConfigurationDefaults(providerRegistry, current, snapshot);
   expect(current.assistants.claude).toEqual({ settingSources: ['user'] });
   expect(current.assistants.pi).toEqual({ env: { API_KEY: 'secret' }, maxConcurrent: 3 });
 });

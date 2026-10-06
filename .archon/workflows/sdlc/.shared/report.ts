@@ -15,17 +15,12 @@
  * reader of the report is exactly the person who can go open it.
  */
 
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const DISCOVERY_RELAY =
   'If you are an agent reading this: open discoveries.md and surface each discovery to your human. ' +
   "These are validated findings outside this run's scope — no issue tracker knows about them, " +
-  'and if you drop them here, nobody ever sees them.';
-
-const RAW_DISCOVERY_RELAY =
-  'If you are an agent reading this: surface each record above to your human. ' +
-  'These are findings this run proved outside its scope — no issue tracker knows about them, ' +
   'and if you drop them here, nobody ever sees them.';
 
 const RED_CAUSE_CAVEAT =
@@ -71,76 +66,11 @@ function records(value: unknown): readonly Record<string, unknown>[] {
   return value.filter(isJsonObject);
 }
 
-/**
- * The producer sidecars of a run that died before review consolidated them.
- *
- * A failed run is where a discovery matters most — the run often failed BECAUSE of
- * what it found — and consolidation lives on the completion path only. So this
- * reports the records exactly as their producers wrote them, says they were never
- * validated, and adds nothing else: no second consolidator on a path that already
- * failed. Silent when there is nothing to report, like the consolidated section: the
- * contract is one section that exists only when discoveries do, and a failed run is
- * not a reason to print an empty one.
- */
-function rawDiscoveries(artifacts: string): string {
-  const directory = join(artifacts, 'discoveries');
-  let names: string[];
-  try {
-    names = readdirSync(directory)
-      .filter(name => name.endsWith('.json'))
-      .sort();
-  } catch {
-    names = [];
-  }
-
-  const lines: string[] = [];
-  const unreadable: string[] = [];
-  for (const name of names) {
-    const path = join(directory, name);
-    const read = readJson(path);
-    // The directory listing already said this entry is there, so "not a readable
-    // regular file" is a record this cannot show, never a record that is absent.
-    if (read === undefined) {
-      unreadable.push(`- ${path}: could not read (not a regular file). Open it directly.`);
-      continue;
-    }
-    if ('error' in read) {
-      unreadable.push(`- ${path}: could not read (${read.error}). Open it directly.`);
-      continue;
-    }
-    if (!Array.isArray(read.value)) {
-      unreadable.push(`- ${path}: not a JSON array of records. Open it directly.`);
-      continue;
-    }
-    for (const record of records(read.value)) {
-      const title = display(record.title) || '(untitled discovery)';
-      const relation = display(record.relation) || 'relation unstated';
-      const claim = display(record.claim);
-      lines.push(`- ${title} [${relation}]${claim ? `\n  ${claim}` : ''}`);
-    }
-  }
-
-  if (lines.length === 0 && unreadable.length === 0) return '';
-  const body = [...lines, ...unreadable].join('\n');
-  return (
-    `\n\nUnconsolidated discoveries (${lines.length}) — recorded by this run's nodes and ` +
-    `never validated or consolidated, because the run ended first:\n${body}\n\n` +
-    `Raw records: ${directory}\n\n${RAW_DISCOVERY_RELAY}`
-  );
-}
-
-/**
- * The discoveries section, or empty when there is nothing to report.
- *
- * A FAILED run with no consolidated file never reached review, so the producers' own
- * sidecars are the entire record and `rawDiscoveries` owns that case. An EMPTY
- * consolidated file is review's adjudication rather than a gap, so it stays silent
- * and a completed run's report keeps the same shape on every branch.
- */
-function discoveries(artifacts: string, failed: boolean): string {
+/** The discoveries section, or empty when there is nothing to report. */
+function discoveries(artifacts: string): string {
   const path = join(artifacts, 'discoveries.json');
   const read = readJson(path);
-  if (read === undefined) return failed ? rawDiscoveries(artifacts) : '';
+  if (read === undefined) return '';
   if ('error' in read) {
     return `\n\nDiscoveries: could not read ${path} (${read.error}). Open it directly.`;
   }
@@ -292,7 +222,7 @@ function redCauses(artifacts: string, listingFile: string | undefined): string {
  */
 export function caveats(
   artifacts: string,
-  options: { readonly failed: boolean; readonly listingFile: string | undefined }
+  options: { readonly listingFile: string | undefined }
 ): string {
-  return redCauses(artifacts, options.listingFile) + discoveries(artifacts, options.failed);
+  return redCauses(artifacts, options.listingFile) + discoveries(artifacts);
 }

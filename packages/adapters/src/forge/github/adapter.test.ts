@@ -18,6 +18,7 @@
  * Both are stubbed below. The package-cwd test preload checks its own
  * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
+import { providerRegistry } from '@archon/providers';
 import {
   describe,
   test,
@@ -575,7 +576,11 @@ describe('GitHubAdapter', () => {
     });
 
     test('the adapter matcher accepts the bundled PR producer contract', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr'], 'archon-pr.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-pr'],
+        'archon-pr.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       // The publishing node owns the verified record; the agent before it only
       // prepares the intent, and an inbound event must never match on that.

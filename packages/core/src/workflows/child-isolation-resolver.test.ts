@@ -20,14 +20,22 @@ const mockProviderCreate = mock((_req: { identifier: string }) =>
     branchName: 'archon/task-stub',
     status: 'active' as const,
     createdAt: new Date(),
-    metadata: { adopted: nextCreateAdopts },
+    metadata: nextCreateAdopts
+      ? { provenance: 'adopted' as const, adopted: true as const }
+      : {
+          provenance: 'created' as const,
+          adopted: false as const,
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        },
   })
 );
 
 /** Records the loader the resolver hands to the isolation factory (see the M1 test). */
 const mockConfigureIsolation = mock((_loader: (repoPath: string) => Promise<unknown>) => undefined);
 
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
   getIsolationProvider: () => ({ create: mockProviderCreate }),
   configureIsolation: mockConfigureIsolation,
   // Distinctive prefix, not identity: proves the resolver actually routes provider
@@ -296,14 +304,31 @@ describe('child worktree resolver', () => {
     // durable half of that signal (a WARN is emitted alongside it).
     nextCreateAdopts = true;
 
-    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
+    const result = await resolver.resolve({
+      parentRun,
+      nodeId: 'refactor-auth',
+      codebaseId: 'cb-1',
+    });
 
     expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(true);
+    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.worktree_creation_id).toBeNull();
+    expect(result.ownedWorktree).toBeUndefined();
   });
 
   test('a freshly created worktree is not recorded as adopted', async () => {
-    await resolver.resolve({ parentRun, nodeId: 'refactor-auth', codebaseId: 'cb-1' });
+    const result = await resolver.resolve({
+      parentRun,
+      nodeId: 'refactor-auth',
+      codebaseId: 'cb-1',
+    });
 
     expect(mockIsolationDbCreate.mock.calls[0][0].metadata.adopted).toBe(false);
+    expect(result.ownedWorktree).toEqual({
+      envId: 'env-1',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
+    expect(mockIsolationDbCreate.mock.calls[0][0].metadata.worktree_creation_id).toBe(
+      result.ownedWorktree?.creationId
+    );
   });
 });

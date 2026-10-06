@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import type { CredentialStatus } from '@archon/provider-contract';
@@ -58,6 +59,7 @@ function fixture(status: CredentialStatus = { state: 'not_checked', source: 'nat
     checkCredential,
     provider,
     deps: {
+      providers: providerRegistry,
       loadConfig: mock(async () => structuredClone(config)),
       store: { getCodebaseEnvVars: mock(async () => ({ DB_SETTING: 'db' })) },
       getAgentProvider: mock(() => provider),
@@ -273,6 +275,7 @@ function savedRun(metadata: Record<string, unknown>): WorkflowRun {
   return {
     id: 'run',
     workflow_name: 'ai',
+    origin: { conversationId: 'conversation' },
     conversation_id: 'conversation',
     parent_conversation_id: null,
     codebase_id: null,

@@ -1,3 +1,4 @@
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 import {
   createRunAiConfigurationSnapshot,
   readRunAiConfigurationSnapshot,
@@ -5,7 +6,6 @@ import {
 } from './run-ai-configuration';
 import type { RunAiConfigurationSnapshot } from './schemas/run-ai-configuration';
 import type { CredentialStatus } from '@archon/provider-contract';
-import { getRegistration, isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import type { WorkflowConfig, WorkflowDeps } from './deps';
 import type { ResolvedWorkflow, WorkflowRun, DagNode } from './schemas';
 import { isAgentNode, isLoopNode, isLoopGroupNode } from './schemas';
@@ -51,7 +51,12 @@ export interface RunAiConfigurationOptions {
 export async function prepareRunAiConfiguration(
   deps: Pick<
     WorkflowDeps,
-    'loadConfig' | 'getUserAiPrefs' | 'getAgentProvider' | 'sealRunConfig' | 'unsealRunConfig'
+    | 'providers'
+    | 'loadConfig'
+    | 'getUserAiPrefs'
+    | 'getAgentProvider'
+    | 'sealRunConfig'
+    | 'unsealRunConfig'
   > & { store: Pick<WorkflowDeps['store'], 'getCodebaseEnvVars'> },
   workflow: ResolvedWorkflow,
   cwd: string,
@@ -90,8 +95,8 @@ export async function prepareRunAiConfiguration(
     effectiveRunConfig?.layer
   );
   const snapshot =
-    readRunAiConfigurationSnapshot(options.continuationRun?.metadata) ??
-    readRunAiConfigurationSnapshot(options.aiConfigurationRun?.metadata);
+    readRunAiConfigurationSnapshot(deps.providers, options.continuationRun?.metadata) ??
+    readRunAiConfigurationSnapshot(deps.providers, options.aiConfigurationRun?.metadata);
   if (
     snapshot &&
     options.aiConfigurationRun &&
@@ -107,7 +112,7 @@ export async function prepareRunAiConfiguration(
       throw new Error('Cannot override AI configuration inherited from a recorded run.');
     }
   }
-  if (snapshot) restoreRunAiConfigurationDefaults(config, snapshot);
+  if (snapshot) restoreRunAiConfigurationDefaults(deps.providers, config, snapshot);
   let userAiPrefs: UserAiPrefsLayer = {};
   if (!snapshot && executionUserId && deps.getUserAiPrefs) {
     try {
@@ -152,14 +157,18 @@ export async function prepareRunAiConfiguration(
 
   const persistedModelBindings =
     !snapshot && options.continuationRun
-      ? readRunModelBindingsMetadata(options.continuationRun.metadata)
+      ? readRunModelBindingsMetadata(deps.providers, options.continuationRun.metadata)
       : undefined;
   const resolvedModelOverrides =
     snapshot?.modelOverrides ??
     persistedModelBindings?.overrides ??
     (options.modelOverrideLayer?.kind === 'resolved'
       ? options.modelOverrideLayer.overrides
-      : resolveRunModelOverrides(baseAiProfile, options.modelOverrideLayer?.overrides));
+      : resolveRunModelOverrides(
+          deps.providers,
+          baseAiProfile,
+          options.modelOverrideLayer?.overrides
+        ));
   const aiProfile = applyResolvedRunModelOverrides(baseAiProfile, resolvedModelOverrides);
   const modelBindingsMetadata = createRunModelBindingsMetadata(resolvedModelOverrides, aiProfile);
   let scope = resolveWorkflowModelScope(
@@ -168,13 +177,14 @@ export async function prepareRunAiConfiguration(
     assistantModelDefaults(config),
     aiProfile
   );
-  if (!isRegisteredProvider(scope.provider))
+  if (!deps.providers.get(scope.provider))
     throw new Error(
-      `Workflow '${workflow.name}': unknown provider '${scope.provider}'. Registered: ${getRegisteredProviders()
+      `Workflow '${workflow.name}': unknown provider '${scope.provider}'. Registered: ${deps.providers
+        .list()
         .map(p => p.id)
         .join(', ')}`
     );
-  const unresolved = collectRunCredentialRequirements(workflow, {
+  const unresolved = collectRunCredentialRequirements(deps.providers, workflow, {
     config,
     aiProfile,
     scope,
@@ -195,8 +205,9 @@ export async function prepareRunAiConfiguration(
     }
   }
   const aiConfigurationSnapshot =
-    snapshot ?? createRunAiConfigurationSnapshot(config, baseAiProfile, resolvedModelOverrides);
-  if (!snapshot) restoreRunAiConfigurationDefaults(config, aiConfigurationSnapshot);
+    snapshot ??
+    createRunAiConfigurationSnapshot(deps.providers, config, baseAiProfile, resolvedModelOverrides);
+  if (!snapshot) restoreRunAiConfigurationDefaults(deps.providers, config, aiConfigurationSnapshot);
   scope = resolveWorkflowModelScope(
     workflow,
     config.assistant,
@@ -215,7 +226,11 @@ export async function prepareRunAiConfiguration(
     effectiveRunConfig,
     runConfigMetadata,
     executionUserId,
-    requirements: collectRunCredentialRequirements(workflow, { config, aiProfile, scope }),
+    requirements: collectRunCredentialRequirements(deps.providers, workflow, {
+      config,
+      aiProfile,
+      scope,
+    }),
     connectedVendors: new Set(),
   };
 }
@@ -242,6 +257,7 @@ export interface RunCredentialRequirement {
 }
 
 export function collectRunCredentialRequirements(
+  providers: ProviderRegistry,
   workflow: ResolvedWorkflow,
   prepared: Pick<PreparedRunAiConfiguration, 'config' | 'aiProfile' | 'scope'>
 ): RunCredentialRequirement[] {
@@ -265,7 +281,7 @@ export function collectRunCredentialRequirements(
         requirements.set(JSON.stringify([provider, model]), {
           provider,
           model,
-          vendor: getRegistration(provider).credentials.vendorFor(model),
+          vendor: requireProvider(providers, provider).credentials.vendorFor(model),
         });
       }
     }

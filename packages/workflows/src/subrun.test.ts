@@ -1,3 +1,6 @@
+import { providerRegistry } from '@archon/providers';
+import { InProcessWorkflowEngine } from './in-process-engine';
+import { isApprovalContext, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { inMemoryDagResumeSnapshot, type InMemoryStoreEvent } from './test-utils';
 import { settlingProvider } from './test-settling-provider';
 /**
@@ -184,7 +187,7 @@ import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
 import type { WorkflowDeps, IWorkflowPlatform, WorkflowConfig } from './deps';
 import type { IWorkflowStore } from './store';
-import { waitCompletionEvents } from './store';
+import { waitCompletionEvents, WorkflowRunPauseConflictError } from './store';
 import {
   readRunDispatchMetadata,
   type WorkflowRun,
@@ -238,10 +241,11 @@ class InMemoryStore implements IWorkflowStore {
   createWorkflowRun: IWorkflowStore['createWorkflowRun'] = data => {
     const id = `run-${String(++this.seq)}`;
     const row: WorkflowRun = {
+      origin: data.origin ?? null,
       id,
       workflow_name: data.workflow_name,
-      conversation_id: data.conversation_id,
-      parent_conversation_id: data.parent_conversation_id ?? null,
+      conversation_id: data.origin?.conversationId ?? null,
+      parent_conversation_id: data.origin?.parentConversationId ?? null,
       codebase_id: data.codebase_id ?? null,
       status: 'pending',
       outcome: null,
@@ -251,7 +255,7 @@ class InMemoryStore implements IWorkflowStore {
       completed_at: null,
       last_activity_at: new Date(),
       working_path: data.working_path ?? null,
-      user_id: data.user_id ?? null,
+      user_id: data.origin?.userId ?? null,
       parent_run_id: data.parent_run_id ?? null,
       output_root: null,
       checkout_baseline: null,
@@ -261,10 +265,11 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(this.clone(row));
   };
 
-  claimPendingWorkflowRun: IWorkflowStore['claimPendingWorkflowRun'] = id => {
+  claimPendingWorkflowRun: IWorkflowStore['claimPendingWorkflowRun'] = (id, workingPath) => {
     const row = this.runs.get(id);
     if (!row || row.status !== 'pending') return Promise.resolve(null);
     row.status = 'running';
+    row.working_path ??= workingPath ?? null;
     return Promise.resolve(this.clone(row));
   };
 
@@ -381,8 +386,16 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve();
   };
 
-  pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (id, approvalContext, extraMetadata) => {
+  pauseWorkflowRun: IWorkflowStore['pauseWorkflowRun'] = (
+    id,
+    approvalContext,
+    extraMetadata,
+    suspension
+  ) => {
     const r = this.runs.get(id);
+    if (!r || r.status !== 'running') {
+      return Promise.reject(new WorkflowRunPauseConflictError(id));
+    }
     if (r) {
       r.status = 'paused';
       // Mirrors the real store's write ORDER: run-level metadata is folded in first,
@@ -395,6 +408,7 @@ class InMemoryStore implements IWorkflowStore {
         approval: { ...approvalContext },
       };
     }
+    if (suspension) this.events.push(suspension);
     return Promise.resolve();
   };
 
@@ -455,16 +469,17 @@ class InMemoryStore implements IWorkflowStore {
     return Promise.resolve({ cleared: false });
   };
 
-  rewriteApprovalContext: IWorkflowStore['rewriteApprovalContext'] = (id, approvalContext) => {
+  failPausedApproval: IWorkflowStore['failPausedApproval'] = (id, approvalContext, error) => {
     const r = this.runs.get(id);
-    // Mirrors the real store's CAS guard (unresolvedGateClause): only while still
-    // paused and unresolved — a human resolving the gate first wins the race.
-    const approval = r?.metadata?.approval as { resolved?: string } | undefined;
-    if (r && r.status === 'paused' && approval?.resolved == null) {
-      r.metadata = { ...r.metadata, approval: { ...approvalContext } };
-      return Promise.resolve({ resolved: true });
+    if (
+      r?.status !== 'paused' ||
+      JSON.stringify(r.metadata?.approval) !== JSON.stringify(approvalContext)
+    ) {
+      return Promise.resolve({ failed: false });
     }
-    return Promise.resolve({ resolved: false });
+    r.status = 'failed';
+    r.metadata = { ...r.metadata, error };
+    return Promise.resolve({ failed: true });
   };
 
   claimWriteback = (): Promise<{ claimed: boolean }> => Promise.resolve({ claimed: true });
@@ -575,6 +590,7 @@ function makeProvider() {
 
 function makeDeps(store: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store,
     getAgentProvider: mock(() =>
       settlingProvider(makeProvider())
@@ -681,7 +697,10 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -694,7 +713,7 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
   });
 
   afterEach(async () => {
-    await rm(cwd, { recursive: true, force: true }).catch(() => {});
+    await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
   });
@@ -730,7 +749,7 @@ nodes:
     const launch = await prepareRunAiConfiguration(deps, workflow, cwd);
     const parent = await store.createWorkflowRun({
       workflow_name: workflow.name,
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
       metadata: { ai_configuration: launch.aiConfigurationSnapshot },
@@ -759,7 +778,7 @@ nodes:
       cwd,
       workflow,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { preCreatedRun: await store.resumeWorkflowRun(parent.id), priorCompletedNodes: new Map() }
     );
     expect(result).toMatchObject({ success: true });
@@ -793,7 +812,7 @@ nodes:
     const parentPrepared = await prepareRunAiConfiguration(deps, workflow, cwd);
     const parent = await store.createWorkflowRun({
       workflow_name: workflow.name,
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
       metadata: { ai_configuration: parentPrepared.aiConfigurationSnapshot },
@@ -807,7 +826,7 @@ nodes:
     const childPrepared = await prepareRunAiConfiguration(deps, await discover('owned-child'), cwd);
     const child = await store.createWorkflowRun({
       workflow_name: 'owned-child',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
       parent_run_id: parent.id,
@@ -841,7 +860,7 @@ nodes:
       cwd,
       workflow,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { preCreatedRun: await store.resumeWorkflowRun(parent.id), priorCompletedNodes: new Map() }
     );
     expect(result).toMatchObject({ success: true });
@@ -850,6 +869,134 @@ nodes:
     expect((await store.getWorkflowRun(child.id))?.metadata.ai_configuration).toEqual(
       childPrepared.aiConfigurationSnapshot
     );
+  });
+
+  const origins = [
+    undefined,
+    { conversationId: 'chat-db', parentConversationId: 'parent-chat-db', userId: 'creator' },
+  ] satisfies (WorkflowRunOrigin | undefined)[];
+
+  it.each(origins)('inherits optional origin through real child execution', async origin => {
+    await writeWorkflow(
+      'origin-child',
+      `
+name: origin-child
+description: child
+nodes:
+  - id: work
+    bash: 'echo child'
+`
+    );
+    await writeWorkflow(
+      'origin-parent',
+      `
+name: origin-parent
+description: parent
+persist_sessions: true
+nodes:
+  - id: child
+    workflow: origin-child
+  - id: finish
+    prompt: finish
+    depends_on: [child]
+`
+    );
+    const store = new InMemoryStore();
+    const sessionReads = mock<IWorkflowStore['listWorkflowNodeSessions']>(async () => []);
+    store.listWorkflowNodeSessions = sessionReads;
+    const result = await executeWorkflow(
+      makeDeps(store),
+      makePlatform(),
+      'run-correlation',
+      cwd,
+      await discover('origin-parent'),
+      'goal',
+      origin
+    );
+    expect(result.success).toBe(true);
+    expect(store.runs.size).toBe(2);
+    for (const run of store.runs.values()) {
+      expect(run.origin).toEqual(origin ?? null);
+      expect(run.conversation_id).toBe(origin?.conversationId ?? null);
+      expect(run.user_id).toBe(origin?.userId ?? null);
+    }
+    const { artifactsRoot } = realArchonPaths.getProjectStoragePaths({ kind: 'cwd', cwd });
+    if (origin) {
+      expect(sessionReads).toHaveBeenCalledWith({
+        workflow_name: 'origin-parent',
+        scope_key: origin.parentConversationId,
+      });
+      expect(
+        existsSync(
+          realArchonPaths.getScopeArtifactsPath(
+            artifactsRoot,
+            'origin-parent',
+            origin.parentConversationId
+          )
+        )
+      ).toBe(true);
+    } else {
+      expect(sessionReads).not.toHaveBeenCalled();
+      expect(existsSync(join(artifactsRoot, 'scopes'))).toBe(false);
+    }
+  });
+
+  it('runs, pauses and resumes the real engine without conversation or user records', async () => {
+    await writeWorkflow(
+      'originless-resume',
+      `
+name: originless-resume
+description: local approval lifecycle
+interactive: true
+persist_sessions: true
+nodes:
+  - id: before
+    bash: 'echo before'
+  - id: gate
+    approval:
+      message: approve
+    depends_on: [before]
+  - id: after
+    bash: 'echo after'
+    depends_on: [gate]
+`
+    );
+    const store = new InMemoryStore();
+    const engine = new InProcessWorkflowEngine(makeDeps(store));
+    const platform = makePlatform();
+    const result = await engine.submit({
+      platform,
+      conversationId: 'local-run',
+      cwd,
+      workflow: await discover('originless-resume'),
+      userMessage: 'goal',
+    });
+    expect(result).toMatchObject({ success: true, paused: true });
+    const paused = [...store.runs.values()][0];
+    if (!paused) throw new Error('expected paused run');
+    expect(paused.origin).toBeNull();
+    expect(paused.conversation_id).toBeNull();
+    expect(paused.user_id).toBeNull();
+    store.approveGate(paused.id);
+    const admission = await engine.resume({
+      platform,
+      conversationId: 'local-run',
+      cwd,
+      userMessage: 'goal',
+      run: paused,
+      legacyWorkflow: await discover('originless-resume'),
+    });
+    if (!admission.accepted) throw new Error('expected resume admission');
+    expect(await admission.settled).toMatchObject({ success: true, workflowRunId: paused.id });
+    expect(store.runs.size).toBe(1);
+    expect((await store.getWorkflowRun(paused.id))?.origin).toBeNull();
+    for (const step of ['before', 'after']) {
+      expect(
+        store.events.filter(
+          event => event.event_type === 'node_completed' && event.step_name === step
+        )
+      ).toHaveLength(1);
+    }
   });
 
   it("pins a pre-change run's source settings on its row at the first resume", async () => {
@@ -881,7 +1028,7 @@ nodes:
     });
     const run = await store.createWorkflowRun({
       workflow_name: 'legacy-resume',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -906,7 +1053,7 @@ nodes:
       cwd,
       workflow,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { preCreatedRun: await store.resumeWorkflowRun(run.id) }
     );
     expect(result.success).toBe(true);
@@ -952,15 +1099,9 @@ nodes:
       const deps = makeDeps(store);
       const workflow = await discover('resume-boundary');
 
-      const r1 = await executeWorkflow(
-        deps,
-        makePlatform(),
-        'conv-plat',
-        cwd,
-        workflow,
-        'goal',
-        'conv-db'
-      );
+      const r1 = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, workflow, 'goal', {
+        conversationId: 'conv-db',
+      });
       expect(r1.success).toBe(false);
       const run = [...store.runs.values()].find(r => r.workflow_name === 'resume-boundary')!;
       expect(run.status).toBe('failed');
@@ -978,7 +1119,7 @@ nodes:
         cwd,
         workflow,
         'goal',
-        'conv-db',
+        { conversationId: 'conv-db' },
         { ...resumeOpts! }
       );
       expect(r2.success).toBe(true);
@@ -1056,7 +1197,7 @@ nodes:
       cwd,
       parent,
       'the-goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -1156,7 +1297,7 @@ nodes:
         cwd,
         await discover('parent-terminal-write'),
         'goal',
-        'conv-db'
+        { conversationId: 'conv-db' }
       )
     ).rejects.toThrow('child terminal write failed');
 
@@ -1206,7 +1347,7 @@ nodes:
         cwd,
         await discover('fan-parent-terminal-write'),
         'goal',
-        'conv-db'
+        { conversationId: 'conv-db' }
       )
     ).rejects.toThrow('fan-out child terminal write failed');
   });
@@ -1243,7 +1384,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       {
         modelOverrideLayer: {
           kind: 'raw',
@@ -1302,7 +1443,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       {
         runConfig: {
           source: { kind: 'cli', label: 'config.minimax.yaml' },
@@ -1369,7 +1510,7 @@ nodes:
       cwd,
       await discover('parent-gated-spelling'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     const parentRun = [...store.runs.values()].find(
@@ -1430,15 +1571,9 @@ nodes:
     const parent = await discover('parent-gated');
 
     // First drive: parent runs, child pauses at its gate, parent pauses on child.
-    const r1 = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const r1 = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
     expect(r1.success && 'paused' in r1 && r1.paused).toBe(true);
 
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
@@ -1467,7 +1602,7 @@ nodes:
       cwd,
       childWf,
       child!.user_message,
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
 
@@ -1479,6 +1614,97 @@ nodes:
       e => e.event_type === 'node_completed' && e.step_name === 'sub'
     );
     expect(subCompleted?.data?.node_output).toBe('ai-output');
+  });
+
+  it('concurrent child runs present independent gates and resume the parent in either decision order', async () => {
+    await writeWorkflow(
+      'independent-child',
+      `
+name: independent-child
+description: Child approval
+mutates_checkout: false
+interactive: true
+nodes:
+  - id: review
+    approval:
+      message: Review this child
+  - id: done
+    depends_on: [review]
+    prompt: Done
+`
+    );
+    await writeWorkflow(
+      'independent-parent',
+      `
+name: independent-parent
+description: Independent children
+mutates_checkout: false
+interactive: true
+nodes:
+  - id: first
+    workflow: independent-child
+  - id: second
+    workflow: independent-child
+`
+    );
+    for (const activeFirst of [false, true]) {
+      const store = new InMemoryStore();
+      const deps = makeDeps(store);
+      const platform = makePlatform();
+      await executeWorkflow(
+        deps,
+        platform,
+        'conv-plat',
+        cwd,
+        await discover('independent-parent'),
+        'goal',
+        { conversationId: 'conv-db' }
+      );
+      const parent = [...store.runs.values()].find(
+        run => run.workflow_name === 'independent-parent'
+      )!;
+      const children = await store.findChildRuns(parent.id);
+      expect(children).toHaveLength(2);
+      expect(children.map(child => child.status)).toEqual(['paused', 'paused']);
+      const prompts = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+        .map(call => call[1] as string)
+        .filter(message => message.includes('**Approval required**'));
+      expect(prompts).toHaveLength(2);
+      for (const child of children)
+        expect(prompts.some(message => message.includes(`approve ${child.id}`))).toBe(true);
+      const approval = parent.metadata.approval;
+      if (!isApprovalContext(approval)) throw new Error('Missing parent block');
+      const active = children.find(child => child.id === approval.childRunId)!;
+      const other = children.find(child => child.id !== approval.childRunId)!;
+      const ordered = activeFirst ? [active, other] : [other, active];
+      for (const [index, child] of ordered.entries()) {
+        store.approveGate(child.id);
+        const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child.id))!);
+        expect(hydrated).not.toBeNull();
+        await executeWorkflow(
+          deps,
+          platform,
+          'conv-plat',
+          cwd,
+          await discover('independent-child'),
+          child.user_message,
+          { conversationId: 'conv-db' },
+          { ...hydrated! }
+        );
+        expect((await store.getWorkflowRun(child.id))?.status).toBe('completed');
+        expect((await store.getWorkflowRun(parent.id))?.status).toBe(
+          index === 0 ? 'paused' : 'completed'
+        );
+      }
+      expect(
+        store.events
+          .filter(
+            event => event.workflow_run_id === parent.id && event.event_type === 'node_completed'
+          )
+          .map(event => event.step_name)
+          .sort()
+      ).toEqual(['first', 'second']);
+    }
   });
 
   it('a throw during the parent auto-resume pass lands the parent in failed, never wedged at running', async () => {
@@ -1513,7 +1739,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('parent-gated');
-    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
+    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
     const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated');
@@ -1536,7 +1764,7 @@ nodes:
       cwd,
       childWf,
       child!.user_message,
-      'conv-db',
+      { conversationId: 'conv-db' },
       {
         ...hydrated!,
       }
@@ -1583,7 +1811,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('parent-gated');
-    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
+    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
     const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated');
@@ -1612,7 +1842,7 @@ nodes:
         cwd,
         childWf,
         child!.user_message,
-        'conv-db',
+        { conversationId: 'conv-db' },
         { ...hydrated! }
       )
     ).rejects.toThrow('parent terminal write failed');
@@ -1648,15 +1878,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('parent-fail');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-fail');
@@ -1680,15 +1904,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('selfie');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'selfie');
@@ -1722,7 +1940,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const a = await discover('cycle-a');
-    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, a, 'g', 'conv-db');
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, a, 'g', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     // B was spawned as A's child, then B's own sub node hit the ancestry guard.
@@ -1751,15 +1971,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const top = await discover('deep-1');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      top,
-      'g',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, top, 'g', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     // The cap counts the full ancestor chain INCLUDING the spawning run itself,
@@ -1804,15 +2018,9 @@ nodes:
     const parent = await discover('parent-recover');
 
     // First drive: child fails → node fails → parent fails.
-    const r1 = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const r1 = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
     expect(r1.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-recover');
     const child1 = [...store.runs.values()].find(r => r.workflow_name === 'child-flaky');
@@ -1835,7 +2043,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...resumeOpts }
     );
     expect(r2.success).toBe(true);
@@ -1866,15 +2074,9 @@ nodes:
     const parent2 = await discover('parent-cancelled');
     // Fail the child's first pass again for this fresh store: remove the marker.
     await rm(join(cwd, 'flaky-marker'), { force: true });
-    const p2r1 = await executeWorkflow(
-      deps2,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent2,
-      'goal',
-      'conv-db'
-    );
+    const p2r1 = await executeWorkflow(deps2, makePlatform(), 'conv-plat', cwd, parent2, 'goal', {
+      conversationId: 'conv-db',
+    });
     expect(p2r1.success).toBe(false);
     const child2 = [...store2.runs.values()].find(r => r.workflow_name === 'child-flaky');
     // Out-of-band cancel (e.g. a direct abandon of the child).
@@ -1894,7 +2096,7 @@ nodes:
       cwd,
       parent2,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...resumeOpts2 }
     );
     expect(p2r2.success).toBe(false);
@@ -1953,10 +2155,10 @@ nodes:
         cwd,
         await discover('parent-plain'),
         'goal',
-        'db',
+        { conversationId: 'db', userId: 'originating-user' },
         {
           codebaseId: 'cb',
-          userId: 'originating-user',
+
           resolveChildIsolation: { resolve },
         }
       );
@@ -1992,15 +2194,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('selfie');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'selfie');
@@ -2048,7 +2244,9 @@ nodes:
     const parent = await discover('parent-gated');
 
     // First drive: child pauses at its gate, parent pauses blocked on it.
-    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
+    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-gated');
     const child = [...store.runs.values()].find(r => r.workflow_name === 'child-gated');
     expect(parentRun?.status).toBe('paused');
@@ -2067,7 +2265,7 @@ nodes:
       cwd,
       parent,
       parentRun!.user_message,
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
 
@@ -2098,15 +2296,9 @@ nodes:
       const parent = await discover('parent-typo');
       const cleanupError = cleanupFails ? new Error('source removal rejected') : undefined;
       const gate = holdSourceRemoval(join(cwd, 'home', 'staged-source'), cleanupError);
-      const execution = executeWorkflow(
-        deps,
-        makePlatform(),
-        'conv-plat',
-        cwd,
-        parent,
-        'goal',
-        'conv-db'
-      );
+      const execution = executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+        conversationId: 'conv-db',
+      });
 
       try {
         const root = await Promise.race([
@@ -2194,7 +2386,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
 
@@ -2243,15 +2435,9 @@ nodes:
 
     // No resolveChildIsolation in opts — the node must fail fast, never silently
     // fall back to the parent's shared checkout.
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     const parentRun = [...store.runs.values()].find(
@@ -2302,8 +2488,11 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
-      { resolveChildIsolation: resolver }
+      { conversationId: 'conv-db' },
+      {
+        resolveChildIsolation: resolver,
+        ownedWorktree: { envId: 'env-parent', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
+      }
     );
 
     expect(result.success).toBe(true);
@@ -2313,6 +2502,7 @@ nodes:
     expect(child?.status).toBe('completed');
     // The child shares the parent's checkout.
     expect(child?.working_path).toBe(cwd);
+    expect(child?.metadata.owned_worktree).toBeUndefined();
   });
 
   it('threads the resolver into a nested child so a grandchild also isolates (I1)', async () => {
@@ -2371,6 +2561,10 @@ nodes:
         return {
           cwd: dir,
           envId: `env-${String(calls.length)}`,
+          ownedWorktree: {
+            envId: `env-${String(calls.length)}`,
+            creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+          },
           branchName: `archon/task-${req.parentRun.id.slice(0, 8)}-child-0`,
         };
       },
@@ -2383,7 +2577,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
 
@@ -2394,6 +2588,14 @@ nodes:
     const grandchild = [...store.runs.values()].find(r => r.workflow_name === 'grandchild-iso');
     expect(child?.status).toBe('completed');
     expect(grandchild?.status).toBe('completed');
+    expect(child?.metadata.owned_worktree).toEqual({
+      envId: 'env-1',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
+    expect(grandchild?.metadata.owned_worktree).toEqual({
+      envId: 'env-2',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
     // Three distinct checkouts: parent (shared), child worktree, grandchild worktree.
     expect(child?.working_path).not.toBe(cwd);
     expect(grandchild?.working_path).not.toBe(cwd);
@@ -2443,7 +2645,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
 
@@ -2501,7 +2703,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
     expect(r1.success).toBe(false);
@@ -2523,7 +2725,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...resumeOpts, resolveChildIsolation: resolver }
     );
 
@@ -2572,9 +2774,18 @@ nodes:
     const { resolver } = makeFakeResolver(join(cwd, 'wt', 'null-path-child'));
 
     // First drive: the child fails, leaving the parent a resumable failed child.
-    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db', {
-      resolveChildIsolation: resolver,
-    });
+    await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      { conversationId: 'conv-db' },
+      {
+        resolveChildIsolation: resolver,
+      }
+    );
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-null-path');
     const child = [...store.runs.values()].find(r => r.workflow_name === 'child-null-path');
     expect(child?.status).toBe('failed');
@@ -2590,7 +2801,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...resumeOpts, resolveChildIsolation: resolver }
     );
 
@@ -2686,7 +2897,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
     expect(r1.success && 'paused' in r1 && r1.paused).toBe(true);
@@ -2711,7 +2922,7 @@ nodes:
       gatedChild!.working_path!,
       await discover('child-gated-iso'),
       gatedChild!.user_message,
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated!, resolveChildIsolation: resolver }
     );
 
@@ -2804,10 +3015,10 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db', userId: 'user-alpha' },
       {
         baseBranch: 'release-2026',
-        userId: 'user-alpha',
+
         source: 'bundled',
       }
     );
@@ -2843,7 +3054,7 @@ nodes:
       child!.working_path!,
       await discover('identity-child'),
       child!.user_message,
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
 
@@ -2928,7 +3139,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
 
@@ -2997,7 +3208,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.workflows.some(w => w.workflow.name === 'fan-parent-caller-schema')).toBe(false);
     const loadError = result.errors.find(e => e.filename.includes('fan-parent-caller-schema'));
     expect(loadError?.error).toBe(
@@ -3036,7 +3250,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
 
@@ -3091,7 +3305,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
 
@@ -3145,7 +3359,7 @@ nodes:
 
     const parentRun = await store.createWorkflowRun({
       workflow_name: 'fan-orphan-recover',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -3159,7 +3373,7 @@ nodes:
     // the item is back now.
     const orphan = await store.createWorkflowRun({
       workflow_name: 'fan-child',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'b',
       parent_run_id: parentRun.id,
       working_path: cwd,
@@ -3175,7 +3389,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       {
         ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }),
         resolveChildIsolation: resolver,
@@ -3222,7 +3436,7 @@ nodes:
     const parent = await discover('fan-session-read-failure');
     const parentRun = await store.createWorkflowRun({
       workflow_name: 'fan-session-read-failure',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -3234,7 +3448,7 @@ nodes:
     });
     const child = await store.createWorkflowRun({
       workflow_name: 'fan-child',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'a',
       parent_run_id: parentRun.id,
       working_path: cwd,
@@ -3251,7 +3465,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }) }
     );
 
@@ -3292,7 +3506,7 @@ nodes:
 
     const parentRun = await store.createWorkflowRun({
       workflow_name: 'fan-noindex',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -3304,7 +3518,7 @@ nodes:
     });
     const legacy = await store.createWorkflowRun({
       workflow_name: 'fan-child',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'from the 1:1 era',
       parent_run_id: parentRun.id,
       working_path: join(cwd, 'legacy'),
@@ -3320,7 +3534,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }) }
     );
 
@@ -3367,7 +3581,7 @@ nodes:
     // 3 and refuse; counting drivable indices sees 1 and proceeds.
     const parentRun = await store.createWorkflowRun({
       workflow_name: 'fan-resume-preflight',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -3383,7 +3597,7 @@ nodes:
     ): Promise<void> => {
       const child = await store.createWorkflowRun({
         workflow_name: 'fan-child',
-        conversation_id: 'conv-db',
+        origin: { conversationId: 'conv-db' },
         user_message: ['a', 'b', 'c'][idx],
         parent_run_id: parentRun.id,
         working_path: cwd,
@@ -3412,7 +3626,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...(hydrated ?? { preCreatedRun: await store.resumeWorkflowRun(parentRun.id) }) }
     );
 
@@ -3457,7 +3671,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
 
@@ -3490,15 +3704,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-empty');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(true);
     // No children were spawned.
@@ -3531,15 +3739,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-malformed');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-malformed');
@@ -3593,15 +3795,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-default-join');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     // The node — and the run — SUCCEED despite the middle child failing.
     expect(result.success).toBe(true);
@@ -3662,15 +3858,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-failfast');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     // The failing item is FIRST, so under the old fail-fast nothing after it would have
     // spawned. No child's outcome ends another's now: all three exist, each reached its own
@@ -3701,6 +3891,213 @@ nodes:
     expect(String(nodeFailed?.data?.error)).toContain('child 0');
   });
 
+  it('#2821: all-refused all_done fails at the fan-out and re-dispatches on resume', async () => {
+    await writeWorkflow(
+      'refused-child',
+      `
+name: refused-child
+description: requires the correctly named input
+mutates_checkout: false
+inputs:
+  expected:
+    required: true
+nodes:
+  - id: run
+    bash: "echo should-not-run"
+`
+    );
+    await writeWorkflow(
+      'refused-parent',
+      `
+name: refused-parent
+description: all children violate the input contract
+nodes:
+  - id: work
+    workflow: refused-child
+    fan_out:
+      items: '[1,2,3]'
+      as: wrong
+      join: all_done
+  - id: collector
+    depends_on: [work]
+    bash: "echo should-not-run"
+`
+    );
+    const store = new InMemoryStore();
+    const ancestry = mock(store.getRunAncestry);
+    store.getRunAncestry = ancestry;
+    const deps = makeDeps(store);
+    const platform = makePlatform();
+    const workflow = await discover('refused-parent');
+    const first = await executeWorkflow(deps, platform, 'conv-plat', cwd, workflow, 'goal', {
+      conversationId: 'conv-db',
+    });
+    expect(first.success).toBe(false);
+    const parent = [...store.runs.values()].find(r => r.workflow_name === 'refused-parent')!;
+    expect(parent.status).toBe('failed');
+    expect(await store.findChildRuns(parent.id)).toEqual([]);
+    expect(ancestry).toHaveBeenCalledTimes(3);
+    const failures = () =>
+      store.events.filter(e => e.event_type === 'node_failed' && e.step_name === 'work');
+    expect(failures()).toHaveLength(1);
+    expect(failures()[0].data?.failure_kind).toBe('child_failed');
+    expect(String(failures()[0].data?.error)).toContain(
+      "fan_out node 'work' refused all 3 children at spawn:"
+    );
+    expect(String(failures()[0].data?.error)).toContain("does not declare input 'wrong'");
+    expect(
+      store.events.some(e => e.step_name === 'collector' && e.event_type === 'node_started')
+    ).toBe(false);
+    expect(
+      store.events.some(e => e.step_name === 'work' && e.event_type === 'node_completed')
+    ).toBe(false);
+
+    await store.createWorkflowRun({
+      workflow_name: 'other-node-child',
+      origin: { conversationId: 'conv-db' },
+      user_message: '',
+      parent_run_id: parent.id,
+      metadata: { parent_node_id: 'other-node', child_index: 0 },
+    });
+    for (const metadata of [
+      { parent_node_id: 'work' },
+      { parent_node_id: 'work', child_index: -1 },
+      { parent_node_id: 'work', child_index: 3 },
+    ]) {
+      const historical = await store.createWorkflowRun({
+        workflow_name: 'historical-child',
+        origin: { conversationId: 'conv-db' },
+        user_message: '',
+        parent_run_id: parent.id,
+        metadata,
+      });
+      await store.failWorkflowRun(historical.id, 'historical failure');
+    }
+    const resume = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+    expect(resume).not.toBeNull();
+    const second = await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      { ...resume! }
+    );
+    expect(second.success).toBe(false);
+    expect(ancestry).toHaveBeenCalledTimes(6);
+    expect(failures()).toHaveLength(2);
+    expect(failures()[1].data?.error).toBe(failures()[0].data?.error);
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(messages).toContain("Re-driving fan_out node 'work'");
+    expect(messages).toContain('no child run rows');
+  });
+
+  it('#2821: partial refusal preserves failed-child markers and reports them when resume skips', async () => {
+    await writeWorkflow(
+      'partial-child',
+      `
+name: partial-child
+description: starts and fails
+mutates_checkout: false
+nodes:
+  - id: run
+    bash: "exit 1"
+`
+    );
+    await writeWorkflow(
+      'partial-parent',
+      `
+name: partial-parent
+description: one child starts, two are refused
+nodes:
+  - id: work
+    workflow: partial-child
+    isolation: worktree
+    fan_out:
+      items: '[1,2,3]'
+      join: all_done
+  - id: collector
+    depends_on: [work]
+    bash: "exit 1"
+`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const platform = makePlatform();
+    const workflow = await discover('partial-parent');
+    const resolve = mock(async (request: ChildIsolationRequest): Promise<ChildIsolationResult> => {
+      if (request.childIndex !== 0) throw new Error('resource unavailable');
+      return { cwd, envId: 'test-child', branchName: 'test-child' };
+    });
+    const options = { resolveChildIsolation: { resolve } };
+    await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      options
+    );
+    const parent = [...store.runs.values()].find(r => r.workflow_name === 'partial-parent')!;
+    const children = await store.findChildRuns(parent.id);
+    expect(children).toHaveLength(1);
+    expect(children[0].status).toBe('failed');
+    const completed = store.events.find(
+      e => e.event_type === 'node_completed' && e.step_name === 'work'
+    );
+    const aggregate: unknown = JSON.parse(String(completed?.data?.node_output));
+    if (!Array.isArray(aggregate)) throw new Error('Expected a fan-out aggregate array');
+    expect(aggregate).toHaveLength(3);
+    expect(aggregate[0]).toEqual({
+      archon_failed: true,
+      status: 'failed',
+      error: expect.any(String),
+    });
+    expect(aggregate.slice(1)).toEqual(
+      [1, 2].map(() => ({
+        archon_failed: true,
+        status: 'failed',
+        error:
+          "Failed to create isolated worktree for sub-run 'partial-child': resource unavailable",
+      }))
+    );
+
+    const resume = await hydrateResumableRun(deps, (await store.getWorkflowRun(parent.id))!);
+    expect(resume?.priorCompletedNodes.has('work')).toBe(true);
+    await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      {
+        ...options,
+        ...resume!,
+      }
+    );
+    expect(resolve).toHaveBeenCalledTimes(3);
+    expect(await store.findChildRuns(parent.id)).toHaveLength(1);
+    expect(
+      store.events.some(
+        e => e.event_type === 'node_skipped_prior_success' && e.step_name === 'work'
+      )
+    ).toBe(true);
+    const messages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(c => String(c[1]))
+      .join('\n');
+    expect(messages).toContain(
+      "Skipping fan_out node 'work': fan-out previously refused 2 of 3 children"
+    );
+  });
+
   it('all_done: a partial failure still completes the node; the failed entry is represented', async () => {
     // Two items: same mechanism as the DEFAULT-join case above — every child is a real
     // subprocess under one test clock, so the fan-out stays minimal for slow CI runners.
@@ -3727,15 +4124,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-alldone');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     // all_done never fails on a partial failure.
     expect(result.success).toBe(true);
@@ -3786,14 +4177,29 @@ nodes:
     );
 
     const store = new InMemoryStore();
-    // Concurrency-tracking provider: the in-flight window during the awaited "AI turn"
-    // reflects how many children run at once.
-    const tracker = { inFlight: 0, max: 0 };
+    // Concurrency-tracking provider: the in-flight count during the awaited "AI turn"
+    // reflects how many children run at once. A turn holds until a second turn joins
+    // it, so the window is observed rather than raced: a slow runner staggers child
+    // start-up past any fixed overlap sleep. The fifth turn has no partner left and
+    // runs alone. An engine that serialized the children leaves the first turn
+    // waiting, and the test fails on its budget.
+    const tracker = { inFlight: 0, max: 0, started: 0 };
+    let releaseWaitingTurn: (() => void) | undefined;
     const slowProvider = {
       ...makeProvider(),
       sendQuery: async function* () {
+        tracker.started++;
         tracker.inFlight++;
         tracker.max = Math.max(tracker.max, tracker.inFlight);
+        if (releaseWaitingTurn) {
+          releaseWaitingTurn();
+          releaseWaitingTurn = undefined;
+        } else if (tracker.started < 5) {
+          await new Promise<void>(resolve => {
+            releaseWaitingTurn = resolve;
+          });
+        }
+        // Stay in flight briefly so an over-limit third child, if admitted, is counted.
         await new Promise(r => setTimeout(r, 15));
         tracker.inFlight--;
         yield { type: 'agent_message_chunk', text: 'ai-output' };
@@ -3807,15 +4213,9 @@ nodes:
       ) as unknown as WorkflowDeps['getAgentProvider'],
     };
     const parent = await discover('fan-window');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(true);
     expect([...store.runs.values()].filter(r => r.workflow_name === 'fan-child-slow')).toHaveLength(
@@ -3877,15 +4277,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-cost');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(true);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-cost');
@@ -3937,7 +4331,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeAccountingDeps(store);
     const parent = await discover('solo-parent');
-    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db');
+    await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     const child = [...store.runs.values()].find(r => r.workflow_name === 'solo-child-doomed');
     expect(child?.status).toBe('failed');
@@ -3992,15 +4388,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeAccountingDeps(store);
     const parent = await discover('fan-partial');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     // all_done: the failed child is represented in the aggregate, not fatal to the node.
     expect(result.success).toBe(true);
@@ -4092,7 +4482,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       // baseBranch is pinned so the executor's $BASE_BRANCH resolution never falls
       // through to git auto-detection — nothing in this test asserts that detection,
       // and every level it reached would otherwise pay for it again.
@@ -4122,7 +4512,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       // Same auto-detection opt-out as drive 1; nothing here asserts branch detection.
       { baseBranch: 'main', ...resumeOpts, resolveChildIsolation: resolver }
     );
@@ -4191,15 +4581,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-gated-parent');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-gated-parent');
@@ -4253,7 +4637,7 @@ nodes:
     // 'running' at index 0 with recent activity (fresh, not stale).
     const parentRun = await store.createWorkflowRun({
       workflow_name: 'fan-c1',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -4265,7 +4649,7 @@ nodes:
     });
     const child = await store.createWorkflowRun({
       workflow_name: 'fan-child-echo2',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'x',
       parent_run_id: parentRun.id,
       working_path: cwd,
@@ -4274,9 +4658,18 @@ nodes:
     await store.updateWorkflowRun(child.id, { status: 'running' });
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
-    const r = await executeWorkflow(deps, platform, 'conv-plat', cwd, parent, 'goal', 'conv-db', {
-      ...hydrated!,
-    });
+    const r = await executeWorkflow(
+      deps,
+      platform,
+      'conv-plat',
+      cwd,
+      parent,
+      'goal',
+      { conversationId: 'conv-db' },
+      {
+        ...hydrated!,
+      }
+    );
 
     expect(r.success).toBe(false);
     // The ambiguous running child is NOT autonomously cancelled (CLAUDE.md lifecycle rule).
@@ -4332,7 +4725,7 @@ nodes:
 
     const parentRun = await store.createWorkflowRun({
       workflow_name: 'fan-i2',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -4345,7 +4738,7 @@ nodes:
     // A leftover child at index 5 (items now length 1) still 'running'.
     const orphan = await store.createWorkflowRun({
       workflow_name: 'fan-child-echo2',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'gone',
       parent_run_id: parentRun.id,
       working_path: join(cwd, 'orphan-wt'),
@@ -4361,7 +4754,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
 
@@ -4401,7 +4794,7 @@ nodes:
 
     const parentRun = await store.createWorkflowRun({
       workflow_name: 'fan-i2',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'goal',
       working_path: cwd,
     });
@@ -4414,7 +4807,7 @@ nodes:
     // A leftover child at index 5 (items now length 1) still 'running'.
     const orphan = await store.createWorkflowRun({
       workflow_name: 'fan-child-echo2',
-      conversation_id: 'conv-db',
+      origin: { conversationId: 'conv-db' },
       user_message: 'gone',
       parent_run_id: parentRun.id,
       working_path: join(cwd, 'orphan-wt'),
@@ -4428,9 +4821,18 @@ nodes:
 
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(parentRun.id))!);
     await expect(
-      executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db', {
-        ...hydrated!,
-      })
+      executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-plat',
+        cwd,
+        parent,
+        'goal',
+        { conversationId: 'conv-db' },
+        {
+          ...hydrated!,
+        }
+      )
     ).rejects.toThrow('terminal projection read failed');
     expect((await store.getWorkflowRun(parentRun.id))?.status).not.toBe('completed');
     expect((await store.getWorkflowRun(orphan.id))?.status).toBe('running');
@@ -4486,15 +4888,9 @@ nodes:
     const parent = await discover('fan-c2-recover');
 
     // Run 1: refused before any child row is created.
-    const r1 = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const r1 = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
     expect(r1.success).toBe(false);
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'fan-c2-recover');
     expect(
@@ -4515,7 +4911,7 @@ nodes:
       cwd,
       parent2,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...resumeOpts }
     );
 
@@ -4578,7 +4974,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { resolveChildIsolation: resolver }
     );
     expect(r1.success).toBe(false);
@@ -4607,7 +5003,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...resumeOpts, resolveChildIsolation: resolver }
     );
 
@@ -4666,15 +5062,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-i1');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     // The node still fails under all_success — the outcome is unchanged, only the means.
     expect(result.success).toBe(false);
@@ -4721,15 +5111,9 @@ nodes:
     const store = new InMemoryStore();
     const deps = makeDeps(store);
     const parent = await discover('fan-causal');
-    const result = await executeWorkflow(
-      deps,
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    const result = await executeWorkflow(deps, makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     expect(result.success).toBe(false);
     const children = [...store.runs.values()].filter(r => r.workflow_name === 'fan-child-cond');
@@ -4783,7 +5167,10 @@ describe('workflow: late resolution is a deliberate affordance', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -4833,7 +5220,10 @@ nodes:
 `
     );
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.errors).toHaveLength(0);
     expect(result.workflows.map(w => w.workflow.name)).toContain('parent-forward-ref');
   });
@@ -4854,7 +5244,7 @@ nodes:
     );
 
     const wf = await discover('parent-forward-ref');
-    const issues = await validateWorkflowResources(wf, cwd);
+    const issues = await validateWorkflowResources(wf, cwd, providerRegistry);
     const errors = issues.filter(i => i.level === 'error');
     expect(errors).toHaveLength(0);
   });
@@ -4897,7 +5287,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -4958,7 +5348,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -5011,7 +5401,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -5056,7 +5446,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -5080,7 +5470,10 @@ nodes:
     // assertion must flip to expect the slot to be ABSENT from plain discovery.
     await writeWorkflow('leaky-slot', slotYaml('leaky-slot', 'LEAK'));
 
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     expect(result.workflows.map(w => w.workflow.name)).toContain('leaky-slot');
   });
 
@@ -5179,7 +5572,7 @@ nodes:
         cwd,
         await discover('parent-fanout-racy-child'),
         'goal',
-        'conv-db'
+        { conversationId: 'conv-db' }
       );
       expect(racyResult.success).toBe(false);
       expect(kids(racyStore, 'parent-fanout-racy-child')).toEqual(['cancelled', 'completed']);
@@ -5193,7 +5586,7 @@ nodes:
         cwd,
         await discover('parent-fanout-safe-child'),
         'goal',
-        'conv-db'
+        { conversationId: 'conv-db' }
       );
       expect(safeResult.success).toBe(true);
       expect(kids(safeStore, 'parent-fanout-safe-child')).toEqual(['completed', 'completed']);
@@ -5206,24 +5599,6 @@ nodes:
     // (Defect A), not the gate-slot collision: the losing child is cancelled before it
     // ever reaches its `approval:` node, so `pauseParentOnChild` never runs for it.
     //
-    // SCOPE LIMIT — READ BEFORE TRUSTING THIS TEST FOR #2180 Defect B.
-    // This test CANNOT characterize the single-gate-slot collision. `InMemoryStore`'s
-    // `pauseWorkflowRun` (see above) is an unconditional status write; production's is
-    // `UPDATE … WHERE status='running'` that THROWS on a 0-row match
-    // (`packages/core/src/db/workflows.ts:942+`). Without that CAS there is no second
-    // pauser to lose. A faithful Defect-B test needs a store double that mirrors the
-    // compare-and-set.
-    //
-    // Before #2489, the two pause call sites behaved DIFFERENTLY on collision:
-    // `approval:`/interactive `loop:` gates tolerated a lost CAS via
-    // `pauseGateRespectingExternalTransition` (re-read status, see 'paused', return
-    // SUCCESS — the collision misclassified as a legitimate external transition,
-    // #1123), while `pauseParentOnChild` (workflow: nodes) bypassed that wrapper, so
-    // the throw reached the generic per-node catch and emitted node_failed instead.
-    // #2489 routed `pauseParentOnChild` through the same shared helper, so both call
-    // sites now behave the same way on a lost CAS — a faithful Defect-B test still
-    // needs the CAS-aware store double described above, but no longer needs to pick a
-    // gate type deliberately for this reason.
     await writeWorkflow(
       'gating-child',
       `
@@ -5253,15 +5628,9 @@ nodes:
 
     const store = new InMemoryStore();
     const parent = await discover('parent-fanout-gates');
-    await executeWorkflow(
-      makeDeps(store),
-      makePlatform(),
-      'conv-plat',
-      cwd,
-      parent,
-      'goal',
-      'conv-db'
-    );
+    await executeWorkflow(makeDeps(store), makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+      conversationId: 'conv-db',
+    });
 
     const parentRun = [...store.runs.values()].find(r => r.workflow_name === 'parent-fanout-gates');
     const children = [...store.runs.values()].filter(r => r.parent_run_id === parentRun?.id);
@@ -5303,7 +5672,10 @@ describe('workflow: declared input contract at runtime (#2470)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -5368,7 +5740,7 @@ nodes:
       cwd,
       await discover('parent-defaults'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       // baseBranch pinned: this suite asserts input contracts, not branch
       // auto-detection; pinning it keeps every executeWorkflow level off the
       // git-detection fallback path.
@@ -5409,7 +5781,7 @@ nodes:
       cwd,
       await discover('parent-missing'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       // baseBranch pinned: this suite asserts input contracts, not branch
       // auto-detection; pinning it keeps every executeWorkflow level off the
       // git-detection fallback path.
@@ -5446,7 +5818,7 @@ nodes:
       cwd,
       await discover('parent-undeclared'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       // baseBranch pinned: this suite asserts input contracts, not branch
       // auto-detection; pinning it keeps every executeWorkflow level off the
       // git-detection fallback path.
@@ -5491,7 +5863,7 @@ nodes:
       cwd,
       await discover('parent-passthrough'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       // baseBranch pinned: this suite asserts input contracts, not branch
       // auto-detection; pinning it keeps every executeWorkflow level off the
       // git-detection fallback path.
@@ -5529,7 +5901,7 @@ nodes:
       cwd,
       await discover('top-level-defaults'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       // baseBranch pinned: this suite asserts input contracts, not branch
       // auto-detection; pinning it keeps every executeWorkflow level off the
       // git-detection fallback path.
@@ -5555,7 +5927,10 @@ describe('workflow: runtime $INPUTS delivery and cold resume (#2470)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -5631,7 +6006,7 @@ nodes:
       cwd,
       await discover('parent-ai-inputs'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -5682,7 +6057,7 @@ nodes:
       cwd,
       await discover('parent-when-inputs'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -5728,7 +6103,7 @@ nodes:
       cwd,
       await discover('parent-when-unknown-input'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     // Loud, not a silent skip: the typo fails the node rather than resolving to ''.
@@ -5786,7 +6161,7 @@ nodes:
       cwd,
       await discover('parent-cold'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     const child = [...store.runs.values()].find(r => r.workflow_name === 'child-cold');
@@ -5804,7 +6179,7 @@ nodes:
       cwd,
       await discover('child-cold'),
       child!.user_message,
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
 
@@ -5847,7 +6222,7 @@ nodes:
       cwd,
       await discover('direct-inputs'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { inputs: { diff: 'D1', style: 'terse' } }
     );
 
@@ -5887,7 +6262,7 @@ nodes:
       cwd,
       await discover('direct-persist'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { inputs: { diff: 'D1' } }
     );
 
@@ -5924,7 +6299,7 @@ nodes:
       cwd,
       await discover('direct-override'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { inputs: { style: 'terse' } }
     );
 
@@ -5956,7 +6331,7 @@ nodes:
       cwd,
       await discover('direct-bare'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     const run = [...store.runs.values()].find(r => r.workflow_name === 'direct-bare');
@@ -5994,7 +6369,7 @@ nodes:
       cwd,
       await discover('direct-cold'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { inputs: { style: 'terse' } }
     );
 
@@ -6014,7 +6389,7 @@ nodes:
       cwd,
       await discover('direct-cold'),
       run!.user_message,
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
 
@@ -6036,7 +6411,10 @@ describe('workflow: returns rebinds the child terminal output (#2470)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -6090,7 +6468,7 @@ nodes:
       cwd,
       await discover('parent-returns'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6157,7 +6535,7 @@ nodes:
       cwd,
       await discover('parent-outcome'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6192,7 +6570,10 @@ describe('workflow: typed value transport (#2637)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -6323,7 +6704,7 @@ nodes:
       cwd,
       await discover('parent-typed'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6386,7 +6767,7 @@ nodes:
       cwd,
       await discover('parent-items'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6438,7 +6819,7 @@ nodes:
       cwd,
       await discover('parent-structured'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6497,7 +6878,7 @@ nodes:
       cwd,
       await discover('fan-mixed-parent'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6554,7 +6935,7 @@ nodes:
       cwd,
       await discover('fan-partial-parent'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6614,7 +6995,7 @@ nodes:
       cwd,
       await discover('fan-verify-parent'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6695,7 +7076,7 @@ nodes:
       cwd,
       await discover('fan-chain-parent'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -6761,7 +7142,7 @@ nodes:
       cwd,
       await discover('fan-resume-parent'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
     expect(first.success).toBe(false);
 
@@ -6782,7 +7163,7 @@ nodes:
       cwd,
       await discover('fan-resume-parent'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
     expect(second.success).toBe(true);
@@ -6821,7 +7202,10 @@ describe('workflow: callee-owned result contracts (#2453)', () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -6910,7 +7294,7 @@ nodes:
           cwd,
           discoverResolved,
           'goal',
-          'conv-db',
+          { conversationId: 'conv-db' },
           options
         );
       const discoverResolved = await discover('nested-parent');
@@ -6965,7 +7349,7 @@ nodes:
       cwd,
       await discover('parent-no-schema'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -7017,7 +7401,7 @@ nodes:
       cwd,
       await discover('parent-typo'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(false);
@@ -7057,7 +7441,7 @@ nodes:
       cwd,
       await discover('parent-resume-contract'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
     expect(first.success).toBe(false);
 
@@ -7077,7 +7461,7 @@ nodes:
       cwd,
       await discover('parent-resume-contract'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
     expect(second.success).toBe(true);
@@ -7135,7 +7519,7 @@ nodes:
       cwd,
       await discover('parent-schemaless'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -7177,7 +7561,10 @@ describe('workflow: artifact pointers across the child boundary (#2453)', () => 
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7250,7 +7637,7 @@ nodes:
       cwd,
       await discover('parent-pointer'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -7292,7 +7679,7 @@ nodes:
       cwd,
       await discover('parent-pointer-missing'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(false);
@@ -7383,7 +7770,7 @@ nodes:
       cwd,
       await discover('parent-pointer-fan'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -7445,7 +7832,10 @@ describe('workflow: a child contract drives the parent composed path (#2453)', (
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7595,7 +7985,7 @@ nodes:
       cwd,
       await discover('composed-parent'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(true);
@@ -7672,7 +8062,7 @@ nodes:
       cwd,
       await discover('composed-parent-resume'),
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
     expect(first.success).toBe(false);
 
@@ -7702,7 +8092,7 @@ nodes:
       cwd,
       await discover('composed-parent-resume'),
       'goal',
-      'conv-db',
+      { conversationId: 'conv-db' },
       { ...hydrated! }
     );
 
@@ -7745,7 +8135,10 @@ describe('sub-run staged capture is reclaimed when the recursive rename fails (#
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7801,7 +8194,7 @@ nodes:
         cwd,
         parent,
         'goal',
-        'conv-db'
+        { conversationId: 'conv-db' }
       );
       expect(result.success).toBe(false);
 
@@ -7836,7 +8229,10 @@ describe("a child's terminal status write fails during setup (#2910)", () => {
   }
 
   async function discover(name: string): Promise<ResolvedWorkflow> {
-    const result = await discoverWorkflows(cwd, { loadDefaults: false });
+    const result = await discoverWorkflows(cwd, {
+      providers: providerRegistry,
+      loadDefaults: false,
+    });
     const wf = result.workflows.find(w => w.workflow.name === name);
     if (!wf) throw new Error(`workflow ${name} not found: ${JSON.stringify(result.errors)}`);
     return wf.workflow;
@@ -7906,7 +8302,9 @@ nodes:
     };
 
     await expect(
-      executeWorkflow(makeDeps(store), makePlatform(), 'conv-plat', cwd, parent, 'goal', 'conv-db')
+      executeWorkflow(makeDeps(store), makePlatform(), 'conv-plat', cwd, parent, 'goal', {
+        conversationId: 'conv-db',
+      })
     ).rejects.toThrow('Failed to persist terminal workflow status');
 
     // The parent must not have carried on past the sub-run node.
@@ -7930,7 +8328,7 @@ nodes:
       cwd,
       parent,
       'goal',
-      'conv-db'
+      { conversationId: 'conv-db' }
     );
 
     expect(result.success).toBe(false);

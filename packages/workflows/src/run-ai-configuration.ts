@@ -1,4 +1,4 @@
-import { getRegisteredProviders, getRegistration } from '@archon/providers';
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 import type { WorkflowConfig } from './deps';
 import {
   readRunModelBindingsMetadata,
@@ -14,6 +14,7 @@ import {
 export { RUN_AI_CONFIGURATION_METADATA_KEY } from './schemas/run-ai-configuration';
 
 export function createRunAiConfigurationSnapshot(
+  providers: ProviderRegistry,
   config: WorkflowConfig,
   baseAiProfile: ResolvedAiProfile,
   modelOverrides: ResolvedRunModelOverrides
@@ -23,10 +24,12 @@ export function createRunAiConfigurationSnapshot(
       version: 1,
       assistant: config.assistant,
       assistants: Object.fromEntries(
-        getRegisteredProviders().map(provider => [
-          provider.id,
-          provider.parseConfig(config.assistants[provider.id] ?? {}, 'snapshot'),
-        ])
+        providers
+          .list()
+          .map(provider => [
+            provider.id,
+            provider.parseConfig(config.assistants[provider.id] ?? {}, 'snapshot'),
+          ])
       ),
       baseAiProfile,
       modelOverrides,
@@ -35,6 +38,7 @@ export function createRunAiConfigurationSnapshot(
 }
 
 export function readRunAiConfigurationSnapshot(
+  providers: ProviderRegistry,
   metadata: Record<string, unknown> | undefined
 ): RunAiConfigurationSnapshot | undefined {
   if (!metadata || !Object.hasOwn(metadata, RUN_AI_CONFIGURATION_METADATA_KEY)) return undefined;
@@ -43,14 +47,14 @@ export function readRunAiConfigurationSnapshot(
   );
   if (!parsed.success) throw new Error('Invalid recorded run AI configuration.');
   try {
-    readRunModelBindingsMetadata({
+    readRunModelBindingsMetadata(providers, {
       model_bindings: {
         overrides: parsed.data.modelOverrides,
         effective: { defaultProvider: parsed.data.baseAiProfile.defaultProvider, aliases: {} },
       },
     });
     for (const [provider, defaults] of Object.entries(parsed.data.assistants)) {
-      getRegistration(provider).parseConfig(defaults, 'run');
+      requireProvider(providers, provider).parseConfig(defaults, 'run');
     }
   } catch {
     throw new Error('Recorded run AI configuration has unavailable or invalid provider defaults.');
@@ -59,12 +63,13 @@ export function readRunAiConfigurationSnapshot(
 }
 
 export function restoreRunAiConfigurationDefaults(
+  providers: ProviderRegistry,
   config: WorkflowConfig,
   snapshot: RunAiConfigurationSnapshot
 ): void {
   const assistants: WorkflowConfig['assistants'] = { claude: {}, codex: {} };
   for (const [provider, saved] of Object.entries(snapshot.assistants)) {
-    const registration = getRegistration(provider);
+    const registration = requireProvider(providers, provider);
     const current = registration.parseConfig(config.assistants[provider] ?? {}, 'install');
     const projected = registration.parseConfig(current, 'snapshot');
     const live = Object.fromEntries(

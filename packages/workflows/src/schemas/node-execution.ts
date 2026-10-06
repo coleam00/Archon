@@ -59,7 +59,7 @@ export const nodeDescriptorSchema = z.discriminatedUnion('kind', [
   gateNodeSchema.pick({ id: true, kind: true }),
   haltNodeSchema.pick({ id: true, kind: true }),
   waitNodeSchema.pick({ id: true, kind: true }),
-  workflowNodeSchema.pick({ id: true, kind: true }),
+  workflowNodeSchema.pick({ id: true, kind: true }).extend({ fanOut: z.literal(true).optional() }),
   composeFanOutNodeSchema.pick({ id: true, kind: true }),
   z.object({ kind: z.literal('compose_fan_out_instance'), id: z.string() }),
 ]);
