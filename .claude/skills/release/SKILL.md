@@ -224,9 +224,8 @@ awk -v prev="## [$PREV_MAJOR_MINOR_PATCH]" '
 If a PR number in your commit range appears in that list, stop and re-derive the
 boundary — do not write it twice.
 
-**Also read the full `[Unreleased]` section before drafting.** Keep its entries,
-including continuation paragraphs and tables, as the hand-written release notes.
-List the PR and issue numbers they cite alongside the previous-section check:
+**Also read the `[Unreleased]` section.** Contributors may write entries there by
+hand. They are input to this release, not a boundary error:
 
 ```bash
 awk '
@@ -235,10 +234,6 @@ awk '
   on                  { print }
 ' CHANGELOG.md
 ```
-
-References in `[Unreleased]` are coverage evidence for Step 5, not a reason to
-reject the release boundary. Keep each number associated with the entry that
-cites it; a citation may name an issue rather than a PR.
 
 If no new commits, abort: "Nothing to release — dev is up to date with main."
 
@@ -253,26 +248,14 @@ they state the user-visible problem, which is what a changelog entry needs:
 gh pr view <N> --repo coleam00/Archon --json number,title,body,closingIssuesReferences
 ```
 
-Compare every merged PR in the range with the hand-written entries from Step 4:
+Draft entries only for changes the `[Unreleased]` entries from Step 4 do not
+already describe, so each change appears once. Hand-written entries often cite
+the issue a PR closes (`closingIssuesReferences`) rather than the PR, or cite
+nothing; judge by what the entry says, not by its number. Keep the substance of
+hand-written entries (migration tables, exact details) and tidy only their wording
+and placement. If you can't tell whether an entry covers a PR, ask in Step 7.
 
-- An entry covers a PR when it cites the PR's number **or an issue in that PR's
-  `closingIssuesReferences`** and describes the change. Do not assume every
-  `#N` is a PR number.
-- For an entry with no matching citation (including uncited entries), read its
-  content against the PR's title, body and diff and judge whether it describes
-  the same change. Use content judgment, not keyword matching.
-- Keep hand-written text verbatim. Draft only changes those entries do not cover;
-  a PR with several changes may already have several entries or be partly covered.
-  Do not paraphrase a covered change into a second entry.
-- If coverage is uncertain, leave that decision pending and ask the operator in
-  Step 7. Do not guess, drop the hand-written entry, or draft a competing entry.
-
-Record each PR as covered (with the matching entry and PR, closing-issue or
-content evidence), drafted, partly covered, or pending operator review. Use this
-record to check that every merged PR is accounted for and every change appears once.
-
-**Categorize into Keep a Changelog sections.** This list is the one category and
-order rule for the release section; render categories in this order and omit empty ones:
+**Categorize into Keep a Changelog sections, in this order (omit empty ones):**
 1. **Breaking** — changes that break existing behavior users may rely on
 2. **Security** — vulnerability fixes and security-relevant hardening
 3. **Added** — new features, new files, new capabilities
@@ -287,7 +270,7 @@ order rule for the release section; render categories in this order and omit emp
 - Group related commits into single entries where it makes sense
 - Include PR numbers in parentheses when available: `(#12)`
 - Each entry should start with a noun or gerund describing WHAT changed
-- Keep internal-only entries concise and group related work without omitting uncovered PRs
+- Skip internal-only changes (CI tweaks, typo fixes) unless they affect behavior
 - One blank line between sections
 
 ### Step 6: Update Files
@@ -306,11 +289,8 @@ order rule for the release section; render categories in this order and omit emp
    - `pyproject.toml` + `uv.lock`: run `uv lock --quiet`
    - `Cargo.toml`: run `cargo update --workspace`
 
-4. **`CHANGELOG.md`** — merge the hand-written `[Unreleased]` entries and the
-   uncovered drafts into one new version section below `[Unreleased]`. Combine
-   entries under one heading per category; preserve the hand-written entries
-   verbatim, including their paragraphs, links and tables. Add no draft that
-   repeats a retained change. Use this format, with one `### <Category>` heading
+4. **`CHANGELOG.md`** — write one new version section below `[Unreleased]` from
+   the `[Unreleased]` entries and the Step 5 drafts, one `### <Category>` heading
    per non-empty category in the Step 5 order:
 
 ```markdown
@@ -336,10 +316,7 @@ One-line summary of the release.
 release workflow reads this section verbatim into the GitHub release body, so this
 file's own section order is what makes breaking changes appear first on the release page.
 
-After merging, leave the `[Unreleased]` header empty. Verify that every original
-hand-written entry survives verbatim in the new section and every uncovered
-releasable change has one draft. If Step 5 has pending matches, the section is
-provisional until Step 7 resolves them.
+Leave the `[Unreleased]` header with nothing under it.
 
 ### Step 7: Present for Review
 
@@ -348,12 +325,7 @@ Show the user:
 2. The version bump (old -> new)
 3. The full changelog section that will be added
 4. The list of commits being included
-5. The per-PR coverage record and any uncertain matches, showing the hand-written
-   entry and the PR's change so the operator can decide whether it is covered
-
-Resolve uncertain matches with the operator, then repeat Steps 5–6 using those
-decisions and the original entries retained in Step 4, and present the complete
-section again. Do not commit or create the PR while a coverage decision is pending.
+5. Any `[Unreleased]` entry you were unsure covers a PR, next to that PR
 
 Ask: "Does this look good? I'll commit and create the PR."
 
