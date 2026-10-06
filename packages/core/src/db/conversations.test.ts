@@ -225,7 +225,7 @@ describe('conversations', () => {
       // Verify parent lookup
       expect(mockQuery).toHaveBeenNthCalledWith(
         2,
-        'SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2',
+        `SELECT * FROM remote_agent_conversations WHERE platform_type = $1 AND platform_conversation_id = $2 AND id <> '00000000-0000-4000-8000-000000003640'`,
         ['discord', 'parent-channel']
       );
       // Verify inherited values in INSERT
@@ -324,7 +324,7 @@ describe('conversations', () => {
 
       expect(result).toEqual(cliConversation);
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
+        `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND id <> '00000000-0000-4000-8000-000000003640'`,
         ['cli-1234-abc']
       );
     });
@@ -351,7 +351,7 @@ describe('conversations', () => {
       expect(result).toEqual(telegramConv);
       // Verify no platform_type in the query
       expect(mockQuery).toHaveBeenCalledWith(
-        'SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1',
+        `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND id <> '00000000-0000-4000-8000-000000003640'`,
         ['tg-chat-999']
       );
     });

@@ -1,8 +1,9 @@
-import type { CredentialStatus } from '@archon/provider-contract';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
  * IWorkflowStore trait defined in @archon/workflows.
  */
+import { providerRegistry } from '@archon/providers';
+import type { CredentialStatus } from '@archon/provider-contract';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
@@ -110,8 +111,7 @@ export function createWorkflowStore(): IWorkflowStore {
     pauseWorkflowRunForWait: workflowDb.pauseWorkflowRunForWait,
     failPausedAttentionWait: workflowDb.failPausedAttentionWait,
     clearWorkflowWaitContext: workflowDb.clearWorkflowWaitContext,
-    rewriteApprovalContext: (id, approvalContext) =>
-      workflowDb.resolveApprovalGate(id, { approval: approvalContext }, []),
+    failPausedApproval: workflowDb.failPausedApproval,
     claimWriteback: workflowDb.claimWriteback,
     releaseWritebackClaim: workflowDb.releaseWritebackClaim,
     cancelWorkflowRun: workflowDb.cancelWorkflowRun,
@@ -167,6 +167,7 @@ export function createWorkflowDeps(): WorkflowDeps {
   const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),
+    providers: providerRegistry,
     getAgentProvider,
     loadConfig: loadMergedConfig,
     sealRunConfig: sealWorkflowRunConfig,

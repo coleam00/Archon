@@ -14,6 +14,7 @@ const { waitForRunAttention } = await import('./run-attention-watch');
 
 function runningRun(): WorkflowRun {
   const run: WorkflowRun = {
+    origin: { conversationId: 'conv-1' },
     id: crypto.randomUUID(),
     workflow_name: 'demo',
     conversation_id: 'conv-1',

@@ -28,6 +28,7 @@ const MAX_LENGTH = 2000;
 
 export class DiscordAdapter implements IPlatformAdapter {
   readonly capabilities = {
+    canDetachProject: true as const,
     messagePersistence: 'core',
     defaultWorkflowDispatch: 'foreground',
   } as const;

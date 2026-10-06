@@ -17,6 +17,7 @@
  */
 
 import type { WorkflowRun } from './schemas';
+import type { OwnedWorktree } from './schemas/workflow-run';
 
 /**
  * Request for a per-child isolated checkout, built by the engine at child-spawn
@@ -44,6 +45,7 @@ export interface ChildIsolationRequest {
  * same port, returning a container `cwd`/`envId` instead of a worktree path.
  */
 export interface ChildIsolationResult {
+  ownedWorktree?: OwnedWorktree;
   /** The per-child checkout path — the child run's `working_path` and execution cwd. */
   cwd: string;
   /** The registered isolation-environment row id (so the child appears in `isolation list`). */

@@ -4,12 +4,15 @@
  *
  * Two concerns handled in one pass:
  *
- * 1. CWD .env leak: Bun unconditionally loads .env / .env.local /
- *    .env.development / .env.production from CWD before any user code runs.
- *    When `archon` is invoked from inside a target repo, that repo's env vars
- *    leak into the Archon process. `override: true` in dotenv only fixes keys
- *    that exist in both files — keys that only appear in the target repo's .env
- *    survive unaffected. We strip them.
+ * 1. CWD .env isolation: every key named in the target project's .env /
+ *    .env.local / .env.development / .env.production is removed, regardless
+ *    of its value or source (including shell exports and direnv). A leaked
+ *    ANTHROPIC_API_KEY can override Claude subscription auth and incur API
+ *    billing; other project keys can override Archon's defaults/environment.
+ *    Install credentials belong in ~/.archon/.env, loaded after this strip.
+ *    Exception: a detached child (--internal-detached-run-config) gets the six
+ *    DETACHED_INSTALL_CONTEXT_KEYS restored afterwards from the trusted detached
+ *    config, never from the project .env.
  *
  * 2. Nested Claude Code session markers: When archon is launched from inside a
  *    Claude Code terminal, the parent shell exports CLAUDECODE=1 and several
@@ -27,7 +30,7 @@ import {
   restoreDetachedInstallContext,
 } from './detached-install-context';
 
-/** The four filenames Bun auto-loads from CWD (in loading order). */
+/** Project env filenames parsed for key-name isolation. */
 const BUN_AUTO_LOADED_ENV_FILES = ['.env', '.env.local', '.env.development', '.env.production'];
 
 /** CLAUDE_CODE_* vars that are auth-related and must be kept in process.env. */
@@ -38,7 +41,8 @@ const CLAUDE_CODE_AUTH_VARS = new Set([
 ]);
 
 /**
- * Strip CWD .env keys and nested Claude Code session markers from process.env.
+ * Strip every key named in CWD .env files, whatever its value or source
+ * (detached children then restore DETACHED_INSTALL_CONTEXT_KEYS), and nested Claude Code session markers from process.env.
  * Keys in ~/.archon/.env (loaded afterward by each entry point) are unaffected.
  * Safe to call even when no CWD .env files exist.
  */

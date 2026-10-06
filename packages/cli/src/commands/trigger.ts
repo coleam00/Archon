@@ -174,7 +174,7 @@ export async function triggerCommand(
       hostId: options.host,
       engine: new InProcessWorkflowEngine(createWorkflowDeps()),
       createPlatform: ({ conversationId, conversationDbId }) => {
-        adapter.setConversationDbId(conversationId, conversationDbId);
+        if (conversationDbId) adapter.setConversationDbId(conversationId, conversationDbId);
         return adapter;
       },
       guardOwnedRun: owned => registerOwnedRunTermination({ ...owned, logModule: 'cli.trigger' }),

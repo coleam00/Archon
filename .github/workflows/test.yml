@@ -4,8 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main, dev]
+  # Draft pull requests skip the suite: their branches are pushed many times while the
+  # work is in progress. Marking one ready for review runs it, and so does every push after.
   pull_request:
     branches: [main, dev]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 env:
   BUN_VERSION: '1.4.2'
@@ -15,7 +18,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Every gated job needs `changes`, so skipping it on a draft skips them too.
+  # `github.event.pull_request` is null on push and dispatch, which therefore always run.
   changes:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     outputs:
       run-tests: ${{ steps.decision.outputs.run-tests }}
@@ -40,9 +46,11 @@ jobs:
           run_tests=$(bun scripts/should-run-test-suite.ts)
           echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"
 
-  # The only Linux run of the fixtures, so it runs for every event. It needs no `changes`
-  # decision and reports in well under a minute, ahead of the matrix.
+  # The only Linux run of the fixtures, so it runs for every event except a draft pull
+  # request. It needs no `changes` decision and reports in well under a minute, ahead of
+  # the matrix.
   workflow-fixtures:
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -112,6 +120,15 @@ jobs:
       - name: Warm uv
         if: runner.os == 'Windows'
         run: uv run python -c "print('uv warm')"
+
+      - name: Install Caddy for deployment recipe tests
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p "$RUNNER_TEMP/caddy"
+          curl --fail --location --retry 3 https://github.com/caddyserver/caddy/releases/download/v2.11.7/caddy_2.11.7_linux_amd64.tar.gz -o "$RUNNER_TEMP/caddy.tar.gz"
+          tar -xzf "$RUNNER_TEMP/caddy.tar.gz" -C "$RUNNER_TEMP/caddy" caddy
+          echo "$RUNNER_TEMP/caddy" >> "$GITHUB_PATH"
+          docker compose version
 
       - name: Validate (Linux)
         if: runner.os == 'Linux'
@@ -357,7 +374,10 @@ jobs:
         postgres-parity,
         docker-build,
       ]
-    if: always()
+    # On a draft the aggregate is skipped with everything else, so the check reads
+    # "skipped" rather than a green that claims tests passed. A draft cannot merge, and
+    # marking it ready starts a run that judges every job.
+    if: ${{ always() && !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

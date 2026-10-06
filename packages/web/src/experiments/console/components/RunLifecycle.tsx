@@ -43,13 +43,13 @@ export function RunFinishedLine({ run }: { run: Run }): ReactElement | null {
   const cost = run.costUsd !== null ? ` · ${formatCost(run.costUsd)}` : '';
 
   return (
-    <div className="mt-2 flex items-center gap-2 py-1 text-[11px]">
+    <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-[11px]">
       <div className="h-px flex-1 bg-border/50" aria-hidden />
       <span aria-hidden className={statusTextClass[run.status]}>
         {GLYPH[run.status]}
       </span>
       <span className={`font-medium ${statusTextClass[run.status]}`}>{LABEL[run.status]}</span>
-      <RunOutcomeBadge outcome={run.outcome} />
+      <RunOutcomeBadge outcome={run.outcome} terminalRecord={run.terminalRecord} />
       <span className="font-mono text-text-tertiary">
         in {duration}
         {cost}

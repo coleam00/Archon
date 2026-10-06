@@ -243,15 +243,17 @@ export function Inspector({
         }}
       />
 
-      <SelectField
-        label="Trigger rule"
-        value={node.base.trigger_rule ?? 'all_success'}
-        options={TRIGGER_RULES.map(rule => ({ value: rule, label: rule }))}
-        onChange={(raw): void => {
-          const rule = TRIGGER_RULES.find(r => r === raw);
-          patchBase({ trigger_rule: rule === 'all_success' ? undefined : rule });
-        }}
-      />
+      {node.variant !== 'opaque' ? (
+        <SelectField
+          label="Trigger rule"
+          value={node.base.trigger_rule ?? 'all_success'}
+          options={TRIGGER_RULES.map(rule => ({ value: rule, label: rule }))}
+          onChange={(raw): void => {
+            const rule = TRIGGER_RULES.find(r => r === raw);
+            patchBase({ trigger_rule: rule === 'all_success' ? undefined : rule });
+          }}
+        />
+      ) : null}
 
       {capabilities.honorsAiFields ? (
         <>
@@ -283,15 +285,17 @@ export function Inspector({
         </>
       ) : null}
 
-      <TextField
-        label="Output type"
-        value={node.base.output_type ?? ''}
-        mono
-        placeholder="e.g. plan, report"
-        onChange={(raw): void => {
-          patchBase({ output_type: raw.length > 0 ? raw : undefined });
-        }}
-      />
+      {node.variant !== 'opaque' ? (
+        <TextField
+          label="Output type"
+          value={node.base.output_type ?? ''}
+          mono
+          placeholder="e.g. plan, report"
+          onChange={(raw): void => {
+            patchBase({ output_type: raw.length > 0 ? raw : undefined });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

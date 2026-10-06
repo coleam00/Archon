@@ -1,85 +1,32 @@
 import { describe, test, expect, mock } from 'bun:test';
+import { HeadlessPlatform } from './headless-platform';
 import type { WorkflowMessageMetadata } from '@archon/workflows/deps';
 
-const mockLogger = {
-  fatal: mock(() => undefined),
-  error: mock(() => undefined),
-  warn: mock(() => undefined),
-  info: mock(() => undefined),
-  debug: mock(() => undefined),
-  trace: mock(() => undefined),
-  child: mock(function (this: unknown) {
-    return this;
-  }),
-  bindings: mock(() => ({ module: 'test' })),
-  isLevelEnabled: mock(() => true),
-  level: 'info' as const,
-};
-
-mock.module('@archon/paths', () => ({
-  createLogger: mock(() => mockLogger),
-}));
-
-const mockAddMessage = mock(async (..._args: unknown[]) => undefined as unknown);
-mock.module('@archon/core/db/messages', () => ({
-  addMessage: mockAddMessage,
-}));
-
-import { HeadlessPlatform } from './headless-platform';
-
 describe('HeadlessPlatform', () => {
-  test('reports platform type and streaming mode', () => {
-    const platform = new HeadlessPlatform('conv-db-1');
+  test('origin-free delivery needs no recorder', async () => {
+    const platform = new HeadlessPlatform();
     expect(platform.getPlatformType()).toBe('api');
     expect(platform.getStreamingMode()).toBe('batch');
+    await expect(platform.sendMessage('run-1', 'hello')).resolves.toBeUndefined();
   });
 
-  test('sendMessage persists to the bound conversation, ignoring the caller-supplied id', async () => {
-    mockAddMessage.mockClear();
-    const platform = new HeadlessPlatform('conv-db-1');
-    await platform.sendMessage('irrelevant-caller-id', 'hello');
-    expect(mockAddMessage).toHaveBeenCalledWith('conv-db-1', 'assistant', 'hello', undefined);
-  });
-
-  test('sendMessage forwards known metadata categories', async () => {
-    mockAddMessage.mockClear();
-    const platform = new HeadlessPlatform('conv-db-1');
-    await platform.sendMessage('ignored', 'done', { category: 'workflow_status' });
-    expect(mockAddMessage).toHaveBeenCalledWith('conv-db-1', 'assistant', 'done', {
-      category: 'workflow_status',
+  test('passes messages and metadata to the supplied recorder', async () => {
+    const recorder = mock(async (_message: string, _metadata?: WorkflowMessageMetadata) => {});
+    const platform = new HeadlessPlatform(recorder, {
+      formatWorkflowCommand: command => `archon workflow ${command}`,
     });
+    const metadata: WorkflowMessageMetadata = { category: 'workflow_status', segment: 'new' };
+    await platform.sendMessage('correlation', 'hello', metadata);
+    expect(recorder).toHaveBeenCalledWith('hello', metadata);
+    expect(platform.formatWorkflowCommand('resume id')).toBe('archon workflow resume id');
   });
 
-  test('sendMessage swallows a persistence failure instead of throwing', async () => {
-    mockAddMessage.mockClear();
-    mockAddMessage.mockImplementationOnce(async () => {
-      throw new Error('db down');
+  // A recorder writes real conversation history, so a failed write is a failed delivery
+  // for the workflow's delivery boundary to report, not a success.
+  test('rejects when the recorder fails', async () => {
+    const platform = new HeadlessPlatform(async () => {
+      throw new Error('history unavailable');
     });
-    const platform = new HeadlessPlatform('conv-db-1');
-    await expect(platform.sendMessage('ignored', 'hello')).resolves.toBeUndefined();
+    await expect(platform.sendMessage('run-1', 'hello')).rejects.toThrow('history unavailable');
   });
-
-  test('persists every future WorkflowMessageMetadata field by derivation (#2709)', async () => {
-    mockAddMessage.mockClear();
-    const platform = new HeadlessPlatform('conv-db-1');
-    const metadata: WorkflowMessageMetadata & { traceId: string } = {
-      category: 'workflow_status',
-      segment: 'new',
-      traceId: 'trace-abc',
-    };
-    await platform.sendMessage('ignored', 'done', metadata);
-    expect(mockAddMessage).toHaveBeenCalledWith('conv-db-1', 'assistant', 'done', {
-      category: 'workflow_status',
-      traceId: 'trace-abc',
-    });
-  });
-});
-
-test('uses the supplied command surface and keeps conversation binding', async () => {
-  const platform = new HeadlessPlatform('bound', {
-    formatWorkflowCommand: command => `archon workflow ${command}`,
-  });
-  expect(platform.formatWorkflowCommand('resume id')).toBe('archon workflow resume id');
-  await platform.sendMessage('other', 'message');
-  expect(mockAddMessage).toHaveBeenLastCalledWith('bound', 'assistant', 'message', undefined);
 });

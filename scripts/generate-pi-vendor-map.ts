@@ -89,7 +89,7 @@ const DISPLAY_NAMES: Record<string, string> = {
   moonshotai: 'Moonshot AI',
   'moonshotai-cn': 'Moonshot AI (CN)',
   'kimi-coding': 'Kimi Coding',
-  'azure-openai-responses': 'Azure OpenAI',
+  azure: 'Azure OpenAI',
   'vercel-ai-gateway': 'Vercel AI Gateway',
   'cloudflare-workers-ai': 'Cloudflare Workers AI',
   'cloudflare-ai-gateway': 'Cloudflare AI Gateway',

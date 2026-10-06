@@ -1,8 +1,13 @@
-import { describe, test, expect, mock, beforeEach, afterEach } from 'bun:test';
+import { describe, test, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
 import { Hono, type Context } from 'hono';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager, User } from '@archon/core';
-import type { WebAdapter } from '../adapters/web';
+import { SSEStreamingApi } from 'hono/streaming';
+import { WebAdapter } from '../adapters/web';
+import { MessagePersistence } from '../adapters/web/persistence';
+import { WorkflowEventBridge } from '../adapters/web/workflow-bridge';
+import { DASHBOARD_STREAM, SSETransport } from '../adapters/web/transport';
+import { DASHBOARD_SSE_PATH } from '../../../web/src/experiments/console/lib/sse-endpoints';
 import { validationErrorHook } from './openapi-defaults';
 import { makeListDashboardRunsMock, mockAllWorkflowModules } from '../test/workflow-mock-factories';
 
@@ -152,8 +157,10 @@ mock.module('@archon/core/utils/commands', () => ({
 
 import { registerApiRoutes, resolveAuthContext, resolveWebUserId, requireWebUser } from './api';
 
-function makeApp(): OpenAPIHono {
-  const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+function makeApp(
+  webAdapter?: WebAdapter,
+  app = new OpenAPIHono({ defaultHook: validationErrorHook })
+): OpenAPIHono {
   const mockWebAdapter = {
     setConversationDbId: mock(() => {}),
     emitSSE: mock(async () => {}),
@@ -166,9 +173,83 @@ function makeApp(): OpenAPIHono {
     }),
     getStats: mock(() => ({ active: 0, queued: 0 })),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, mockLockManager);
+  registerApiRoutes(app, webAdapter ?? mockWebAdapter, mockLockManager);
   return app;
 }
+
+describe('console dashboard SSE endpoint and disconnect lifecycle', () => {
+  for (const cleanup of ['abort', 'finally'] as const) {
+    test(`${cleanup} removes only the disconnected dashboard connection`, async () => {
+      apiGateEnabled = false;
+      const transport = new SSETransport();
+      const adapter = new WebAdapter(
+        transport,
+        new MessagePersistence((id, event) => transport.emit(id, event)),
+        new WorkflowEventBridge(transport)
+      );
+      const sleepers = new Map<SSEStreamingApi, (reason: Error) => void>();
+      // Control the heartbeat wait so both cleanup paths run without a 30-second timer.
+      const sleep = spyOn(SSEStreamingApi.prototype, 'sleep').mockImplementation(function (
+        this: SSEStreamingApi
+      ) {
+        return new Promise<void>((_resolve, reject) => sleepers.set(this, reject));
+      });
+      const readers: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'>[] = [];
+      const decoder = new TextDecoder();
+      try {
+        const app = new OpenAPIHono({ defaultHook: validationErrorHook });
+        app.use('*', async (c, next) => {
+          await next();
+          c.header('X-Test-Route', c.req.routePath);
+        });
+        makeApp(adapter, app);
+        for (let i = 0; i < 2; i++) {
+          const response = await app.request(DASHBOARD_SSE_PATH);
+          expect(response.status).toBe(200);
+          expect(response.headers.get('content-type')).toBe('text/event-stream');
+          expect(response.headers.get('X-Test-Route')).toBe(DASHBOARD_SSE_PATH);
+          if (!response.body) throw new Error('Missing SSE response body');
+          const reader = response.body.getReader();
+          readers.push(reader);
+          expect(decoder.decode((await reader.read()).value)).toContain('"heartbeat"');
+        }
+        const [first, second] = readers;
+        if (!first || !second) throw new Error('Missing dashboard readers');
+        const broadcast = adapter.emitSSE(DASHBOARD_STREAM, 'first event');
+        const frames = await Promise.all([first.read(), second.read()]);
+        await broadcast;
+        expect(frames.map(frame => decoder.decode(frame.value))).toEqual([
+          'data: first event\n\n',
+          'data: first event\n\n',
+        ]);
+        const firstSleeper = sleepers.values().next().value;
+        if (!firstSleeper) throw new Error('Heartbeat wait was not reached');
+        if (cleanup === 'abort') {
+          await first.cancel();
+        } else {
+          firstSleeper(new Error('closed'));
+          expect((await first.read()).done).toBe(true);
+        }
+        expect(transport.hasActiveStream(DASHBOARD_STREAM)).toBe(true);
+        const nextBroadcast = adapter.emitSSE(DASHBOARD_STREAM, 'second event');
+        expect(decoder.decode((await second.read()).value)).toBe('data: second event\n\n');
+        await nextBroadcast;
+        if (cleanup === 'abort') {
+          firstSleeper(new Error('aborted'));
+          await first.read();
+        }
+        expect(transport.hasActiveStream(DASHBOARD_STREAM)).toBe(true);
+        await second.cancel();
+        expect(transport.hasActiveStream(DASHBOARD_STREAM)).toBe(false);
+      } finally {
+        await Promise.all(readers.map(reader => reader.cancel()));
+        for (const reject of sleepers.values()) reject(new Error('closed'));
+        sleep.mockRestore();
+        transport.stop();
+      }
+    });
+  }
+});
 
 describe('GET /api/auth/status', () => {
   beforeEach(() => {
