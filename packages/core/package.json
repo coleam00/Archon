@@ -300,6 +300,9 @@
       "src/workflows/commit-author.integration.test.ts"
     ],
     [
+      "src/github-auth/bootstrap.test.ts"
+    ],
+    [
       "src/db/workflows.origin.integration.test.ts"
     ],
     [
@@ -307,6 +310,9 @@
     ],
     [
       "src/db/users.sqlite.integration.test.ts"
+    ],
+    [
+      "src/services/cleanup-worktree.integration.test.ts"
     ]
   ]
 }

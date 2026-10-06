@@ -1,4 +1,4 @@
-import type { WorkflowRunOrigin } from './schemas/workflow-run';
+import type { OwnedWorktree, WorkflowRunOrigin } from './schemas/workflow-run';
 import {
   prepareRunAiConfiguration,
   assertRunCredentials,
@@ -96,7 +96,6 @@ import { formatDuration, parseDbTimestamp } from './utils/duration';
 import { keepAwake } from './utils/keep-awake';
 import { getWorkflowEventEmitter } from './event-emitter';
 import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
-import { isRegisteredProvider, getRegisteredProviders } from '@archon/providers';
 import type { ExecutionContext } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 export type { ContainerRunContext, ContainerWriteBackBackend } from './container-context';
@@ -187,56 +186,56 @@ async function sendCriticalMessage(
 }
 
 /**
- * Parse `owner/repo` from a github.com URL. Returns null for non-GitHub URLs
+ * Parse `owner/repo` from a codebase's stored remote URL, which is the raw
+ * `git remote get-url origin` value for locally registered repos. Accepts URL
+ * forms (`https://`, `ssh://`, with or without userinfo) and scp-like
+ * `[user@]github.com:owner/repo`. Returns null when the host is not github.com
  * so the caller can fall through to env-inheritance.
  *
- *   https://github.com/owner/repo.git   → { owner, repo }
- *   https://github.com/owner/repo       → { owner, repo }
- *   git@github.com:owner/repo.git       → { owner, repo }
- *   <anything else>                     → null
+ * Throws when the host is github.com but the path is not exactly `owner/repo`:
+ * falling through there would let nodes run on whatever GitHub credential the
+ * host process holds instead of the App installation token.
  */
 function parseGithubRepoUrl(url: string): { owner: string; repo: string } | null {
-  // HTTPS form
-  const https = /^https?:\/\/(?:www\.)?github\.com\/([^/]+)\/([^/]+?)(?:\.git)?\/?$/i.exec(url);
-  if (https) return { owner: https[1], repo: https[2] };
-  // SSH form (git@github.com:owner/repo[.git])
-  const ssh = /^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/i.exec(url);
-  if (ssh) return { owner: ssh[1], repo: ssh[2] };
-  return null;
+  let host: string;
+  let path: string;
+  if (url.includes('://')) {
+    try {
+      ({ hostname: host, pathname: path } = new URL(url));
+    } catch {
+      return null;
+    }
+  } else {
+    const scp = /^(?:[^@/]+@)?([^:/]+):(.*)$/.exec(url);
+    if (!scp) return null;
+    [, host, path] = scp;
+  }
+  host = host.toLowerCase();
+  if (host !== 'github.com' && host !== 'www.github.com') return null;
+  const [owner, repo, ...rest] = path
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\.git$/i, '')
+    .split('/');
+  if (!owner || !repo || rest.length > 0) {
+    // The URL is not logged: a stored remote can embed credentials in its userinfo.
+    throw new Error('Codebase repository URL is on github.com but names no owner/repo');
+  }
+  return { owner, repo };
 }
 
-/**
- * Resolve a fresh GH_TOKEN/GITHUB_TOKEN pair from the registered bot-token
- * provider, if any. Used at the top of executeWorkflow to inject the token
- * into the workflow's envVars so bash/script subprocesses pick it up.
- *
- * Contract: NEVER THROWS. On any failure (no codebase, non-GitHub URL,
- * provider rejected, network blip) returns {} — the workflow continues with
- * whatever env inheritance was already in place. This matches the
- * resolveBotGitHubToken? contract in deps.ts.
- */
 async function resolveBotGitHubEnvForWorkflow(
   deps: WorkflowDeps,
   codebaseId: string | undefined
 ): Promise<Record<string, string>> {
   if (!codebaseId || !deps.resolveBotGitHubToken) return {};
-  try {
-    const codebase = await deps.store.getCodebase(codebaseId);
-    if (!codebase?.repository_url) return {};
-    const parsed = parseGithubRepoUrl(codebase.repository_url);
-    if (!parsed) return {};
-    const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
-    if (!token) return {};
-    getLog().debug(
-      { owner: parsed.owner, repo: parsed.repo },
-      'workflow.bot_github_token_injected'
-    );
-    return { GH_TOKEN: token, GITHUB_TOKEN: token };
-  } catch (err) {
-    // Resolution failure must not block the workflow — log and fall back.
-    getLog().warn({ err: err as Error, codebaseId }, 'workflow.bot_github_token_resolve_failed');
-    return {};
-  }
+  const codebase = await deps.store.getCodebase(codebaseId);
+  if (!codebase?.repository_url) return {};
+  const parsed = parseGithubRepoUrl(codebase.repository_url);
+  if (!parsed) return {};
+  const token = await deps.resolveBotGitHubToken(parsed.owner, parsed.repo);
+  if (!token) throw new Error('GitHub App token resolution returned no installation token');
+  getLog().debug({ owner: parsed.owner, repo: parsed.repo }, 'workflow.bot_github_token_injected');
+  return { GH_TOKEN: token, GITHUB_TOKEN: token };
 }
 
 /**
@@ -580,6 +579,7 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  ownedWorktree?: OwnedWorktree;
   preparedAiConfiguration?: PreparedRunAiConfiguration;
   /** Codebase ID for env vars + isolation context. */
   codebaseId?: string;
@@ -889,7 +889,12 @@ export async function resolveContinuationWorkflow(
   if (!capture) return undefined; // predates capture — the caller keeps live behavior
   const roots = capturedSourceRoots(capture.anchor);
 
-  const { workflows, errors } = await discoverWorkflowsWithConfig(cwd, deps.loadConfig, roots);
+  const { workflows, errors } = await discoverWorkflowsWithConfig(
+    cwd,
+    deps.loadConfig,
+    deps.providers,
+    roots
+  );
   const workflow = resolveWorkflowName(
     run.workflow_name,
     workflows.map(w => w.workflow)
@@ -1271,6 +1276,7 @@ async function runChildWorkflow(
       const { workflows } = await discoverWorkflowsWithConfig(
         cwd,
         deps.loadConfig,
+        deps.providers,
         childSource.roots
       );
       childWorkflow = resolveWorkflowName(
@@ -1519,6 +1525,9 @@ async function runChildWorkflow(
             ...(childIsolationEnv
               ? {
                   isolation_env_id: childIsolationEnv.envId,
+                  ...(childIsolationEnv.ownedWorktree
+                    ? { owned_worktree: childIsolationEnv.ownedWorktree }
+                    : {}),
                   branch_name: childIsolationEnv.branchName,
                 }
               : {}),
@@ -1707,7 +1716,11 @@ async function maybeResumeParentRun(
       parentWorkflow = continuation.workflow;
     } else {
       // No recorded source: a parent predating capture, which resumes live as it always did.
-      const { workflows } = await discoverWorkflowsWithConfig(parentCwd, deps.loadConfig);
+      const { workflows } = await discoverWorkflowsWithConfig(
+        parentCwd,
+        deps.loadConfig,
+        deps.providers
+      );
       parentWorkflow = resolveWorkflowName(
         parent.workflow_name,
         workflows.map(w => w.workflow)
@@ -1941,29 +1954,6 @@ export async function executeWorkflow(
     effectiveRunConfig,
     runConfigMetadata,
   } = prepared;
-  // Resolve a fresh bot GitHub token once at workflow start when:
-  //   (a) the codebase URL is a github.com repo, and
-  //   (b) deps.resolveBotGitHubToken is registered (App mode).
-  // Injected into envVars so bash/script subprocesses authenticate `gh` and
-  // initial `git push` via inherited GH_TOKEN. Workflows that run >1h still
-  // need the credential helper for live token rotation (handled at clone
-  // time in the GitHub adapter), but the env injection is enough for the
-  // typical <1h workflow.
-  const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
-  const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
-  config.envVars = {
-    ...config.envVars,
-    // The injected bot token is system-set; the per-user override
-    // wins last so a run routes through the originating human's token (or scrubs
-    // the org/bot token when they haven't connected). Empty-string values from
-    // the per-user policy scrub the corresponding key via the subprocess merge.
-    ...botGitHubEnv,
-    ...userGitHubEnv,
-  };
-  const protectedEnvKeys = new Set([...Object.keys(botGitHubEnv), ...Object.keys(userGitHubEnv)]);
-  if (protectedEnvKeys.size > 0) {
-    config.protectedEnvKeys = [...protectedEnvKeys];
-  }
   const configuredCommandFolder = config.commands.folder;
 
   // What the run recorded when it started (#2454). A continuation re-enters with whatever
@@ -2094,10 +2084,11 @@ export async function executeWorkflow(
     }
   }
 
-  if (!isRegisteredProvider(resolvedProvider)) {
+  if (!deps.providers.get(resolvedProvider)) {
     throw new Error(
       `Workflow '${workflow.name}': unknown provider '${resolvedProvider}'. ` +
-        `Registered: ${getRegisteredProviders()
+        `Registered: ${deps.providers
+          .list()
           .map(p => p.id)
           .join(', ')}`
     );
@@ -2161,6 +2152,7 @@ export async function executeWorkflow(
           ...(issueContext ? { github_context: issueContext } : {}),
           ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
           ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+          ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
           // Declared inputs supplied by a direct top-level invocation (#2554), already
           // validated by the invocation gate. Written here — inside `if (!workflowRun)` —
           // so a resume, which arrives with `preCreatedRun` set and never enters this
@@ -2208,7 +2200,7 @@ export async function executeWorkflow(
     const pendingRun = workflowRun;
     let claimed: WorkflowRun | null;
     try {
-      claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id);
+      claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
     } catch (error) {
       getLog().error(
         { err: error, workflowRunId: workflowRun.id },
@@ -2232,7 +2224,8 @@ export async function executeWorkflow(
       return {
         success: false,
         workflowRunId: workflowRun.id,
-        error: 'Workflow run is no longer pending or no longer owns its admitted resource',
+        error:
+          'Workflow run is no longer pending, no longer owns its admitted resource, or its worktree was released',
       };
     }
     pendingRun.status = claimed.status;
@@ -2262,6 +2255,7 @@ export async function executeWorkflow(
             ...(runConfigMetadata ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: runConfigMetadata } : {}),
             ...(execContext.kind === 'container' ? { isolation: 'container' } : {}),
             ...(containerCtx ? { isolation_env_id: containerCtx.envId } : {}),
+            ...(opts.ownedWorktree ? { owned_worktree: opts.ownedWorktree } : {}),
           }),
       [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
     };
@@ -2895,6 +2889,24 @@ export async function executeWorkflow(
   // failed would either fail again or mask the real error.
   let terminalStatusWriteFailed = false;
   try {
+    // The environment stays fixed for this execution; resumed segments resolve again
+    // through the provider's refresh cache. Resolve inside the run's failure boundary.
+    const botGitHubEnv = await resolveBotGitHubEnvForWorkflow(deps, codebaseId);
+    const userGitHubEnv = await resolveUserGithubEnvForWorkflow(deps, executionUserId);
+    config.envVars = {
+      ...config.envVars,
+      // The injected bot token is system-set; the per-user override
+      // wins last so a run routes through the originating human's token (or scrubs
+      // the org/bot token when they haven't connected). Empty-string values from
+      // the per-user policy scrub the corresponding key via the subprocess merge.
+      ...botGitHubEnv,
+      ...userGitHubEnv,
+    };
+    const protectedEnvKeys = new Set([...Object.keys(botGitHubEnv), ...Object.keys(userGitHubEnv)]);
+    if (protectedEnvKeys.size > 0) {
+      config.protectedEnvKeys = [...protectedEnvKeys];
+    }
+
     // Per-user AI-provider credentials (Phase 2). Resolved AFTER artifactsDir is
     // created because file-based deliveries (Codex `CODEX_HOME/auth.json`) live
     // under it. Clear files from an earlier invocation first: a disconnected
@@ -2996,7 +3008,7 @@ export async function executeWorkflow(
       interactive: workflow.interactive ?? false,
       usedIsolation: isolationContext !== undefined,
       isResume: isContinuation,
-      ...workflowTelemetryShape(workflow, runSource),
+      ...workflowTelemetryShape(deps.providers, workflow, runSource),
     });
 
     let isolationMode: 'container' | 'worktree' | 'in-place' = 'in-place';

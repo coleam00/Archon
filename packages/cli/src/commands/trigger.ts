@@ -20,7 +20,7 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createCliWorkflowDeps } from '../utils/workflow-deps';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
@@ -170,7 +170,7 @@ export async function triggerCommand(
       Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
       assertDetachedRunProcessOwner();
     }
-    const deps = createWorkflowDeps();
+    const deps = createCliWorkflowDeps();
     const result = await startAdmittedResourceStart({
       requestId: args[0],
       hostId: options.host,

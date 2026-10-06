@@ -1,4 +1,5 @@
 import type { Conversation } from '@archon/core/schemas/conversation';
+import { providerRegistry } from '@archon/providers';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
 import { withBranchLaunchSource } from '@archon/core/workflows/branch-launch-source';
 import {
@@ -22,7 +23,7 @@ import { registerRepository, registerFolder } from '@archon/core/handlers/clone'
 import { loadConfig, loadRepoConfig } from '@archon/core/config/config-loader';
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { toPersistedMessageMetadata } from '@archon/core/types';
-import type { WorkflowCommandHost } from './workflow-host';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import { WorkflowNotResumableError, PROVIDER_EVENT_ROW_TYPES } from '@archon/workflows/store';
@@ -57,12 +58,13 @@ import {
   getIsolationProvider,
   resolveFolderBackend,
   classifyIsolationError,
+  worktreeRegistrationMetadata,
 } from '@archon/isolation';
 import type {
   ExecutionContext,
   ContainerBackend,
   ContainerBackendConfig,
-  IsolatedEnvironment,
+  WorktreeCreationEnvironment,
 } from '@archon/isolation';
 import type { TaskBranchSelection } from '@archon/isolation';
 import {
@@ -170,6 +172,7 @@ import {
   workflowOperationErrorMessage,
   type CancelWorkflowResult,
   describeAbandonOwner,
+  describeReleasedWorktrees,
   assertApprovable,
   assertRejectable,
   assertRespondable,
@@ -481,7 +484,7 @@ function destinationCorrelationId(destination: RunDestination): string {
 // Transport correlation never creates chat provenance. Only a continued run's stored
 // origin can attach a recorder; losing that destination must refuse the continuation.
 async function resolveRunDestination(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   options: WorkflowRunOptions,
   continuationRun: WorkflowRun | undefined
 ): Promise<RunDestination> {
@@ -859,10 +862,7 @@ function buildResumeLookupFailureError(error: Error): Error {
  * One owner for the refusals because two callers need them: the `--detach` pre-flight,
  * which refuses before forking (#2872), and the run path that records the provenance.
  */
-async function resolveSupersededRun(
-  host: WorkflowCommandHost,
-  runId: string
-): Promise<WorkflowRun> {
+async function resolveSupersededRun(host: WorkflowHost, runId: string): Promise<WorkflowRun> {
   const superseded = await host.deps.store.getWorkflowRun(runId);
   if (!superseded) {
     throw new Error(`Cannot supersede: no workflow run '${runId}' exists.`);
@@ -878,7 +878,7 @@ async function resolveSupersededRun(
  * or the identity cannot be resolved. Attribution is best-effort by design — a run must
  * not fail because the user table could not be reached.
  */
-async function resolveCliUserRecordId(host: WorkflowCommandHost): Promise<string | undefined> {
+async function resolveCliUserRecordId(host: WorkflowHost): Promise<string | undefined> {
   const cliId = resolveCliUserId();
   if (!cliId) return undefined;
   try {
@@ -943,7 +943,7 @@ function assertWorkflowNotWorktreePinnedForFolder(
  * to the orchestrator gate.
  */
 async function assertCliWorkflowRequirementsMet(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   workflow: RequirementBearingWorkflow
 ): Promise<void> {
   if (!host.deps.isPerUserGitHubEnabled?.() || !workflow.requires?.length) return;
@@ -970,7 +970,7 @@ async function assertCliWorkflowRequirementsMet(
 }
 
 async function resolveCliDryRunAiPrefs(
-  host: WorkflowCommandHost
+  host: WorkflowHost
 ): Promise<Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>> {
   const cliId = resolveCliUserId();
   if (!cliId) return {};
@@ -994,7 +994,7 @@ async function resolveCliDryRunAiPrefs(
  * `archon ai tier list`.
  */
 export async function maybePrintTierNotice(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   workflow: Pick<WorkflowDefinition, 'model'> & {
     readonly nodes: readonly WorkflowDefinition['nodes'][number][];
   },
@@ -1206,7 +1206,7 @@ async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically —
     // no option needed since the discovery helper reads them unconditionally.
-    return await discoverWorkflowsWithConfig(cwd, loadConfig);
+    return await discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry);
   } catch (error) {
     const err = error as Error;
     throw new Error(
@@ -1548,7 +1548,7 @@ export async function workflowListCommand(
  * sentence written into the middle of it.
  */
 async function resolveRunCodebase(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   cwd: string,
   options: Pick<WorkflowRunOptions, 'codebaseId' | 'folder' | 'registrationBaseBranch'>
 ): Promise<{
@@ -1662,7 +1662,7 @@ async function resolveRunCodebase(
  * Run a specific workflow
  */
 async function runWorkflowWithOwnedSource(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   owner: CapturedSourceOwner,
   cwd: string,
   workflowName: string,
@@ -1818,7 +1818,12 @@ async function runWorkflowWithOwnedSource(
   let { workflows: workflowEntries, errors } = continuation
     ? { workflows: continuation.workflows, errors: continuation.errors }
     : preparedSource
-      ? await discoverWorkflowsWithConfig(cwd, host.deps.loadConfig, preparedSource.roots)
+      ? await discoverWorkflowsWithConfig(
+          cwd,
+          host.deps.loadConfig,
+          host.deps.providers,
+          preparedSource.roots
+        )
       : await loadWorkflows(effectiveDiscoveryCwd);
   const sourceCounts = countWorkflowSources(workflowEntries);
 
@@ -1873,6 +1878,7 @@ async function runWorkflowWithOwnedSource(
     const rediscovered = await discoverWorkflowsWithConfig(
       sourceRoot,
       host.deps.loadConfig,
+      host.deps.providers,
       preparedSource.roots
     );
     workflowEntries = rediscovered.workflows;
@@ -2077,7 +2083,11 @@ async function runWorkflowWithOwnedSource(
       };
       dryRunBaseProfile = buildAiProfile(dryRunDefaultProvider, dryRunProfileOptions);
     }
-    const dryRunModelOverrides = resolveRunModelOverrides(dryRunBaseProfile, modelOverrides);
+    const dryRunModelOverrides = resolveRunModelOverrides(
+      host.deps.providers,
+      dryRunBaseProfile,
+      modelOverrides
+    );
     const result = await dryRunWorkflow({
       workflow,
       userMessage,
@@ -2660,6 +2670,7 @@ async function runWorkflowWithOwnedSource(
   let isolationEnvId: string | undefined;
   // Set only when this invocation created the run's branch (#3305).
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   // Execution context for the run. Repo/worktree and folder-in-place both run on
   // the host; the folder-backend seam sets this and is where `--container` flips
   // it to a container context.
@@ -3104,7 +3115,7 @@ async function runWorkflowWithOwnedSource(
         'worktree_creating'
       );
 
-      let isolatedEnv: IsolatedEnvironment;
+      let isolatedEnv: WorktreeCreationEnvironment;
       try {
         isolatedEnv = await provider.create({
           workflowType: 'task',
@@ -3149,11 +3160,13 @@ async function runWorkflowWithOwnedSource(
         working_path: isolatedEnv.workingPath,
         branch_name: isolatedEnv.branchName,
         created_by_platform: 'cli',
-        metadata: {},
+        metadata: { ...worktreeRegistrationMetadata(isolatedEnv.metadata) },
       });
 
       workingCwd = isolatedEnv.workingPath;
       isolationEnvId = envRecord.id;
+      if (isolatedEnv.metadata.provenance === 'created')
+        ownedWorktree = { envId: envRecord.id, creationId: isolatedEnv.metadata.creationId };
       if (!isolatedEnv.metadata.adopted) cutFromCommit = isolatedEnv.metadata.cutFromCommit;
       getLog().info({ path: workingCwd }, 'worktree_created');
     }
@@ -3407,6 +3420,7 @@ async function runWorkflowWithOwnedSource(
         // when IT creates the row, and this row already carries them.
         ...(detachedPreCreatedRun ? { preCreatedRun: detachedPreCreatedRun } : {}),
         ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+        ownedWorktree,
       };
       result = await engine.submit({
         platform: adapter,
@@ -3663,7 +3677,7 @@ const WAIT_CONTINUATION_POLL_MS = 5_000;
  * is the final guard.
  */
 async function awaitDurableWaitDeadline(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   wait: DurableWaitCursor
 ): Promise<'resume' | 'stop'> {
@@ -3694,7 +3708,7 @@ interface WaitResumeAttempt {
 
 /** Mirror `workflowResumeCommand`'s continuation options for a run this process owns. */
 async function buildWaitResumeAttempt(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   run: WorkflowRun,
   destination: RunDestination
 ): Promise<WaitResumeAttempt> {
@@ -3761,7 +3775,7 @@ function isResumeSuperseded(error: unknown): boolean {
  * — so another host can still take the run and this loop then stops.
  */
 export async function workflowRunCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   cwd: string,
   workflowName: string,
   userMessage: string,
@@ -3828,7 +3842,7 @@ export async function workflowRunCommand(
  * the run and is left alone — `failWorkflowRun`'s own status CAS closes the race.
  */
 async function recordDetachedChildStartupFailure(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   detachedRunId: string | undefined,
   error: Error
 ): Promise<void> {
@@ -4063,7 +4077,7 @@ export function buildNodeSummaries(events: WorkflowEventRow[]): NodeSummary[] {
  * never read them, and a long run has thousands.
  */
 function listRunEvents(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   rawEvents: boolean
 ): Promise<WorkflowEventRow[]> {
@@ -4102,7 +4116,7 @@ export function buildRunNodes(
 async function withRunDetail<
   Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
 >(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runs: Run[]
 ): Promise<(Run & { nodes: NodeSummary[]; attention: RunAttention | null })[]> {
   const eventsByRun = await host.deps.store.listEventsForRuns(
@@ -4124,7 +4138,7 @@ async function withRunDetail<
  * silenced; an empty derived/raw payload is the documented signal there.)
  */
 async function fetchVerboseEvents(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   rawEvents: boolean
 ): Promise<{ events: WorkflowEventRow[]; failed: boolean }> {
@@ -4181,7 +4195,7 @@ function printVerboseNodes(events: WorkflowEventRow[]): void {
 
 /** Show active workflow runs for the current project, or every project with `--all`. */
 export async function workflowStatusCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   cwd: string,
   opts: { json?: boolean; verbose?: boolean; rawEvents?: boolean; all?: boolean } = {}
 ): Promise<void> {
@@ -4359,7 +4373,7 @@ function announceWaitAttached(
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowWaitCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   json?: boolean,
   cwd?: string,
@@ -4733,7 +4747,7 @@ function transcriptUnavailableMessage(
 
 /** Print or follow one run's append-only JSONL transcript, verbatim or as text, without mutating the run. */
 export async function workflowLogsCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   follow: boolean,
   cwd?: string,
@@ -4850,7 +4864,7 @@ function describeRunStopReason(metadata: Record<string, unknown>): string | null
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowGetCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   json?: boolean,
   verbose?: boolean,
@@ -5107,7 +5121,7 @@ interface ArtifactOmissions {
 }
 
 async function resolveRunTranscriptPath(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   run: WorkflowRun
 ): Promise<string | null> {
   const codebase = run.codebase_id
@@ -5117,7 +5131,7 @@ async function resolveRunTranscriptPath(
   return root ? archonPaths.getRunLogPathForRoot(root, run.id) : null;
 }
 
-async function buildLeaveBehind(host: WorkflowCommandHost, run: WorkflowRun): Promise<LeaveBehind> {
+async function buildLeaveBehind(host: WorkflowHost, run: WorkflowRun): Promise<LeaveBehind> {
   const codebase = run.codebase_id
     ? await host.records.codebases.getCodebase(run.codebase_id)
     : null;
@@ -5239,7 +5253,7 @@ function readParseWarningEvents(events: readonly WorkflowEventRow[]): string[] {
  * `--json --verbose` adds each run's `nodes` and `attention` (see `withRunDetail`).
  */
 export async function workflowRunsCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   cwd: string,
   opts: {
     json?: boolean;
@@ -5444,7 +5458,7 @@ const FULL_RUN_ID_RE =
  * Callers without a downstream lookup can require a match instead.
  */
 async function resolveRunIdArg(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   cwd?: string,
   requirePrefixMatch = false,
@@ -5566,7 +5580,7 @@ async function runDetachedControlCommand(
 }
 
 async function resolveDiscoveryCwdForCodebase(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   codebaseId: string,
   action: 'resume' | 'approve' | 'reject' | 'respond'
@@ -5608,7 +5622,7 @@ async function resolveDiscoveryCwdForCodebase(
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowResumeCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   json?: boolean,
   cwd?: string,
@@ -5717,7 +5731,7 @@ export async function workflowResumeCommand(
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowAbandonCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   json?: boolean,
   cwd?: string
@@ -5730,8 +5744,14 @@ export async function workflowAbandonCommand(
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-        await abandonWorkflow(resolvedId);
+      const {
+        run,
+        cascadeFailures,
+        cleanupWarnings,
+        releasedWorktrees,
+        blockedParentRunId,
+        owner,
+      } = await abandonWorkflow(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -5749,6 +5769,7 @@ export async function workflowAbandonCommand(
                 recordedUid: owner.recordedOwner?.uid ?? null,
                 lastActivityAt: owner.lastActivityAt?.toISOString() ?? null,
               },
+        ...(releasedWorktrees ? { releasedWorktrees } : {}),
         ...(cleanupWarnings ? { cleanupWarnings } : {}),
         ...(cascadeFailures > 0 ? { cascadeFailures } : {}),
         ...(blockedParentRunId ? { blockedParentRunId } : {}),
@@ -5760,11 +5781,12 @@ export async function workflowAbandonCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
+  const { run, cascadeFailures, cleanupWarnings, releasedWorktrees, blockedParentRunId, owner } =
     await abandonWorkflow(resolvedId);
   for (const line of describeAbandonOwner(owner)) console.log(line);
   console.log(`Abandoned workflow run: ${resolvedId}`);
   console.log(`Workflow: ${run.workflow_name}`);
+  for (const line of describeReleasedWorktrees(releasedWorktrees)) console.log(line);
   for (const warning of cleanupWarnings ?? []) console.log(`Warning: ${warning}`);
   printRunTreeCancellationWarnings(cascadeFailures, blockedParentRunId);
 }
@@ -5796,7 +5818,7 @@ function printRunTreeCancellationWarnings(
  * transition — the refusal points at `abandon` for an orphan the operator has verified.
  */
 export async function workflowCancelCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   json?: boolean,
   cwd?: string
@@ -5874,7 +5896,7 @@ export async function workflowCancelCommand(
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowApproveCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   comment?: string,
   json?: boolean,
@@ -6014,7 +6036,7 @@ export async function workflowApproveCommand(
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowRejectCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   reason?: string,
   json?: boolean,
@@ -6165,7 +6187,7 @@ export async function workflowRejectCommand(
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
 export async function workflowRespondCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   decision: string,
   text?: string,
@@ -6303,7 +6325,7 @@ export async function workflowRespondCommand(
  *   - --json: machine-readable output
  */
 export async function workflowResetSessionsCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   workflowName: string,
   options: { scope?: string; node?: string; yes?: boolean; json?: boolean }
 ): Promise<void> {
@@ -6349,10 +6371,7 @@ export async function workflowResetSessionsCommand(
 /**
  * Delete terminal workflow runs older than the given number of days.
  */
-export async function workflowCleanupCommand(
-  host: WorkflowCommandHost,
-  days: number
-): Promise<void> {
+export async function workflowCleanupCommand(host: WorkflowHost, days: number): Promise<void> {
   try {
     const { count } = await host.deps.store.deleteOldWorkflowRuns(days);
     if (count === 0) {
@@ -6376,7 +6395,7 @@ export function isValidEventType(value: string): value is WorkflowEventType {
 }
 
 export async function workflowEventEmitCommand(
-  host: WorkflowCommandHost,
+  host: WorkflowHost,
   runId: string,
   eventType: WorkflowEventType,
   data?: Record<string, unknown>,

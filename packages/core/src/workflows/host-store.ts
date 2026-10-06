@@ -3,6 +3,9 @@ import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../sche
 import type { User, IdentityPlatform } from '../schemas/user';
 import type { Conversation, UpdateConversationInput } from '../schemas/conversation';
 import type { MessageRow } from '../schemas/message';
+import type { IWorkflowEngine } from '@archon/workflows/engine-port';
+import type { WorkflowOperations } from '../operations/workflow-operations';
+import type { createWorkflowDeps } from './store-adapter';
 
 export interface IWorkflowHostStore {
   codebases: {
@@ -46,4 +49,12 @@ export interface IWorkflowHostStore {
       createdBefore: Date
     ): Promise<IsolationEnvironmentRow | null>;
   };
+}
+
+/** One workflow host: the engine, operations, queries and termination share `deps.store`. */
+export interface WorkflowHost {
+  deps: ReturnType<typeof createWorkflowDeps>;
+  records: IWorkflowHostStore;
+  engine: IWorkflowEngine;
+  operations: WorkflowOperations;
 }

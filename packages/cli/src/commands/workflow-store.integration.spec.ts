@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { providerRegistry, registerBuiltinProviders } from '@archon/providers';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { runAttention } from '@archon/workflows/schemas/workflow-run';
 import { createWorkflowOperations } from '@archon/core/operations/workflow-operations';
@@ -15,7 +16,7 @@ import {
   createInMemoryWorkflowStore,
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
-import type { WorkflowCommandHost } from './workflow-host';
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 
 const tempRoots = trackTempRoots();
 const priorEnv = { ...process.env };
@@ -34,6 +35,7 @@ test('real CLI commands pause, approve, resume and query one run without SQL', a
   delete process.env.USERNAME;
   delete process.env.DATABASE_URL;
   setPlatformPolicies([]);
+  registerBuiltinProviders();
   mkdirSync(join(project, '.archon', 'workflows'), { recursive: true });
   writeFileSync(
     join(project, '.archon', 'workflows', 'portable.yaml'),
@@ -61,12 +63,13 @@ nodes:
   const store = createInMemoryWorkflowStore(records);
   const deps = {
     store,
+    providers: providerRegistry,
     loadConfig,
     getAgentProvider: (): never => {
       throw new Error('No AI provider needed');
     },
   };
-  const host: WorkflowCommandHost = {
+  const host: WorkflowHost = {
     deps,
     records,
     engine: new InProcessWorkflowEngine(deps),
@@ -78,6 +81,9 @@ nodes:
       },
       isRunOwnedByThisProcess: () => false,
       isRunOwnerAnswering: async () => false,
+      reclaimRunWorktree: async () => {
+        throw new Error('No worktree');
+      },
       reclaimContainerEnv: async () => {
         throw new Error('No container');
       },

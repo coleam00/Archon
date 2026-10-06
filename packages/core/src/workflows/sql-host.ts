@@ -1,4 +1,4 @@
-import type { IWorkflowHostStore } from './host-store';
+import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import * as isolationDb from '../db/isolation-environments';
 import * as codebases from '../db/codebases';
 import * as users from '../db/users';
@@ -6,7 +6,6 @@ import * as conversations from '../db/conversations';
 import * as messages from '../db/messages';
 import { createWorkflowStore, createWorkflowDeps } from './store-adapter';
 import type { IWorkflowStore } from '@archon/workflows/store';
-import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import {
   createWorkflowOperations,
@@ -39,6 +38,10 @@ export function createSqlWorkflowOperations(
     requestDetachedRunStop,
     isRunOwnedByThisProcess,
     isRunOwnerAnswering,
+    reclaimRunWorktree: async (run, isolation) => {
+      const { reclaimRunWorktree } = await import('../services/cleanup-service');
+      return reclaimRunWorktree(run, isolation);
+    },
     reclaimContainerEnv: async (envId, isolation) => {
       const { reclaimContainerEnv } = await import('../services/cleanup-service');
       await reclaimContainerEnv(envId, isolation);
@@ -46,13 +49,7 @@ export function createSqlWorkflowOperations(
   });
 }
 
-export function createSqlWorkflowHost(): {
-  deps: ReturnType<typeof createWorkflowDeps>;
-  records: IWorkflowHostStore;
-  engine: IWorkflowEngine;
-  operations: WorkflowOperations;
-} {
-  const deps = createWorkflowDeps();
+export function createSqlWorkflowHost(deps = createWorkflowDeps()): WorkflowHost {
   const records = createWorkflowHostStore();
   return {
     deps,

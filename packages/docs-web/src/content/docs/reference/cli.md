@@ -986,6 +986,23 @@ archon workflow abandon <run-id> --json
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
 
+Abandon also removes the worktree Archon created for this run, and for each cancelled
+`workflow:` sub-run. Abandon is final for that checkout: removal is forced, so
+uncommitted, untracked, and ignored files (including copied `.env` files) and
+initialized submodules are deleted with it. The branch is kept, so committed work,
+pushed or not, stays recoverable. The result lists each removed worktree and its
+branch (`releasedWorktrees` in `--json`), and the isolation record is marked `destroyed`.
+
+Only a checkout this run created is removed. Adopted, reused, inherited, and legacy
+checkouts without that creation proof stay in place, with a reason. A checkout another
+resumable or live run uses, one locked with `git worktree lock`, one whose owner runs on
+another host or as another user, or one under a descendant that could not be accounted
+for is also kept.
+
+The run is cancelled even when removal fails; the failure is reported as a cleanup
+warning. Retry `workflow abandon <run-id>` on that cancelled run to finish removal
+without repeating cancellation.
+
 Managed container reclamation is best-effort here too. A failure leaves the run
 `cancelled` and reports a warning on every abandon surface because container resources
 may remain allocated. Inspect the managed containers before retrying cleanup.
@@ -1151,6 +1168,12 @@ is still resumable: a resume reuses the child's recorded worktree and fails if i
 removed.
 
 ### `isolation cleanup [days]`
+
+To explicitly discard a resumable run and remove the worktree it created, use
+`archon workflow abandon <run-id>`. Ordinary cleanup keeps resumable runs protected.
+Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
+an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
+how to retry.
 
 Remove stale environments.
 

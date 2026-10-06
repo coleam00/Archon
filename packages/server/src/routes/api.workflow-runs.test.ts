@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import {
   RUN_GRAPH_METADATA_KEY,
   terminalRecordSchema,
@@ -161,6 +162,7 @@ const mockCreateCodebaseChildResolver = mock(
 );
 
 mock.module('@archon/core', () => ({
+  providers: providerRegistry,
   handleMessage: mockHandleMessage,
   getDatabaseType: () => 'sqlite',
   loadConfig: mock(async () => ({})),
@@ -437,6 +439,7 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
 const mockReclaimContainerEnv = mock(async () => {});
 mock.module('@archon/core/services/cleanup-service', () => ({
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
 }));
 // Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.
@@ -2490,20 +2493,20 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(response.status).toBe(404);
   });
 
-  test('returns 400 when run is completed (non-resumable terminal)', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_COMPLETED_RUN);
+  test('returns 409 when run is completed (non-resumable terminal)', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-2/abandon', {
       method: 'POST',
     });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(409);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot abandon');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
-  test('returns 400 when run is cancelled (non-resumable terminal)', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+  test('returns 409 when run is cancelled (non-resumable terminal)', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
       status: 'cancelled' as const,
       completed_at: NOW_DATE,
@@ -2512,7 +2515,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
       method: 'POST',
     });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(409);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot abandon');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
@@ -2546,6 +2549,19 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1', { cancel_reason: 'operator' });
+  });
+
+  test('returns 409 instead of success when cancellation loses its CAS', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining('changed before abandonment'),
+    });
   });
 
   test('returns 409 with the reason and leaves the run when a live owner cannot be stopped', async () => {

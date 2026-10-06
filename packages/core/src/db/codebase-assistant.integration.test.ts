@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, readFile, realpath, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 
 const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-assistant-')));
 process.env.ARCHON_HOME = join(root, 'home');
@@ -35,6 +36,9 @@ mock.module('./connection', () => ({
 }));
 const { setPlatformPolicies } = await import('../platforms/registry');
 setPlatformPolicies([]);
+// The host registers providers before loading configuration.
+registerBuiltinProviders();
+registerCommunityProviders();
 const { updateGlobalConfig } = await import('../config/config-loader');
 const { registerFolder, registerRepository } = await import('../handlers/sql-registration');
 const { getCodebase } = await import('./codebases');

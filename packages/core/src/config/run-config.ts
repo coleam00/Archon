@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import {
@@ -96,7 +97,7 @@ function assertRegisteredProvider(provider: string, path: string): void {
 
 function normalizePreset(path: string, preset: ModelAliasPreset): ModelAliasPreset {
   try {
-    return normalizeStrictRunModelPreset(preset);
+    return normalizeStrictRunModelPreset(providerRegistry, preset);
   } catch (error) {
     if (!(error instanceof RunModelPresetValidationError)) throw error;
     const issuePath = `${path}.${error.issue.field}`;

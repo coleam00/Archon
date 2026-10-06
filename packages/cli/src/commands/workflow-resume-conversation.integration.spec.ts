@@ -200,6 +200,22 @@ function countMessages(fixture: Fixture): number {
   }
 }
 
+/** Parsed metadata of every message the run's conversation recorded with metadata. */
+function readMessageMetadata(fixture: Fixture, conversationId: string): Record<string, unknown>[] {
+  const database = openDatabase(fixture);
+  try {
+    return database
+      .query<{ metadata: string | null }, [string]>(
+        'SELECT metadata FROM remote_agent_messages WHERE conversation_id = ? AND metadata IS NOT NULL'
+      )
+      .all(conversationId)
+      .map(row => JSON.parse(row.metadata ?? '{}') as Record<string, unknown>)
+      .filter(metadata => Object.keys(metadata).length > 0);
+  } finally {
+    database.close();
+  }
+}
+
 function countConversations(fixture: Fixture): number {
   const database = openDatabase(fixture);
   try {
@@ -355,6 +371,11 @@ describe('resumed runs keep one conversation', () => {
     expect(resumed.output).toContain("Bash node 'boom' failed");
 
     expectResumedInPlace(readThreadState(fixture), before);
+    // The executor marks its startup message with the transient `segment` layout hint.
+    // History keeps the durable fields and drops that hint.
+    const metadata = readMessageMetadata(fixture, before.runConversationId);
+    expect(metadata).toContainEqual(expect.objectContaining({ category: 'workflow_status' }));
+    expect(metadata.filter(entry => 'segment' in entry)).toEqual([]);
   }, 120_000);
 
   test('workflow run <name> --resume continues the run existing thread', async () => {

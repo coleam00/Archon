@@ -462,12 +462,34 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
   }
 }
 
-export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null> {
+/**
+ * A run whose checkout belongs only to destroyed worktree records cannot start.
+ * Abandonment marks the record destroyed before its final claimant check, so a run
+ * that reused the record too late to be seen fails here instead of starting in a
+ * checkout that is being removed.
+ *
+ * `workingPath` is stamped by the claim itself on a row created without one
+ * (`run --detach`), so the check and the claimant lookup see the checkout the
+ * run is about to use. An existing path is never replaced.
+ */
+export async function claimPendingWorkflowRun(
+  id: string,
+  workingPath?: string
+): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
-          SET status = 'running', last_activity_at = ${getDialect().now()}
+          SET status = 'running', last_activity_at = ${getDialect().now()},
+              working_path = COALESCE(working_path, CAST($2 AS TEXT))
         WHERE id = $1 AND status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM remote_agent_isolation_environments e
+             WHERE e.provider = 'worktree'
+               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
+               AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
+             GROUP BY e.working_path
+            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+          )
           AND (
             NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
             OR EXISTS (
@@ -478,7 +500,7 @@ export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun |
                WHERE q.id = $1 AND q.status = 'admitted'
             )
           )`,
-      [id]
+      [id, workingPath ?? null]
     );
     if (claimed.rowCount !== 1) return null;
     const selected = await query<WorkflowRunRow>(

@@ -1,8 +1,10 @@
+import type { ExecuteWorkflowOptions } from './executor';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
  * Covers concurrent-run guards, model/provider resolution, and resume logic
  * that the inner dag-executor.test.ts cannot reach.
  */
+import { providerRegistry } from '@archon/providers';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import { NodeEventWriteError } from './node-event-write';
 import { describe, it, expect, mock, beforeEach, afterEach, spyOn } from 'bun:test';
@@ -301,6 +303,7 @@ function makePlatform(): IWorkflowPlatform {
 
 function makeDeps(store?: IWorkflowStore): WorkflowDeps {
   return {
+    providers: providerRegistry,
     store: store ?? makeStore(),
     getUserProviderCredentialStatus: mock(async () => ({ state: 'usable', source: 'archon' })),
     loadConfig: mock(
@@ -367,6 +370,54 @@ describe('executeWorkflow', () => {
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
   });
 
+  it.each(['fresh', 'precreated', 'resume'] as const)(
+    'persists creation proof only on %s invocation',
+    async mode => {
+      const store = makeStore();
+      const updatesSpy = spyOn(store, 'updateWorkflowRun');
+      const original = {
+        envId: 'env-original',
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+      };
+      const incoming = { envId: 'env-new', creationId: 'c226ac7a-33cb-4ae0-aa9f-f07df1141dde' };
+      const prior = makeRun({
+        status: mode === 'precreated' ? 'pending' : 'running',
+        metadata: { owned_worktree: original },
+      });
+      const options: ExecuteWorkflowOptions =
+        mode === 'fresh'
+          ? { ownedWorktree: incoming }
+          : mode === 'resume'
+            ? { ownedWorktree: incoming, preCreatedRun: prior, priorCompletedNodes: new Map() }
+            : { ownedWorktree: incoming, preCreatedRun: prior };
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/repo',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        options
+      );
+      if (mode === 'fresh') {
+        expect(store.createWorkflowRun).toHaveBeenCalledWith(
+          expect.objectContaining({
+            metadata: expect.objectContaining({ owned_worktree: incoming }),
+          })
+        );
+      } else {
+        const updates = updatesSpy.mock.calls;
+        const proofWrites = updates.filter(
+          ([, update]) => update.metadata?.owned_worktree !== undefined
+        );
+        expect(proofWrites.length).toBe(mode === 'resume' ? 0 : 1);
+        if (mode === 'precreated')
+          expect(proofWrites[0]?.[1].metadata?.owned_worktree).toEqual(incoming);
+        expect(prior.metadata.owned_worktree).toEqual(original);
+      }
+    }
+  );
   it.each([false, true])('persists loaded graph before DAG execution (resume=%s)', async resume => {
     const store = makeStore();
     const workflow = makeWorkflow({ returns: 'node1' });
@@ -2724,6 +2775,7 @@ describe('executeWorkflow', () => {
     it('passes configured docsPath when set', async () => {
       const store = makeStore();
       const deps = {
+        providers: providerRegistry,
         store,
         loadConfig: mock(
           async (): Promise<WorkflowConfig> => ({
@@ -3620,6 +3672,61 @@ describe('executeWorkflow', () => {
       expect(deps.getUserGithubAuthor).toHaveBeenCalledTimes(1);
       expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
     });
+
+    for (const [repositoryUrl, expected] of [
+      ['ssh://git@github.com/acme/demo.git', 'token'],
+      ['https://x-access-token@github.com/acme/demo.git', 'token'],
+      ['github.com:acme/demo', 'token'],
+      ['https://github.com/acme/demo/tree/main', 'fail'],
+      ['git@github.com:acme', 'fail'],
+      ['https://gitlab.com/acme/demo', 'inherit'],
+    ] as const) {
+      it(`resolves the App token for ${repositoryUrl} as ${expected}`, async () => {
+        const resolveBotGitHubToken = mock(async () => 'bot-token');
+        const deps: WorkflowDeps = {
+          ...makeDeps(
+            makeStore({
+              getCodebase: mock(async () => ({
+                id: 'codebase-1',
+                name: 'demo',
+                repository_url: repositoryUrl,
+                default_cwd: '/tmp',
+                kind: 'repo' as const,
+              })),
+            })
+          ),
+          resolveBotGitHubToken,
+        };
+
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          { conversationId: 'db-c1' },
+          { codebaseId: 'codebase-1' }
+        );
+
+        if (expected === 'fail') {
+          // A github.com remote without a resolvable owner/repo must not run on
+          // whatever GitHub credential the host process happens to hold.
+          expect(result.success).toBe(false);
+          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+          return;
+        }
+        const envVars = mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars;
+        if (expected === 'token') {
+          expect(resolveBotGitHubToken).toHaveBeenCalledWith('acme', 'demo');
+          expect(envVars).toMatchObject({ GH_TOKEN: 'bot-token', GITHUB_TOKEN: 'bot-token' });
+        } else {
+          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(envVars).not.toHaveProperty('GH_TOKEN');
+        }
+      });
+    }
 
     it('removes stale credential files before a credential refresh failure', async () => {
       const artifactsDir = wsPath('_cwd', 'tmp', 'artifacts', 'runs', 'run-123');
@@ -5474,6 +5581,8 @@ describe('run checkout baseline (#3305)', () => {
     );
 
     expect(order).toEqual(['claim', 'baseline', 'first node']);
+    // The claim carries the checkout so a pre-created row without a path is fenced by it.
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalledWith('run-123', repo);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledTimes(1);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledWith(
       'run-123',

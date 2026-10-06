@@ -1,4 +1,5 @@
 /** Tests for the declared-data dry-run fixture runner (#2772). */
+import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeAll, afterAll, mock, spyOn } from 'bun:test';
 import {
   cpSync,
@@ -50,7 +51,7 @@ import {
 function workflowsOnDisk(cwd: string, names: string[], pack = 'pack'): WorkflowWithSource[] {
   return names.map(name => {
     const path = join(cwd, '.archon', 'workflows', pack, `${name}.yaml`);
-    const parsed = parseWorkflow(readFileSync(path, 'utf8'), `${name}.yaml`);
+    const parsed = parseWorkflow(readFileSync(path, 'utf8'), `${name}.yaml`, providerRegistry);
     if (!parsed.workflow) throw new Error(parsed.error.error);
     const raw = new Map([[parsed.workflow.name, parsed.workflow]]);
     const expanded = expandWorkflowIncludes(raw);
@@ -1080,6 +1081,7 @@ describe('discovery and fixture execution agree (#3183)', () => {
       writeWorkflowDirs(cwd, [path]);
 
       const discovered = await discoverWorkflows(cwd, {
+        providers: providerRegistry,
         loadDefaults: false,
         sourceRoots: isolatedSourceRoots(cwd),
       });

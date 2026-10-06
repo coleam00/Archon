@@ -101,6 +101,7 @@ mock.module('@archon/providers', () => ({
   normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
+  providerRegistry: { get: () => undefined, list: () => [] },
   getRegistration: mock(
     (): { parseConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
       parseConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,
@@ -172,6 +173,7 @@ mock.module('../db/user-provider-key-store', () => ({
 
 // github-auth mocks (required by store-adapter imports)
 mock.module('../github-auth/config', () => ({
+  loadGitHubAppConfig: () => null,
   isPerUserGitHubEnabled: mock(() => false),
 }));
 const mockGetUserGithubAuthor = mock(async (_userId: string) => ({

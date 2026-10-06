@@ -1,3 +1,4 @@
+import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
     _repo: string,
@@ -232,17 +233,26 @@ const mockGetProviderCapabilities = mock<typeof Providers.getProviderCapabilitie
   () => providerCapabilities
 );
 
+const providerRegistry: ProviderRegistry = {
+  get: id => ({
+    id,
+    displayName: id,
+    builtIn: true,
+    capabilities: mockGetProviderCapabilities(id),
+    parseConfig: raw => raw,
+    credentials: { kind: 'static', specs: [], vendorFor: () => 'anthropic' },
+  }),
+  list: () => [],
+};
+
 mock.module('@archon/providers', () => ({
+  providerRegistry,
   getRegistration: () => ({
     parseConfig: (raw: Record<string, unknown>) => raw,
     credentials: { vendorFor: () => 'anthropic' },
   }),
   getAgentProvider: mockGetAgentProvider,
   getProviderCapabilities: mockGetProviderCapabilities,
-  // `validEffortsForProvider` (@archon/workflows/model-validation) reads the
-  // registry to decide whether a tier's `effort` reaches this provider (#2556).
-  // Without this the REAL implementation runs against an empty registry and
-  // every provider looks unregistered.
   isRegisteredProvider: mock(() => true),
   getRegisteredProviders: mock(() => []),
   // credentials/delivery (#1955) imports these from '@archon/providers'.
@@ -263,6 +273,7 @@ const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflo
 
 mock.module('../workflows/store-adapter', () => ({
   createWorkflowDeps: mock(() => ({
+    providers: providerRegistry,
     store: { getCodebaseEnvVars: async () => ({}) },
     sealRunConfig: (_layer: unknown, source: unknown) => ({
       version: 1,
@@ -1568,7 +1579,8 @@ describe('orchestrator-agent handleMessage', () => {
       // Home-scoped workflows (~/.archon/workflows/) are discovered internally.
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/home/test/.archon/workspaces',
-        expect.any(Function)
+        expect.any(Function),
+        providerRegistry
       );
     });
 
@@ -1587,6 +1599,7 @@ describe('orchestrator-agent handleMessage', () => {
       expect(mockDiscoverWorkflows).toHaveBeenCalledWith(
         '/workspace/project',
         expect.any(Function),
+        providerRegistry,
         undefined // non-worktree cwd: source root is the cwd itself
       );
     });
@@ -1606,7 +1619,7 @@ describe('orchestrator-agent handleMessage', () => {
       );
 
       const seenRoots: (string | undefined)[] = [];
-      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, roots) => {
+      mockDiscoverWorkflows.mockImplementation(async (cwd, _loadConfig, _providers, roots) => {
         if (cwd === '/workspace/project') seenRoots.push(roots?.project ?? undefined);
         return { workflows: [], errors: [] };
       });

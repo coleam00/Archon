@@ -1,3 +1,4 @@
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
 import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from './node-record-reader';
 import {
@@ -78,11 +79,6 @@ import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/provider-contra
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
-import {
-  getProviderCapabilities,
-  getRegisteredProviders,
-  isRegisteredProvider,
-} from '@archon/providers';
 import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
 import { validateStructuredOutput } from './structured-output';
 import type {
@@ -213,7 +209,7 @@ import {
   type RetryClass,
   currentAdoptedRunDir,
   getRetryDelayMs,
-  RATE_LIMIT_MAX_RETRIES,
+  effectiveRetryMaxRetries,
   loadCommandPrompt,
   substituteWorkflowVariables,
   buildPromptWithContext,
@@ -555,6 +551,7 @@ function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefined): st
 }
 
 function applyPresetOptions(
+  providers: ProviderRegistry,
   provider: string,
   preset: ModelAliasPreset | undefined,
   node: DagNode,
@@ -573,7 +570,7 @@ function applyPresetOptions(
   // Shared with the chat orchestrator's `applyPresetToRequestOptions`, so the
   // same tier cannot mean one depth in a workflow and another in chat. The
   // classifier returns the reason; each caller keeps its own event namespace.
-  const decision = resolvePresetEffort(provider, preset.effort);
+  const decision = resolvePresetEffort(providers, provider, preset.effort);
   if (!decision.ok) {
     // Warn rather than silently drop it — fail-loud per the project's fail-fast
     // guideline. `unsupported` means the resolved provider has no reasoning
@@ -884,6 +881,28 @@ export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | nul
   return status === 'running' || status === 'paused';
 }
 
+async function waitForNodeRetry(
+  store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
+  runId: string,
+  nodeId: string,
+  delayMs: number
+): Promise<void> {
+  for (let remaining = delayMs; remaining > 0; ) {
+    // A failed status read is not a stop signal: keep waiting, as the streaming check does.
+    try {
+      if (!shouldContinueStreamingForStatus(await store.getWorkflowRunStatus(runId))) return;
+    } catch (statusErr) {
+      getLog().warn(
+        { err: statusErr as Error, workflowRunId: runId, nodeId },
+        'dag.status_check_failed'
+      );
+    }
+    const sliceMs = Math.min(remaining, CANCEL_CHECK_INTERVAL_MS);
+    await new Promise(resolve => setTimeout(resolve, sliceMs));
+    remaining -= sliceMs;
+  }
+}
+
 /** Throttle state for activity heartbeat writes (only used for stale/zombie detection) */
 const lastNodeActivityUpdate = new Map<string, number>();
 const ACTIVITY_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -1002,9 +1021,12 @@ async function runNodeRetryLoop(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
+  stepName: string,
   retryConfig: { maxRetries: number; delayMs: number; onError: 'transient' | 'all' },
   run: () => Promise<NodeExecutionResult>,
-  initialOutput: NodeExecutionResult
+  initialOutput: NodeExecutionResult,
+  iteration?: number
 ): Promise<NodeExecutionResult> {
   let output = initialOutput;
   let accumulatedCostUsd: number | undefined;
@@ -1015,6 +1037,18 @@ async function runNodeRetryLoop(
   let sawRateLimit = false;
   let attempt = 0;
   while (true) {
+    if (attempt > 0) {
+      const status = await store.getWorkflowRunStatus(workflowRun.id);
+      if (!shouldContinueStreamingForStatus(status)) {
+        output = {
+          state: 'failed',
+          output: '',
+          error: `Workflow ${status ?? 'deleted'}`,
+          failureKind: 'cancelled',
+        };
+        break;
+      }
+    }
     output = await run();
     if (output.costUsd !== undefined) {
       accumulatedCostUsd = (accumulatedCostUsd ?? 0) + output.costUsd;
@@ -1029,9 +1063,11 @@ async function runNodeRetryLoop(
 
     const retryClass = retryableFailureClass(output, retryConfig.onError);
     if (retryClass === 'rate_limited') sawRateLimit = true;
-    const effectiveMaxRetries = sawRateLimit
-      ? Math.max(retryConfig.maxRetries, RATE_LIMIT_MAX_RETRIES)
-      : retryConfig.maxRetries;
+    const effectiveMaxRetries = effectiveRetryMaxRetries(
+      retryConfig.maxRetries,
+      retryClass,
+      sawRateLimit
+    );
     if (retryClass === undefined || attempt >= effectiveMaxRetries) break;
 
     const delayMs = getRetryDelayMs(retryClass, attempt, retryConfig.delayMs);
@@ -1040,13 +1076,19 @@ async function runNodeRetryLoop(
         nodeId: node.id,
         attempt: attempt + 1,
         maxRetries: effectiveMaxRetries,
+        retryClass,
         delayMs,
         error: output.error,
       },
       'dag_node_transient_retry'
     );
 
-    const errorKind = retryClass === 'unknown' ? 'error' : 'transient error';
+    const errorKind =
+      retryClass === 'overloaded'
+        ? 'provider capacity error'
+        : retryClass === 'unknown'
+          ? 'error'
+          : 'transient error';
     await safeSendMessage(
       platform,
       conversationId,
@@ -1054,7 +1096,20 @@ async function runNodeRetryLoop(
       { workflowId: workflowRun.id, nodeName: node.id }
     );
 
-    await new Promise(resolve => setTimeout(resolve, delayMs));
+    await store.createWorkflowEvent({
+      workflow_run_id: workflowRun.id,
+      event_type: 'node_retry_scheduled',
+      step_name: stepName,
+      data: {
+        nodeId: node.id,
+        retry_class: retryClass,
+        retry_attempt: attempt + 1,
+        max_retries: effectiveMaxRetries,
+        delay_ms: delayMs,
+        ...(iteration !== undefined ? { iteration } : {}),
+      },
+    });
+    await waitForNodeRetry(store, workflowRun.id, node.id, delayMs);
     attempt++;
   }
   output.costUsd = accumulatedCostUsd;
@@ -1076,18 +1131,32 @@ async function runDeterministicNodeWithRetry(
   platform: IWorkflowPlatform,
   conversationId: string,
   workflowRun: WorkflowRun,
-  run: () => Promise<NodeExecutionResult>
+  store: Pick<WorkflowDeps['store'], 'createWorkflowEvent' | 'getWorkflowRunStatus'>,
+  stepName: string,
+  run: () => Promise<NodeExecutionResult>,
+  iteration?: number
 ): Promise<NodeExecutionResult> {
   const retryConfig = getExplicitNodeRetryConfig(node);
   // No explicit retry: preserve the single-attempt deterministic-node default.
   if (!retryConfig) {
     return run();
   }
-  return runNodeRetryLoop(node, platform, conversationId, workflowRun, retryConfig, run, {
-    state: 'failed',
-    output: '',
-    error: 'Node did not execute',
-  });
+  return runNodeRetryLoop(
+    node,
+    platform,
+    conversationId,
+    workflowRun,
+    store,
+    stepName,
+    retryConfig,
+    run,
+    {
+      state: 'failed',
+      output: '',
+      error: 'Node did not execute',
+    },
+    iteration
+  );
 }
 
 /**
@@ -1552,6 +1621,7 @@ export function substituteLoopPrevRefs(
  * Capability warnings inform users when features are unsupported.
  */
 async function resolveNodeProviderAndModel(
+  providers: ProviderRegistry,
   node: DagNode,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -1632,17 +1702,19 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  if (!isRegisteredProvider(provider)) {
+  const descriptor = providers.get(provider);
+  if (!descriptor) {
     throw new Error(
       `Node '${node.id}': unknown provider '${provider}'. ` +
-        `Registered: ${getRegisteredProviders()
+        `Registered: ${providers
+          .list()
           .map(p => p.id)
           .join(', ')}`
     );
   }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
-  const caps = getProviderCapabilities(provider);
+  const caps = descriptor.capabilities;
 
   // `webSearchMode:` is Codex's alone — no other provider reads it, and #2556
   // decided it keeps no node-level form, making it the single workflow-level
@@ -1781,6 +1853,7 @@ async function resolveNodeProviderAndModel(
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
   const presetEffortRejection = applyPresetOptions(
+    providers,
     provider,
     effectivePreset,
     node,
@@ -2266,7 +2339,7 @@ async function executeNodeInternal(
   // structured-output validation miss, re-run the stream with the schema errors
   // appended. Enforced providers and non-output_format nodes get 0 reasks.
   const maxReasks =
-    getProviderCapabilities(provider).structuredOutput === 'best-effort' &&
+    requireProvider(ctx.deps.providers, provider).capabilities.structuredOutput === 'best-effort' &&
     nodeOptions?.outputFormat
       ? STRUCTURED_OUTPUT_MAX_REASKS
       : 0;
@@ -5614,11 +5687,18 @@ async function executeLoopNode(
     ): Promise<boolean> => {
       const retryClass = retryClassOf(failure.failureKind);
       if (retryClass === 'rate_limited') iterSawRateLimit = true;
-      if (retryClass !== 'transient' && retryClass !== 'rate_limited') return false;
+      if (
+        retryClass !== 'transient' &&
+        retryClass !== 'rate_limited' &&
+        retryClass !== 'overloaded'
+      )
+        return false;
       const message = failure.error;
-      const maxRetries = iterSawRateLimit
-        ? Math.max(DEFAULT_NODE_MAX_RETRIES, RATE_LIMIT_MAX_RETRIES)
-        : DEFAULT_NODE_MAX_RETRIES;
+      const maxRetries = effectiveRetryMaxRetries(
+        DEFAULT_NODE_MAX_RETRIES,
+        retryClass,
+        iterSawRateLimit
+      );
       if (attempt >= maxRetries) return false;
       const delayMs = getRetryDelayMs(retryClass, attempt, DEFAULT_NODE_RETRY_DELAY_MS);
       getLog().warn(
@@ -5627,6 +5707,7 @@ async function executeLoopNode(
           iteration: i,
           attempt: attempt + 1,
           maxRetries,
+          retryClass,
           delayMs,
           error: message,
         },
@@ -5635,14 +5716,39 @@ async function executeLoopNode(
       await safeSendMessage(
         platform,
         conversationId,
-        `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with a transient error (attempt ${String(attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
+        `⚠️ Loop \`${node.id}\` iteration ${String(i)} failed with ${retryClass === 'overloaded' ? 'a provider capacity error' : 'a transient error'} (attempt ${String(attempt + 1)}/${String(maxRetries + 1)}). Retrying in ${String(Math.round(delayMs / 1000))}s...`,
         msgContext
       );
-      await new Promise(resolve => setTimeout(resolve, delayMs));
+      await deps.store.createWorkflowEvent({
+        workflow_run_id: workflowRun.id,
+        event_type: 'node_retry_scheduled',
+        step_name: stepName,
+        data: {
+          nodeId: node.id,
+          iteration: i,
+          retry_class: retryClass,
+          retry_attempt: attempt + 1,
+          max_retries: maxRetries,
+          delay_ms: delayMs,
+        },
+      });
+      await waitForNodeRetry(deps.store, workflowRun.id, node.id, delayMs);
       return true;
     };
 
     iterationAttempt: for (let iterRetry = 0; ; iterRetry++) {
+      if (iterRetry > 0) {
+        const status = await deps.store.getWorkflowRunStatus(workflowRun.id);
+        if (!shouldContinueStreamingForStatus(status)) {
+          return failLoopNode(`Workflow ${status ?? 'deleted'}`, {
+            failureKind: 'cancelled',
+            costUsd: loopTotalCostUsd,
+            ...(loopTotalTokens !== undefined ? { tokens: loopTotalTokens } : {}),
+            loopIterations: i - 1,
+            data: { status: status ?? 'deleted', iteration: i },
+          });
+        }
+      }
       // A failed attempt's session is not the one the iteration completed in.
       iterationSessionId = undefined;
       let iterationAbortController = new AbortController();
@@ -5715,7 +5821,8 @@ async function executeLoopNode(
       const wantsStructured = resolvedOptions?.outputFormat !== undefined;
       const maxReasks =
         wantsStructured &&
-        getProviderCapabilities(workflowProvider).structuredOutput === 'best-effort'
+        requireProvider(ctx.deps.providers, workflowProvider).capabilities.structuredOutput ===
+          'best-effort'
           ? STRUCTURED_OUTPUT_MAX_REASKS
           : 0;
 
@@ -7103,6 +7210,7 @@ async function executeApprovalNode(
       tier: resolvedTier,
       effort: resolvedEffort,
     } = await resolveNodeProviderAndModel(
+      ctx.deps.providers,
       syntheticNode,
       workflowProvider,
       workflowModel,
@@ -7724,6 +7832,7 @@ export async function resolveFanOutChildDefinition(
     const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
+      deps.providers,
       sourceRoots
     );
     // Discovery qualified a pack's composed targets to that pack, so a support workflow
@@ -9420,6 +9529,7 @@ async function settleSequentially(
  */
 async function runLayers(parentCtx: RunLayersContext): Promise<void> {
   const ctx = parentCtx;
+  const providers = ctx.deps.providers;
   // Lifecycle events expose only the immediate enclosing iteration; artifact
   // identity retains the complete outermost-to-innermost lineage.
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
@@ -9787,6 +9897,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                     ctx.platform,
                     ctx.conversationId,
                     ctx.workflowRun,
+                    ctx.deps.store,
+                    ctx.stepNamePrefix + node.id,
                     () =>
                       executeBashNode(
                         ctx,
@@ -9797,7 +9909,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                         ctx.stepNamePrefix,
                         iteration,
                         ctx.bodyLoopUserInput ?? ''
-                      )
+                      ),
+                    iteration
                   );
                   return {
                     nodeId: node.id,
@@ -9826,6 +9939,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   ctx.platform,
                   ctx.conversationId,
                   ctx.workflowRun,
+                  ctx.deps.store,
+                  ctx.stepNamePrefix + node.id,
                   () =>
                     executeScriptNode(
                       ctx,
@@ -9836,7 +9951,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                       ctx.stepNamePrefix,
                       iteration,
                       ctx.bodyLoopUserInput ?? ''
-                    )
+                    ),
+                  iteration
                 );
                 return {
                   nodeId: node.id,
@@ -9869,6 +9985,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   tier: resolvedLoopTier,
                   effort: resolvedLoopEffort,
                 } = await resolveNodeProviderAndModel(
+                  providers,
                   node,
                   ctx.workflowProvider,
                   ctx.workflowModel,
@@ -9921,6 +10038,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   tier: loopGroupTier,
                   preset: loopGroupPreset,
                 } = await resolveNodeProviderAndModel(
+                  providers,
                   node,
                   ctx.workflowProvider,
                   ctx.workflowModel,
@@ -10044,6 +10162,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               tier: resolvedTier,
               effort: resolvedEffort,
             } = await resolveNodeProviderAndModel(
+              providers,
               node,
               ctx.workflowProvider,
               ctx.workflowModel,
@@ -10229,6 +10348,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               ctx.platform,
               ctx.conversationId,
               ctx.workflowRun,
+              ctx.deps.store,
+              ctx.stepNamePrefix + node.id,
               getEffectiveNodeRetryConfig(node),
               async () => {
                 // Fresh per attempt: an attempt after a transient failure observes
@@ -10256,7 +10377,8 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   attemptTypedArtifactsFile
                 );
               },
-              { state: 'failed', output: '', error: 'Node did not execute' } as NodeExecutionResult
+              { state: 'failed', output: '', error: 'Node did not execute' },
+              iteration
             );
             const output = await assertCheckoutUntouched(
               node,
@@ -10616,14 +10738,15 @@ export function visitProviderInvokingNodes(
  * skipped here — they fail later with a clearer "unknown provider" error.
  */
 export function collectContainerIncompatibleProviders(
+  providers: ProviderRegistry,
   nodes: readonly DagNode[],
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (_node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
+    const descriptor = providers.get(provider);
+    if (descriptor && !descriptor.capabilities.containerExec) incompatible.add(provider);
   });
   return incompatible;
 }
@@ -10669,14 +10792,16 @@ export interface ScopedCapabilityMismatch {
  * they fail later with a clearer "unknown provider" error.
  */
 export function collectScopedCapabilityMismatches(
+  providers: ProviderRegistry,
   nodes: readonly DagNode[],
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): ScopedCapabilityMismatch[] {
   const mismatches: ScopedCapabilityMismatch[] = [];
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    const capabilities = unsupportedScopedCapabilities(node, getProviderCapabilities(provider));
+    const descriptor = providers.get(provider);
+    if (!descriptor) return;
+    const capabilities = unsupportedScopedCapabilities(node, descriptor.capabilities);
     if (capabilities.length > 0) mismatches.push({ nodeId: node.id, provider, capabilities });
   });
   return mismatches;
@@ -10715,14 +10840,14 @@ export type StrictSchemaViolation = StrictSchemaIssue & {
  * opt-out: the workflow owner chose a provider that accepts optional-by-omission.
  */
 export function collectStrictSchemaViolations(
+  providers: ProviderRegistry,
   nodes: readonly (DagNode | IncludeDirective)[],
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): StrictSchemaViolation[] {
   const violations: StrictSchemaViolation[] = [];
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) return;
+    if (!providers.get(provider)?.capabilities.requiresAllPropertiesRequired) return;
     // Only nodes whose output_format is enforced by the engine — gate/loop_group
     // schemas are inert even when present, so their issues cost nothing.
     if (!isOutputFormatEnforced(node)) return;
@@ -11183,11 +11308,13 @@ export async function executeDagWorkflow(
     priorNodeSessions,
     workflowSourceRoots,
   } = options;
+  const providers = deps.providers;
   const dagStartTime = Date.now();
 
   // Scoped-capability fail-fast: before ANY node runs, so no node spends in a run
   // that would later reach a node whose MCP servers, skills or plugins cannot load.
   const capabilityMismatches = collectScopedCapabilityMismatches(
+    providers,
     workflow.nodes,
     workflowProvider,
     aiProfile
@@ -11202,6 +11329,7 @@ export async function executeDagWorkflow(
   // asked for isolation and must get it or a clear error.
   if (execContext.kind === 'container') {
     const incompatible = collectContainerIncompatibleProviders(
+      providers,
       workflow.nodes,
       workflowProvider,
       aiProfile
@@ -11267,7 +11395,12 @@ export async function executeDagWorkflow(
   // coverage). Container scoping is irrelevant — this fires on host too, and it
   // protects the setup costs a first-turn 400 would otherwise burn.
   {
-    const violations = collectStrictSchemaViolations(workflow.nodes, workflowProvider, aiProfile);
+    const violations = collectStrictSchemaViolations(
+      providers,
+      workflow.nodes,
+      workflowProvider,
+      aiProfile
+    );
     if (violations.length > 0) {
       const [first] = violations;
       const more = violations.length > 1 ? ` (+${violations.length - 1} more)` : '';

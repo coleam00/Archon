@@ -1,5 +1,6 @@
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as sqlWorkflow from '@archon/core/db/workflows';
+import { providerRegistry } from '@archon/providers';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import { prepareRunAiConfiguration, assertRunCredentials } from '@archon/workflows/run-preflight';
@@ -146,7 +147,7 @@ function applyPresetToRequestOptions(
   // is shared with `applyPresetOptions` in the DAG executor rather than
   // restated, so the same tier cannot mean different depths in chat and in a
   // workflow.
-  const decision = resolvePresetEffort(provider, preset.effort);
+  const decision = resolvePresetEffort(providerRegistry, provider, preset.effort);
   if (!decision.ok) {
     // `unsupported` = the provider has no reasoning control at all. Warn instead
     // of silently dropping.
@@ -247,8 +248,8 @@ export interface TitleRequest {
 /**
  * Resolve provider + request options for conversation-title generation (#1855).
  *
- * Server entry points that fire title generation outside a full chat turn
- * (create-with-message, web workflow run) resolve the `small` tier here —
+ * Entry points that fire title generation outside a full chat turn
+ * (create-with-message, web workflow run, CLI workflow run) resolve the `small` tier here —
  * config tiers plus per-user prefs when a userId is available — instead of
  * letting the provider fall through to its raw config-default model, which
  * the active account may not support (e.g. `gpt-5.3-codex` on ChatGPT-plan
@@ -261,10 +262,11 @@ export interface TitleRequest {
  */
 export async function resolveTitleRequest(
   fallbackProvider: string,
-  userId?: string
+  userId?: string,
+  repoPath?: string
 ): Promise<TitleRequest> {
   try {
-    const config = await loadConfig();
+    const config = await loadConfig(repoPath);
     const userAiPrefs = userId ? await resolveUserAiPrefsForChat(userId) : {};
     let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
     let aiProfile: ReturnType<typeof buildAiProfile>;
@@ -1095,6 +1097,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   if (adoptionLane?.kind === 'reuse-worktree') {
     // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
     // instead of cutting a fresh one (same shape as the background dispatch in
@@ -1147,7 +1150,10 @@ async function dispatchOrchestratorWorkflowOwned(
         userId
       );
       cwd = result.cwd;
-      if (result.status === 'new') cutFromCommit = result.cutFromCommit;
+      if (result.status === 'new') {
+        cutFromCommit = result.cutFromCommit;
+        ownedWorktree = result.ownedWorktree;
+      }
     } catch (error) {
       if (error instanceof IsolationBlockedError) {
         getLog().warn(
@@ -1484,6 +1490,7 @@ async function dispatchOrchestratorWorkflowOwned(
           capturedSourceOwner: owner,
           inputs: resolvedInputs,
           ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+          ownedWorktree,
           ...(options?.adoptRunId
             ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
             : options?.supersedesRunId
@@ -1544,6 +1551,7 @@ async function captureFreshSource(
       const { workflows: capturedWorkflows } = await discoverWorkflowsWithConfig(
         runCwd,
         loadConfig,
+        providerRegistry,
         preparedSource.roots
       );
       const reResolved = resolveWorkflowName(
@@ -1802,7 +1810,11 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically
     // by discoverWorkflowsWithConfig — no option needed.
-    const result = await discoverWorkflowsWithConfig(getArchonWorkspacesPath(), loadConfig);
+    const result = await discoverWorkflowsWithConfig(
+      getArchonWorkspacesPath(),
+      loadConfig,
+      providerRegistry
+    );
     workflows = [...result.workflows];
     allErrors.push(...result.errors);
   } catch (error) {
@@ -1862,6 +1874,7 @@ async function discoverAllWorkflows(conversation: Conversation): Promise<Discove
         const repoResult = await discoverWorkflowsWithConfig(
           workflowCwd,
           () => Promise.resolve(loadedConfig),
+          providerRegistry,
           workflowSourceRoot === undefined ? undefined : liveSourceRoots(workflowSourceRoot)
         );
         const workflowMap = new Map(workflows.map(w => [w.workflow.name, w]));

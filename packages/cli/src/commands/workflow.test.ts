@@ -1,4 +1,5 @@
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
+import { providerRegistry } from '@archon/providers';
 mock.module('@archon/core/services/provider-admission', () => ({
   getAgentProvider: () => ({
     checkCredential: async () => ({ state: 'not_checked', source: 'native' }),
@@ -207,8 +208,10 @@ mock.module('@archon/core/services/run-live-owner', () => ({
 mock.module(
   '@archon/core/services/cleanup-service',
   (): {
+    reclaimRunWorktree: () => Promise<{ warnings: string[] }>;
     reclaimContainerEnv: typeof mockReclaimContainerEnv;
   } => ({
+    reclaimRunWorktree: async () => ({ warnings: [] }),
     reclaimContainerEnv: mockReclaimContainerEnv,
   })
 );
@@ -279,7 +282,9 @@ mock.module('@archon/paths', () => ({
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
   configureIsolation: mock(() => undefined),
   // Marked rather than reimplemented: these tests prove a failure path routes
   // through the classifier, while what the real one produces is the isolation
@@ -294,7 +299,11 @@ mock.module('@archon/isolation', () => ({
         branchName: 'test-branch',
         status: 'active',
         createdAt: new Date(),
-        metadata: { adopted: false },
+        metadata: {
+          provenance: 'created',
+          adopted: false,
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        },
       })
     ),
     healthCheck: mock(() => Promise.resolve(true)),
@@ -329,6 +338,7 @@ mock.module('@archon/core', () => ({
     Promise.resolve({ defaults: {}, assistant: 'claude', assistants: { claude: {} }, commands: {} })
   ),
   generateAndSetTitle: mock(() => Promise.resolve()),
+  resolveTitleRequest: mock((provider: string) => Promise.resolve({ provider, options: {} })),
   loadRepoConfig: mock(() => Promise.resolve(null)),
   getUserAiPrefs: mock(() => Promise.resolve({})),
   createWorkflowStore: mock(() => ({
@@ -632,17 +642,24 @@ function statusRuns(runs: unknown[]): {
   return { runs, total: runs.length, counts: EMPTY_STATUS_COUNTS };
 }
 
+const mockLookupWorkflowRun = mock<typeof import('@archon/core/db/workflows').getWorkflowRun>(
+  async () => null
+);
+const mockCancelWorkflowRunCommand = mock<
+  typeof import('@archon/core/db/workflows').cancelWorkflowRun
+>(async () => ({ cancelled: true }));
+
 mock.module('@archon/core/db/workflows', () => ({
   createWorkflowRun: mockCreateWorkflowRun,
   getActiveWorkflowRun: mock(() => Promise.resolve(null)),
   getWorkflowRunStatus: mock(() => Promise.resolve(null)),
   failWorkflowRun: mock(() => Promise.resolve()),
-  cancelWorkflowRun: mock(() => Promise.resolve({ cancelled: true })),
+  cancelWorkflowRun: mockCancelWorkflowRunCommand,
   findChildRuns: mock(() => Promise.resolve([])),
   getRunAncestry: mock(() => Promise.resolve([])),
   findResumableRun: mock(() => Promise.resolve(null)),
   resumeWorkflowRun: mock(() => Promise.resolve(null)),
-  getWorkflowRun: mock(() => Promise.resolve(null)),
+  getWorkflowRun: mockLookupWorkflowRun,
   findAdoptingRuns: mock(() => Promise.resolve([])),
   findWorkflowRunsByIdPrefix: mock(() => Promise.resolve([])),
   updateWorkflowRun: mock(() => Promise.resolve()),
@@ -828,6 +845,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
       requestDetachedRunStop: mockRequestDetachedRunStop,
       isRunOwnedByThisProcess: () => false,
       isRunOwnerAnswering: mockIsRunOwnerAnswering,
+      reclaimRunWorktree: async () => ({ warnings: [] }),
       reclaimContainerEnv: mockReclaimContainerEnv,
     }),
 }));
@@ -835,7 +853,7 @@ mock.module('@archon/core/workflows/sql-host', () => ({
 const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
 const coreCapabilities = await import('@archon/core');
 const { createSqlWorkflowOperations } = await import('@archon/core/workflows/sql-host');
-function createTestWorkflowHost(): import('./workflow-host').WorkflowCommandHost {
+function createTestWorkflowHost(): import('@archon/core/workflows/host-store').WorkflowHost {
   const host = createSqlWorkflowHost();
   host.deps.store.createWorkflowEvent = mockCreateWorkflowEvent;
   host.deps.store.persistWorkflowEvent = mockPersistWorkflowEvent;
@@ -1314,7 +1332,11 @@ describe('workflowListCommand', () => {
 
     // After the globalSearchPath refactor, discovery reads ~/.archon/workflows/
     // on every call with no option — every caller inherits home-scope for free.
-    expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith('/test/path', expect.any(Function));
+    expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith(
+      '/test/path',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should throw error when discoverWorkflows fails', async () => {
@@ -2859,6 +2881,7 @@ describe('workflowRunCommand', () => {
     expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/path',
       expect.any(Function),
+      providerRegistry,
       expect.objectContaining({ project: '/test/capture/project' })
     );
     expect(consoleSpy).toHaveBeenCalledWith(
@@ -7985,6 +8008,8 @@ describe('write command --json output', () => {
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
     stdoutSpy = spyOnJsonStdout();
+    mockCancelWorkflowRunCommand.mockReset();
+    mockCancelWorkflowRunCommand.mockResolvedValue({ cancelled: true });
     mockRequestDetachedRunStop.mockReset();
     mockRequestDetachedRunStop.mockImplementation(noOwnerAnswers);
   });
@@ -7992,6 +8017,36 @@ describe('write command --json output', () => {
   afterEach(() => {
     consoleSpy.mockRestore();
     stdoutSpy.mockRestore();
+  });
+
+  it('JSON reports failure when abandonment loses cancellation', async () => {
+    mockLookupWorkflowRun.mockResolvedValueOnce({
+      id: 'run-1',
+      workflow_name: 'test',
+      conversation_id: 'conv',
+      parent_conversation_id: null,
+      codebase_id: null,
+      status: 'running',
+      outcome: null,
+      user_message: '',
+      metadata: {},
+      started_at: new Date(),
+      completed_at: null,
+      last_activity_at: null,
+      working_path: null,
+      user_id: null,
+      parent_run_id: null,
+      adopted_from_run_id: null,
+      output_root: null,
+      checkout_baseline: null,
+      origin: null,
+    });
+    mockCancelWorkflowRunCommand.mockResolvedValueOnce({ cancelled: false });
+    await workflowAbandonCommand(createTestWorkflowHost(), 'run-1', true);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      ok: false,
+      error: expect.stringContaining('changed before abandonment'),
+    });
   });
 
   it('abandon --json emits a structured cancelled result', async () => {
@@ -10326,7 +10381,11 @@ describe('workflowResumeCommand', () => {
       expect.objectContaining({ codebaseId: 'cb-bad' }),
       'cli.workflow_resume_codebase_lookup_failed'
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('fails loudly when codebase row is missing during resume', async () => {
@@ -10350,7 +10409,11 @@ describe('workflowResumeCommand', () => {
     await expect(
       workflowResumeCommand(createTestWorkflowHost(), 'run-missing-codebase')
     ).rejects.toThrow("references codebase 'cb-missing', but that codebase no longer exists");
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should discover workflows from codebase.default_cwd, not working_path', async () => {
@@ -10390,7 +10453,8 @@ describe('workflowResumeCommand', () => {
     // path directly — #1663's guarantee, unchanged.
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -10418,7 +10482,11 @@ describe('workflowResumeCommand', () => {
     }
 
     // No codebase → falls back to working_path (preserves existing behavior)
-    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/tmp/old-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('resolves a resumed worktree through its Git-proven source checkout (#2127)', async () => {
@@ -10595,7 +10663,11 @@ describe('workflowApproveCommand', () => {
     ).rejects.toThrow(
       "Approved but failed to resume workflow 'implement': Workflow run 'run-approve-missing-codebase' references codebase 'cb-missing', but that codebase no longer exists"
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('fails with recorded-approval recovery when getCodebase throws during approve auto-resume', async () => {
@@ -10640,7 +10712,11 @@ describe('workflowApproveCommand', () => {
       expect.objectContaining({ runId: 'run-approve-codebase-error' }),
       'cli.workflow_approve_resume_failed'
     );
-    expect(discoverSpy).not.toHaveBeenCalledWith('/tmp/test-worktree', expect.any(Function));
+    expect(discoverSpy).not.toHaveBeenCalledWith(
+      '/tmp/test-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 
   it('should pass original platform conversation ID through to workflowRunCommand', async () => {
@@ -10736,7 +10812,8 @@ describe('workflowApproveCommand', () => {
 
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 });
@@ -11676,7 +11753,8 @@ describe('workflowRejectCommand', () => {
     // path directly — #1663's guarantee, unchanged.
     expect(discoverSpy).toHaveBeenCalledWith(
       '/users/me/source-repo-with-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11727,7 +11805,8 @@ describe('workflowRejectCommand', () => {
     );
     expect(discoverSpy).not.toHaveBeenCalledWith(
       '/tmp/worktree-without-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11777,7 +11856,8 @@ describe('workflowRejectCommand', () => {
     );
     expect(discoverSpy).not.toHaveBeenCalledWith(
       '/tmp/worktree-without-yaml',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
   });
 
@@ -11817,7 +11897,11 @@ describe('workflowRejectCommand', () => {
     }
 
     // No codebase → falls back to working_path (preserves existing behavior)
-    expect(discoverSpy).toHaveBeenCalledWith('/tmp/old-worktree', expect.any(Function));
+    expect(discoverSpy).toHaveBeenCalledWith(
+      '/tmp/old-worktree',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 });
 
@@ -13318,7 +13402,8 @@ describe('workflowTestCommand', () => {
     expect(gitModule.findRepoRoot).toHaveBeenCalledWith('/test/repository/tools');
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/repository',
-      expect.any(Function)
+      expect.any(Function),
+      providerRegistry
     );
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/test/repository', targetCwd: '/test/repository/tools' })
@@ -13755,7 +13840,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
         branchName: 'feature/live-pr',
         status: 'active' as const,
         createdAt: new Date(),
-        metadata: { adopted: true },
+        metadata: { provenance: 'adopted', adopted: true },
       })
     );
     (isolation.getIsolationProvider as ReturnType<typeof mock>).mockReturnValueOnce({
@@ -13795,7 +13880,7 @@ describe('workflowRunCommand — adopt lane source recapture (#2660/#2747)', () 
           branchName: 'feature/live-pr',
           status: 'active' as const,
           createdAt: new Date(),
-          metadata: { adopted: true },
+          metadata: { provenance: 'adopted', adopted: true },
         })
       ),
       healthCheck: mock(() => Promise.resolve(true)),

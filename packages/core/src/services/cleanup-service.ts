@@ -2,7 +2,13 @@
  * Cleanup service for isolation environments
  * Handles removal triggered by events, schedule, or commands
  */
-import type { IIsolationStore } from '@archon/isolation';
+import { lstat } from 'node:fs/promises';
+import { readOwnedWorktree, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  readWorktreeCreationId,
+  WorktreeLeftoverError,
+  type IIsolationStore,
+} from '@archon/isolation';
 import { retainedPlatformIds, retainsWorkspace } from '../platforms/registry';
 import * as isolationEnvDb from '../db/isolation-environments';
 import * as conversationDb from '../db/conversations';
@@ -14,6 +20,7 @@ import { getIsolationProvider, getPrState, ContainerBackend } from '@archon/isol
 import type { WorktreeStatusBreakdown, PrLookup, ContainerBackendConfig } from '@archon/isolation';
 import {
   hasUncommittedChanges,
+  isWorktreeRegistered,
   worktreeExists,
   getDefaultBranch,
   isBranchMerged,
@@ -399,7 +406,14 @@ export async function removeEnvironment(
       getLog().warn({ envId, warnings: destroyResult.warnings }, 'env_partial_cleanup');
     }
 
-    // Mark as destroyed in database
+    if (!destroyResult.worktreeRemoved || !destroyResult.directoryClean) {
+      return {
+        worktreeRemoved: destroyResult.worktreeRemoved,
+        branchDeleted: destroyResult.branchDeleted,
+        warnings: destroyResult.warnings,
+        skippedReason: 'filesystem removal incomplete; environment remains active',
+      };
+    }
     await isolationEnvDb.updateStatus(envId, 'destroyed');
 
     getLog().info({ envId, workingPath: env.working_path }, 'env_removed');
@@ -410,24 +424,7 @@ export async function removeEnvironment(
       warnings: destroyResult.warnings,
     };
   } catch (error) {
-    const err = error as Error & { code?: string; stderr?: string };
-    const errorText = `${err.message} ${err.stderr ?? ''}`;
-
-    // Handle "directory not found" errors gracefully
-    // Be specific: check that the error is about the worktree path, not unrelated paths
-    const isPathNotFoundError =
-      err.code === 'ENOENT' ||
-      (errorText.includes(env.working_path) &&
-        (errorText.includes('No such file or directory') ||
-          errorText.includes('does not exist') ||
-          errorText.includes('is not a working tree')));
-
-    if (isPathNotFoundError) {
-      await isolationEnvDb.updateStatus(envId, 'destroyed');
-      getLog().info({ envId }, 'env_removed_externally');
-      return { worktreeRemoved: true, branchDeleted: false, warnings: [] };
-    }
-
+    const err = error as Error;
     getLog().error({ err, envId }, 'env_remove_failed');
     throw err;
   }
@@ -1012,4 +1009,114 @@ export function stopCleanupScheduler(): void {
  */
 export function isSchedulerRunning(): boolean {
   return cleanupIntervalId !== null;
+}
+
+export interface ReleasedWorktree {
+  path: string;
+  branch: string;
+}
+
+export interface RunWorktreeRelease {
+  released?: ReleasedWorktree;
+  warnings: string[];
+}
+
+async function reclaimOwnedWorktree(
+  run: WorkflowRun,
+  store: IIsolationStore
+): Promise<RunWorktreeRelease> {
+  const proof = readOwnedWorktree(run.metadata);
+  if (!proof) {
+    if (run.metadata?.isolation === 'container') return { warnings: [] };
+    const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+    if (codebase?.kind === 'folder') return { warnings: [] };
+    return {
+      warnings: run.working_path
+        ? [
+            `Retained checkout ${run.working_path} for run ${run.id}: no valid proof this run created it. Inspect it and use explicit isolation cleanup if appropriate.`,
+          ]
+        : [],
+    };
+  }
+  const refuse = (reason: string): never => {
+    throw new Error(reason);
+  };
+  const env = await store.getById(proof.envId);
+  if (
+    env?.provider !== 'worktree' ||
+    env.codebase_id !== run.codebase_id ||
+    env.working_path !== run.working_path ||
+    readWorktreeCreationId(env.metadata) !== proof.creationId
+  ) {
+    return refuse('creation proof does not match its isolation record');
+  }
+  const codebase = run.codebase_id ? await codebaseDb.getCodebase(run.codebase_id) : null;
+  if (!codebase) return refuse('canonical repository is unavailable');
+  const repo = toRepoPath(codebase.default_cwd);
+  const path = toWorktreePath(env.working_path);
+  const pathExists = async (): Promise<boolean> => {
+    try {
+      await lstat(path);
+      return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      return false;
+    }
+  };
+  if (!(await pathExists())) {
+    if (await isWorktreeRegistered(repo, path))
+      return refuse('checkout is absent but still registered with Git');
+    if (env.status !== 'destroyed') await store.updateStatus(env.id, 'destroyed');
+    return { warnings: [] };
+  }
+  if (env.status === 'destroyed')
+    return refuse('a path exists for an already destroyed environment');
+  let marked = false;
+  try {
+    const result = await getIsolationProvider().destroy(path, {
+      canonicalRepoPath: repo,
+      guardedRemoval: {
+        creationId: proof.creationId,
+        // The record is marked destroyed before the claimant check, so a run that
+        // reused it after this point fails claimPendingWorkflowRun instead of
+        // starting in a checkout that is about to disappear.
+        beforeRemove: async () => {
+          await store.updateStatus(env.id, 'destroyed');
+          marked = true;
+          const user = await isolationEnvDb.getLiveRunOwningEnv(env.id);
+          if (user) refuse(`claimable run ${user.id} (${user.status}) also uses this checkout`);
+        },
+      },
+    });
+    if (!result.worktreeRemoved || !result.directoryClean)
+      return refuse('filesystem removal incomplete');
+    return { released: { path, branch: env.branch_name }, warnings: result.warnings };
+  } catch (err) {
+    if (marked && (await pathExists())) await store.updateStatus(env.id, 'active');
+    throw err;
+  }
+}
+
+/**
+ * Remove the worktree an abandoned run created, discarding uncommitted work.
+ * The branch is kept, so committed work stays recoverable.
+ */
+export async function reclaimRunWorktree(
+  run: WorkflowRun,
+  store: IIsolationStore
+): Promise<RunWorktreeRelease> {
+  try {
+    return await reclaimOwnedWorktree(run, store);
+  } catch (err) {
+    const proof = readOwnedWorktree(run.metadata);
+    // A leftover Git no longer tracks cannot be finished by a retry; its message says so.
+    const next =
+      err instanceof WorktreeLeftoverError
+        ? ''
+        : `. Fix the cause and retry workflow abandon ${run.id}.`;
+    throw new Error(
+      `Could not release worktree for run ${run.id}, environment ${proof?.envId ?? '(unaccounted)'}, checkout ${run.working_path ?? '(missing)'}: ${(err as Error).message}${next}`,
+      { cause: err }
+    );
+  }
 }

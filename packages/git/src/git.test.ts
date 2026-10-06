@@ -77,6 +77,8 @@ import * as git from './index';
 const repo = git.toRepoPath;
 const branch = git.toBranchName;
 const worktree = git.toWorktreePath;
+/** A path as listWorktrees returns it: git's output in this platform's native form. */
+const listed = (path: string): git.WorktreePath => worktree(git.toNativeWorktreePath(path));
 const trackTempRoot = trackTempRoots();
 
 /**
@@ -764,9 +766,9 @@ branch refs/heads/feature/auth
       const result = await git.listWorktrees(repo('/path/to/main'));
 
       expect(result).toHaveLength(2);
-      expect(result[0]).toEqual({ path: worktree('/path/to/main'), branch: branch('main') });
+      expect(result[0]).toEqual({ path: listed('/path/to/main'), branch: branch('main') });
       expect(result[1]).toEqual({
-        path: worktree('/path/to/feature'),
+        path: listed('/path/to/feature'),
         branch: branch('feature/auth'),
       });
     });
@@ -866,7 +868,7 @@ branch refs/heads/feature/auth
         repo('/workspace/main'),
         branch('feature/auth')
       );
-      expect(result).toBe(worktree('/workspace/worktrees/feature-auth'));
+      expect(result).toBe(listed('/workspace/worktrees/feature-auth'));
     });
 
     test('finds slugified branch match', async () => {
@@ -874,7 +876,7 @@ branch refs/heads/feature/auth
         repo('/workspace/main'),
         branch('feature-auth')
       );
-      expect(result).toBe(worktree('/workspace/worktrees/feature-auth'));
+      expect(result).toBe(listed('/workspace/worktrees/feature-auth'));
     });
 
     test('returns null when no match', async () => {

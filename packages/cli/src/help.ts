@@ -797,7 +797,7 @@ const orderedFlags: FlagHelp[] = [
   {
     spec: '--conversation-id <id>',
     description:
-      'Reuse a stable conversation scope across runs (enables\npersist_session resume between separate CLI invocations)',
+      "Correlation id for the run's messages. It creates no\nconversation and no persist_session scope",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
