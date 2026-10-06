@@ -32,6 +32,7 @@ export {
   CanonicalRepoPathUnavailableError,
   verifyWorktreeOwnership,
   isWorktreeRegistered,
+  readWorktreeRegistration,
   isSameWorktreePath,
   toNativeWorktreePath,
 } from './worktree';

@@ -593,26 +593,44 @@ export function isSameWorktreePath(
  * Whether Git still lists `worktreePath` as a worktree of `repoPath`.
  *
  * Unlike listWorktrees, this counts detached worktrees and lets a failed
- * `git worktree list` throw: a caller deletes files on a `false`. Git prints
- * symlink-resolved paths, so both sides are compared resolved; a path that no
- * longer exists resolves through its nearest existing ancestor.
+ * `git worktree list` throw: a caller deletes files on a `false`.
  */
 export async function isWorktreeRegistered(
   repoPath: RepoPath,
   worktreePath: string
 ): Promise<boolean> {
+  return (await readWorktreeRegistration(repoPath, worktreePath)) !== null;
+}
+
+/**
+ * Git's registration of `worktreePath` under `repoPath`, or null when it is not
+ * listed. `lockReason` is null when unlocked and '' for a lock without a reason.
+ *
+ * Read from Git's admin entry, so it works after the checkout directory is gone.
+ * Git prints symlink-resolved paths, so both sides are compared resolved; a path
+ * that no longer exists resolves through its nearest existing ancestor.
+ */
+export async function readWorktreeRegistration(
+  repoPath: RepoPath,
+  worktreePath: string
+): Promise<{ lockReason: string | null } | null> {
   const { stdout } = await execFileAsync(
     'git',
     ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
     { timeout: 10000 }
   );
   const target = await resolveThroughExistingAncestor(worktreePath);
-  for (const record of stdout.split('\0')) {
-    if (!record.startsWith('worktree ')) continue;
-    const listed = await resolveThroughExistingAncestor(record.slice('worktree '.length));
-    if (isSameWorktreePath(listed, target)) return true;
+  // -z ends each field with NUL and each record with an extra NUL.
+  for (const record of stdout.split('\0\0')) {
+    const fields = record.split('\0');
+    const listedPath = fields.find(field => field.startsWith('worktree '));
+    if (!listedPath) continue;
+    const listed = await resolveThroughExistingAncestor(listedPath.slice('worktree '.length));
+    if (!isSameWorktreePath(listed, target)) continue;
+    const locked = fields.find(field => field === 'locked' || field.startsWith('locked '));
+    return { lockReason: locked === undefined ? null : locked.slice('locked '.length) };
   }
-  return false;
+  return null;
 }
 
 async function resolveThroughExistingAncestor(path: string): Promise<string> {

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import type { IPlatformAdapter } from '../types';
 import type { Codebase } from '../types';

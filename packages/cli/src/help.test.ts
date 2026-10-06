@@ -270,8 +270,8 @@ Options:
   --follow                   For 'workflow logs': stream appended rows until the run ends
   --format <jsonl|text>      For 'workflow logs': jsonl (default) prints the exact transcript;
                              text renders it as progress lines for a human
-  --conversation-id <id>     Reuse a stable conversation scope across runs (enables
-                             persist_session resume between separate CLI invocations)
+  --conversation-id <id>     Correlation id for the run's messages. It creates no
+                             conversation and no persist_session scope
   --port <port>              Override server port for 'serve' (default: 3090)
   --download-only            Download web UI without starting the server
   --force                    For 'setup': overwrite existing values instead of merging

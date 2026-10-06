@@ -708,17 +708,22 @@ The provider adopts existing worktrees before creating new ones:
 2. **Branch match**: If a same-repository PR branch or a task request with `taskBranch.kind: 'existing'` has an existing worktree -> adopt
 
 Only a worktree whose setup finished can be adopted. `create()` adds every worktree already
-locked (`git worktree add --lock`) and releases the lock once setup — git identity, submodule
-init, configured file copies — completes, so the checkout is never visible as ready while it is
-still half-built. A setup failure removes the worktree it locked before rethrowing, so the next
-run creates a fresh one.
+locked (`git worktree add --lock --reason <attempt reason>`) and releases the lock once setup
+completes. Each creation attempt has a unique reason, so another attempt cannot remove its
+checkout. Existing directories that are not adoptable worktrees are refused and preserved.
 
-A worktree still carrying that lock is refused rather than adopted: either another run is
-setting it up right now, or a run died before finishing and left a checkout with no
-submodules. Both cases need an operator decision, so the error names the path and the command
-that clears it (`git worktree remove --force --force <path>`). The same error carries the path
-when the rollback itself cannot remove the worktree — a locked submodule `.git` file or a
-permission problem — because the leftover is then the operator's to delete.
+If add fails after creating the checkout (for example, a failing `post-checkout` hook), or
+later setup fails, rollback removes it only while its lock still matches this attempt and
+Git reports no tracked, untracked, or ignored changes and the index has no submodules or
+flags that can hide changes. Branches are preserved. An owned registration can also be
+removed when a failing hook has already removed its checkout directory.
+A dirty checkout or one whose ownership cannot be proved stays in place; the original error
+includes the leftover path and cleanup failure. Inspect it and preserve any changes before
+removing it.
+
+A worktree still carrying an Archon setup lock is refused rather than adopted: another run
+may still be setting it up, or setup may have failed. This includes locks created by older
+Archon versions. The operator decides whether to wait, finish setup and unlock it for reuse, or remove the checkout.
 
 ```typescript
 // Inside create()

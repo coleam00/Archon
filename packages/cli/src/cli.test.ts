@@ -15,7 +15,7 @@ import * as git from '@archon/git';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -25,6 +25,7 @@ import {
   rejectConfigOutsideRun,
   rejectModelOnContinue,
 } from './dispatch-guards';
+import { loadCliEnv } from './load-cli-env';
 
 const CLI_ENTRY = join(import.meta.dir, 'cli.ts');
 // The enclosing git worktree — a valid repo for the git gate, with a real
@@ -52,108 +53,144 @@ describe('forge user trust boundary', () => {
     }
   });
 
+  // The engine expresses a run's GitHub identity by setting the key (a token, or '' to
+  // scrub). An absent key is no opinion, so Archon's env files supply it. Exercised in
+  // process: a CLI subprocess per scenario is too slow on Windows runners.
   for (const key of GITHUB_TOKEN_KEYS) {
     it(`${key}: a run's credential state wins over Archon env files`, async () => {
-      const root = mkdtempSync(join(tmpdir(), 'archon-forge-run-token-'));
+      const root = mkdtempSync(join(tmpdir(), 'archon-run-token-'));
       const home = join(root, 'home');
-      const plugin = join(root, 'plugin.ts');
-      const marker = join(root, 'marker');
       mkdirSync(home);
       writeFileSync(join(home, '.env'), `${key}=home-test-token\n`);
-      writeFileSync(
-        plugin,
-        `import { writeFileSync } from 'node:fs';
-if (process.argv[3] === 'metadata') {
-  console.log(JSON.stringify({ protocol: 1, name: 'marker', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['checks.state'], token_env: [${JSON.stringify(key)}] }));
-} else {
-  const token = process.env.ARCHON_FORGE_TOKEN;
-  writeFileSync(process.argv[2], token === 'engine-test-token' ? 'engine' : token === 'home-test-token' ? 'home' : token === 'repo-test-token' ? 'repo' : 'absent-or-other');
-  const request = JSON.parse(await Bun.stdin.text());
-  console.log(JSON.stringify({ operationId: request.operationId, ok: true, result: { op: 'checks.state', value: { ref: request.ref, revision: 'marker', units: [], required: null, summary: { state: 'none', counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 } } } } }));
-}
-`
-      );
-      writeFileSync(
-        join(home, 'config.yaml'),
-        `forge:\n  plugins:\n    - plugin: marker\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(marker)}]\n  hosts:\n    forge.example: marker\n`
-      );
+      const saved = { ...process.env };
+      const cases = [
+        {
+          name: 'outside',
+          run: false,
+          inherited: undefined,
+          repoEnv: false,
+          gets: 'home-test-token',
+        },
+        {
+          name: 'absent',
+          run: true,
+          inherited: undefined,
+          repoEnv: false,
+          gets: 'home-test-token',
+        },
+        {
+          name: 'absent-repo',
+          run: true,
+          inherited: undefined,
+          repoEnv: true,
+          gets: 'repo-test-token',
+        },
+        {
+          name: 'engine',
+          run: true,
+          inherited: 'engine-test-token',
+          repoEnv: false,
+          gets: 'engine-test-token',
+        },
+        {
+          name: 'engine-repo',
+          run: true,
+          inherited: 'engine-test-token',
+          repoEnv: true,
+          gets: 'engine-test-token',
+        },
+        { name: 'empty', run: true, inherited: '', repoEnv: false, gets: '' },
+        { name: 'empty-repo', run: true, inherited: '', repoEnv: true, gets: '' },
+      ] as const;
       try {
-        const db = new SqliteAdapter(join(home, 'archon.db'));
-        try {
-          await db.query(
-            "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('conversation', 'cli', 'credential-test')"
-          );
-          await db.query(
-            "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('credential-run', 'conversation', 'credential-test', '')"
-          );
-        } finally {
-          await db.close();
-        }
-        // The engine expresses a run's GitHub identity by setting the key (a token, or ''
-        // to scrub). An absent key is no opinion, so Archon's env files supply it.
-        const cases = [
-          { name: 'outside', run: false, inherited: undefined, repoEnv: false, gets: 'home' },
-          { name: 'absent', run: true, inherited: undefined, repoEnv: false, gets: 'home' },
-          { name: 'absent-repo', run: true, inherited: undefined, repoEnv: true, gets: 'repo' },
-          {
-            name: 'engine',
-            run: true,
-            inherited: 'engine-test-token',
-            repoEnv: false,
-            gets: 'engine',
-          },
-          {
-            name: 'engine-repo',
-            run: true,
-            inherited: 'engine-test-token',
-            repoEnv: true,
-            gets: 'engine',
-          },
-          { name: 'empty', run: true, inherited: '', repoEnv: false, gets: null },
-          { name: 'empty-repo', run: true, inherited: '', repoEnv: true, gets: null },
-        ] as const;
         for (const { name, run, inherited, repoEnv, gets } of cases) {
           const repo = join(root, name);
           mkdirSync(join(repo, '.archon'), { recursive: true });
           if (repoEnv) writeFileSync(join(repo, '.archon', '.env'), `${key}=repo-test-token\n`);
-          const env: NodeJS.ProcessEnv = {
+          process.env.ARCHON_HOME = home;
+          process.env.WORKFLOW_ID = run ? 'credential-run' : '';
+          if (inherited === undefined) delete process.env[key];
+          else process.env[key] = inherited;
+          await loadCliEnv(repo);
+          expect({ name, token: process.env[key] }).toEqual({ name, token: gets });
+        }
+      } finally {
+        for (const name of Object.keys(process.env)) {
+          if (!(name in saved)) delete process.env[name];
+        }
+        Object.assign(process.env, saved);
+        await removeTempTree(root);
+      }
+    });
+  }
+
+  // One end-to-end case proves cli.ts applies loadCliEnv's result to the credential a
+  // forge plugin receives.
+  it("a run's engine token reaches a forge plugin over both Archon env files", async () => {
+    const key = 'GH_TOKEN';
+    const root = mkdtempSync(join(tmpdir(), 'archon-forge-run-token-'));
+    const home = join(root, 'home');
+    const repo = join(root, 'repo');
+    const plugin = join(root, 'plugin.ts');
+    const marker = join(root, 'marker');
+    mkdirSync(home);
+    mkdirSync(join(repo, '.archon'), { recursive: true });
+    writeFileSync(join(home, '.env'), `${key}=home-test-token\n`);
+    writeFileSync(join(repo, '.archon', '.env'), `${key}=repo-test-token\n`);
+    writeFileSync(
+      plugin,
+      `import { writeFileSync } from 'node:fs';
+if (process.argv[3] === 'metadata') {
+  console.log(JSON.stringify({ protocol: 1, name: 'marker', version: '1', forge: 'test', hosts: ['forge.example'], capabilities: ['checks.state'], token_env: [${JSON.stringify(key)}] }));
+} else {
+  writeFileSync(process.argv[2], process.env.ARCHON_FORGE_TOKEN ?? 'absent');
+  const request = JSON.parse(await Bun.stdin.text());
+  console.log(JSON.stringify({ operationId: request.operationId, ok: true, result: { op: 'checks.state', value: { ref: request.ref, revision: 'marker', units: [], required: null, summary: { state: 'none', counts: { total: 0, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 } } } } }));
+}
+`
+    );
+    writeFileSync(
+      join(home, 'config.yaml'),
+      `forge:\n  plugins:\n    - plugin: marker\n      command: ${JSON.stringify(process.execPath)}\n      args: [${JSON.stringify(plugin)}, ${JSON.stringify(marker)}]\n  hosts:\n    forge.example: marker\n`
+    );
+    try {
+      const db = new SqliteAdapter(join(home, 'archon.db'));
+      try {
+        await db.query(
+          "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('conversation', 'cli', 'credential-test')"
+        );
+        await db.query(
+          "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ('credential-run', 'conversation', 'credential-test', '')"
+        );
+      } finally {
+        await db.close();
+      }
+      const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
+      const result = spawnSync(
+        process.execPath,
+        [CLI_ENTRY, 'forge', 'checks', '--data', JSON.stringify({ ref })],
+        {
+          cwd: repo,
+          encoding: 'utf8',
+          env: {
             PATH: process.env.PATH,
             HOME: root,
             USERPROFILE: root,
             ARCHON_HOME: home,
             ARCHON_TELEMETRY_DISABLED: '1',
             DATABASE_URL: '',
-            WORKFLOW_ID: run ? 'credential-run' : '',
-          };
-          if (inherited !== undefined) env[key] = inherited;
-          const ref = { repo: { host: 'forge.example', path: 'owner/repo' }, number: 7 };
-          const result = spawnSync(
-            process.execPath,
-            [CLI_ENTRY, 'forge', 'checks', '--data', JSON.stringify({ ref })],
-            { cwd: repo, encoding: 'utf8', env }
-          );
-          expect({ name, status: result.status, stderr: result.stderr }).toEqual({
-            name,
-            status: gets === null ? 1 : 0,
-            stderr: '',
-          });
-          if (gets === null) {
-            expect(JSON.parse(result.stdout)).toMatchObject({
-              ok: false,
-              error: { kind: 'no_credential' },
-            });
-            expect(existsSync(marker)).toBe(false);
-          } else {
-            expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
-            expect({ name, token: readFileSync(marker, 'utf8') }).toEqual({ name, token: gets });
-            rmSync(marker);
-          }
+            WORKFLOW_ID: 'credential-run',
+            [key]: 'engine-test-token',
+          },
         }
-      } finally {
-        await removeTempTree(root);
-      }
-    });
-  }
+      );
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: '' });
+      expect(JSON.parse(result.stdout)).toMatchObject({ ok: true });
+      expect(readFileSync(marker, 'utf8')).toBe('engine-test-token');
+    } finally {
+      await removeTempTree(root);
+    }
+  });
 
   it('keeps config and executable discovery user-scoped while accepting a repo credential', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-forge-trust-'));

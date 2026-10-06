@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { spyOn, mock, describe, test, expect, beforeEach } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
 import { testTimeout } from '@archon/paths/test-utils';

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import type { RunActor } from '../operations/run-authorization';
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';

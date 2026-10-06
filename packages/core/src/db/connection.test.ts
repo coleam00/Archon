@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { getDatabaseType, resetDatabase } from './connection';
 

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import { createMockQuery, createQueryResult, mockPostgresDialect } from '../test/mocks/database';
 

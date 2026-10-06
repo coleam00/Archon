@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { mock, describe, test, expect, beforeEach } from 'bun:test';
 import type { SaveUserGithubTokenParams } from '../db/user-github-token-store';
 

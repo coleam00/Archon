@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, afterEach, spyOn } from 'bun:test';
 import { SqliteAdapter } from './sqlite';
 import { getSchemaSQL } from '../bundled-schema';

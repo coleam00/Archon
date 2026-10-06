@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import { toBranchName } from '@archon/git';
 import type * as IsolationDb from '../db/isolation-environments';

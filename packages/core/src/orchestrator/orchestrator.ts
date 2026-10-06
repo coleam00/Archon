@@ -1,3 +1,4 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import {
@@ -497,11 +498,15 @@ async function dispatchBackgroundWorkflowOwned(
       );
     }
     codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
-    resolveChildIsolation = createCodebaseChildResolver(codebase, {
-      baseBranch: codebaseBaseBranch,
-      createdByPlatform: ctx.platform.getPlatformType(),
-      createdByUserId: ctx.userId,
-    });
+    resolveChildIsolation = createCodebaseChildResolver(
+      sqlIsolation.createIsolationStore(),
+      codebase,
+      {
+        baseBranch: codebaseBaseBranch,
+        createdByPlatform: ctx.platform.getPlatformType(),
+        createdByUserId: ctx.userId,
+      }
+    );
     if (workflow.worktree?.enabled === false) {
       // Respect an explicit worktree opt-out: skip isolation and run in the parent's cwd.
       getLog().info(

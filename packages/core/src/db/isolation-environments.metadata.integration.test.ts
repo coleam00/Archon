@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: isolation-environment `metadata` normalization against a REAL
  * bun:sqlite database.
@@ -12,7 +13,7 @@
  * turns it into a real object for every consumer — including `created_at`, which
  * must arrive as the UTC `Date` the type promises, not zone-less TEXT.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with isolation-environments.test.ts's
  * fake.
  */

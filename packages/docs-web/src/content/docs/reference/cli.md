@@ -317,6 +317,8 @@ Note that a real `run` emits a JSON payload **only** under `--detach`. Without i
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
 | `--pause-at-gates` | During `--dry-run`, stop at the first approval gate instead of auto-approving it. |
 
+Fresh CLI runs do not create a chat conversation, message history, or title. Execution output stays in stdout and the run's transcript, events, and artifacts. Resuming a run with an existing chat origin keeps recording into that conversation.
+
 #### Per-run config files
 
 A run config is an ordinary YAML file selected explicitly for one invocation. It is useful for reusable choices such as `config.minimax.yaml`, but it is not a registered profile and does not change `.archon/config.yaml`.

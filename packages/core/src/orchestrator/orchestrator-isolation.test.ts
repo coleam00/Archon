@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import {
   providerRegistry,
   registerBuiltinProviders,

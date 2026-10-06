@@ -13,7 +13,7 @@ import '@archon/paths/strip-cwd-env-boot';
 // Then load archon-owned env from ~/.archon/.env (user scope) and
 // <cwd>/.archon/.env (repo scope, wins over user). Both with override: true.
 // See packages/paths/src/env-loader.ts and the three-path model (#1302 / #1303).
-import { loadArchonEnv } from '@archon/paths/env-loader';
+import { loadCliEnv } from './load-cli-env';
 import {
   captureDetachedInstallContext,
   getPluginsPath,
@@ -29,26 +29,7 @@ const hasDetachedRunConfigHandoff = process.argv
 const inheritedInstallContext = hasDetachedRunConfigHandoff
   ? captureDetachedInstallContext()
   : undefined;
-// Inside a run, a GitHub key the engine set (a token, or '' to scrub it) is the run's
-// identity; neither Archon env file may replace or restore it. An absent key is no
-// opinion, so the env files still supply it (see github-token-policy). Imported only
-// inside a run: CLI startup must not load workflow modules (check:cli-import-boundary).
-const runGithubCredentials = process.env.WORKFLOW_ID
-  ? (await import('@archon/workflows/utils/github-token-policy')).GITHUB_TOKEN_KEYS.flatMap(key => {
-      const value = process.env[key];
-      return value === undefined ? [] : [[key, value] as const];
-    })
-  : [];
-let forgeTrustedEnv: NodeJS.ProcessEnv = {};
-loadArchonEnv(process.cwd(), {
-  afterUserLoad: () => {
-    // Forge plugin processes run with the environment as the user scope left it, so
-    // the repository's `.archon/.env` can supply a credential (passed separately) but
-    // cannot change the environment an executable plugin runs in.
-    forgeTrustedEnv = { ...process.env };
-  },
-});
-for (const [key, value] of runGithubCredentials) process.env[key] = value;
+const forgeTrustedEnv = await loadCliEnv(process.cwd());
 // The detached parent sealed this payload with its effective install key. Repo
 // env still loads normally, but it cannot replace any input that derives the
 // install home before the child consumes the accepted snapshot.
@@ -690,6 +671,18 @@ async function main(): Promise<number> {
         } = await loadRoute(() => import('./commands/workflow'), {
           database: true,
         });
+        const { createSqlWorkflowHost } = await import('@archon/core/workflows/sql-host');
+        // The host's deps capture GitHub App auth when built, so commands that can
+        // execute a workflow initialize it first. A misconfigured App fails here,
+        // before any run row exists; query commands stay usable without it.
+        const executesWorkflow = ['run', 'resume', 'approve', 'reject', 'respond'].includes(
+          subcommand ?? ''
+        );
+        const workflowHost = createSqlWorkflowHost(
+          executesWorkflow
+            ? (await import('./utils/workflow-deps')).createCliWorkflowDeps()
+            : undefined
+        );
         switch (subcommand) {
           case 'list': {
             const workflowName = positionals[2];
@@ -832,7 +825,13 @@ async function main(): Promise<number> {
               detachedRunConfig,
               detachedRunId: values['internal-detached-run-id'] as string | undefined,
             };
-            await workflowRunCommand(effectiveCwd, workflowName, userMessage, options);
+            await workflowRunCommand(
+              workflowHost,
+              effectiveCwd,
+              workflowName,
+              userMessage,
+              options
+            );
             break;
           }
 
@@ -844,7 +843,7 @@ async function main(): Promise<number> {
                   'To show a single run, use: archon workflow get <run-id>'
               );
             }
-            await workflowStatusCommand(effectiveCwd, {
+            await workflowStatusCommand(workflowHost, effectiveCwd, {
               json: jsonFlag,
               verbose: values.verbose as boolean | undefined,
               rawEvents: values.events as boolean | undefined,
@@ -863,6 +862,7 @@ async function main(): Promise<number> {
             // Propagate the command's exit code so `get <id> && ...` and CI
             // pipelines see a non-zero status when the run is missing.
             return await workflowGetCommand(
+              workflowHost,
               getRunId,
               jsonFlag,
               values.verbose as boolean | undefined,
@@ -899,6 +899,7 @@ async function main(): Promise<number> {
               );
             }
             return await workflowLogsCommand(
+              workflowHost,
               logsRunId,
               Boolean(values.follow),
               effectiveCwd,
@@ -927,7 +928,13 @@ async function main(): Promise<number> {
             }
             // `return await`, not `break`: the wait's own exit code (3 for a deadline)
             // has to reach the shell instead of falling through to the generic success.
-            return await workflowWaitCommand(waitRunId, jsonFlag, effectiveCwd, timeoutSeconds);
+            return await workflowWaitCommand(
+              workflowHost,
+              waitRunId,
+              jsonFlag,
+              effectiveCwd,
+              timeoutSeconds
+            );
           }
 
           case 'runs': {
@@ -942,7 +949,7 @@ async function main(): Promise<number> {
                 );
               }
             }
-            await workflowRunsCommand(effectiveCwd, {
+            await workflowRunsCommand(workflowHost, effectiveCwd, {
               json: jsonFlag,
               all: values.all as boolean | undefined,
               status: values.status as string | undefined,
@@ -958,7 +965,13 @@ async function main(): Promise<number> {
             if (!resumeRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow resume <run-id>');
             }
-            await workflowResumeCommand(resumeRunId, jsonFlag, effectiveCwd, detachFlag);
+            await workflowResumeCommand(
+              workflowHost,
+              resumeRunId,
+              jsonFlag,
+              effectiveCwd,
+              detachFlag
+            );
             break;
           }
 
@@ -967,7 +980,7 @@ async function main(): Promise<number> {
             if (!abandonRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow abandon <run-id>');
             }
-            await workflowAbandonCommand(abandonRunId, jsonFlag, effectiveCwd);
+            await workflowAbandonCommand(workflowHost, abandonRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -976,7 +989,7 @@ async function main(): Promise<number> {
             if (!cancelRunId) {
               return await fail(jsonFlag, 'Usage: archon workflow cancel <run-id>');
             }
-            await workflowCancelCommand(cancelRunId, jsonFlag, effectiveCwd);
+            await workflowCancelCommand(workflowHost, cancelRunId, jsonFlag, effectiveCwd);
             break;
           }
 
@@ -993,6 +1006,7 @@ async function main(): Promise<number> {
               (values.comment as string | undefined) || positionals.slice(3).join(' ');
             const approveComment = rawApproveComment.length > 0 ? rawApproveComment : undefined;
             await workflowApproveCommand(
+              workflowHost,
               approveRunId,
               approveComment,
               jsonFlag,
@@ -1011,6 +1025,7 @@ async function main(): Promise<number> {
               (values.reason as string | undefined) || positionals.slice(3).join(' ');
             const rejectReason = rawRejectReason.length > 0 ? rawRejectReason : undefined;
             await workflowRejectCommand(
+              workflowHost,
               rejectRunId,
               rejectReason,
               jsonFlag,
@@ -1035,6 +1050,7 @@ async function main(): Promise<number> {
               (values.text as string | undefined) || positionals.slice(4).join(' ');
             const respondText = rawRespondText.length > 0 ? rawRespondText : undefined;
             await workflowRespondCommand(
+              workflowHost,
               respondRunId,
               decision,
               respondText,
@@ -1054,7 +1070,7 @@ async function main(): Promise<number> {
                   '  days: delete terminal runs older than N days (default: 7)'
               );
             }
-            await workflowCleanupCommand(days);
+            await workflowCleanupCommand(workflowHost, days);
             break;
           }
 
@@ -1078,7 +1094,7 @@ async function main(): Promise<number> {
                   `Error: unexpected positional argument(s): ${extras.join(' ')}. Use --node <id> to filter by node.`
               );
             }
-            await workflowResetSessionsCommand(workflowName, {
+            await workflowResetSessionsCommand(workflowHost, workflowName, {
               scope: values.scope as string | undefined,
               node: values.node as string | undefined,
               yes: values.yes as boolean | undefined,
@@ -1130,7 +1146,7 @@ async function main(): Promise<number> {
                 );
               }
             }
-            await workflowEventEmitCommand(runId, eventType, eventData, effectiveCwd);
+            await workflowEventEmitCommand(workflowHost, runId, eventType, eventData, effectiveCwd);
             break;
           }
 
