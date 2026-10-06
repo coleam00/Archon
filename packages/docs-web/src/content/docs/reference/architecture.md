@@ -131,7 +131,6 @@ export class YourPlatformAdapter implements IPlatformAdapter {
 
 ```typescript
 import { YourPlatformAdapter } from './adapters/your-platform';
-import { findOrCreateUserByPlatformIdentity } from '@archon/core/db/users';
 
 // Read environment variables
 const yourPlatformToken = process.env.YOUR_PLATFORM_TOKEN;
@@ -144,9 +143,10 @@ if (yourPlatformToken) {
 
   // Set up message handler
   adapter.onMessage(async (conversationId, message, platformUserId) => {
-    const user = await findOrCreateUserByPlatformIdentity(adapter.getPlatformType(), platformUserId);
+    // resolveUserId (defined in this file) returns undefined when resolution fails.
+    const userId = await resolveUserId(adapter.getPlatformType(), platformUserId, undefined);
     await handleMessage(adapter, conversationId, message, {
-      actor: { kind: 'user', userId: user.id },
+      actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
     });
   });
 
@@ -269,11 +269,17 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
 
   // Parse event, extract conversationId and message
   const { conversationId, message, platformUserId } = this.parseEvent(payload);
-  const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
+  let userId: string | undefined;
+  try {
+    const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
+    userId = user.id;
+  } catch (err) {
+    getLog().warn({ err }, 'your_platform.user_resolve_failed');
+  }
 
   // Route to orchestrator
   await handleMessage(this, conversationId, message, {
-    actor: { kind: 'user', userId: user.id },
+    actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
   });
 }
 ```
