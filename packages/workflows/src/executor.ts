@@ -178,7 +178,7 @@ async function sendCriticalMessage(
 
   // Log prominently so operators can manually notify user
   getLog().error(
-    { conversationId, messagePreview: message.slice(0, 100), ...context },
+    { conversationId, messageLength: message.length, ...context },
     'critical_message_delivery_failed'
   );
 
