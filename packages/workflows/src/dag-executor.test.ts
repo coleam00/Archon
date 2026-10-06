@@ -4705,6 +4705,59 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
     }
   );
 
+  it('a failed status read during a capacity wait does not end the node', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            errors: ['opaque capacity evidence'],
+            failure: { class: 'overloaded', evidence: 'opaque capacity evidence' },
+          };
+        } else {
+          yield { type: 'agent_message_chunk', text: 'recovered' };
+          yield { type: 'result', sessionId: 'after-capacity' };
+        }
+      });
+      const store = createMockStore();
+      let waiting = false;
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (waiting) {
+          waiting = false;
+          throw new Error('database is locked');
+        }
+        return 'running';
+      });
+      const createEvent = store.createWorkflowEvent;
+      store.createWorkflowEvent = mock(async event => {
+        await createEvent(event);
+        if (event.event_type === 'node_retry_scheduled') waiting = true;
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('capacity-status-error-run'),
+          workflow: {
+            name: 'capacity-status-error',
+            nodes: [{ id: 'my-node', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+          },
+        })
+      );
+      expect(calls).toBe(2);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
+
   it('retries a typed transient failure whose text reads as fatal — #3520', async () => {
     const result = await attemptsForTypedFailure({
       class: 'transient',

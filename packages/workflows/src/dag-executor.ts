@@ -884,10 +884,19 @@ export function shouldContinueStreamingForStatus(status: WorkflowRunStatus | nul
 async function waitForNodeRetry(
   store: Pick<WorkflowDeps['store'], 'getWorkflowRunStatus'>,
   runId: string,
+  nodeId: string,
   delayMs: number
 ): Promise<void> {
   for (let remaining = delayMs; remaining > 0; ) {
-    if (!shouldContinueStreamingForStatus(await store.getWorkflowRunStatus(runId))) return;
+    // A failed status read is not a stop signal: keep waiting, as the streaming check does.
+    try {
+      if (!shouldContinueStreamingForStatus(await store.getWorkflowRunStatus(runId))) return;
+    } catch (statusErr) {
+      getLog().warn(
+        { err: statusErr as Error, workflowRunId: runId, nodeId },
+        'dag.status_check_failed'
+      );
+    }
     const sliceMs = Math.min(remaining, CANCEL_CHECK_INTERVAL_MS);
     await new Promise(resolve => setTimeout(resolve, sliceMs));
     remaining -= sliceMs;
@@ -1100,7 +1109,7 @@ async function runNodeRetryLoop(
         ...(iteration !== undefined ? { iteration } : {}),
       },
     });
-    await waitForNodeRetry(store, workflowRun.id, delayMs);
+    await waitForNodeRetry(store, workflowRun.id, node.id, delayMs);
     attempt++;
   }
   output.costUsd = accumulatedCostUsd;
@@ -5723,7 +5732,7 @@ async function executeLoopNode(
           delay_ms: delayMs,
         },
       });
-      await waitForNodeRetry(deps.store, workflowRun.id, delayMs);
+      await waitForNodeRetry(deps.store, workflowRun.id, node.id, delayMs);
       return true;
     };
 
