@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterAll, expect, mock, test } from 'bun:test';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, expect, mock, test } from 'bun:test';
 import { testTimeout } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';

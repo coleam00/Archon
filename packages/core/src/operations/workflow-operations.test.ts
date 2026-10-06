@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import type { RunActor } from './run-authorization';
 import {
   startNodeExecution,

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect } from 'bun:test';
 import { join } from 'node:path';
 import {

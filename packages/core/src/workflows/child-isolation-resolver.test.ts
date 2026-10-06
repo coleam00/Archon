@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 /**
  * Child-isolation resolver — identifier uniqueness (#2121 slice 2, PR-A).

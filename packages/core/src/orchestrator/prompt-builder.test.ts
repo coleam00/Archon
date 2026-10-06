@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, afterEach } from 'bun:test';
 import {
   buildRoutingRulesWithProject,

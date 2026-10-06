@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: a wait completion against a REAL on-disk SQLite database whose
  * write lock another connection holds for longer than the adapter's busy timeout.

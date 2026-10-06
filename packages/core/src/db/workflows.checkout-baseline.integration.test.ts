@@ -1,9 +1,10 @@
+// @archon-test-isolated
 /**
  * Integration test: the run checkout baseline against a REAL bun:sqlite database
  * (#3305). SQLite stores the observation as JSON TEXT; the write must be write-once in
  * the store itself, and reads must hand back the typed observation.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter.
  */
 import { describe, expect, mock, test } from 'bun:test';

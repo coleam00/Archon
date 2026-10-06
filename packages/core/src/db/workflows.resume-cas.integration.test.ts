@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: resumeWorkflowRun against a REAL bun:sqlite database.
  *
@@ -7,7 +8,7 @@
  * the actual function against a real SqliteAdapter so the orphan-recovery arm and
  * the `datetime('now','-N days')` comparison are executed end-to-end.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with workflows.test.ts's fake.
  */
 import { describe, test, expect, mock, afterEach } from 'bun:test';
