@@ -38,8 +38,24 @@ function getLog(): ReturnType<typeof createLogger> {
 /** Retry budget for rate-limited failures, replacing the node's own maxRetries when one is seen. */
 export const RATE_LIMIT_MAX_RETRIES = 5;
 
+export const OVERLOAD_MAX_RETRIES = 5;
+const OVERLOAD_RETRY_DELAY_MS = 45_000;
+const OVERLOAD_MAX_DELAY_MS = 300_000;
+
 /** Flat delay center for rate-limit retries; jitter widens it to ±50% in {@link getRetryDelayMs}. */
 export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
+
+export function effectiveRetryMaxRetries(
+  configuredMaxRetries: number,
+  retryClass: RetryClass | undefined,
+  sawRateLimit: boolean
+): number {
+  return Math.max(
+    configuredMaxRetries,
+    sawRateLimit ? RATE_LIMIT_MAX_RETRIES : 0,
+    retryClass === 'overloaded' ? OVERLOAD_MAX_RETRIES : 0
+  );
+}
 
 /**
  * Delay before retry attempt N for a failed attempt of this retry class.
@@ -48,7 +64,7 @@ export const RATE_LIMIT_RETRY_DELAY_MS = 45_000;
  * recover on a minutes-scale window with no retry-after signal (#2706), so exponential
  * from 3s either exhausts before the window opens or over-waits once it does; flat +
  * jitter spreads concurrent nodes apart without thundering-herd re-synchronization.
- * Everything else keeps the caller's base × 2^attempt exponential shape.
+ * Ordinary failures keep the caller's base × 2^attempt exponential shape.
  */
 export function getRetryDelayMs(
   retryClass: RetryClass,
@@ -58,13 +74,19 @@ export function getRetryDelayMs(
   if (retryClass === 'rate_limited') {
     return Math.round(RATE_LIMIT_RETRY_DELAY_MS * (0.5 + Math.random()));
   }
+  if (retryClass === 'overloaded') {
+    return Math.round(
+      Math.min(OVERLOAD_RETRY_DELAY_MS * 2 ** attempt, OVERLOAD_MAX_DELAY_MS) *
+        (0.5 + Math.random())
+    );
+  }
   return baseDelayMs * Math.pow(2, attempt);
 }
 
 /** How retry treats a failure; also the failure kinds a provider error can have. */
 export type RetryClass = Extract<
   NodeFailureKind,
-  'fatal' | 'transient' | 'rate_limited' | 'unknown'
+  'fatal' | 'transient' | 'rate_limited' | 'overloaded' | 'unknown'
 >;
 
 /** The node failure kind a provider's typed failure class maps to. */
@@ -75,6 +97,7 @@ export function nodeFailureKindOf(failure: ProviderFailure): RetryClass {
     case 'budget_exceeded':
     case 'misconfigured':
       return 'fatal';
+    case 'overloaded':
     case 'rate_limited':
     case 'transient':
     case 'unknown':
@@ -95,6 +118,7 @@ const RETRY_CLASS = {
   fatal: 'fatal',
   transient: 'transient',
   rate_limited: 'rate_limited',
+  overloaded: 'overloaded',
   unknown: 'unknown',
   // A silent provider stream or a hung subprocess; a fresh attempt is the remedy. Each
   // retry of a hung AI node can wait another full idle_timeout.

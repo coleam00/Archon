@@ -48,6 +48,8 @@ export function formatProviderFailure(failure: ProviderFailure): string {
       return `⚠️ The AI provider is not set up correctly${detail}. Fix its configuration, then try again; retrying unchanged will fail the same way.`;
     case 'rate_limited':
       return '⚠️ The AI provider is rate limiting requests. Wait a moment and try again.';
+    case 'overloaded':
+      return `⚠️ The AI provider is at capacity${detail}. Wait and try again.`;
     case 'transient':
       return `⚠️ The AI provider failed temporarily${detail}. Try again.`;
     case 'unknown':
