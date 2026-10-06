@@ -5,7 +5,13 @@ import {
   type GateResolutionEvent,
   type IWorkflowStore,
 } from './store';
-import type { ApprovalContext, WorkflowWaitContext, WorkflowRun } from './schemas/workflow-run';
+import {
+  TERMINAL_WORKFLOW_STATUSES,
+  isTerminalRunStatus,
+  type ApprovalContext,
+  type WorkflowWaitContext,
+  type WorkflowRun,
+} from './schemas/workflow-run';
 import { workflowNodeSessionSchema } from './schemas/workflow-node-session';
 import { workflowRunNodeSessionSchema } from './schemas/workflow-run-node-session';
 import { terminalRecordSchema } from './schemas/terminal-record';
@@ -467,6 +473,76 @@ export function describeWorkflowStoreConformance(
         expect(harness.terminalReports()).toEqual([run.id]);
       }
     );
+    test.each([
+      'complete',
+      'fail',
+      'cancel',
+      'fan-out',
+      'reject',
+      'reset',
+      'attention',
+      'approval',
+    ] as const)('%s publishes terminal status together with its event', async mode => {
+      const run = await running(store, {
+        origin: { conversationId: CONFORMANCE_CONVERSATION_ID },
+      });
+      const attention = {
+        owner: 'node' as const,
+        nodeId: 'attention',
+        kind: 'attention' as const,
+        waitingSince: wait.waitingSince,
+        message: 'Act',
+      };
+      if (mode === 'reject' || mode === 'reset' || mode === 'approval')
+        await store.pauseWorkflowRun(run.id, approval);
+      if (mode === 'attention')
+        await store.pauseWorkflowRunForWait(run.id, attention, {
+          kind: 'started',
+          stepName: 'attention',
+        });
+      const writers: Record<typeof mode, () => Promise<unknown>> = {
+        complete: () => store.completeWorkflowRun(run.id, { duration_ms: 1 }),
+        fail: () => store.failWorkflowRun(run.id, 'failed', { scheduledResume: schedule }),
+        cancel: () => store.cancelWorkflowRun(run.id),
+        'fan-out': () => store.cancelFanOutRun(run.id, 'fan_out_sibling'),
+        reject: () =>
+          store.resolveAndCancelApprovalGate(run.id, gateEvents(0), {
+            step_name: 'review',
+          }),
+        reset: () => store.cancelResumableRunsForConversation(CONFORMANCE_CONVERSATION_ID),
+        attention: () => store.failPausedAttentionWait(run.id, attention, 'lost'),
+        approval: () => store.failPausedApproval(run.id, approval, 'lost'),
+      };
+      const pending = writers[mode]();
+      try {
+        const observed = await store.getWorkflowRun(run.id);
+        const events = await store.listWorkflowEvents(run.id);
+        if (observed && isTerminalRunStatus(observed.status)) {
+          const terminal = events.find(event => event.event_type === `workflow_${observed.status}`);
+          expect(terminal).toBeDefined();
+          expect(terminalRecordSchema.parse(terminal?.data.terminal_record).status).toBe(
+            observed.status
+          );
+        }
+        if (mode === 'fail') {
+          const resumed = await Promise.allSettled([store.resumeWorkflowRun(run.id)]);
+          if (resumed[0]?.status === 'fulfilled') {
+            const ordered = await types(store, run.id);
+            expect(ordered.indexOf('workflow_failed')).toBeGreaterThanOrEqual(0);
+            expect(ordered.indexOf('workflow_resumed')).toBeGreaterThan(
+              ordered.indexOf('workflow_failed')
+            );
+          }
+        }
+      } finally {
+        await pending;
+      }
+      expect(
+        (await types(store, run.id)).filter(type =>
+          TERMINAL_WORKFLOW_STATUSES.some(status => type === `workflow_${status}`)
+        )
+      ).toHaveLength(1);
+    });
     test('terminal writer start-state predicates preserve losers', async () => {
       const pending = await create(store);
       expect(
@@ -547,12 +623,14 @@ export function describeWorkflowStoreConformance(
         metadata: { keep: true, extra: true },
       });
       // Exercise the runtime boundary used by untyped SDK consumers.
-      const terminalUpdate = JSON.parse('{"status":"completed"}') as Parameters<
-        IWorkflowStore['updateWorkflowRun']
-      >[1];
-      expect(await rejection(store.updateWorkflowRun(run.id, terminalUpdate))).toMatchObject({
-        message: expect.stringContaining('lifecycle writer'),
-      });
+      for (const status of TERMINAL_WORKFLOW_STATUSES) {
+        const terminalUpdate = JSON.parse(JSON.stringify({ status })) as Parameters<
+          IWorkflowStore['updateWorkflowRun']
+        >[1];
+        expect(await rejection(store.updateWorkflowRun(run.id, terminalUpdate))).toMatchObject({
+          message: expect.stringContaining('lifecycle writer'),
+        });
+      }
       expect(await store.getWorkflowRunStatus(run.id)).toBe('pending');
     });
     test('write-back has one winner and release permits another claim', async () => {

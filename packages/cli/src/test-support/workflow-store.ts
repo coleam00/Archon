@@ -9,6 +9,7 @@ import {
 } from '@archon/workflows/store';
 import {
   isApprovalContext,
+  isTerminalRunStatus,
   workflowRunStatusSchema,
   isWorkflowWaitContext,
   isScheduledWorkflowResume,
@@ -147,20 +148,63 @@ export function createInMemoryWorkflowStore(
       (gate.pauseId ?? null) === (typeof expected === 'string' ? null : expected.pauseId)
     );
   };
-  const terminal = async (run: WorkflowRun, event: WorkflowEventInput): Promise<void> => {
-    run.completed_at = new Date();
-    const terminalRecord = await buildTerminalRecord({
-      run: structuredClone(run),
-      events: listEvents(run.id),
-    });
-    record({ ...event, data: { ...event.data, terminal_record: terminalRecord } });
-    onTerminal(run.id);
+  // All writers share the queue: resume and event writes must not overtake terminal projection.
+  let writes: Promise<void> = Promise.resolve();
+  const serialize =
+    <Args extends unknown[], Result>(
+      write: (...args: Args) => Promise<Result>
+    ): ((...args: Args) => Promise<Result>) =>
+    (...args) => {
+      const result = writes.then(() => write(...args));
+      writes = result.then(
+        () => undefined,
+        () => undefined
+      );
+      return result;
+    };
+  interface TerminalChange {
+    run: WorkflowRun;
+    event: WorkflowEventInput;
+    precedingEvents?: WorkflowEventInput[];
+  }
+  const terminalBatch = async (changes: TerminalChange[]): Promise<void> => {
+    const prepared = await Promise.all(
+      changes.map(async ({ run, event, precedingEvents = [] }) => {
+        run.completed_at = new Date();
+        const terminalRecord = await buildTerminalRecord({
+          run,
+          events: [
+            ...listEvents(run.id),
+            ...precedingEvents.map(event => ({ ...event, data: event.data ?? {} })),
+          ],
+        });
+        return {
+          run,
+          precedingEvents,
+          event: {
+            ...event,
+            data: { ...event.data, terminal_record: terminalRecord },
+          },
+        };
+      })
+    );
+    for (const { run, precedingEvents, event } of prepared) {
+      runs.set(run.id, run);
+      for (const preceding of precedingEvents) record(preceding);
+      record(event);
+    }
+    for (const { run } of prepared) onTerminal(run.id);
   };
+  const terminal = async (
+    run: WorkflowRun,
+    event: WorkflowEventInput,
+    precedingEvents: WorkflowEventInput[] = []
+  ): Promise<void> => terminalBatch([{ run, event, precedingEvents }]);
   const store: InMemoryWorkflowStore = {
-    backdate: async (id, dates) => {
+    backdate: serialize(async (id, dates) => {
       Object.assign(row(id), structuredClone(dates));
-    },
-    createWorkflowRun: async (input): ReturnType<IWorkflowStore['createWorkflowRun']> => {
+    }),
+    createWorkflowRun: serialize(async (input): ReturnType<IWorkflowStore['createWorkflowRun']> => {
       const origin =
         input.origin && Object.values(input.origin).some(value => value !== undefined)
           ? structuredClone(input.origin)
@@ -189,119 +233,125 @@ export function createInMemoryWorkflowStore(
       if (runs.has(run.id)) throw new Error('Duplicate run');
       runs.set(run.id, run);
       return structuredClone(run);
-    },
+    }),
     getWorkflowRun: async id => structuredClone(runs.get(id) ?? null),
     getWorkflowRunStatus: async id => runs.get(id)?.status ?? null,
-    claimPendingWorkflowRun: async (
-      id,
-      workingPath
-    ): ReturnType<IWorkflowStore['claimPendingWorkflowRun']> => {
-      const run = row(id);
-      if (run.status !== 'pending') return null;
-      run.status = 'running';
-      run.working_path ??= workingPath ?? null;
-      run.last_activity_at = new Date();
-      return structuredClone(run);
-    },
-    updateWorkflowRun: async (id, updates): ReturnType<IWorkflowStore['updateWorkflowRun']> => {
-      const run = row(id);
-      if (
-        updates.status !== undefined &&
-        ['completed', 'failed', 'cancelled'].includes(updates.status)
-      )
-        throw new Error('Terminal workflow status requires a lifecycle writer');
-      Object.assign(run, updates, {
-        metadata: { ...run.metadata, ...updates.metadata },
-        output_root: run.output_root ?? updates.output_root ?? null,
-        working_path: run.working_path ?? updates.working_path ?? null,
-      });
-    },
-    updateWorkflowActivity: async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
-      row(id).last_activity_at = new Date();
-    },
-    recordWorkflowRunCheckoutBaseline: async (
-      id,
-      baseline
-    ): ReturnType<IWorkflowStore['recordWorkflowRunCheckoutBaseline']> => {
-      const run = row(id);
-      run.checkout_baseline ??= structuredClone(baseline);
-      return structuredClone(run.checkout_baseline);
-    },
-    completeWorkflowRun: async (
-      id,
-      completion,
-      metadata
-    ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
-      const run = row(id);
-      if (run.status !== 'running') throw new Error('Run not in running state');
-      run.status = 'completed';
-      run.completed_at = new Date();
-      Object.assign(run.metadata, metadata);
-      await terminal(run, {
-        workflow_run_id: id,
-        event_type: 'workflow_completed',
-        data: completion,
-      });
-    },
-    failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
-      const run = row(id);
-      if (run.status !== 'running' && run.status !== 'pending')
-        throw new Error('Run already terminal');
-      run.status = 'failed';
-      run.completed_at = new Date();
-      delete run.metadata.scheduled_resume;
-      delete run.metadata.stop_reason;
-      run.metadata.error = error;
-      if (options?.exitReason)
-        run.metadata.stop_reason = {
-          reason: options.exitReason,
-          ...(options.signal ? { signal: options.signal } : {}),
-        };
-      if (options?.scheduledResume) {
-        run.metadata.scheduled_resume = structuredClone(options.scheduledResume);
-        record({
-          workflow_run_id: id,
-          event_type: 'quota_resume_scheduled',
-          data: {
-            resume_at: options.scheduledResume.resumeAt,
-            deadline_at: options.scheduledResume.deadlineAt,
-            attempt: options.scheduledResume.attempt,
-            max_attempts: options.scheduledResume.maxAttempts,
-          },
+    claimPendingWorkflowRun: serialize(
+      async (id, workingPath): ReturnType<IWorkflowStore['claimPendingWorkflowRun']> => {
+        const run = row(id);
+        if (run.status !== 'pending') return null;
+        run.status = 'running';
+        run.working_path ??= workingPath ?? null;
+        run.last_activity_at = new Date();
+        return structuredClone(run);
+      }
+    ),
+    updateWorkflowRun: serialize(
+      async (id, updates): ReturnType<IWorkflowStore['updateWorkflowRun']> => {
+        const run = row(id);
+        if (updates.status !== undefined && isTerminalRunStatus(updates.status))
+          throw new Error('Terminal workflow status requires a lifecycle writer');
+        Object.assign(run, updates, {
+          metadata: { ...run.metadata, ...updates.metadata },
+          output_root: run.output_root ?? updates.output_root ?? null,
+          working_path: run.working_path ?? updates.working_path ?? null,
         });
       }
-      await terminal(run, {
-        workflow_run_id: id,
-        event_type: 'workflow_failed',
-        data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
-      });
-    },
-    pauseWorkflowRun: async (
-      id,
-      approval,
-      metadata,
-      suspension
-    ): ReturnType<IWorkflowStore['pauseWorkflowRun']> => {
-      const run = row(id);
-      if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
-      run.status = 'paused';
-      delete run.metadata.wait;
-      run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
-      if (suspension) record(suspension);
-    },
-    resolveApprovalGate: async (
-      id,
-      metadata,
-      gateEvents,
-      expected
-    ): ReturnType<IWorkflowStore['resolveApprovalGate']> => {
-      const run = row(id);
-      if (!gateOpen(run, expected)) return { resolved: false };
-      Object.assign(run.metadata, structuredClone(metadata));
-      for (const event of gateEvents) record({ ...event, workflow_run_id: id });
-      return { resolved: true };
-    },
-    resumeWorkflowRun: async (id, cursor) => {
+    ),
+    updateWorkflowActivity: serialize(
+      async (id): ReturnType<IWorkflowStore['updateWorkflowActivity']> => {
+        row(id).last_activity_at = new Date();
+      }
+    ),
+    recordWorkflowRunCheckoutBaseline: serialize(
+      async (id, baseline): ReturnType<IWorkflowStore['recordWorkflowRunCheckoutBaseline']> => {
+        const run = row(id);
+        run.checkout_baseline ??= structuredClone(baseline);
+        return structuredClone(run.checkout_baseline);
+      }
+    ),
+    completeWorkflowRun: serialize(
+      async (id, completion, metadata): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
+        const run = structuredClone(row(id));
+        if (run.status !== 'running') throw new Error('Run not in running state');
+        run.status = 'completed';
+        Object.assign(run.metadata, metadata);
+        await terminal(run, {
+          workflow_run_id: id,
+          event_type: 'workflow_completed',
+          data: completion,
+        });
+      }
+    ),
+    failWorkflowRun: serialize(
+      async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
+        const run = structuredClone(row(id));
+        if (run.status !== 'running' && run.status !== 'pending')
+          throw new Error('Run already terminal');
+        run.status = 'failed';
+        delete run.metadata.scheduled_resume;
+        delete run.metadata.stop_reason;
+        run.metadata.error = error;
+        if (options?.exitReason)
+          run.metadata.stop_reason = {
+            reason: options.exitReason,
+            ...(options.signal ? { signal: options.signal } : {}),
+          };
+        const precedingEvents: WorkflowEventInput[] = [];
+        if (options?.scheduledResume) {
+          run.metadata.scheduled_resume = structuredClone(options.scheduledResume);
+          precedingEvents.push({
+            workflow_run_id: id,
+            event_type: 'quota_resume_scheduled',
+            data: {
+              resume_at: options.scheduledResume.resumeAt,
+              deadline_at: options.scheduledResume.deadlineAt,
+              attempt: options.scheduledResume.attempt,
+              max_attempts: options.scheduledResume.maxAttempts,
+            },
+          });
+        }
+        await terminal(
+          run,
+          {
+            workflow_run_id: id,
+            event_type: 'workflow_failed',
+            data: { error, ...(options?.exitReason ? { exit_reason: options.exitReason } : {}) },
+          },
+          precedingEvents
+        );
+      }
+    ),
+    pauseWorkflowRun: serialize(
+      async (
+        id,
+        approval,
+        metadata,
+        suspension
+      ): ReturnType<IWorkflowStore['pauseWorkflowRun']> => {
+        const run = row(id);
+        if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
+        run.status = 'paused';
+        delete run.metadata.wait;
+        run.metadata = { ...run.metadata, ...metadata, approval: structuredClone(approval) };
+        if (suspension) record(suspension);
+      }
+    ),
+    resolveApprovalGate: serialize(
+      async (
+        id,
+        metadata,
+        gateEvents,
+        expected
+      ): ReturnType<IWorkflowStore['resolveApprovalGate']> => {
+        const run = row(id);
+        if (!gateOpen(run, expected)) return { resolved: false };
+        Object.assign(run.metadata, structuredClone(metadata));
+        for (const event of gateEvents) record({ ...event, workflow_run_id: id });
+        return { resolved: true };
+      }
+    ),
+    resumeWorkflowRun: serialize(async (id, cursor) => {
       const run = row(id);
       const wait = run.metadata.wait;
       const scheduled = run.metadata.scheduled_resume;
@@ -345,23 +395,26 @@ export function createInMemoryWorkflowStore(
       run.started_at = new Date();
       run.last_activity_at = new Date();
       return structuredClone(run);
-    },
-    createWorkflowEvent: async (input): ReturnType<IWorkflowStore['createWorkflowEvent']> => {
-      record(input);
-    },
-    persistWorkflowEvent: async (input): ReturnType<IWorkflowStore['persistWorkflowEvent']> => {
-      record(input);
-    },
-    persistWorkflowEventIfRunning: async (
-      input,
-      options
-    ): ReturnType<IWorkflowStore['persistWorkflowEventIfRunning']> => {
-      const status = row(input.workflow_run_id).status;
-      if (status !== 'running' && !(options?.allowPaused && status === 'paused'))
-        return { persisted: false };
-      record(input);
-      return { persisted: true };
-    },
+    }),
+    createWorkflowEvent: serialize(
+      async (input): ReturnType<IWorkflowStore['createWorkflowEvent']> => {
+        record(input);
+      }
+    ),
+    persistWorkflowEvent: serialize(
+      async (input): ReturnType<IWorkflowStore['persistWorkflowEvent']> => {
+        record(input);
+      }
+    ),
+    persistWorkflowEventIfRunning: serialize(
+      async (input, options): ReturnType<IWorkflowStore['persistWorkflowEventIfRunning']> => {
+        const status = row(input.workflow_run_id).status;
+        if (status !== 'running' && !(options?.allowPaused && status === 'paused'))
+          return { persisted: false };
+        record(input);
+        return { persisted: true };
+      }
+    ),
     listWorkflowEvents: async (id, options) =>
       listEvents(id).filter(event => !options?.excludeEventTypes?.includes(event.event_type)),
     listEventsForRuns: async (ids, types) =>
@@ -523,7 +576,7 @@ export function createInMemoryWorkflowStore(
           .filter(session => session.workflow_run_id === id)
           .sort((a, b) => a.node_id.localeCompare(b.node_id))
       ),
-    upsertWorkflowRunNodeSession: async input => {
+    upsertWorkflowRunNodeSession: serialize(async input => {
       const key = JSON.stringify([input.workflow_run_id, input.node_id]);
       const prior = runSessions.get(key);
       runSessions.set(key, {
@@ -531,8 +584,8 @@ export function createInMemoryWorkflowStore(
         created_at: prior?.created_at ?? new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
-    },
-    upsertWorkflowNodeSession: async input => {
+    }),
+    upsertWorkflowNodeSession: serialize(async input => {
       const key = JSON.stringify([
         input.workflow_name,
         input.node_id,
@@ -545,8 +598,8 @@ export function createInMemoryWorkflowStore(
         created_at: prior?.created_at ?? new Date().toISOString(),
         updated_at: new Date().toISOString(),
       });
-    },
-    deleteWorkflowNodeSessions: async filter => {
+    }),
+    deleteWorkflowNodeSessions: serialize(async filter => {
       let deleted = 0;
       for (const [key, session] of sessions)
         if (
@@ -558,13 +611,13 @@ export function createInMemoryWorkflowStore(
           deleted++;
         }
       return { deleted };
-    },
-    deleteOldWorkflowRuns: async days => {
+    }),
+    deleteOldWorkflowRuns: serialize(async days => {
       if (!Number.isInteger(days) || days < 0) throw new Error('Invalid olderThanDays');
       const ids = [...runs.values()]
         .filter(
           run =>
-            ['completed', 'failed', 'cancelled'].includes(run.status) &&
+            isTerminalRunStatus(run.status) &&
             run.started_at.getTime() < Date.now() - days * 86_400_000
         )
         .map(run => run.id);
@@ -582,24 +635,27 @@ export function createInMemoryWorkflowStore(
         }
       }
       return { count: ids.length };
-    },
-    resolveAndCancelApprovalGate: async (id, gateEvents, cancellation, expected) => {
-      const run = row(id);
+    }),
+    resolveAndCancelApprovalGate: serialize(async (id, gateEvents, cancellation, expected) => {
+      const run = structuredClone(row(id));
       if (!gateOpen(run, expected)) return { resolved: false };
       run.status = 'cancelled';
-      for (const event of gateEvents) record({ ...event, workflow_run_id: id });
-      await terminal(run, {
-        workflow_run_id: id,
-        event_type: 'workflow_cancelled',
-        step_name: cancellation.step_name,
-        data: {
-          cancel_reason: 'approval_rejected',
-          ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
+      await terminal(
+        run,
+        {
+          workflow_run_id: id,
+          event_type: 'workflow_cancelled',
+          step_name: cancellation.step_name,
+          data: {
+            cancel_reason: 'approval_rejected',
+            ...(cancellation.reason === undefined ? {} : { reason: cancellation.reason }),
+          },
         },
-      });
+        gateEvents.map(event => ({ ...event, workflow_run_id: id }))
+      );
       return { resolved: true };
-    },
-    cancelResumableRunsForConversation: async id => {
+    }),
+    cancelResumableRunsForConversation: serialize(async id => {
       const targets = newest(
         [...runs.values()].filter(
           run =>
@@ -608,17 +664,20 @@ export function createInMemoryWorkflowStore(
         )
       );
       const prior = structuredClone(targets);
-      for (const run of targets) run.status = 'cancelled';
-      for (const run of targets)
-        await terminal(run, {
-          workflow_run_id: run.id,
-          event_type: 'workflow_cancelled',
-          data: { cancel_reason: 'conversation_reset' },
-        });
+      await terminalBatch(
+        targets.map(target => ({
+          run: { ...structuredClone(target), status: 'cancelled' },
+          event: {
+            workflow_run_id: target.id,
+            event_type: 'workflow_cancelled',
+            data: { cancel_reason: 'conversation_reset' },
+          },
+        }))
+      );
       return prior;
-    },
-    cancelWorkflowRun: async (id, details) => {
-      const run = row(id);
+    }),
+    cancelWorkflowRun: serialize(async (id, details) => {
+      const run = structuredClone(row(id));
       if (run.status === 'completed' || run.status === 'cancelled') return { cancelled: false };
       run.status = 'cancelled';
       await terminal(run, {
@@ -631,9 +690,9 @@ export function createInMemoryWorkflowStore(
         },
       });
       return { cancelled: true };
-    },
-    cancelFanOutRun: async (id, reason) => {
-      const run = row(id);
+    }),
+    cancelFanOutRun: serialize(async (id, reason) => {
+      const run = structuredClone(row(id));
       if (run.status === 'completed' || run.status === 'cancelled') return { cancelled: false };
       run.status = 'cancelled';
       run.metadata.cancelled_reason = reason;
@@ -643,8 +702,8 @@ export function createInMemoryWorkflowStore(
         data: { reason, cancel_reason: 'fan_out' },
       });
       return { cancelled: true };
-    },
-    recoverCancelledFanOutRun: async id => {
+    }),
+    recoverCancelledFanOutRun: serialize(async id => {
       const run = row(id);
       if (
         run.status !== 'cancelled' ||
@@ -666,8 +725,8 @@ export function createInMemoryWorkflowStore(
           events.splice(index, 1);
       }
       return structuredClone(run);
-    },
-    pauseWorkflowRunForWait: async (id, wait, pause) => {
+    }),
+    pauseWorkflowRunForWait: serialize(async (id, wait, pause) => {
       const run = row(id);
       if (run.status !== 'running') throw new WorkflowRunPauseConflictError(id);
       run.status = 'paused';
@@ -684,9 +743,9 @@ export function createInMemoryWorkflowStore(
             ...(wait.kind === 'event' ? { event: wait.event } : {}),
           },
         });
-    },
-    failPausedAttentionWait: async (id, wait, error) => {
-      const run = row(id);
+    }),
+    failPausedAttentionWait: serialize(async (id, wait, error) => {
+      const run = structuredClone(row(id));
       const current = run.metadata.wait;
       if (
         run.status !== 'paused' ||
@@ -706,8 +765,8 @@ export function createInMemoryWorkflowStore(
       delete run.metadata.scheduled_resume;
       await terminal(run, { workflow_run_id: id, event_type: 'workflow_failed', data: { error } });
       return { failed: true };
-    },
-    clearWorkflowWaitContext: async (id, wait, completion) => {
+    }),
+    clearWorkflowWaitContext: serialize(async (id, wait, completion) => {
       const run = row(id);
       const current = run.metadata.wait;
       if (
@@ -723,9 +782,9 @@ export function createInMemoryWorkflowStore(
       record(rows.outcome);
       record(rows.node);
       return { cleared: true, nodeEvent: rows.node };
-    },
-    failPausedApproval: async (id, approval, error) => {
-      const run = row(id);
+    }),
+    failPausedApproval: serialize(async (id, approval, error) => {
+      const run = structuredClone(row(id));
       if (run.status !== 'paused' || !isDeepStrictEqual(run.metadata.approval, approval))
         return { failed: false };
       run.status = 'failed';
@@ -737,16 +796,16 @@ export function createInMemoryWorkflowStore(
         data: { error, exit_reason: 'node_error' },
       });
       return { failed: true };
-    },
-    claimWriteback: async id => {
+    }),
+    claimWriteback: serialize(async id => {
       const run = row(id);
       if (run.metadata.writeback_apply_claimed === true) return { claimed: false };
       run.metadata.writeback_apply_claimed = true;
       return { claimed: true };
-    },
-    releaseWritebackClaim: async id => {
+    }),
+    releaseWritebackClaim: serialize(async id => {
       delete row(id).metadata.writeback_apply_claimed;
-    },
+    }),
   };
   return store;
 }
