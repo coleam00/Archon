@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { runForgeMutationConformance } from '@archon/forge/conformance';
 import {
   contentDigest,
+  forgeResponseSchema,
   type ForgeMutationRequest,
   type ForgeRequest,
   type ForgeResponse,
@@ -537,4 +538,384 @@ test('passes the public mutation conformance kit for every outcome', async () =>
     cases.map(({ name, request, expectedOutcome }) => ({ name, request, expectedOutcome }))
   );
   expect(failures).toEqual([]);
+});
+
+const mergeRequest = {
+  operationId: 'merge',
+  op: 'pr.merge',
+  ref,
+  method: 'squash',
+  conditions: { head: 'headsha' },
+} satisfies ForgeMutationRequest;
+
+function mergeGitHub(
+  options: {
+    stale?: boolean;
+    status?: number;
+    lost?: boolean;
+    mismatch?: boolean;
+    commitMismatch?: boolean;
+    supplementalMissing?: boolean;
+    mergedFalse?: boolean;
+    readFailed?: boolean;
+  } = {}
+) {
+  let wrote = false;
+  const writes: unknown[] = [];
+  const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = String(input);
+    if (init?.method === 'PUT') {
+      writes.push(JSON.parse(String(init.body)));
+      if (options.lost) throw new Error('token must never escape');
+      if (options.status) return json({}, options.status);
+      wrote = true;
+      return json({ merged: !options.mergedFalse, sha: 'landed' });
+    }
+    if (url.includes('/git/commits/')) {
+      if (options.supplementalMissing) return json({}, 403);
+      return json({
+        sha: options.commitMismatch ? 'wrong' : 'landed',
+        tree: { sha: 'landed-tree' },
+        parents: [{ sha: 'base' }, { sha: 'headsha' }],
+      });
+    }
+    if (wrote && options.readFailed) return json({}, 500);
+    return json({
+      ...pull({ draft: false, merged: wrote, state: wrote ? 'closed' : 'open' }),
+      head: {
+        ref: 'feature',
+        sha: options.stale || (wrote && options.mismatch) ? 'other' : 'headsha',
+        repo: { full_name: repo.path },
+      },
+      merge_commit_sha: wrote ? 'landed' : null,
+    });
+  };
+  return { fetch, writes };
+}
+
+test.each(['merge', 'squash'] as const)(
+  'merges with %s and the exact approved head, then reads ordered landed evidence',
+  async method => {
+    const github = mergeGitHub();
+    const failures = await runForgeMutationConformance(
+      request => handleGithubOperation(request, { token: 'token', fetch: github.fetch }),
+      githubPluginMetadata,
+      [{ name: method, request: { ...mergeRequest, method }, expectedOutcome: 'applied' }]
+    );
+    expect(failures).toEqual([]);
+    expect(github.writes).toEqual([{ sha: 'headsha', merge_method: method }]);
+    const response = await handleGithubOperation(
+      { ...mergeRequest, method },
+      { token: 'token', fetch: mergeGitHub().fetch }
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        value: {
+          landed: { commit: 'landed', tree: 'landed-tree', parents: ['base', 'headsha'] },
+          enforcedConditions: ['head'],
+        },
+      },
+    });
+  }
+);
+
+test('merge refuses stale and unsupported conditions before writing', async () => {
+  for (const conditions of [
+    {},
+    { head: 'headsha', base: 'base' },
+    { head: 'headsha', tree: 'tree' },
+    { head: 'headsha' },
+  ]) {
+    const github = mergeGitHub({ stale: true });
+    const response = await handleGithubOperation(
+      { ...mergeRequest, conditions },
+      { token: 'token', fetch: github.fetch }
+    );
+    expect(response).toMatchObject({ ok: false, mutation: { outcome: 'refused' } });
+    expect(github.writes).toEqual([]);
+  }
+});
+
+test.each([
+  [{ status: 409 }, 'refused'],
+  [{ lost: true }, 'outcome_unknown'],
+  [{ mismatch: true }, 'verification_failed'],
+  [{ commitMismatch: true }, 'verification_failed'],
+  [{ readFailed: true }, 'verification_failed'],
+  [{ mergedFalse: true }, 'refused'],
+] as const)('merge reports truthful failure evidence for %j', async (options, outcome) => {
+  const github = mergeGitHub(options);
+  const response = await handleGithubOperation(mergeRequest, {
+    token: 'token',
+    fetch: github.fetch,
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    mutation: { outcome, merge: { method: 'squash', conditions: { head: 'headsha' } } },
+  });
+  expect(JSON.stringify(response)).not.toContain('token must never escape');
+  expect(github.writes).toHaveLength(1);
+});
+
+test('unavailable supplemental merge evidence remains explicitly null', async () => {
+  expect(
+    await handleGithubOperation(mergeRequest, {
+      token: 'token',
+      fetch: mergeGitHub({ supplementalMissing: true }).fetch,
+    })
+  ).toMatchObject({
+    ok: true,
+    result: { value: { landed: { commit: 'landed', tree: null, parents: null } } },
+  });
+});
+
+const selected = (id: number, runId = 100) => ({
+  unit: { kind: 'check' as const, id: String(id), name: 'same-name' },
+  rerun: { id: String(runId), attempt: 1 },
+});
+const rerunRequest = {
+  operationId: 'rerun',
+  op: 'checks.rerun',
+  ref,
+  revision: 'headsha',
+  units: [selected(1), selected(2)],
+} satisfies ForgeMutationRequest;
+function rerunGitHub(
+  options: {
+    prHead?: string;
+    check?: Record<string, unknown>;
+    run?: Record<string, unknown>;
+    oldAttempt?: boolean;
+    failureGroup?: string;
+    failureStatus?: number;
+    readFailed?: boolean;
+  } = {}
+) {
+  const posted: string[] = [];
+  const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith('/pulls/7'))
+      return json({ head: { sha: options.prHead ?? 'headsha' } });
+    const id = url.pathname.split('/').at(-1)!;
+    if (url.pathname.includes('/check-runs/'))
+      return json({
+        id: Number(id),
+        name: 'same-name',
+        head_sha: 'headsha',
+        status: 'completed',
+        conclusion: 'cancelled',
+        app: { slug: 'github-actions' },
+        check_suite: { id: Number(id) === 3 ? 200 : 100 },
+        ...options.check,
+      });
+    const runId = init?.method === 'POST' ? url.pathname.split('/').at(-2)! : id;
+    if (init?.method === 'POST') {
+      posted.push(runId);
+      if (options.failureGroup === runId) {
+        if (options.failureStatus) return json({}, options.failureStatus);
+        throw new Error('network dropped');
+      }
+      return new Response(null, { status: 201 });
+    }
+    if (posted.includes(runId) && options.readFailed) return json({}, 500);
+    return json({
+      id: Number(runId),
+      head_sha: 'headsha',
+      check_suite_id: Number(runId),
+      run_attempt: posted.includes(runId) && !options.oldAttempt ? 2 : 1,
+      status: 'completed',
+      conclusion: 'failure',
+      ...options.run,
+    });
+  };
+  return { fetch, posted };
+}
+
+test('reruns failed jobs once per owning run and verifies a newer attempt', async () => {
+  const github = rerunGitHub();
+  const failures = await runForgeMutationConformance(
+    request => handleGithubOperation(request, { token: 'token', fetch: github.fetch }),
+    githubPluginMetadata,
+    [{ name: 'rerun', request: rerunRequest, expectedOutcome: 'applied' }]
+  );
+  expect(failures).toEqual([]);
+  expect(github.posted).toEqual(['100']);
+});
+
+test('unsupported later units prevent every rerun write', async () => {
+  const github = rerunGitHub();
+  const units = [
+    ...rerunRequest.units,
+    { unit: { kind: 'commit_status' as const, id: 'status', name: 'status' }, rerun: null },
+  ];
+  expect(
+    await handleGithubOperation({ ...rerunRequest, units }, { token: 'token', fetch: github.fetch })
+  ).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { outcome: 'refused' },
+  });
+  expect(github.posted).toEqual([]);
+});
+
+test.each([
+  { check: { app: { slug: 'another-app' } } },
+  { check: { head_sha: 'old' } },
+  { check: { status: 'in_progress' } },
+  { check: { conclusion: 'success' } },
+  { check: { conclusion: 'action_required' } },
+  { run: { check_suite_id: 99 } },
+  { run: { run_attempt: 2 } },
+  { run: { head_sha: 'old' } },
+])('invalid check/run association is refused with zero writes: %j', async options => {
+  const github = rerunGitHub(options);
+  expect(
+    await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
+  ).toMatchObject({ ok: false, mutation: { outcome: 'refused' } });
+  expect(github.posted).toEqual([]);
+});
+
+test.each([{ oldAttempt: true }, { readFailed: true }])(
+  'acknowledged rerun without newer attempt evidence fails verification: %j',
+  async options => {
+    const github = rerunGitHub(options);
+    expect(
+      await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
+    ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
+    expect(github.posted).toEqual(['100']);
+  }
+);
+
+test.each([
+  [403, 'verification_failed'],
+  [undefined, 'outcome_unknown'],
+] as const)(
+  'partial reruns retain observed attempts and stop on a later failure (%s)',
+  async (failureStatus, outcome) => {
+    const github = rerunGitHub({ failureGroup: '200', failureStatus });
+    const units = [selected(1), selected(3, 200), selected(4, 300)];
+    // The third group must also validate before the first submission.
+    const fetch = async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).endsWith('/check-runs/4'))
+        return json({
+          id: 4,
+          name: 'same-name',
+          head_sha: 'headsha',
+          status: 'completed',
+          conclusion: 'failure',
+          app: { slug: 'github-actions' },
+          check_suite: { id: 300 },
+        });
+      return github.fetch(input, init);
+    };
+    const response = await handleGithubOperation(
+      { ...rerunRequest, units },
+      { token: 'token', fetch }
+    );
+    expect(response).toMatchObject({
+      ok: false,
+      mutation: {
+        outcome,
+        rerun: { observed: [{ unit: units[0].unit, rerun: { id: '100', attempt: 2 } }] },
+      },
+    });
+    expect(github.posted).toEqual(['100', '200']);
+  }
+);
+
+test('reviews paginate submissions and root diff comments, retaining author and commit', async () => {
+  const item = {
+    id: 1,
+    html_url: 'https://github.com/a/b/pull/7#review-1',
+    body: 'private body',
+    user: { id: 2, login: 'reviewer' },
+    commit_id: 'headsha',
+    state: 'COMMENTED',
+    submitted_at: '2026-10-06T10:00:00Z',
+    created_at: '2026-10-06T10:00:00Z',
+  };
+  const calls: string[] = [];
+  const response = await handleGithubOperation(
+    { operationId: 'reviews', op: 'pr.reviews', ref },
+    {
+      token: 'token',
+      fetch: async input => {
+        const url = String(input);
+        calls.push(url);
+        if (url.includes('/reviews'))
+          return json(
+            url.endsWith('page=1')
+              ? Array.from({ length: 100 }, (_, id) => ({ ...item, id }))
+              : [
+                  { ...item, id: 101, state: 'PENDING' },
+                  { ...item, id: 102, state: 'DISMISSED' },
+                ]
+          );
+        return json([
+          { ...item, state: undefined },
+          { ...item, id: 2, in_reply_to_id: 1 },
+          { ...item, id: 3, user: null, commit_id: null, created_at: null },
+        ]);
+      },
+    }
+  );
+  expect(response).toMatchObject({ ok: true, result: { op: 'pr.reviews' } });
+  if (!response.ok || response.result.op !== 'pr.reviews') throw new Error('expected reviews');
+  expect(response.result.value.items).toHaveLength(103);
+  expect(response.result.value.items.at(-2)).toMatchObject({
+    kind: 'review_comment',
+    author: { host: repo.host, id: '2', login: 'reviewer' },
+    commit: 'headsha',
+    state: null,
+  });
+  expect(response.result.value.items.at(-1)).toMatchObject({
+    author: null,
+    commit: null,
+    createdAt: null,
+  });
+  expect(calls.some(url => url.endsWith('page=2'))).toBe(true);
+});
+
+test('a moved PR head refuses reruns of otherwise valid historical checks without writing', async () => {
+  const github = rerunGitHub({ prHead: 'new-head' });
+  expect(
+    await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
+  ).toMatchObject({ ok: false, mutation: { outcome: 'refused' } });
+  expect(github.posted).toEqual([]);
+});
+
+test.each([
+  { user: { id: 2, login: '' } },
+  { user: { id: 2, login: '   ' } },
+  { commit_id: '' },
+  { commit_id: '   ' },
+  { state: '' },
+  { submitted_at: 'invalid-timestamp' },
+  { created_at: 'invalid-timestamp' },
+])('invalid review facts return a contract-valid failure: %j', async invalid => {
+  const response = await handleGithubOperation(
+    { operationId: 'reviews', op: 'pr.reviews', ref },
+    {
+      token: 'token must never escape',
+      fetch: async () =>
+        json([
+          {
+            id: 1,
+            html_url: 'https://github.com/archon/test/pull/7#review-1',
+            body: 'private body',
+            user: { id: 2, login: 'reviewer' },
+            commit_id: 'headsha',
+            state: 'COMMENTED',
+            submitted_at: '2026-10-06T10:00:00Z',
+            created_at: '2026-10-06T10:00:00Z',
+            ...invalid,
+          },
+        ]),
+    }
+  );
+  expect(response).toMatchObject({ ok: false, error: { kind: 'forge_error' } });
+  expect(forgeResponseSchema.safeParse(response).success).toBe(true);
+  expect(JSON.stringify(response)).not.toContain('token must never escape');
+  expect(JSON.stringify(response)).not.toContain('private body');
 });

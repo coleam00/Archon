@@ -78,15 +78,99 @@ export interface CheckUnit {
   readonly state: Exclude<CheckState, 'none'>;
 }
 
+export interface RerunGroup {
+  readonly id: string;
+  readonly attempt: number;
+}
+export interface ForgeCheckUnit extends CheckUnit {
+  readonly unit: {
+    readonly kind: 'check' | 'commit_status';
+    readonly id: string;
+    readonly name: string;
+  };
+  readonly rerun?: RerunGroup | null;
+}
+export interface ForgeCheckSet extends CheckSet {
+  readonly units: readonly ForgeCheckUnit[];
+}
+export interface MergeRequest {
+  readonly ref: QualifiedPr;
+  readonly method: 'merge' | 'squash';
+  readonly conditions: { readonly head?: string; readonly base?: string; readonly tree?: string };
+}
+export interface Landed {
+  readonly commit: string | null;
+  readonly tree: string | null;
+  readonly parents: readonly string[] | null;
+}
+export interface MergeResult extends Omit<MergeRequest, 'ref'> {
+  readonly target: QualifiedPr;
+  readonly outcome: 'applied';
+  readonly changed: true;
+  readonly pr: PrRecord;
+  readonly enforcedConditions: readonly (keyof MergeRequest['conditions'])[];
+  readonly landed: Landed;
+}
+export interface SelectedCheck {
+  readonly unit: ForgeCheckUnit['unit'];
+  readonly rerun: RerunGroup | null;
+}
+export interface RerunRequest {
+  readonly ref: QualifiedPr;
+  readonly revision: string;
+  readonly units: readonly SelectedCheck[];
+}
+export interface RerunResult extends RerunRequest {
+  readonly target: QualifiedPr;
+  readonly outcome: 'applied';
+  readonly changed: true;
+}
+export interface ReviewItem {
+  readonly kind: 'review' | 'review_comment';
+  readonly id: string;
+  readonly author: {
+    readonly host: string;
+    readonly id: string;
+    readonly login: string | null;
+  } | null;
+  readonly commit: string | null;
+  readonly state: string | null;
+  readonly createdAt: string | null;
+  readonly url: string;
+  readonly body: string;
+}
+export interface ReviewsResult {
+  readonly ref: QualifiedPr;
+  readonly items: readonly ReviewItem[];
+}
+export interface MutationFailure {
+  readonly op: string;
+  readonly target: QualifiedPr | QualifiedPr['repo'];
+  readonly outcome: 'refused' | 'verification_failed' | 'outcome_unknown';
+  readonly leaveBehind?: string;
+  readonly observed?: PrRecord;
+  readonly merge?: {
+    readonly method: MergeRequest['method'];
+    readonly conditions: MergeRequest['conditions'];
+    readonly landed?: Landed;
+  };
+  readonly rerun?: {
+    readonly revision: string;
+    readonly requested: readonly SelectedCheck[];
+    readonly observed: readonly SelectedCheck[];
+  };
+}
+
 export interface CheckSet {
   readonly units: readonly CheckUnit[];
   readonly summary: { readonly state: CheckState };
 }
 
-export interface ChecksObservation extends CheckSet {
+export interface ChecksObservation extends ForgeCheckSet {
+  readonly approvalPending?: boolean | null;
   readonly ref: QualifiedPr;
   readonly revision: string;
-  readonly required: CheckSet | null;
+  readonly required: ForgeCheckSet | null;
 }
 
 /**
@@ -283,12 +367,15 @@ function parseCommand(value: string | undefined): readonly string[] {
   return parsed as string[];
 }
 
-function parseUnit(value: unknown): CheckUnit | undefined {
+function parseUnit(value: unknown): ForgeCheckUnit | undefined {
   const item = record(value);
   const unit = record(item?.unit);
   const states: readonly CheckState[] = CHECK_STATES.filter(state => state !== 'none');
   const phases = ['pending', 'running', 'completed', 'unknown'] as const;
   if (
+    (unit?.kind !== 'check' && unit?.kind !== 'commit_status') ||
+    typeof unit.id !== 'string' ||
+    unit.id === '' ||
     typeof unit?.name !== 'string' ||
     unit.name === '' ||
     !states.includes(item?.state as CheckState) ||
@@ -296,15 +383,31 @@ function parseUnit(value: unknown): CheckUnit | undefined {
     !(typeof item?.result === 'string' || item?.result === null)
   )
     return undefined;
+  let rerun: RerunGroup | null | undefined;
+  if (item.rerun === null) rerun = null;
+  else if (item.rerun !== undefined) {
+    const group = record(item.rerun);
+    if (
+      !group ||
+      typeof group.id !== 'string' ||
+      group.id === '' ||
+      typeof group.attempt !== 'number' ||
+      !Number.isInteger(group.attempt) ||
+      group.attempt <= 0
+    )
+      return undefined;
+    rerun = { id: group.id, attempt: group.attempt };
+  }
   return {
-    unit: { name: unit.name },
+    unit: { kind: unit.kind, id: unit.id, name: unit.name },
+    ...(rerun === undefined ? {} : { rerun }),
     phase: item.phase as CheckUnit['phase'],
     result: item.result,
     state: item.state as CheckUnit['state'],
   };
 }
 
-function parseSet(value: unknown): CheckSet | undefined {
+function parseSet(value: unknown): ForgeCheckSet | undefined {
   const set = record(value);
   const summary = record(set?.summary);
   const states: readonly CheckState[] = CHECK_STATES;
@@ -312,7 +415,7 @@ function parseSet(value: unknown): CheckSet | undefined {
     return undefined;
   const units = set.units.map(parseUnit);
   if (units.some(unit => unit === undefined)) return undefined;
-  return { units: units as CheckUnit[], summary: { state: summary?.state as CheckState } };
+  return { units: units as ForgeCheckUnit[], summary: { state: summary?.state as CheckState } };
 }
 
 function samePr(left: QualifiedPr, right: QualifiedPr): boolean {
@@ -364,6 +467,11 @@ export function readChecks(ref: QualifiedPr): ChecksObservation {
     response.operationId === '' ||
     response.ok !== true ||
     resultBody?.op !== 'checks.state' ||
+    !(
+      value?.approvalPending === undefined ||
+      value.approvalPending === null ||
+      typeof value.approvalPending === 'boolean'
+    ) ||
     typeof value?.revision !== 'string' ||
     value.revision === '' ||
     !observed ||
@@ -378,6 +486,7 @@ export function readChecks(ref: QualifiedPr): ChecksObservation {
   return {
     ref,
     revision: value.revision,
+    approvalPending: value.approvalPending,
     units: full.units,
     summary: full.summary,
     required: required ?? null,

@@ -93,7 +93,8 @@ export async function githubRequest(
   token: string,
   url: string,
   init: RequestInit = {},
-  acknowledge?: () => void
+  acknowledge?: () => void,
+  responseMode: 'json' | 'empty' = 'json'
 ): Promise<unknown> {
   let response: Response;
   try {
@@ -130,6 +131,7 @@ export async function githubRequest(
     );
   }
   acknowledge?.();
+  if (responseMode === 'empty') return undefined;
   try {
     return await response.json();
   } catch (cause) {

@@ -33,6 +33,7 @@ export interface FakeGitHubState {
   comments: { id: number; body: string }[];
   nextComment: number;
   checkRuns: { id: number; name: string; status: string; conclusion: string | null }[];
+  workflowRuns: { id: number; head_sha: string; check_suite_id: number; run_attempt: number; status: string; conclusion: string | null }[];
   /** Every request, as `METHOD url`, so a test can see what was written. */
   calls: string[];
 }
@@ -44,6 +45,7 @@ export function initialState(headSha: string): FakeGitHubState {
     comments: [],
     nextComment: 900,
     checkRuns: [{ id: 1, name: 'build', status: 'completed', conclusion: 'success' }],
+    workflowRuns: [],
     calls: [],
   };
 }
@@ -114,6 +116,7 @@ function route(
     if (method === 'PATCH' && typeof body?.body === 'string') row.body = body.body;
     return Response.json(comment(row));
   }
+  if (path === `${ROOT}/actions/runs`) return Response.json({ total_count: state.workflowRuns.length, workflow_runs: page === 1 ? state.workflowRuns : [] });
   if (path === `${ROOT}/commits/${state.headSha}/check-runs`) {
     return Response.json({ check_runs: page === 1 ? state.checkRuns : [] });
   }
