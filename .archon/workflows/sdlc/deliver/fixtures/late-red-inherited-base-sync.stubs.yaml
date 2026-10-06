@@ -56,7 +56,7 @@ validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"e2e-smoke (fail)"}'
 ci-verdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
 ci-rerun: { requested: false, reason: "stub: no re-run warranted" }
-ci-reverdict: '{"state":"red","detail":"e2e-smoke (fail)","cancelled":[]}'
+ci-reverdict: '{"state":"red","detail":"e2e-smoke (fail)"}'
 ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
 ci-classify:
   failing_checks: ["e2e-smoke"]

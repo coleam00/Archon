@@ -54,25 +54,24 @@ review__publish:
   discoveries: []
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
-ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
-ci-verdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
+ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
+ci-verdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-rerun: { requested: true, reason: "stub: two checks were cancelled before a runner was acquired; re-ran the failed and cancelled jobs" }
 # CI cancels them again: the re-run reproduced no failure.
-rerun-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
-ci-reverdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
+rerun-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
+ci-reverdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 ci-changed: '{"files":["packages/core/src/feature.ts"]}'
-# The worst claim a classifier could pair with it: a re-run that "fails". The real
-# ci-cause still keeps it environment, because a cancelled check never ran and no
-# failure points at a file.
+# The re-run was cancelled the same way: it reproduced nothing, so the real
+# ci-cause keeps the environment claim instead of reading a reproduced failure.
 ci-classify:
   failing_checks: ["changes", "workflow-fixtures", "Test Suite"]
   failing_paths: []
   base: passes
-  rerun: fails
+  rerun: cancelled
   claim: environment
   evidence: "stub: changes and workflow-fixtures were cancelled when no hosted runner was acquired, every downstream job was skipped, and Test Suite failed only because of them; the re-run was cancelled the same way"
-fix-ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
-attention-ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
+fix-ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
+attention-ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)"}'
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'

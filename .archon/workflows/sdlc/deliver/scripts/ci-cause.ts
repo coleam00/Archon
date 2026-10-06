@@ -8,10 +8,8 @@
  * - A failure located in a file the pull request changes is `introduced`,
  *   whatever the claim. It cannot be inherited from a base that lacks the file.
  * - `inherited` stands only when the same check fails on the base commit.
- * - `environment` stands only when no re-run reproduced the failure, or when the
- *   red includes a check CI cancelled and no failure points at a file: a check that
- *   never ran (a runner never acquired) produced no failure to reproduce, and a
- *   re-run cancelled again is the same infrastructure fault, never a code red.
+ * - `environment` stands only when no re-run reproduced the failure. A re-run CI
+ *   cancelled before it ran (no runner acquired) reproduced nothing.
  * - `unavailable` (the evidence could not be read from this run) stands as claimed:
  *   it attributes nothing, so it goes to the operator, never to a fix.
  * - Anything else is `introduced`, and goes to the CI correction pass.
@@ -21,11 +19,9 @@
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_CHANGED: the pull request's changed files, `{files: string[]}`.
- * - INPUTS_CANCELLED: JSON string array, the checks the CI probe saw concluded
- *   cancelled.
  * - INPUTS_FAILING_CHECKS / INPUTS_FAILING_PATHS: JSON string arrays.
  * - INPUTS_BASE: `fails`, `passes`, or `unknown`.
- * - INPUTS_RERUN: `fails`, `passes`, or `not_rerun`.
+ * - INPUTS_RERUN: `fails`, `passes`, `cancelled`, or `not_rerun`.
  * - INPUTS_CLAIM: `introduced`, `inherited`, `environment`, or `unavailable`.
  * - INPUTS_EVIDENCE: the agent's account of what it read.
  */
@@ -61,7 +57,6 @@ try {
   const changed = (JSON.parse(text(process.env.INPUTS_CHANGED)) as { files?: unknown }).files;
   if (!Array.isArray(changed)) throw new Error('the changed-file list has no `files` array');
   const changedFiles = (changed as string[]).map(normalize);
-  const cancelled = strings('cancelled', text(process.env.INPUTS_CANCELLED));
   const failingChecks = strings('failing_checks', text(process.env.INPUTS_FAILING_CHECKS));
   const failingPaths = strings('failing_paths', text(process.env.INPUTS_FAILING_PATHS)).map(
     normalize
@@ -83,15 +78,14 @@ try {
   } else if (claim === 'inherited' && base === 'fails') {
     cause = 'inherited';
     reason = 'the same check fails on the base commit, in files this pull request does not change';
-  } else if (claim === 'environment' && cancelled.length > 0 && failingPaths.length === 0) {
-    cause = 'environment';
-    reason = `CI cancelled ${cancelled.join(', ')} before a result, and no failure points at a file`;
   } else if (claim === 'environment' && rerun !== 'fails') {
     cause = 'environment';
     reason =
       rerun === 'passes'
         ? 'the check passed when re-run, in files this pull request does not change'
-        : 'the failure is in no file this pull request changes and was not re-run';
+        : rerun === 'cancelled'
+          ? 'CI cancelled the re-run before it ran, so nothing reproduced the failure'
+          : 'the failure is in no file this pull request changes and was not re-run';
   } else if (claim === 'introduced') {
     cause = 'introduced';
     reason = 'the classifier attributed the failure to this branch';

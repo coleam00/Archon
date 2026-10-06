@@ -7,7 +7,7 @@ The project's gate ran and at least one check failed. `$ARTIFACTS_DIR/validation
 - `red_cause` — why the gate is red; when several checks failed, the cause that most needs action (`introduced` over `inherited` over `environment`):
   - `introduced` — the change under validation caused the failure.
   - `inherited` — the same check was already failing at the base this branch came from.
-  - `environment` — the machine caused it, not any code: a database or port a parallel process holds, a missing credential, a network fault, a process killed for memory, or a test that failed in a file the change does not touch and passes when re-run alone on this same tree.
+  - `environment` — the machine caused it, not any code: a database or port a parallel process holds, a missing credential, a network fault, a process killed for memory, or a test that failed in a file the change does not touch, passes when re-run alone on this same tree, and shares nothing the change alters (a mock, a fixture, global or shared test state).
 - `summary` — a few sentences: every failing check by name, what failed in each, and the evidence for each cause. A fixer reads this first.
 
 ## Evidence

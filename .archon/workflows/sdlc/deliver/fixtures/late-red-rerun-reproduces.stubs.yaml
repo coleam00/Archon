@@ -57,7 +57,7 @@ ci-probe: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-verdict: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-rerun: { requested: true, reason: "stub: the failing test is outside the change and passes on the base; one re-run requested" }
 rerun-probe: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
-ci-reverdict: '{"state":"red","detail":"test (ubuntu-latest) (failure)","cancelled":[]}'
+ci-reverdict: '{"state":"red","detail":"test (ubuntu-latest) (failure)"}'
 ci-changed: '{"files":["packages/core/src/feature.ts"]}'
 ci-classify:
   failing_checks: ["test (ubuntu-latest)"]
