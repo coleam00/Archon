@@ -309,3 +309,5 @@ export * from './workflow-run-listing';
 
 export { workflowRunOriginSchema } from './workflow-run';
 export type { WorkflowRunOrigin } from './workflow-run';
+
+export * from './workflow-event';

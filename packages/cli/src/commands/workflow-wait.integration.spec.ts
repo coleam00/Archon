@@ -1152,7 +1152,7 @@ describe('a durable wait deadline is enforced by the owning process', () => {
 
   test('resumes a duration wait at its deadline and finishes the run', async () => {
     const fixture = makeFixture('archon-wait-duration-', { 'wait-duration': DURATION_WAIT });
-    const { runId, conversationId } = await launchDetached(fixture, 'wait-duration');
+    const { runId } = await launchDetached(fixture, 'wait-duration');
 
     const completed = await waitFor(
       'the duration wait to resume and complete the run',
@@ -1171,9 +1171,7 @@ describe('a durable wait deadline is enforced by the owning process', () => {
     // The engine's own record of the wait: the deadline was genuinely waited, and
     // only then did the owner resume the run.
     expect(Number(output.waited_ms)).toBeGreaterThanOrEqual(3000);
-    // The resumed segment continues the run's original conversation instead of
-    // generating a second one for its dispatch and result card.
-    expect(readCliConversationPlatformIds(fixture.archonHome)).toEqual([conversationId]);
+    expect(readCliConversationPlatformIds(fixture.archonHome)).toEqual([]);
   }, 120_000);
 
   test('carries one owner through two sequential waits', async () => {

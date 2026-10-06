@@ -25,7 +25,9 @@
     "./schemas": "./src/schemas/index.ts",
     "./schemas/*": "./src/schemas/*.ts",
     "./platforms/registry": "./src/platforms/registry.ts",
-    "./platforms/types": "./src/platforms/types.ts"
+    "./platforms/types": "./src/platforms/types.ts",
+    "./handlers/clone": "./src/handlers/clone.ts",
+    "./config/config-loader": "./src/config/config-loader.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",

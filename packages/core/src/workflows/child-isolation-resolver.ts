@@ -31,7 +31,7 @@ import {
 import * as git from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { loadRepoConfig } from '../config/config-loader';
-import * as isolationDb from '../db/isolation-environments';
+import type { IIsolationStore } from '@archon/isolation';
 import type { Codebase } from '../schemas/codebase';
 
 /**
@@ -111,6 +111,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * returns the shared checkout as a fallback.
  */
 export function createCodebaseChildResolver(
+  isolation: IIsolationStore,
   codebase: Pick<Codebase, 'id' | 'name' | 'default_cwd' | 'kind'>,
   surface: {
     /**
@@ -191,7 +192,7 @@ export function createCodebaseChildResolver(
         });
 
         // Register the env so `isolation list`/`cleanup`/`complete <branch>` see it.
-        const envRecord = await isolationDb.create({
+        const envRecord = await isolation.create({
           codebase_id: codebase.id,
           workflow_type: 'task',
           workflow_id: identifier,

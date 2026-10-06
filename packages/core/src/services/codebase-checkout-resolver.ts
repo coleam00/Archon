@@ -1,5 +1,4 @@
 import type { Codebase } from '../types';
-import * as codebaseDb from '../db/codebases';
 import { resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
 import {
@@ -16,13 +15,6 @@ export interface CodebaseCheckoutResolverDeps {
   getGitCheckoutIdentity: (path: string) => Promise<GitCheckoutIdentity>;
 }
 
-const defaultDeps: CodebaseCheckoutResolverDeps = {
-  findCodebaseByDefaultCwd: cwd => codebaseDb.findCodebaseByDefaultCwd(cwd),
-  listCodebases: () => codebaseDb.listCodebases(),
-  getCanonicalRepoPath: path => getCanonicalRepoPath(path),
-  getGitCheckoutIdentity: path => getGitCheckoutIdentity(path),
-};
-
 /**
  * Resolve a checkout to an existing codebase without remote or branch inference.
  *
@@ -33,14 +25,15 @@ const defaultDeps: CodebaseCheckoutResolverDeps = {
  */
 export async function findCodebaseForCheckoutPath(
   cwd: string,
-  deps: CodebaseCheckoutResolverDeps = defaultDeps
+  deps: Pick<CodebaseCheckoutResolverDeps, 'findCodebaseByDefaultCwd' | 'listCodebases'> &
+    Partial<Pick<CodebaseCheckoutResolverDeps, 'getCanonicalRepoPath' | 'getGitCheckoutIdentity'>>
 ): Promise<Codebase | null> {
   cwd = await canonicalizeProjectPath(cwd);
   const exact = await deps.findCodebaseByDefaultCwd(cwd);
   if (exact) return exact;
 
   try {
-    const canonicalCwd = await deps.getCanonicalRepoPath(cwd);
+    const canonicalCwd = await (deps.getCanonicalRepoPath ?? getCanonicalRepoPath)(cwd);
     if (canonicalCwd === cwd) return null;
     // The primary path comes from `git worktree list` (forward slashes on
     // Windows); `default_cwd` is stored in canonical form.
@@ -49,12 +42,14 @@ export async function findCodebaseForCheckoutPath(
     if (!(error instanceof CanonicalRepoPathUnavailableError)) throw error;
   }
 
-  const checkoutIdentity = await deps.getGitCheckoutIdentity(cwd);
+  const checkoutIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(cwd);
   const matches: Codebase[] = [];
   for (const codebase of await deps.listCodebases()) {
     if (codebase.kind === 'folder') continue;
     try {
-      const registeredIdentity = await deps.getGitCheckoutIdentity(codebase.default_cwd);
+      const registeredIdentity = await (deps.getGitCheckoutIdentity ?? getGitCheckoutIdentity)(
+        codebase.default_cwd
+      );
       if (resolve(registeredIdentity.commonGitDir) === resolve(checkoutIdentity.commonGitDir)) {
         matches.push(codebase);
       }
