@@ -433,11 +433,11 @@ node in its `upstream_failed` cause. Condition skips and optional timeout
 skips (`on_timeout: skip`) remain admissible when another dependency succeeds.
 
 A dependency skipped by its own `when:` provides neither a success nor a failure.
-If **all** dependencies are conditional and all skip, `none_failed_min_one_success`
-cannot satisfy its success requirement and the downstream node skips too. The loader
-warns about this shape, naming the downstream node; both `archon validate workflows`
-and run loading report the warning. A conditional dependency can still succeed, so
-this is a warning about a possible skip, not an invalid workflow.
+When a `none_failed_min_one_success` node has a single dependency and that
+dependency has a `when:`, the node skips every time the condition is false. The
+loader warns about this shape, naming the node; both `archon validate workflows`
+and run loading report the warning. Joins over several conditional dependencies
+are not flagged, since they are usually branches where one always runs.
 
 To run after an optional gate, use `all_done`:
 

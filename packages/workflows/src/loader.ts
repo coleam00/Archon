@@ -4,7 +4,6 @@
 import type { ProviderRegistry } from '@archon/provider-contract';
 import type {
   WorkflowDefinition,
-  ResolvedWorkflow,
   WorkflowLoadError,
   DagNode,
   IncludeDirective,
@@ -26,7 +25,6 @@ import {
   persistedSessionHandling,
   isNodeContextResume,
 } from './schemas';
-import { readComposedMeta } from './compiled-command';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from './fan-out-identity';
 import { createLogger } from '@archon/paths';
 import { compileOutputSchema } from './structured-output';
@@ -394,7 +392,7 @@ function collectUnknownNodeKeys(raw: unknown, id: string, label: string, warning
  * terminal sink recurses into this same case, following a chain of well-formed
  * sole-terminal-sink nesting to any depth). A gate that is mid-body or
  * co-terminal with another sink breaks the chain here too — the placement
- * check in `collectExpandedGraphWarnings` below already warns about that
+ * check in `collectLoopGroupSinkWarnings` below already warns about that
  * misplacement on its own. Mirrors `findLoopGroupTerminalSuspendNode`'s doc
  * comment (dag-executor.ts): the runtime has no unambiguous way to escalate
  * a pause through a sink that isn't a bare gate, so this only makes that gap
@@ -410,49 +408,59 @@ function isUnescalatableInteractiveSink(node: DagNode | IncludeDirective): boole
   return soleSink !== undefined && isUnescalatableInteractiveSink(soleSink);
 }
 
-/** Graph advisories need expanded includes and statically resolved fan-out bodies. */
-export function collectExpandedGraphWarnings(
+/**
+ * A condition-skipped dependency is neither a success nor a failure, so a
+ * `none_failed_min_one_success` node whose ONLY dependency has a `when:` skips
+ * whenever that condition is false (#3783). Two or more conditional dependencies
+ * are usually mutually exclusive branches where one always runs, so they are not
+ * flagged. This judges the authored graph, not the expanded one: expansion copies
+ * an include's `when:` onto the block's entry nodes, where a whole block skipping
+ * together is the intent rather than a mistake.
+ */
+function collectConditionalJoinWarnings(
   nodes: readonly (DagNode | IncludeDirective)[],
-  warnings: string[],
-  workflows: ReadonlyMap<string, ResolvedWorkflow>,
-  scope = ''
+  warnings: string[]
 ): void {
-  const nodesById = new Map(nodes.map(node => [node.id, node]));
+  const conditional = new Set(nodes.filter(node => node.when !== undefined).map(node => node.id));
   for (const node of nodes) {
-    const dependencies = node.depends_on ?? [];
+    const [dependency, ...rest] = node.depends_on ?? [];
     if (
       node.trigger_rule === 'none_failed_min_one_success' &&
-      dependencies.length > 0 &&
-      dependencies.every(id => {
-        const dependency = nodesById.get(id);
-        return (
-          dependency !== undefined &&
-          (dependency.when !== undefined ||
-            (!isIncludeDirective(dependency) &&
-              readComposedMeta(dependency)?.boundaries?.some(
-                boundary => boundary.when !== undefined
-              )))
-        );
-      })
+      dependency !== undefined &&
+      rest.length === 0 &&
+      conditional.has(dependency)
     ) {
       warnings.push(
-        `Node '${scope}${node.id}': 'none_failed_min_one_success' requires at least one successful dependency, ` +
-          "but every dependency has a 'when' (locally or on an include). If all are condition-skipped, this node will also be skipped. " +
-          "Use 'all_done' to run after an optional gate, with a downstream 'when' if needed to prevent " +
-          'running after a failure. See /guides/authoring-workflows/#trigger_rule-values.'
+        `Node '${node.id}': its only dependency '${dependency}' has a 'when', and ` +
+          "'none_failed_min_one_success' needs a successful dependency, so this node skips " +
+          `whenever '${dependency}' is condition-skipped. Use 'all_done' to run after an ` +
+          'optional gate. See /guides/authoring-workflows/#trigger_rule-values.'
       );
     }
-    if (isComposeFanOutNode(node)) {
-      const target = workflows.get(node.include);
-      if (target) {
-        collectExpandedGraphWarnings(
-          target.nodes,
-          warnings,
-          workflows,
-          `${scope}${node.id} -> ${node.include}:`
-        );
-      }
+    if (!isIncludeDirective(node) && isLoopGroupNode(node)) {
+      collectConditionalJoinWarnings(node.loop_group.nodes, warnings);
     }
+  }
+}
+
+/**
+ * Loop-group sink-shape warnings, judged against the EXPANDED node graph (#2756).
+ *
+ * Both checks below read resolved nodes only — `depends_on` edges and node kinds —
+ * never the raw YAML, so they describe the graph the executor will run rather than
+ * what the author typed. That is the point: an `include:` is a legal `loop_group`
+ * body entry, and before expansion it is an opaque target name no sink check can
+ * classify, so a composed terminal sink is invisible at parse time. This therefore
+ * runs once per workflow AFTER `expandWorkflowIncludes`, from the discovery site
+ * that pairs warnings with the expanded definition (`workflow-discovery.ts`) — a
+ * directly-authored sink keeps its id and its verdict through expansion, so it
+ * still warns exactly once.
+ */
+export function collectLoopGroupSinkWarnings(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  warnings: string[]
+): void {
+  for (const node of nodes) {
     if (isIncludeDirective(node) || !isLoopGroupNode(node)) continue;
 
     // An `include:` is already gone from the body here — expansion replaced it with the
@@ -543,7 +551,7 @@ export function collectExpandedGraphWarnings(
       );
     }
 
-    collectExpandedGraphWarnings(node.loop_group.nodes, warnings, workflows, scope);
+    collectLoopGroupSinkWarnings(node.loop_group.nodes, warnings);
   }
 }
 
@@ -561,7 +569,7 @@ export function collectExpandedGraphWarnings(
  * Every notice here is about one node as its author wrote it — the gate ones read
  * the RAW node to see a key Zod already normalized away. Verdicts about graph
  * SHAPE are not here: the loop_group sink-shape checks live in
- * `collectExpandedGraphWarnings`, which judges the expanded graph (#2756).
+ * `collectLoopGroupSinkWarnings`, which judges the expanded graph (#2756).
  */
 function collectGateAndLoopDeprecationWarnings(
   node: DagNode | IncludeDirective,
@@ -1605,6 +1613,8 @@ export function parseWorkflow(
         error: { filename, error: outputFormatError, errorType: 'validation_error' },
       };
     }
+
+    collectConditionalJoinWarnings(dagNodes, parseWarnings);
 
     // Workflow-class placement (#2707 step 2) + the typed `interactive` field share
     // one raw-value coercion, computed here so the class check and the field the

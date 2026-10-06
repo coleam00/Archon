@@ -157,7 +157,7 @@ describe('validateWorkflowsCommand', () => {
 
   test('renders conditional-join load warnings and exits successfully', async () => {
     const warning =
-      "Node 'join': 'none_failed_min_one_success' requires at least one successful dependency, but every dependency has a 'when'. Use 'all_done'.";
+      "Node 'join': its only dependency 'gate' has a 'when', and 'none_failed_min_one_success' needs a successful dependency. Use 'all_done'.";
     mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
       workflows: [
         {
