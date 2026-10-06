@@ -20,3 +20,28 @@ A provider that declares `sessionResume` names the session each turn ran in with
 `schema/provider-contract.schema.json` is generated from `src/` by `src/scripts/generate-schema.ts`. Run `bun run generate:provider-contract-schema` from the repository root after changing a schema; `bun run validate` fails while the file is stale.
 
 `@archon/provider-contract/conformance` checks a provider against the contract from fixtures the provider owns. Failure cases drive the provider into one failure each and name the class it must report and the vendor text its evidence must keep. Turn cases, together with the failure cases, check that every turn settles exactly once, last, after its result. A provider with tools also supplies a `toolTurn`: a turn with two tool calls, one of them interrupted. Its stream must parse as provider chunks, close every tool call once before the next result, never update a call it did not start, and leave every subtask in a terminal status at `settled`, as reported by its runtime. Providers never invent terminal subtask statuses. A provider declaring `backgroundWork: reported` supplies `backgroundCases` with runtime status evidence sampled as chunks arrive; the checker rejects early settlement, invented closes, and missing background fixtures. `none` means verified absence of background work; `unobserved` makes no claim about work the adapter cannot see. When the suite's `capabilities` declare `sessionResume`, every result of a turn case, the tool turn, the fork turn and each background case must carry a non-empty `sessionId`; failure cases are not checked. When they declare `sessionFork`, the suite needs a `forkTurn`: a turn that forks an existing `source` session. Every result of it must report `resumed: true` and name a session other than `source`.
+
+`@archon/provider-contract/plugin` serves and connects a provider over a pair of UTF-8 byte streams (`ReadableStream<Uint8Array>` and `WritableStream<Uint8Array>`). This is the contract slice for [#3642](https://github.com/coleam00/Archon/issues/3642); process spawning, installation and registry integration follow separately.
+
+```ts
+import { connectProvider, serveProvider } from '@archon/provider-contract/plugin';
+
+const serving = serveProvider({ descriptor, create: () => provider }, providerIO);
+const client = await connectProvider(hostIO);
+try {
+  for await (const chunk of client.sendQuery('Task', '/absolute/project/path')) {
+    // Consume the same ProviderChunk the in-process provider emits.
+  }
+} finally {
+  await client.close();
+  await serving;
+}
+```
+
+`serveProvider` defaults to stdin/stdout when no stream pair is supplied. Stdout must contain only protocol traffic; diagnostics belong on stderr. The connection uses ACP v1 `initialize`, `session/new`, `session/prompt` and `session/cancel`, with the descriptor advertised in `agentCapabilities._meta.archon`. The transport-local session handle is separate from the native session id carried in `result.sessionId`. Each `_archon/chunk` notification carries `{ sessionId, chunk }`; the client validates the chunk using `providerChunkSchema` and preserves its fields and order. It exposes `settled` only after `session/prompt` acknowledges successful iterator completion, so a provider rejection after emitting settlement still fails the turn. It finishes after that settlement, or when a cancelled stream ends. It never invents results, settlement or terminal subtask states. An uncancelled end before settlement fails.
+
+Descriptors declare protocol `1`, provider identity/version, capabilities, a static credential catalog and a config JSON Schema. Native tool handlers and dynamic credential catalogs cannot cross this wire and are refused. Credential checks and credential-model resolution use `_archon/check_credential` and `_archon/resolve_credential_model`. Unknown notifications are ignored; unsupported requests receive JSON-RPC `-32601`. This is an Archon extension, not a plain ACP agent adapter.
+
+Session requests carry the data fields of `SendQueryOptions`. `abortSignal` becomes `session/cancel`; `onAdmission` stays with the host; `nativeTools` cannot be transported. `env` belongs to the process carrier, not the wire: `serveProvider` gives the underlying provider its own process environment. A stream pair does not apply the client's `env` bag to the serving process. The process carrier owns termination when a provider does not respond to cancellation. Closing a connection aborts its provider work.
+
+The generated JSON Schema includes the descriptor, serializable request, lifecycle payloads, extension payloads and JSON-RPC envelopes. Messages are newline-terminated JSON, capped at `PROVIDER_PLUGIN_MAX_MESSAGE_BYTES` (16 MiB per line, excluding the newline). Malformed UTF-8, JSON, envelopes and chunk payloads fail with `ProviderPluginProtocolError`, including the provider id and incoming line number. The tests check emitted lifecycle payloads against the unmodified ACP v1 schema definitions from `@agentclientprotocol/sdk@1.7.0`, installed only as a development dependency.

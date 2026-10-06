@@ -181,6 +181,7 @@ clearRegistry();
 registerBuiltinProviders();
 
 import { executeWorkflow, hydrateResumableRun } from './executor';
+import { prepareRunAiConfiguration } from './run-preflight';
 import { captureWorkflowSource, resolveRunSourceCapture } from './workflow-source';
 import { discoverWorkflows } from './workflow-discovery';
 import { validateWorkflowResources } from './validator';
@@ -730,6 +731,159 @@ describe('workflow: sub-run e2e (#2121 Phase 2)', () => {
     await removeTempTree(cwd);
     if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
     else process.env.ARCHON_HOME = originalArchonHome;
+  });
+
+  it('a resumed parent gives a newly reached child its frozen AI base', async () => {
+    await writeWorkflow(
+      'frozen-child',
+      `name: frozen-child
+description: Frozen child policy
+nodes:
+  - id: ai
+    prompt: run child
+`
+    );
+    await writeWorkflow(
+      'frozen-parent',
+      `name: frozen-parent
+description: Frozen parent policy
+nodes:
+  - id: child
+    workflow: frozen-child
+`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const workflow = await discover('frozen-parent');
+    deps.loadConfig = mock(async () => ({
+      assistant: 'codex',
+      assistants: { claude: {}, codex: { model: 'gpt-5.6-sol' } },
+      commands: {},
+      defaults: { loadDefaultWorkflows: false, loadDefaultCommands: false },
+    }));
+    const launch = await prepareRunAiConfiguration(deps, workflow, cwd);
+    const parent = await store.createWorkflowRun({
+      workflow_name: workflow.name,
+      origin: { conversationId: 'conv-db' },
+      user_message: 'goal',
+      working_path: cwd,
+      metadata: { ai_configuration: launch.aiConfigurationSnapshot },
+    });
+    deps.loadConfig = mock(async () => ({
+      assistant: 'claude',
+      assistants: { claude: { model: 'opus' }, codex: { model: 'changed' } },
+      commands: {},
+      defaults: { loadDefaultWorkflows: false, loadDefaultCommands: false },
+    }));
+    const requests: { provider: string; model?: string }[] = [];
+    const getProvider = deps.getAgentProvider;
+    deps.getAgentProvider = provider => {
+      const runtime = getProvider(provider);
+      const sendQuery = runtime.sendQuery.bind(runtime);
+      runtime.sendQuery = (...args) => {
+        requests.push({ provider, model: args[3]?.model });
+        return sendQuery(...args);
+      };
+      return runtime;
+    };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      { preCreatedRun: await store.resumeWorkflowRun(parent.id), priorCompletedNodes: new Map() }
+    );
+    expect(result).toMatchObject({ success: true });
+    const child = [...store.runs.values()].find(run => run.parent_run_id === parent.id);
+    expect(child?.metadata.ai_configuration).toEqual(launch.aiConfigurationSnapshot);
+    expect(requests).toEqual([{ provider: 'codex', model: 'gpt-5.6-sol' }]);
+  });
+
+  it('an existing child resumes with its own recorded policy before the parent policy', async () => {
+    await writeWorkflow(
+      'owned-child',
+      `name: owned-child
+description: Own recorded policy
+nodes:
+  - id: ai
+    prompt: resume child
+`
+    );
+    await writeWorkflow(
+      'owned-parent',
+      `name: owned-parent
+description: Resume an existing child
+nodes:
+  - id: child
+    workflow: owned-child
+`
+    );
+    const store = new InMemoryStore();
+    const deps = makeDeps(store);
+    const workflow = await discover('owned-parent');
+    const parentPrepared = await prepareRunAiConfiguration(deps, workflow, cwd);
+    const parent = await store.createWorkflowRun({
+      workflow_name: workflow.name,
+      origin: { conversationId: 'conv-db' },
+      user_message: 'goal',
+      working_path: cwd,
+      metadata: { ai_configuration: parentPrepared.aiConfigurationSnapshot },
+    });
+    deps.loadConfig = mock(async () => ({
+      assistant: 'codex',
+      assistants: { claude: {}, codex: { model: 'child-model' } },
+      commands: {},
+      defaults: { loadDefaultWorkflows: false, loadDefaultCommands: false },
+    }));
+    const childPrepared = await prepareRunAiConfiguration(deps, await discover('owned-child'), cwd);
+    const child = await store.createWorkflowRun({
+      workflow_name: 'owned-child',
+      origin: { conversationId: 'conv-db' },
+      user_message: 'goal',
+      working_path: cwd,
+      parent_run_id: parent.id,
+      metadata: {
+        parent_node_id: 'child',
+        ai_configuration: childPrepared.aiConfigurationSnapshot,
+      },
+    });
+    await store.failWorkflowRun(child.id, 'interrupted');
+    deps.loadConfig = mock(async () => ({
+      assistant: 'claude',
+      assistants: { claude: { model: 'current-model' }, codex: {} },
+      commands: {},
+      defaults: { loadDefaultWorkflows: false, loadDefaultCommands: false },
+    }));
+    const queries: { provider: string; model?: string }[] = [];
+    const getProvider = deps.getAgentProvider;
+    deps.getAgentProvider = provider => {
+      const runtime = getProvider(provider);
+      const sendQuery = runtime.sendQuery.bind(runtime);
+      runtime.sendQuery = (...args) => {
+        queries.push({ provider, model: args[3]?.model });
+        return sendQuery(...args);
+      };
+      return runtime;
+    };
+    const result = await executeWorkflow(
+      deps,
+      makePlatform(),
+      'conv-plat',
+      cwd,
+      workflow,
+      'goal',
+      { conversationId: 'conv-db' },
+      { preCreatedRun: await store.resumeWorkflowRun(parent.id), priorCompletedNodes: new Map() }
+    );
+    expect(result).toMatchObject({ success: true });
+    expect(queries).toEqual([{ provider: 'codex', model: 'child-model' }]);
+    expect([...store.runs.values()].filter(run => run.parent_run_id === parent.id)).toHaveLength(1);
+    expect((await store.getWorkflowRun(child.id))?.metadata.ai_configuration).toEqual(
+      childPrepared.aiConfigurationSnapshot
+    );
   });
 
   const origins = [
@@ -2851,8 +3005,14 @@ nodes:
 
     const store = new InMemoryStore();
     const prefsUserIds: string[] = [];
+    const credentialUserIds: string[] = [];
     const deps: WorkflowDeps = {
       ...makeDeps(store),
+      isPerUserGitHubEnabled: () => true,
+      getUserGithubToken: async userId => {
+        credentialUserIds.push(userId);
+        return undefined;
+      },
       getUserAiPrefs: (userId: string) => {
         prefsUserIds.push(userId);
         return Promise.resolve({});
@@ -2889,6 +3049,7 @@ nodes:
     )?.data?.node_output;
     expect(preGateBase).toBe('release-2026');
     const preGatePrefsCalls = prefsUserIds.length;
+    const preGateCredentialCalls = credentialUserIds.length;
     const preGateTelemetry = telemetryInvocations.filter(t => t.workflowName === 'identity-parent');
     expect(preGateTelemetry).toEqual([
       { workflowName: 'identity-parent', workflowSource: 'bundled' },
@@ -2898,9 +3059,6 @@ nodes:
     // completion fires the in-process parent auto-resume, which re-enters executeWorkflow
     // with nothing but what the run itself recorded.
     store.approveGate(child!.id);
-    // Give the child a user of its own so the two post-gate drives are told apart by the
-    // user they resolve, not by counting calls: the child's resume looks up 'user-child',
-    // and only the parent's own restore can produce the 'user-alpha' lookup below.
     store.runs.get(child!.id)!.user_id = 'user-child';
     const hydrated = await hydrateResumableRun(deps, (await store.getWorkflowRun(child!.id))!);
     expect(hydrated).not.toBeNull();
@@ -2921,13 +3079,11 @@ nodes:
     )?.data?.node_output;
     expect(postGateBase).toBe(preGateBase);
 
-    // Execution identity: the parent's post-gate drive resolved per-user AI prefs for the
-    // user that started it. A dropped userId is silent -- the guarded lookup simply never
-    // happens -- so the parent's lookup has to be present, not merely unchallenged.
     expect(prefsUserIds.slice(0, preGatePrefsCalls)).toEqual(
       Array(preGatePrefsCalls).fill('user-alpha')
     );
-    expect(prefsUserIds.slice(preGatePrefsCalls)).toEqual(['user-child', 'user-alpha']);
+    expect(prefsUserIds.slice(preGatePrefsCalls)).toEqual([]);
+    expect(credentialUserIds.slice(preGateCredentialCalls)).toEqual(['user-child', 'user-alpha']);
 
     // The resumed half of the run reports the same workflow source, so a bundled
     // workflow is not recategorized as custom halfway through. Terminal telemetry reads

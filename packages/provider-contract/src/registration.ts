@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { IAgentProvider } from './agent-provider';
 import type { ProviderCapabilities } from './capabilities';
 
@@ -5,17 +6,14 @@ import type { ProviderCapabilities } from './capabilities';
 export type ProviderDefaults = Record<string, unknown>;
 
 /**
- * Which authored surface a strict provider-config parse is validating.
- *
- * `install` is `assistants.<provider>` in a global or repository
- * `.archon/config.yaml`; `run` is an explicitly selected per-run layer. They
- * share one parser so both paths reject the same bad values, and the scope
- * lets a provider refuse a key whose consumer owns process-lifetime state and
- * therefore cannot be re-decided per run.
+ * `install` validates global/repository defaults; `run` validates a per-run layer.
+ * `snapshot` projects JSON-compatible run defaults without credentials or
+ * provider-native and process-owned settings. Providers own which settings have
+ * run-lifetime meaning.
  */
-export type ProviderConfigScope = 'install' | 'run';
+export type ProviderConfigScope = 'install' | 'run' | 'snapshot';
 
-/** Strict parser for an authored provider config layer. */
+/** Validate, normalize, and project defaults according to their owning scope. */
 export type ProviderConfigParser = (
   raw: ProviderDefaults,
   scope: ProviderConfigScope
@@ -46,14 +44,16 @@ export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
  * OpenCode). Delivery (vendor → env vars / files) is owned by
  * @archon/core/credentials — this spec is only the consumption matrix.
  */
-export interface CredentialSpec {
-  /** Canonical vendor id — used as the storage key in user_provider_keys. */
-  vendor: string;
-  /** Human-readable vendor name for UI display (e.g. 'OpenRouter'). */
-  displayName: string;
-  /** Which connection kinds this vendor supports for this agent (at least one). */
-  kinds: [CredentialKind, ...CredentialKind[]];
-}
+export const credentialSpecSchema = z.object({
+  vendor: z.string().min(1),
+  displayName: z.string().min(1),
+  // Zod needs the explicit length check to emit minItems for a tuple with rest.
+  kinds: z
+    .tuple([z.enum(CREDENTIAL_KINDS)])
+    .rest(z.enum(CREDENTIAL_KINDS))
+    .check(z.minLength(1)),
+});
+export type CredentialSpec = z.infer<typeof credentialSpecSchema>;
 
 /**
  * An agent's credential catalog. `static` lists the vendors up front

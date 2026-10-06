@@ -288,3 +288,99 @@ test('dispatch permits recovery of closed marked issues with edited content', as
     result: { value: { changed: false, workitem: { state: 'closed' } } },
   });
 });
+
+const merge = {
+  operationId: 'merge',
+  op: 'pr.merge',
+  ref,
+  method: 'squash',
+  conditions: { head: 'headsha' },
+} satisfies ForgeRequest;
+const rerun = {
+  operationId: 'rerun',
+  op: 'checks.rerun',
+  ref,
+  revision: 'headsha',
+  units: [
+    { unit: { kind: 'check', id: 'check-id', name: 'check' }, rerun: { id: 'run-id', attempt: 2 } },
+  ],
+} satisfies ForgeRequest;
+
+test('merges and reruns require complete applied evidence at dispatch', async () => {
+  for (const request of [merge, rerun]) {
+    expect((await dispatch(request)).response.ok).toBe(true);
+    expect((await dispatch(request, 'mismatch')).response).toMatchObject({
+      ok: false,
+      mutation: { outcome: 'outcome_unknown' },
+    });
+    const timeout = await dispatch(request, 'hang', 100);
+    expect(timeout.response).toMatchObject({ ok: false, mutation: { outcome: 'outcome_unknown' } });
+    if (!timeout.response.ok)
+      expect(timeout.response.mutation).toMatchObject(
+        request.op === 'pr.merge'
+          ? { merge: { method: merge.method, conditions: merge.conditions } }
+          : { rerun: { revision: rerun.revision, requested: rerun.units } }
+      );
+  }
+});
+
+test('unsupported or missing merge conditions do not launch the operation', async () => {
+  const discovery = await discoverPlugins({
+    config: {
+      plugins: [{ plugin: 'mutator', command: process.execPath, args: [fixture] }],
+      scanPath: false,
+    },
+  });
+  // If dispatch launches this missing executable, the response is a process failure.
+  for (const plugin of discovery.byHost.values()) plugin.command = '/missing-operation-executable';
+  for (const conditions of [
+    {},
+    { head: 'headsha', base: 'base' },
+    { head: 'headsha', tree: 'tree' },
+  ]) {
+    const result = await dispatchForge({ ...merge, conditions }, { discovery });
+    expect(result.response).toMatchObject({
+      ok: false,
+      error: { kind: conditions.head ? 'unsupported_op' : 'invalid_request' },
+      mutation: { outcome: 'refused' },
+    });
+  }
+  expect((await dispatch(merge, 'no-conditions')).response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op' },
+    mutation: { outcome: 'refused' },
+  });
+});
+
+test('review bodies reach callers and only their digests reach the audit', async () => {
+  const result = await dispatch({ operationId: 'reviews', op: 'pr.reviews', ref });
+  expect(JSON.stringify(result.response)).toContain('private review body');
+  expect(JSON.stringify(result.audit)).not.toContain('private review body');
+  expect(JSON.stringify(result.audit)).toContain(contentDigest('private review body'));
+});
+
+test.each(['wrong-method', 'wrong-condition', 'unenforced'])(
+  'merge results cannot overstate enforcement or change the request: %s',
+  async mode => {
+    expect((await dispatch(merge, mode)).response).toMatchObject({
+      ok: false,
+      error: { kind: 'invalid_response' },
+      mutation: { outcome: 'outcome_unknown' },
+    });
+  }
+);
+
+test('a partial rerun result cannot certify complete success', async () => {
+  const request = {
+    ...rerun,
+    units: [
+      ...rerun.units,
+      { ...rerun.units[0], unit: { ...rerun.units[0].unit, id: 'another-check' } },
+    ],
+  };
+  expect((await dispatch(request, 'subset')).response).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response' },
+    mutation: { outcome: 'outcome_unknown' },
+  });
+});

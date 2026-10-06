@@ -445,6 +445,9 @@ const scopedOnlyHelp: HelpEntry[] = [
       ['pr.create', 'Open a pull request and verify it by reading it back'],
       ['pr.edit-body', 'Replace a pull request body and verify the result'],
       ['pr.ready', 'Take a pull request out of draft and verify the result'],
+      ['pr.merge', 'Merge a pull request pinned to its approved head'],
+      ['checks.rerun', 'Rerun selected failed checks at a revision'],
+      ['pr.reviews', 'Read submitted reviews and root review comments'],
       ['comment.upsert', 'Write the one marked comment on a pull request'],
     ] as const
   ).map(([subcommand, description]) => ({

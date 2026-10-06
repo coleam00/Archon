@@ -421,3 +421,63 @@ test('new work-item mutations use file requests and record content-free verified
       expect(JSON.stringify(audits)).not.toContain(secret);
   }
 });
+
+test('reviews retain bodies in stdout and digest them through the CLI audit boundary', async () => {
+  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 42 };
+  const auditRecords: unknown[] = [];
+  const responses: unknown[] = [];
+  const code = await forgeCommand(
+    'pr.reviews',
+    { data: JSON.stringify({ ref }) },
+    {
+      env: { WORKFLOW_ID: 'run' },
+      readConfig: async () => ({}),
+      dispatch: async request => {
+        const response: ForgeResponse = {
+          operationId: request.operationId,
+          ok: true,
+          result: {
+            op: 'pr.reviews',
+            value: {
+              ref,
+              items: [
+                {
+                  kind: 'review',
+                  id: '1',
+                  author: null,
+                  commit: 'head',
+                  state: 'COMMENTED',
+                  createdAt: null,
+                  url: 'https://forge.example/review/1',
+                  body: 'confidential review',
+                },
+              ],
+            },
+          },
+        };
+        return {
+          response,
+          plugin: null,
+          audit: {
+            operationId: request.operationId,
+            operation: request.op,
+            target: ref,
+            plugin: null,
+            result: forgeAuditResponse(response),
+            durationMs: 1,
+          },
+        };
+      },
+      audit: async audit => {
+        auditRecords.push(audit);
+      },
+      write: async response => {
+        responses.push(response);
+      },
+    }
+  );
+  expect(code).toBe(0);
+  expect(JSON.stringify(responses)).toContain('confidential review');
+  expect(JSON.stringify(auditRecords)).not.toContain('confidential review');
+  expect(JSON.stringify(auditRecords)).toContain('digest');
+});

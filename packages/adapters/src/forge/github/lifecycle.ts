@@ -1,14 +1,15 @@
 /**
  * GitHub's work-item and pull-request lifecycle operations.
  *
- * Every mutation here submits at most one write and then reads the result back
- * from GitHub before claiming it. The outcome a caller receives is decided by how
- * far the write got: nothing submitted is a refusal, a submitted request whose
+ * Lifecycle mutations submit at most one write; check reruns submit one per run.
+ * Each write is read back before claiming success. The outcome is decided by
+ * how far the write got: nothing submitted is a refusal, a submitted request whose
  * answer was lost is unknown, and an acknowledged write whose read-back does not
  * agree is a verification failure carrying what may remain on the forge.
  */
 
 import { z } from 'zod';
+import { handleGithubChecksRerun } from './checks-rerun';
 import {
   contentDigest,
   forgePrRecordSchema,
@@ -16,7 +17,10 @@ import {
   type ForgeWorkItemRecord,
   type ForgeLabelRecord,
   mutationTarget,
+  mutationAttempt,
   type ForgeCommentRecord,
+  type landedSchema,
+  reviewItemSchema,
   type ForgeError,
   type ForgeMutationFailure,
   type ForgeMutationRequest,
@@ -46,6 +50,7 @@ const pullSchema = z.object({
   state: z.enum(['open', 'closed']),
   draft: z.boolean(),
   merged: z.boolean().optional(),
+  merge_commit_sha: z.string().nullable().optional(),
   maintainer_can_modify: z.boolean().nullable().optional(),
   head: z.object({ ref: z.string().min(1), sha: z.string().min(1), repo: repoSchema.nullable() }),
   base: z.object({ ref: z.string().min(1), sha: z.string().min(1) }),
@@ -137,11 +142,10 @@ async function verifyRepository(fetchImpl: Fetch, token: string, repo: RepoRef):
   }
 }
 
-function evidenceBase(request: ForgeMutationRequest): {
-  op: typeof request.op;
-  target: ReturnType<typeof mutationTarget>;
-} {
-  return { op: request.op, target: mutationTarget(request) };
+function evidenceBase(
+  request: ForgeMutationRequest
+): Pick<ForgeMutationFailure, 'op' | 'target' | 'merge' | 'rerun'> {
+  return { op: request.op, target: mutationTarget(request), ...mutationAttempt(request) };
 }
 function refused(
   request: ForgeMutationRequest,
@@ -169,6 +173,7 @@ function unverified(
     comment?: ForgeCommentRecord;
     workitem?: ForgeWorkItemRecord;
     label?: ForgeLabelRecord;
+    landed?: z.infer<typeof landedSchema>;
   }
 ): ForgeResponse {
   return failure(
@@ -178,6 +183,15 @@ function unverified(
       ...evidenceBase(request),
       outcome: 'verification_failed',
       leaveBehind,
+      ...(request.op === 'pr.merge' && observed?.landed
+        ? {
+            merge: {
+              method: request.method,
+              conditions: request.conditions,
+              landed: observed.landed,
+            },
+          }
+        : {}),
       ...(observed?.pr ? { observed: observed.pr } : {}),
       ...(observed?.comment ? { comment: observed.comment } : {}),
       ...(observed?.workitem ? { workitem: observed.workitem } : {}),
@@ -696,6 +710,7 @@ export async function handleGithubMutation(
   fetchImpl: Fetch,
   token: string
 ): Promise<ForgeResponse> {
+  if (request.op === 'checks.rerun') return handleGithubChecksRerun(request, fetchImpl, token);
   const progress: { phase: 'not_submitted' | 'submitted' | 'acknowledged' } = {
     phase: 'not_submitted',
   };
@@ -710,6 +725,8 @@ export async function handleGithubMutation(
         return await setLabels(request, fetchImpl, token, submit);
       case 'repo.label.ensure':
         return await ensureLabel(request, fetchImpl, token, submit);
+      case 'pr.merge':
+        return await mergePullRequest(request, fetchImpl, token, submit);
       case 'pr.create':
         return await createPullRequest(request, fetchImpl, token, submit);
       case 'pr.edit-body':
@@ -827,4 +844,174 @@ export async function handleGithubPrView(
       : undefined,
     selector.repo
   );
+}
+
+async function mergePullRequest(
+  request: Extract<ForgeMutationRequest, { op: 'pr.merge' }>,
+  fetchImpl: Fetch,
+  token: string,
+  submit: (phase: 'submitted' | 'acknowledged') => void
+): Promise<ForgeResponse> {
+  if (!request.conditions.head)
+    return refused(request, {
+      kind: 'invalid_request',
+      message: 'A merge requires the approved head condition',
+    });
+  if (Object.keys(request.conditions).some(key => key !== 'head'))
+    return refused(request, {
+      kind: 'unsupported_op',
+      message: 'GitHub enforces only the head merge condition',
+    });
+  const before = await readPull(fetchImpl, token, request.ref);
+  if (
+    before.number !== request.ref.number ||
+    before.head.sha !== request.conditions.head ||
+    before.state !== 'open' ||
+    before.merged ||
+    before.draft
+  )
+    return refused(
+      request,
+      { kind: 'conflict', message: 'Pull request is not open and ready at the requested head' },
+      prRecord(request.ref.repo, before)
+    );
+  const { root, path } = location(request.ref.repo);
+  submit('submitted');
+  const result = z.object({ merged: z.boolean(), sha: z.string().nullable().optional() }).parse(
+    await githubRequest(
+      fetchImpl,
+      token,
+      `${root}/repos/${path}/pulls/${String(request.ref.number)}/merge`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ sha: request.conditions.head, merge_method: request.method }),
+      },
+      () => {
+        submit('acknowledged');
+      }
+    )
+  );
+  if (!result.merged)
+    return refused(request, { kind: 'conflict', message: 'GitHub declined the merge' });
+  const observed = await readPull(fetchImpl, token, request.ref);
+  const pr = prRecord(request.ref.repo, observed);
+  const commit = observed.merge_commit_sha ?? null;
+  if (
+    pr.number !== request.ref.number ||
+    pr.state !== 'merged' ||
+    pr.head_revision !== request.conditions.head ||
+    !commit ||
+    result.sha !== commit
+  )
+    return unverified(
+      request,
+      'Merged pull request read-back did not match',
+      'the pull request may be merged',
+      { pr, landed: { commit, tree: null, parents: null } }
+    );
+  let tree: string | null = null;
+  let parents: string[] | null = null;
+  let raw: unknown;
+  try {
+    raw = await githubRequest(
+      fetchImpl,
+      token,
+      `${root}/repos/${path}/git/commits/${encodeURIComponent(commit)}`
+    );
+  } catch {
+    return applied(request, {
+      changed: true,
+      pr,
+      method: request.method,
+      conditions: request.conditions,
+      enforcedConditions: ['head'],
+      landed: { commit, tree, parents },
+    });
+  }
+  const object = z
+    .object({
+      sha: z.string(),
+      tree: z.object({ sha: z.string().min(1) }).optional(),
+      parents: z.array(z.object({ sha: z.string().min(1) })).optional(),
+    })
+    .safeParse(raw);
+  if (!object.success || object.data.sha !== commit)
+    return unverified(
+      request,
+      'Landed commit identity did not match',
+      'the pull request is merged',
+      { pr, landed: { commit, tree: null, parents: null } }
+    );
+  tree = object.data.tree?.sha ?? null;
+  parents = object.data.parents?.map(parent => parent.sha) ?? null;
+  return applied(request, {
+    changed: true,
+    pr,
+    method: request.method,
+    conditions: request.conditions,
+    enforcedConditions: ['head'],
+    landed: { commit, tree, parents },
+  });
+}
+
+export async function handleGithubPrReviews(
+  request: Extract<ForgeRequest, { op: 'pr.reviews' }>,
+  fetchImpl: Fetch,
+  token: string
+): Promise<ForgeResponse> {
+  const { root, path } = location(request.ref.repo);
+  const fields = reviewItemSchema.shape;
+  const actor = fields.author.unwrap().shape;
+  const itemSchema = z.object({
+    id: z.union([z.number().int(), fields.id]),
+    html_url: fields.url,
+    body: fields.body.nullable(),
+    user: z
+      .object({
+        id: z.union([z.number().int(), actor.id]),
+        login: actor.login.optional(),
+      })
+      .nullable(),
+    commit_id: fields.commit.optional(),
+    state: fields.state.optional(),
+    submitted_at: fields.createdAt.optional(),
+    created_at: fields.createdAt.optional(),
+    in_reply_to_id: z.number().nullable().optional(),
+  });
+  const base = `${root}/repos/${path}/pulls/${String(request.ref.number)}`;
+  const [reviews, comments] = await Promise.all([
+    githubPages(fetchImpl, token, `${base}/reviews`, value => z.array(itemSchema).parse(value)),
+    githubPages(fetchImpl, token, `${base}/comments`, value => z.array(itemSchema).parse(value)),
+  ]);
+  const project = (
+    item: z.infer<typeof itemSchema>,
+    kind: 'review' | 'review_comment'
+  ): z.infer<typeof reviewItemSchema> => ({
+    kind,
+    id: String(item.id),
+    author: item.user
+      ? { host: request.ref.repo.host, id: String(item.user.id), login: item.user.login ?? null }
+      : null,
+    commit: item.commit_id ?? null,
+    state: kind === 'review' ? (item.state ?? null) : null,
+    createdAt: (kind === 'review' ? item.submitted_at : item.created_at) ?? null,
+    url: item.html_url,
+    body: item.body ?? '',
+  });
+  return {
+    operationId: request.operationId,
+    ok: true,
+    result: {
+      op: request.op,
+      value: {
+        ref: request.ref,
+        items: [
+          ...reviews.filter(item => item.state !== 'PENDING').map(item => project(item, 'review')),
+          ...comments
+            .filter(item => item.in_reply_to_id == null)
+            .map(item => project(item, 'review_comment')),
+        ],
+      },
+    },
+  };
 }

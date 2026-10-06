@@ -24,6 +24,9 @@ const OPS = [
   'pr.edit-body',
   'pr.ready',
   'comment.upsert',
+  'pr.merge',
+  'checks.rerun',
+  'pr.reviews',
 ];
 
 if (command === 'metadata') {
@@ -35,6 +38,7 @@ if (command === 'metadata') {
       forge: 'test',
       hosts: ['forge.example'],
       capabilities: OPS,
+      mutationConditions: mode === 'no-conditions' ? undefined : { 'pr.merge': ['head'] },
       token_env: [],
     })
   );
@@ -61,6 +65,13 @@ else {
     name?: string;
     color?: string;
     description?: string;
+    method?: 'merge' | 'squash';
+    conditions?: { head?: string };
+    revision?: string;
+    units?: {
+      unit: { kind: string; id: string; name: string };
+      rerun: { id: string; attempt: number } | null;
+    }[];
   };
   const ref = input.ref ??
     input.selector?.ref ?? { repo: { host: 'forge.example', path: 'a/b' }, number: 1 };
@@ -97,6 +108,13 @@ else {
 
   /** An applied answer that does not answer the request it was sent. */
   const mismatched = (): unknown => {
+    if (input.op === 'pr.merge')
+      return answer(ref, {
+        ...mergeValue(),
+        pr: { ...pr, state: 'merged', head_revision: 'wrong' },
+      });
+    if (input.op === 'checks.rerun')
+      return answer(ref, { ref, revision: input.revision, units: input.units });
     if (input.op === 'pr.create')
       return answer(repo, { pr: { ...pr, head_revision: 'another-revision' } });
     if (input.op === 'pr.ready') return answer(ref, { pr: { ...pr, is_draft: true } });
@@ -105,6 +123,13 @@ else {
     return answer(ref, { pr, bodyDigest: digest('something else') });
   };
 
+  const mergeValue = (): Record<string, unknown> => ({
+    pr: { ...pr, state: 'merged', head_revision: input.conditions?.head },
+    method: mode === 'wrong-method' ? 'merge' : input.method,
+    conditions: mode === 'wrong-condition' ? { head: 'wrong' } : input.conditions,
+    enforcedConditions: mode === 'unenforced' ? [] : ['head'],
+    landed: { commit: 'landed', tree: 'tree', parents: ['base', 'head'] },
+  });
   const applied = (): unknown => {
     if (input.op === 'workitem.create')
       return answer(repo, {
@@ -142,6 +167,39 @@ else {
         operationId: input.operationId,
         ok: true,
         result: { op: input.op, value: { repo, labels: [{ name: 'a' }] } },
+      };
+    if (input.op === 'pr.merge') return answer(ref, mergeValue());
+    if (input.op === 'checks.rerun')
+      return answer(ref, {
+        ref,
+        revision: input.revision,
+        units: (mode === 'subset' ? input.units?.slice(0, 1) : input.units)?.map(selected => ({
+          ...selected,
+          rerun: selected.rerun ? { ...selected.rerun, attempt: selected.rerun.attempt + 1 } : null,
+        })),
+      });
+    if (input.op === 'pr.reviews')
+      return {
+        operationId: input.operationId,
+        ok: true,
+        result: {
+          op: input.op,
+          value: {
+            ref,
+            items: [
+              {
+                kind: 'review_comment',
+                id: '1',
+                author: null,
+                commit: 'head',
+                state: null,
+                createdAt: null,
+                url: pr.url,
+                body: 'private review body',
+              },
+            ],
+          },
+        },
       };
     if (input.op === 'pr.create') return answer(repo, { pr });
     if (input.op === 'pr.ready') return answer(ref, { pr });

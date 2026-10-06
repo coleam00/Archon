@@ -4,6 +4,9 @@ import {
   checksStateSchema,
   concludedCheckStates,
   type ChecksObservation as ContractObservation,
+  type ForgeRequest,
+  type ForgeResponse,
+  type ForgeMutationFailure,
 } from '../../../packages/forge/src/operations';
 import { checkResultSchema } from '../../../packages/forge/src/events';
 import { handleGithubOperation } from '../../../packages/adapters/src/forge/github/operations';
@@ -20,6 +23,12 @@ import {
   parseCreatedWorkItem,
   type PrRecord,
   type QualifiedPr,
+  type MergeRequest,
+  type MergeResult,
+  type RerunRequest,
+  type RerunResult,
+  type ReviewsResult,
+  type MutationFailure,
 } from '../../workflows/sdlc/.shared/forge';
 import type { PrRef } from '../../../packages/forge/src/identity';
 import {
@@ -86,6 +95,7 @@ test('gh and the GitHub forge plugin classify every GitHub check result identica
   const fetch = async (input: string | URL | Request): Promise<Response> => {
     const url = input instanceof Request ? input.url : input.toString();
     if (url.endsWith('/pulls/42')) return Response.json({ head: { sha: 'head' } });
+    if (url.includes('/actions/runs')) return Response.json({ total_count: 0, workflow_runs: [] });
     if (url.includes('/check-runs')) {
       return Response.json({
         check_runs: [
@@ -217,4 +227,149 @@ test('triage producer declares qualified identities and its non-tracker sentinel
   expect(
     validateStructuredOutput({ repo: { path: 'group/team/repo' }, number: 7 }, schema).valid
   ).toBe(false);
+});
+
+type ContractResult = Extract<ForgeResponse, { ok: true }>['result'];
+const consumesMerge = (value: Extract<ContractResult, { op: 'pr.merge' }>): MergeResult =>
+  value.value;
+const consumesRerun = (value: Extract<ContractResult, { op: 'checks.rerun' }>): RerunResult =>
+  value.value;
+const consumesReviews = (value: Extract<ContractResult, { op: 'pr.reviews' }>): ReviewsResult =>
+  value.value;
+const consumesFailure = (value: ForgeMutationFailure): MutationFailure => value;
+const producesMerge = (
+  value: MergeRequest
+): Omit<Extract<ForgeRequest, { op: 'pr.merge' }>, 'op' | 'operationId'> => value;
+const producesRerun = (
+  value: RerunRequest
+): Omit<Extract<ForgeRequest, { op: 'checks.rerun' }>, 'op' | 'operationId'> => ({
+  ...value,
+  units: value.units.map(unit => ({ ...unit })),
+});
+
+test('standalone new-operation projections carry typed request and result evidence', async () => {
+  const { forgeRequestSchema } = await import('../../../packages/forge/src/operations');
+  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 1 };
+  expect(
+    forgeRequestSchema.parse({
+      ...producesMerge({ ref, method: 'merge', conditions: { head: 'opaque-head' } }),
+      op: 'pr.merge',
+      operationId: 'merge',
+    }).op
+  ).toBe('pr.merge');
+  expect(
+    forgeRequestSchema.parse({
+      ...producesRerun({
+        ref,
+        revision: 'head',
+        units: [
+          {
+            unit: { kind: 'check', id: 'check', name: 'check' },
+            rerun: { id: 'group', attempt: 1 },
+          },
+        ],
+      }),
+      op: 'checks.rerun',
+      operationId: 'rerun',
+    }).op
+  ).toBe('checks.rerun');
+  expect(consumesReviews({ op: 'pr.reviews', value: { ref, items: [] } })).toEqual({
+    ref,
+    items: [],
+  });
+  expect(
+    consumesFailure({
+      op: 'pr.merge',
+      target: ref,
+      outcome: 'outcome_unknown',
+      merge: { method: 'merge', conditions: { head: 'head' } },
+    }).outcome
+  ).toBe('outcome_unknown');
+  const pr = forgePrRecordSchema.parse({
+    ...ref,
+    schemaVersion: 1,
+    url: 'https://forge.example/pr/1',
+    head: 'feature',
+    base: 'dev',
+    is_draft: false,
+    state: 'merged',
+    head_repo: ref.repo,
+    head_revision: 'head',
+    base_revision: null,
+    maintainer_can_modify: null,
+  });
+  expect(
+    consumesMerge({
+      op: 'pr.merge',
+      value: {
+        target: ref,
+        outcome: 'applied',
+        changed: true,
+        pr,
+        method: 'squash',
+        conditions: { head: 'head' },
+        enforcedConditions: ['head'],
+        landed: { commit: 'landed', tree: null, parents: null },
+      },
+    }).landed.commit
+  ).toBe('landed');
+  expect(
+    consumesRerun({
+      op: 'checks.rerun',
+      value: {
+        target: ref,
+        outcome: 'applied',
+        changed: true,
+        ref,
+        revision: 'head',
+        units: [
+          {
+            unit: { kind: 'check', id: 'check', name: 'check' },
+            rerun: { id: 'group', attempt: 2 },
+          },
+        ],
+      },
+    }).units[0].rerun?.attempt
+  ).toBe(2);
+});
+
+test('standalone check reader retains unit IDs, rerun attempts and workflow approval', async () => {
+  const { readChecks } = await import('../../workflows/sdlc/.shared/forge');
+  const { checksObservationSchema, summarizeChecks } =
+    await import('../../../packages/forge/src/operations');
+  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 1 };
+  const unit = {
+    unit: { kind: 'check' as const, id: 'opaque-check', name: 'same-name' },
+    nativeState: 'completed',
+    nativeResult: 'failure',
+    phase: 'completed' as const,
+    result: 'failure' as const,
+    state: 'red' as const,
+    rerun: { id: 'opaque-group', attempt: 3 },
+  };
+  const value = checksObservationSchema.parse({
+    ref,
+    revision: 'opaque-revision',
+    units: [unit],
+    summary: summarizeChecks([unit]),
+    required: null,
+    approvalPending: true,
+  });
+  const response = { operationId: 'test', ok: true, result: { op: 'checks.state', value } };
+  const previous = process.env.ARCHON_CLI_COMMAND;
+  process.env.ARCHON_CLI_COMMAND = JSON.stringify([
+    process.execPath,
+    '-e',
+    `console.log(${JSON.stringify(JSON.stringify(response))})`,
+  ]);
+  try {
+    expect(readChecks(ref)).toMatchObject({
+      revision: value.revision,
+      approvalPending: true,
+      units: [{ unit: unit.unit, rerun: unit.rerun }],
+    });
+  } finally {
+    if (previous === undefined) delete process.env.ARCHON_CLI_COMMAND;
+    else process.env.ARCHON_CLI_COMMAND = previous;
+  }
 });
