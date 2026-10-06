@@ -64,14 +64,18 @@ test(
     }
     expect(await run(root)).toBe(0);
     expect(readFileSync(join(root, 'package.json'), 'utf8')).toBe(manifest);
-    const pids = Object.fromEntries(
+    const pids = new Map(
       readFileSync(join(root, 'pids'), 'utf8')
         .trim()
         .split('\n')
-        .map(line => line.split(':'))
+        .map(line => {
+          const [name, pid] = line.split(':');
+          return [name, pid] as const;
+        })
     );
-    expect(pids.one).toBe(pids.two);
-    expect(new Set([pids.mock, pids.real, pids.one]).size).toBe(3);
+    expect([...pids.keys()].sort()).toEqual(['mock', 'one', 'real', 'two']);
+    expect(pids.get('one')).toBe(pids.get('two'));
+    expect(new Set([pids.get('mock'), pids.get('real'), pids.get('one')]).size).toBe(3);
   },
   testTimeout(5000)
 );
