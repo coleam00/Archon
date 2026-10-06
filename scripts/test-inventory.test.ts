@@ -52,7 +52,6 @@ function readPackageManifest(manifestPath: string): {
   name: string | undefined;
   testScript: string | undefined;
   testGroups: unknown;
-  testDiscovery: unknown;
   workspaces: string[] | undefined;
 } {
   const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -65,7 +64,6 @@ function readPackageManifest(manifestPath: string): {
     name: typeof parsed.name === 'string' ? parsed.name : undefined,
     testScript: typeof scripts?.test === 'string' ? scripts.test : undefined,
     testGroups: parsed.testGroups,
-    testDiscovery: parsed.testDiscovery,
     workspaces:
       Array.isArray(parsed.workspaces) &&
       parsed.workspaces.every(value => typeof value === 'string')
@@ -117,7 +115,7 @@ function sourceSelectors(testScript: string | undefined): SelectorParseResult {
 }
 
 function packageTestSelectors(
-  manifest: { testScript: string | undefined; testGroups: unknown; testDiscovery: unknown },
+  manifest: { testScript: string | undefined; testGroups: unknown },
   packageDirectory: string
 ): SelectorParseResult {
   const runsSharedRunner = manifest.testScript?.trim() === PACKAGE_TEST_RUNNER;
@@ -132,11 +130,11 @@ function packageTestSelectors(
       return { selectors: [], unsupportedDeclarations: [String(error)] };
     }
   }
-  if (manifest.testGroups !== undefined || manifest.testDiscovery !== undefined) {
+  if (manifest.testGroups !== undefined) {
     return {
       selectors: [],
       unsupportedDeclarations: [
-        `declares testGroups or testDiscovery but scripts.test is not "${PACKAGE_TEST_RUNNER}"`,
+        `declares testGroups but scripts.test is not "${PACKAGE_TEST_RUNNER}"`,
       ],
     };
   }
@@ -303,7 +301,7 @@ function formatMismatches(mismatches: InventoryMismatch[]): string {
     'Package test inventory is out of sync.',
     ...details,
     'Add each test to a compatible Bun batch or cover it with a directory selector; remove stale selectors.',
-    `Declare package tests either as an explicit \`bun test <src selectors>\` chain in scripts.test, or as testGroups or testDiscovery: true with scripts.test set to "${PACKAGE_TEST_RUNNER}", so execution and inventory agree.`,
+    `Declare package tests either as an explicit \`bun test <src selectors>\` chain in scripts.test, or with scripts.test set to "${PACKAGE_TEST_RUNNER}", with optional legacy testGroups; otherwise src tests are discovered, so execution and inventory agree.`,
     'Keep separate `bun test` invocations where `mock.module()` factories conflict.',
   ].join('\n');
 }

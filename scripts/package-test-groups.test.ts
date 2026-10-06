@@ -23,13 +23,13 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
   write(root, 'src/.hidden/d.spec.tsx', `${TEST_ISOLATION_DIRECTIVE} extra`);
   write(root, 'src/not-a-test.ts');
   write(root, 'outside.test.ts');
-  expect(resolvePackageTestGroups(root, { testDiscovery: true })).toEqual([
+  expect(resolvePackageTestGroups(root, {})).toEqual([
     ['src/a.test.ts'],
     ['src/b.spec.ts'],
     ['src/.hidden/d.spec.tsx', 'src/nested/c.test.tsx'],
   ]);
   write(root, 'src/new.test.ts');
-  expect(resolvePackageTestGroups(root, { testDiscovery: true }).at(-1)).toEqual([
+  expect(resolvePackageTestGroups(root, {}).at(-1)).toEqual([
     'src/.hidden/d.spec.tsx',
     'src/nested/c.test.tsx',
     'src/new.test.ts',
@@ -42,33 +42,31 @@ test('legacy groups retain their order and malformed declarations fail', () => {
   expect(resolvePackageTestGroups(root, { testGroups: groups })).toEqual(groups);
   for (const declaration of [
     null,
-    {},
     { testGroups: [] },
     { testGroups: [[]] },
     { testGroups: [['']] },
     { testGroups: [[1]] },
     { testGroups: 'src/' },
-    { testDiscovery: false },
-    { testDiscovery: 'true' },
-    { testGroups: groups, testDiscovery: true },
-    { testDiscovery: true },
   ]) {
     expect(() => resolvePackageTestGroups(root, declaration)).toThrow();
   }
 });
 
-test('inventory accepts independent additions and rejects incomplete adoption and stale selectors', () => {
+test('inventory accepts independent additions and rejects invalid groups and stale selectors', () => {
   const root = fixture();
   const manifest = {
     scripts: { test: 'bun run ../../scripts/package-tests.ts' },
-    testDiscovery: true,
   };
   write(root, 'package.json', JSON.stringify(manifest));
   write(root, 'src/one.test.ts');
   expect(inspectPackage(root)).toBeUndefined();
   write(root, 'src/nested/two.test.ts');
   expect(inspectPackage(root)).toBeUndefined();
-  write(root, 'package.json', JSON.stringify({ ...manifest, scripts: { test: 'bun test src/' } }));
+  write(
+    root,
+    'package.json',
+    JSON.stringify({ testGroups: [['src/']], scripts: { test: 'bun test src/' } })
+  );
   expect(inspectPackage(root)?.unsupportedDeclarations.length).toBe(1);
   write(
     root,
@@ -92,7 +90,8 @@ test('inventory accepts independent additions and rejects incomplete adoption an
 
 test('discovery errors remain visible and explicit script chains still cover tests', () => {
   const root = fixture();
-  expect(() => resolvePackageTestGroups(join(root, 'missing'), { testDiscovery: true })).toThrow();
+  expect(() => resolvePackageTestGroups(root, {})).toThrow('found no tests under src');
+  expect(() => resolvePackageTestGroups(join(root, 'missing'), {})).toThrow();
   write(root, 'src/one.test.ts');
   write(root, 'src/nested/two.test.ts');
   write(
@@ -106,5 +105,5 @@ test('discovery errors remain visible and explicit script chains still cover tes
     'package.json',
     JSON.stringify({ scripts: { test: 'bun run ../../scripts/package-tests.ts' } })
   );
-  expect(inspectPackage(root)?.unsupportedDeclarations.length).toBe(1);
+  expect(inspectPackage(root)).toBeUndefined();
 });

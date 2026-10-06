@@ -14,8 +14,9 @@ Thank you for your interest in contributing to Archon!
 
 ### Code Quality
 
-Core tests under `packages/core/src` are discovered automatically (`*.test.ts`,
-`*.spec.ts`, and their `.tsx` equivalents). A test that uses `mock.module()`, directly
+Packages using the shared test runner without legacy `testGroups` discover tests
+under `src` automatically (`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents).
+Core uses this default. A test that uses `mock.module()`, directly
 or through a helper, must start with the exact line `// @archon-test-isolated`.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors

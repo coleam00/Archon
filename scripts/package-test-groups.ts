@@ -11,10 +11,6 @@ export function resolvePackageTestGroups(
     throw new Error('Package test declaration must be an object');
   }
   const groups = 'testGroups' in declaration ? declaration.testGroups : undefined;
-  const discovery = 'testDiscovery' in declaration ? declaration.testDiscovery : undefined;
-  if (groups !== undefined && discovery !== undefined) {
-    throw new Error('Declare either testGroups or testDiscovery, not both');
-  }
   if (groups !== undefined) {
     if (
       !Array.isArray(groups) ||
@@ -31,7 +27,6 @@ export function resolvePackageTestGroups(
       throw new Error('testGroups must contain nonempty arrays of string selectors');
     return groups;
   }
-  if (discovery !== true) throw new Error('Declare nonempty testGroups or testDiscovery: true');
 
   const files = [
     ...new Set(
@@ -44,7 +39,7 @@ export function resolvePackageTestGroups(
   ]
     .map(path => path.replaceAll('\\', '/'))
     .sort();
-  if (files.length === 0) throw new Error('testDiscovery found no tests under src');
+  if (files.length === 0) throw new Error('Test discovery found no tests under src');
   const isolated: string[][] = [];
   const shared: string[] = [];
   for (const file of files) {

@@ -10,7 +10,7 @@ const runner = join(import.meta.dir, 'package-tests.ts');
 function fixture(): string {
   const root = track(mkdtempSync(join(tmpdir(), 'package-runner-')));
   mkdirSync(join(root, 'src'));
-  writeFileSync(join(root, 'package.json'), JSON.stringify({ testDiscovery: true }));
+  writeFileSync(join(root, 'package.json'), JSON.stringify({}));
   return root;
 }
 async function run(root: string, args: string[] = []): Promise<number> {
