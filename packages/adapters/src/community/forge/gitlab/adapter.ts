@@ -796,7 +796,7 @@ Use 'glab mr view ${String(mr.iid)}' for full details and 'glab mr diff ${String
             issueContext: contextToAppend,
             threadContext,
             isolationHints,
-            userId: archonUserId,
+            actor: archonUserId ? { kind: 'user', userId: archonUserId } : { kind: 'unidentified' },
           });
         } catch (error) {
           const err = toError(error);

@@ -125,19 +125,30 @@ export type IsolationRequest =
 // --- Isolated Environment Types ---
 
 export interface AdoptedWorktreeMetadata {
+  provenance: 'adopted';
   adopted: true;
   adoptedFrom?: 'path' | 'branch';
   request?: IsolationRequest;
 }
 
 export interface CreatedWorktreeMetadata {
+  provenance: 'created';
   adopted: false;
+  creationId: string;
   request?: IsolationRequest;
   /** The commit a newly created branch was cut from; absent when an existing branch was checked out. */
   cutFromCommit?: string;
 }
 
-export type WorktreeMetadata = AdoptedWorktreeMetadata | CreatedWorktreeMetadata;
+export interface ObservedWorktreeMetadata {
+  provenance: 'observed';
+  adopted: false;
+}
+
+export type WorktreeMetadata =
+  | AdoptedWorktreeMetadata
+  | CreatedWorktreeMetadata
+  | ObservedWorktreeMetadata;
 
 interface IsolatedEnvironmentBase {
   /** For worktrees, this is the filesystem path */
@@ -153,13 +164,36 @@ interface IsolatedEnvironmentBase {
   warnings?: string[];
 }
 
-export interface WorktreeEnvironment extends IsolatedEnvironmentBase {
+export interface WorktreeEnvironment<
+  Metadata extends WorktreeMetadata = WorktreeMetadata,
+> extends IsolatedEnvironmentBase {
   provider: 'worktree';
   branchName: BranchName;
-  metadata: WorktreeMetadata;
+  metadata: Metadata;
 }
 
 export type IsolatedEnvironment = WorktreeEnvironment;
+export type WorktreeCreationEnvironment = WorktreeEnvironment<
+  CreatedWorktreeMetadata | AdoptedWorktreeMetadata
+>;
+
+/** Isolation-record metadata carrying a worktree's creation proof; null when adopted. */
+export interface WorktreeRegistrationMetadata {
+  worktree_creation_id: string | null;
+}
+
+/** The one encoding of creation provenance every isolation-record writer persists. */
+export function worktreeRegistrationMetadata(
+  metadata: WorktreeCreationEnvironment['metadata']
+): WorktreeRegistrationMetadata {
+  return { worktree_creation_id: metadata.provenance === 'created' ? metadata.creationId : null };
+}
+
+/** Read the creation proof that worktreeRegistrationMetadata persisted. */
+export function readWorktreeCreationId(metadata: Record<string, unknown>): string | null {
+  const id = (metadata as Partial<WorktreeRegistrationMetadata>).worktree_creation_id;
+  return typeof id === 'string' ? id : null;
+}
 
 // --- Provider Interface ---
 
@@ -168,6 +202,12 @@ export interface DestroyOptions {
 }
 
 export interface WorktreeDestroyOptions extends DestroyOptions {
+  /**
+   * Remove a checkout Archon created, with force, after proving its creation ID.
+   * `beforeRemove` runs while the checkout is locked against adoption; throwing
+   * refuses the removal and drops the lock.
+   */
+  guardedRemoval?: { creationId: string; beforeRemove: () => Promise<void> };
   branchName?: BranchName;
   /**
    * Remove the worktree even while it is locked. Implies `force`: `git worktree
@@ -213,7 +253,7 @@ export interface DestroyResult {
 export interface IIsolationProvider {
   readonly providerType: IsolationProviderType;
 
-  create(request: IsolationRequest): Promise<IsolatedEnvironment>;
+  create(request: IsolationRequest): Promise<WorktreeCreationEnvironment>;
 
   /**
    * Best-effort cleanup. Throws only for unexpected errors (permissions, git failures).
@@ -392,8 +432,10 @@ export type ResolutionMethod =
   | { type: 'workflow_reuse' }
   | { type: 'linked_issue_reuse'; issueNumber: number }
   | { type: 'branch_adoption'; branch: string }
+  | { type: 'provider_adoption' }
   | {
       type: 'created';
+      creationId: string;
       autoCleanedCount?: number;
       /** The commit the new branch was cut from, when this resolution created one. */
       cutFromCommit?: string;

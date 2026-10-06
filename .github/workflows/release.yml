@@ -338,8 +338,8 @@ jobs:
 
           # CHANGELOG.md at this tag's commit is the one source of truth for the
           # release body — the same curated text the /release skill's Step 6
-          # wrote there (Breaking, if any, first, then Added/Changed/Fixed/
-          # Removed). This step always (re)writes the body from it, so it does
+          # wrote there, in the category order its Step 5 defines (Breaking
+          # first). This step always (re)writes the body from it, so it does
           # not matter whether the skill already created the release with its
           # own placeholder notes: this step's output wins, every time.
           # Previously `body:` was hardcoded to install instructions and

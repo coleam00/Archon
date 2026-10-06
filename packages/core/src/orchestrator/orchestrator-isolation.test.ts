@@ -1,3 +1,5 @@
+// @archon-test-isolated
+import { buildAiProfile } from '@archon/workflows/model-validation';
 import {
   providerRegistry,
   registerBuiltinProviders,
@@ -212,7 +214,9 @@ class MockIsolationResolver {
   constructor(_deps: unknown) {}
 }
 
+const { worktreeRegistrationMetadata } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  worktreeRegistrationMetadata,
   IsolationResolver: MockIsolationResolver,
   IsolationBlockedError: class IsolationBlockedError extends Error {
     constructor(
@@ -452,7 +456,13 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase();
 
-    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created', autoCleanedCount: 3 }));
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation({
+        type: 'created',
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        autoCleanedCount: 3,
+      })
+    );
 
     const result = await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -467,7 +477,9 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: 'develop' });
 
-    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created' }));
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation({ type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' })
+    );
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -479,7 +491,9 @@ describe('validateAndResolveIsolation', () => {
     const conversation = makeConversation();
     const codebase = makeCodebase({ default_branch: null });
 
-    mockResolve.mockResolvedValueOnce(resolvedIsolation({ type: 'created' }));
+    mockResolve.mockResolvedValueOnce(
+      resolvedIsolation({ type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' })
+    );
 
     await validateAndResolveIsolation(conversation, codebase, platform, 'conv-1');
 
@@ -810,6 +824,49 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
   });
 
+  test('background adoption records inherited policy before handing off to the executor', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const original = adapter.createWorkflowDeps();
+    const snapshot = {
+      version: 1 as const,
+      assistant: 'codex',
+      assistants: { codex: { model: 'launch-model' } },
+      baseAiProfile: buildAiProfile('codex'),
+      modelOverrides: {},
+    };
+    const ancestor = {
+      ...(await mockCreateWorkflowRun({
+        workflow_name: 'ancestor',
+        origin: { conversationId: 'conv' },
+        user_message: '',
+      })),
+      user_id: 'old-actor',
+      metadata: { ai_configuration: snapshot },
+    };
+    mockCreateWorkflowRun.mockClear();
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      store: { ...original.store, getWorkflowRun: async () => ancestor },
+    }));
+    try {
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx({ adoptRunId: 'ancestor', userId: 'new-actor' }),
+        makeWorkflow({ worktree: { enabled: false } })
+      );
+      await flushBackgroundExecution();
+      const row = mockCreateWorkflowRun.mock.calls[0]?.[0];
+      expect(row?.metadata?.ai_configuration).toEqual(snapshot);
+      expect(row?.origin?.userId).toBe('new-actor');
+      const prepared = mockExecuteWorkflow.mock.calls[0]?.[7]?.preparedAiConfiguration;
+      expect(prepared?.config.assistant).toBe('codex');
+      expect(prepared?.config.assistants.codex.model).toBe('launch-model');
+      expect(prepared?.executionUserId).toBe('new-actor');
+    } finally {
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
+  });
+
   test('passes sparse model bindings to the executor for a pre-created background run', async () => {
     const workflow = makeWorkflow({ worktree: { enabled: false } });
 
@@ -856,7 +913,7 @@ describe('dispatchBackgroundWorkflow', () => {
     const workflow = makeWorkflow();
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        { type: 'created' },
+        { type: 'created', creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8' },
         makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
       )
     );
@@ -879,7 +936,11 @@ describe('dispatchBackgroundWorkflow', () => {
   test('hands the executor the cut-from commit of a branch this dispatch created', async () => {
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        { type: 'created', cutFromCommit: 'c'.repeat(40) },
+        {
+          type: 'created',
+          cutFromCommit: 'c'.repeat(40),
+          creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+        },
         makeEnvRow({ working_path: '/worktrees/bg-1', branch_name: 'bg-1' })
       )
     );
@@ -888,6 +949,10 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
 
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.cutFromCommit).toBe('c'.repeat(40));
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.ownedWorktree).toEqual({
+      envId: 'env-1',
+      creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+    });
   });
 
   test('a reused worktree carries no cut-from commit', async () => {
@@ -902,6 +967,7 @@ describe('dispatchBackgroundWorkflow', () => {
     await flushBackgroundExecution();
 
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]).not.toHaveProperty('cutFromCommit');
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.ownedWorktree).toBeUndefined();
   });
 
   test('missing-worktree adoption materializes the exact branch for a background run', async () => {
@@ -909,7 +975,7 @@ describe('dispatchBackgroundWorkflow', () => {
     const workflow = makeWorkflow();
     mockResolve.mockResolvedValueOnce(
       resolvedIsolation(
-        { type: 'created' },
+        { type: 'provider_adoption' },
         makeEnvRow({
           working_path: '/worktrees/feature-adopted',
           branch_name: 'feature/adopted',
@@ -939,5 +1005,6 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(mockResolveWorkflowSourceRoot).not.toHaveBeenCalledWith('/worktrees/feature-adopted');
 
     await flushBackgroundExecution();
+    expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.ownedWorktree).toBeUndefined();
   });
 });

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { clearPlatformPolicies, setPlatformPolicies } from '../platforms/registry';
 import { mock, describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { createMockLogger } from '../test/mocks/logger';
@@ -450,7 +451,7 @@ describe('cleanup-service', () => {
       expect(result.skippedReason).toBeUndefined();
     });
 
-    test('handles git worktree remove failure for missing path', async () => {
+    test('retains the active record when provider failure merely claims a missing path', async () => {
       const envId = 'env-git-fail';
 
       mockGetById.mockResolvedValueOnce(
@@ -488,10 +489,8 @@ describe('cleanup-service', () => {
         new Error("fatal: cannot change to '/path/exists/but/git/fails': No such file or directory")
       );
 
-      await removeEnvironment(envId);
-
-      // Should mark as destroyed despite provider.destroy failure
-      expect(mockUpdateStatus).toHaveBeenCalledWith(envId, 'destroyed');
+      await expect(removeEnvironment(envId)).rejects.toThrow('No such file or directory');
+      expect(mockUpdateStatus).not.toHaveBeenCalled();
     });
 
     test('logs warnings from partial destroy and still marks as destroyed', async () => {
@@ -696,6 +695,25 @@ describe('cleanup-service', () => {
       expect(result.branchDeleted).toBe(false);
       expect(result.skippedReason).toBe('has uncommitted changes');
     });
+
+    test.each(['worktreeRemoved', 'directoryClean'] as const)(
+      'incomplete %s retains the active isolation record',
+      async field => {
+        mockGetById.mockResolvedValueOnce(makeEnvironment());
+        mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+        mockDestroy.mockResolvedValueOnce({
+          worktreeRemoved: true,
+          directoryClean: true,
+          branchDeleted: null,
+          remoteBranchDeleted: null,
+          warnings: [],
+          [field]: false,
+        });
+        const result = await removeEnvironment('env-1');
+        expect(result.skippedReason).toContain('filesystem removal incomplete');
+        expect(mockUpdateStatus).not.toHaveBeenCalled();
+      }
+    );
 
     test('returns warnings from partial destroy', async () => {
       const envId = 'env-partial';

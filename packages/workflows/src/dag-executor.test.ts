@@ -244,6 +244,21 @@ function createMockStore(): MockWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
+    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');
@@ -4522,6 +4537,241 @@ describe('executeDagWorkflow -- node-level retry for transient errors', () => {
       globalThis.setTimeout = realSetTimeout;
     }
   }
+
+  it.each([
+    ['capacity exhaustion', 'overloaded', 0, 6, true],
+    ['capacity recovery', 'overloaded', 4, 5, false],
+    ['transient exhaustion', 'transient', 0, 3, true],
+    ['capacity then transient', 'mixed', 0, 3, true],
+    ['unclassified capacity prose', 'unknown', 0, 1, true],
+  ] as const)(
+    '%s keeps its budget in nodes and loop iterations',
+    async (_name, mode, recoverAt, expectedCalls, fails) => {
+      const realSetTimeout = globalThis.setTimeout;
+      const random = Math.random;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      Math.random = () => 0.5;
+      try {
+        for (const isLoop of [false, true]) {
+          let calls = 0;
+          mockSendQueryDag.mockImplementation(async function* () {
+            calls++;
+            if (recoverAt && calls > recoverAt) {
+              yield { type: 'agent_message_chunk', text: '<promise>COMPLETE</promise>' };
+              yield { type: 'result', sessionId: 'capacity-recovered' };
+              return;
+            }
+            const failureClass =
+              mode === 'mixed' ? (calls === 1 ? 'overloaded' : 'transient') : mode;
+            const evidence = `Selected model is at capacity: attempt ${String(calls)}`;
+            yield {
+              type: 'result',
+              isError: true,
+              errors: [evidence],
+              failure: { class: failureClass, evidence },
+            };
+          });
+          const store = createMockStore();
+          const node: DagNode = isLoop
+            ? {
+                id: 'my-node',
+                kind: 'loop',
+                loop: {
+                  prompt: 'Complete the task.',
+                  until: 'COMPLETE',
+                  max_iterations: 2,
+                  fresh_context: false,
+                },
+              }
+            : {
+                id: 'my-node',
+                kind: 'agent',
+                source: { kind: 'command', name: 'my-cmd' },
+                ...(mode === 'overloaded' ? { retry: { max_attempts: 1, delay_ms: 1000 } } : {}),
+              };
+          await executeDagWorkflow(
+            dagOptions({
+              deps: createMockDeps(store),
+              platform: createMockPlatform(),
+              cwd: testDir,
+              workflow: { name: 'capacity-retry', nodes: [node] },
+              workflowRun: makeWorkflowRun(`capacity-${String(isLoop)}-${mode}`),
+            })
+          );
+          expect(calls).toBe(expectedCalls);
+          expect(store.failWorkflowRun.mock.calls.length > 0).toBe(fails);
+          const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+          const waits = events.filter(event => event.event_type === 'node_retry_scheduled');
+          expect(waits).toHaveLength(expectedCalls - 1);
+          for (const [index, wait] of waits.entries()) {
+            const capacity = mode === 'overloaded' || (mode === 'mixed' && index === 0);
+            expect(wait.step_name).toBe('my-node');
+            expect(wait.data).toMatchObject({
+              nodeId: 'my-node',
+              retry_class: capacity ? 'overloaded' : 'transient',
+              retry_attempt: index + 1,
+              max_retries: capacity ? 5 : 2,
+              delay_ms: capacity
+                ? [45000, 90000, 180000, 300000, 300000][index]
+                : 3000 * 2 ** index,
+            });
+            expect(wait.data?.iteration).toBe(isLoop ? 1 : undefined);
+          }
+          if (fails) {
+            const final = store.persistWorkflowEvent.mock.calls
+              .map(([event]) => event)
+              .filter(event => event.event_type === 'node_failed')
+              .at(-1);
+            const failureClass = mode === 'mixed' ? 'transient' : mode;
+            expect(final?.data).toMatchObject({
+              failure_kind: failureClass,
+              provider_failure: {
+                class: failureClass,
+                evidence: `Selected model is at capacity: attempt ${String(calls)}`,
+              },
+              error: expect.stringContaining(
+                `Selected model is at capacity: attempt ${String(calls)}`
+              ),
+            });
+          }
+        }
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+        Math.random = random;
+      }
+    }
+  );
+
+  it.each(['cancelled', 'failed', 'completed', null, 'paused'] as const)(
+    'capacity waits respect run status %s before another provider attempt',
+    async stopStatus => {
+      const realSetTimeout = globalThis.setTimeout;
+      try {
+        for (const isLoop of [false, true]) {
+          let status: WorkflowRun['status'] | null = 'running';
+          let waiting = false;
+          const waitSlices: number[] = [];
+          globalThis.setTimeout = ((fn: () => void, delay?: number) => {
+            if (waiting) {
+              waitSlices.push(delay ?? 0);
+              return realSetTimeout(() => {
+                status = stopStatus;
+                fn();
+              }, 1);
+            }
+            return realSetTimeout(fn, 1);
+          }) as typeof setTimeout;
+          let calls = 0;
+          mockSendQueryDag.mockImplementation(async function* () {
+            calls++;
+            if (calls === 1) {
+              yield {
+                type: 'result',
+                isError: true,
+                errors: ['opaque capacity evidence'],
+                failure: { class: 'overloaded', evidence: 'opaque capacity evidence' },
+              };
+            } else {
+              yield { type: 'agent_message_chunk', text: '<promise>COMPLETE</promise>' };
+              yield { type: 'result', sessionId: 'unexpected-retry' };
+            }
+          });
+          const store = createMockStore();
+          store.getWorkflowRunStatus.mockImplementation(async () => status);
+          const createEvent = store.createWorkflowEvent;
+          store.createWorkflowEvent = mock(async event => {
+            await createEvent(event);
+            if (event.event_type === 'node_retry_scheduled') waiting = true;
+          });
+          const node: DagNode = isLoop
+            ? {
+                id: 'my-node',
+                kind: 'loop',
+                loop: {
+                  prompt: 'Do work.',
+                  until: 'COMPLETE',
+                  max_iterations: 2,
+                  fresh_context: false,
+                },
+              }
+            : { id: 'my-node', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } };
+          await executeDagWorkflow(
+            dagOptions({
+              deps: createMockDeps(store),
+              cwd: testDir,
+              workflowRun: makeWorkflowRun('capacity-cancel-run'),
+              workflow: { name: 'capacity-cancel', nodes: [node] },
+            })
+          );
+          expect(calls).toBe(stopStatus === 'paused' ? 2 : 1);
+          expect(waitSlices.length).toBeGreaterThan(0);
+          if (stopStatus !== 'paused') expect(waitSlices).toHaveLength(1);
+          expect(Math.max(...waitSlices)).toBeLessThanOrEqual(10_000);
+          const completed = store.persistWorkflowEvent.mock.calls
+            .map(([event]) => event)
+            .filter(event => event.event_type === 'node_completed');
+          expect(completed).toHaveLength(stopStatus === 'paused' ? 1 : 0);
+          expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+          expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        }
+      } finally {
+        globalThis.setTimeout = realSetTimeout;
+      }
+    }
+  );
+
+  it('a failed status read during a capacity wait does not end the node', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            errors: ['opaque capacity evidence'],
+            failure: { class: 'overloaded', evidence: 'opaque capacity evidence' },
+          };
+        } else {
+          yield { type: 'agent_message_chunk', text: 'recovered' };
+          yield { type: 'result', sessionId: 'after-capacity' };
+        }
+      });
+      const store = createMockStore();
+      let waiting = false;
+      store.getWorkflowRunStatus.mockImplementation(async () => {
+        if (waiting) {
+          waiting = false;
+          throw new Error('database is locked');
+        }
+        return 'running';
+      });
+      const createEvent = store.createWorkflowEvent;
+      store.createWorkflowEvent = mock(async event => {
+        await createEvent(event);
+        if (event.event_type === 'node_retry_scheduled') waiting = true;
+      });
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('capacity-status-error-run'),
+          workflow: {
+            name: 'capacity-status-error',
+            nodes: [{ id: 'my-node', kind: 'agent', source: { kind: 'command', name: 'my-cmd' } }],
+          },
+        })
+      );
+      expect(calls).toBe(2);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      expect(store.completeWorkflowRun).toHaveBeenCalled();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
 
   it('retries a typed transient failure whose text reads as fatal — #3520', async () => {
     const result = await attemptsForTypedFailure({
@@ -27389,6 +27639,128 @@ describe('executeDagWorkflow -- loop_group body step_name namespacing (#2090)', 
       // ignore
     }
   });
+
+  it('capacity retry audit rows keep the loop-group body path and iteration', async () => {
+    const realSetTimeout = globalThis.setTimeout;
+    globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+    try {
+      let calls = 0;
+      mockSendQueryDag.mockImplementation(async function* () {
+        calls++;
+        if (calls % 2 === 1) {
+          yield {
+            type: 'result',
+            isError: true,
+            errors: ['opaque'],
+            failure: { class: 'overloaded', evidence: 'opaque' },
+          };
+        } else {
+          yield { type: 'agent_message_chunk', text: calls === 4 ? 'DONE' : 'still working' };
+          yield { type: 'result', sessionId: 'capacity-body' };
+        }
+      });
+      const store = createMockStore();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          cwd: testDir,
+          workflowRun: makeWorkflowRun('capacity-body-run'),
+          workflow: {
+            name: 'capacity-body',
+            nodes: [
+              {
+                id: 'fixer',
+                kind: 'loop_group',
+                loop_group: {
+                  until: 'DONE',
+                  max_iterations: 2,
+                  fresh_context: false,
+                  nodes: [
+                    { id: 'work', kind: 'agent', source: { kind: 'inline', prompt: 'Do work.' } },
+                  ],
+                },
+              },
+            ],
+          },
+        })
+      );
+      expect(calls).toBe(4);
+      const waits = eventsWith(store, 'node_retry_scheduled', 'fixer.work');
+      expect(waits).toHaveLength(2);
+      expect(waits.map(wait => wait.data?.iteration)).toEqual([1, 2]);
+      expect(waits[0].data).toMatchObject({
+        nodeId: 'work',
+        retry_class: 'overloaded',
+        retry_attempt: 1,
+        max_retries: 5,
+      });
+      expect(persistedEvents(store).some(event => event.step_name === 'work')).toBe(false);
+      expect(store.failWorkflowRun).not.toHaveBeenCalled();
+    } finally {
+      globalThis.setTimeout = realSetTimeout;
+    }
+  });
+
+  it.each(['sh', 'bun'] as const)(
+    '%s retry audit rows carry each loop-group body iteration',
+    async runtime => {
+      const realSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((fn: () => void) => realSetTimeout(fn, 1)) as typeof setTimeout;
+      let calls = 0;
+      const execSpy = spyOn(git, 'execFileAsync').mockImplementation(async command => {
+        if (command === 'git') return { stdout: '', stderr: '' };
+        calls++;
+        if (calls % 2 === 1)
+          throw Object.assign(new Error('opaque failure'), {
+            code: 1,
+            stdout: '',
+            stderr: 'opaque',
+          });
+        return { stdout: calls === 4 ? 'DONE' : 'still working', stderr: '' };
+      });
+      try {
+        const store = createMockStore();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('deterministic-body-retry'),
+            workflow: {
+              name: 'deterministic-body-retry',
+              nodes: [
+                {
+                  id: 'fixer',
+                  kind: 'loop_group',
+                  loop_group: {
+                    until: 'DONE',
+                    max_iterations: 2,
+                    fresh_context: false,
+                    nodes: [
+                      {
+                        id: 'work',
+                        kind: 'exec',
+                        runtime,
+                        script: 'console.log("work");',
+                        retry: { max_attempts: 1, delay_ms: 1, on_error: 'all' },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          })
+        );
+        expect(calls).toBe(4);
+        const waits = eventsWith(store, 'node_retry_scheduled', 'fixer.work');
+        expect(waits.map(wait => wait.data?.iteration)).toEqual([1, 2]);
+        expect(waits.map(wait => wait.data?.retry_attempt)).toEqual([1, 1]);
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+      } finally {
+        execSpy.mockRestore();
+        globalThis.setTimeout = realSetTimeout;
+      }
+    }
+  );
 
   it('namespaces body node lifecycle step_name and tags iteration; top-level node stays bare', async () => {
     // `work` (AI) does not emit DONE on iteration 1, emits it on iteration 2 → 2 iterations.

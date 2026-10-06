@@ -72,7 +72,11 @@ function probe(): void {
     return;
   }
   const missing = missingChecks(units, expected);
-  if (state === 'gated' || (missing.length > 0 && approvalPending(pr, read))) {
+  // The forge source reports approval with its observation; gh needs a workflow-run
+  // read, made only when an expected check is missing.
+  const awaitingApproval =
+    read.source === 'gh' ? missing.length > 0 && approvalPending(pr, read) : approvalPending(pr, read);
+  if (state === 'gated' || awaitingApproval) {
     const gated = units.filter(unit => unit.state === 'gated');
     emit({
       state: 'concluded',

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: getLiveRunOwningEnv against a REAL bun:sqlite database.
  *
@@ -7,7 +8,7 @@
  * an env through either attachment route, while historical conversation rows and
  * terminal runs never do.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with isolation-environments.test.ts's
  * fake.
  */
@@ -199,3 +200,25 @@ describe('getLiveRunOwningEnv — real SQLite behavior', () => {
     });
   });
 });
+
+test.each(['pending', 'running', 'paused', 'failed'])(
+  'same-path %s run pins environment without a conversation link',
+  async status => {
+    const env = await create({
+      codebase_id: 'cb-1',
+      workflow_type: 'task',
+      workflow_id: `path-${status}`,
+      working_path: `/tmp/path-${status}`,
+      branch_name: '' as never,
+    });
+    const conversation = `path-conv-${status}`;
+    const run = `path-run-${status}`;
+    await seedConversation(conversation, null);
+    await seedRun(run, conversation, status);
+    await db.query(
+      'UPDATE remote_agent_workflow_runs SET codebase_id = $1, working_path = $2 WHERE id = $3',
+      ['cb-1', env.working_path, run]
+    );
+    await expect(getLiveRunOwningEnv(env.id)).resolves.toEqual({ id: run, status });
+  }
+);

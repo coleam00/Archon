@@ -1,3 +1,6 @@
+import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
+import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
 import {
@@ -85,10 +88,13 @@ import { loadRepoConfig } from '../config/config-loader';
 import { toBranchName } from '@archon/git';
 import { startRunLiveOwner } from '../services/run-live-owner';
 
+import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
+
 type IsolationResolution =
   | { status: 'existing'; cwd: string; env: IsolationEnvironmentRow }
   | {
       status: 'new';
+      ownedWorktree?: OwnedWorktree;
       cwd: string;
       env: IsolationEnvironmentRow;
       /** The commit a branch created by this resolution was cut from. */
@@ -215,6 +221,9 @@ export async function validateAndResolveIsolation(
       }
       return {
         status: 'new',
+        ...(result.method.type === 'created'
+          ? { ownedWorktree: { envId: result.env.id, creationId: result.method.creationId } }
+          : {}),
         cwd: result.cwd,
         env: result.env,
         ...(result.method.type === 'created' && result.method.cutFromCommit !== undefined
@@ -436,6 +445,9 @@ async function dispatchBackgroundWorkflowOwned(
       {
         codebaseId: ctx.codebaseId,
         userId: ctx.userId,
+        aiConfigurationRun: ctx.adoptRunId
+          ? ((await workflowDeps.store.getWorkflowRun(ctx.adoptRunId)) ?? undefined)
+          : undefined,
         runConfig: ctx.runConfig,
         ...(ctx.modelOverrides
           ? { modelOverrideLayer: { kind: 'raw', overrides: ctx.modelOverrides } }
@@ -480,6 +492,7 @@ async function dispatchBackgroundWorkflowOwned(
   // is then fatal (never fall back to running in a shared/parent worktree).
   let workerCwd: string;
   let workerCutFromCommit: string | undefined;
+  let workerOwnedWorktree: OwnedWorktree | undefined;
   let codebaseBaseBranch: string | undefined;
   let resolveChildIsolation: ReturnType<typeof createCodebaseChildResolver>;
   if (ctx.codebaseId) {
@@ -490,11 +503,15 @@ async function dispatchBackgroundWorkflowOwned(
       );
     }
     codebaseBaseBranch = codebase.default_branch?.trim() || undefined;
-    resolveChildIsolation = createCodebaseChildResolver(codebase, {
-      baseBranch: codebaseBaseBranch,
-      createdByPlatform: ctx.platform.getPlatformType(),
-      createdByUserId: ctx.userId,
-    });
+    resolveChildIsolation = createCodebaseChildResolver(
+      sqlIsolation.createIsolationStore(),
+      codebase,
+      {
+        baseBranch: codebaseBaseBranch,
+        createdByPlatform: ctx.platform.getPlatformType(),
+        createdByUserId: ctx.userId,
+      }
+    );
     if (workflow.worktree?.enabled === false) {
       // Respect an explicit worktree opt-out: skip isolation and run in the parent's cwd.
       getLog().info(
@@ -555,7 +572,10 @@ async function dispatchBackgroundWorkflowOwned(
         ctx.userId
       );
       workerCwd = result.cwd;
-      if (result.status === 'new') workerCutFromCommit = result.cutFromCommit;
+      if (result.status === 'new') {
+        workerCutFromCommit = result.cutFromCommit;
+        workerOwnedWorktree = result.ownedWorktree;
+      }
       await db.updateConversation(workerConv.id, { cwd: workerCwd }).catch((e: unknown) => {
         getLog().warn(
           { err: toError(e), workerPlatformId },
@@ -614,6 +634,10 @@ async function dispatchBackgroundWorkflowOwned(
       user_message: ctx.originalMessage,
       working_path: workerCwd,
       metadata: {
+        [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAiConfiguration.aiConfigurationSnapshot,
+        ...(preparedAiConfiguration.runConfigMetadata
+          ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAiConfiguration.runConfigMetadata }
+          : {}),
         ...(ctx.issueContext ? { github_context: ctx.issueContext } : {}),
         // Declared inputs supplied by this invocation (#2554). Stamped here because the
         // executor only writes them when IT creates the row, and this path hands it a
@@ -682,6 +706,7 @@ async function dispatchBackgroundWorkflowOwned(
             preparedAiConfiguration,
             capturedSourceOwner: backgroundOwner,
             ...(workerCutFromCommit !== undefined ? { cutFromCommit: workerCutFromCommit } : {}),
+            ownedWorktree: workerOwnedWorktree,
             // Only consumed when `preCreatedRun` is undefined (pre-creation failed and
             // the executor creates the row itself); otherwise the row above already
             // carries them.

@@ -27,6 +27,7 @@ export interface ReadUnit extends CheckUnit {
 
 /** Checks for one read. `revision` is null when the source does not report the evaluated head. */
 export interface CheckRead {
+  readonly approvalPending?: boolean | null;
   readonly source: ForgeSource;
   readonly revision: string | null;
   readonly units: readonly ReadUnit[];
@@ -216,6 +217,7 @@ export function readPrChecks(pr: QualifiedPr): CheckRead {
     return {
       source,
       revision: observation.revision,
+      approvalPending: observation.approvalPending,
       units: preferredChecks(observation).units.map(unit => ({ ...unit, completedAt: null })),
     };
   } catch (error) {
@@ -235,12 +237,11 @@ export function missingChecks(units: readonly CheckUnit[], expected: readonly st
  * Whether the forge reports CI on the pull request's head waiting for a maintainer's
  * approval: a workflow run for that commit concluded `action_required`. GitHub
  * starts no check for such a run, so silence alone never says this; the run's own
- * conclusion does. Only the gh source can read workflow runs; the forge contract
- * has no such read, so there approval gating is recognized from an
- * `action_required` check alone. A failed read refuses rather than guessing.
+ * conclusion does. The forge source reports that fact with its observation; the gh
+ * source reads the head's workflow runs. A failed read refuses rather than guessing.
  */
 export function approvalPending(pr: QualifiedPr, read: CheckRead): boolean {
-  if (read.source !== 'gh') return false;
+  if (read.source !== 'gh') return read.approvalPending === true;
   const head = gh('pr', 'view', String(pr.number), '--repo', ghRepo(pr), '--json', 'headRefOid', '--jq', '.headRefOid');
   if (!head.ok || head.stdout.trim() === '') {
     throw new Error(`could not read the pull request's head commit: ${head.stderr.trim()}`);

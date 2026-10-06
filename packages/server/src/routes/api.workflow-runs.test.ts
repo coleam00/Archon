@@ -21,7 +21,8 @@ import * as fsPromises from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, sep } from 'path';
 import { OpenAPIHono } from '@hono/zod-openapi';
-import type { ConversationLockManager } from '@archon/core';
+import type { ConversationLockManager, RunActor, User } from '@archon/core';
+import * as sqlHost from '@archon/core/workflows/sql-host';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -52,6 +53,33 @@ beforeAll(async (): Promise<void> => {
 // ---------------------------------------------------------------------------
 // Mock setup — must be before dynamic imports of mocked modules
 // ---------------------------------------------------------------------------
+
+let sessionUserId: string | undefined;
+mock.module('../auth', () => ({
+  getAuth: () =>
+    sessionUserId
+      ? {
+          api: { getSession: async () => ({ user: { id: sessionUserId } }) },
+        }
+      : null,
+  isWebAuthEnabled: () => sessionUserId !== undefined,
+  isApiGateEnabled: () => false,
+  getSignupMode: () => 'disabled',
+}));
+const mockFindOrCreateUser = mock(
+  async (_platform: string, platformUserId: string): Promise<User> => ({
+    id: `user-from-${platformUserId}`,
+    display_name: null,
+    email: null,
+    role: 'member',
+    created_at: new Date(),
+    updated_at: new Date(),
+  })
+);
+mock.module('@archon/core/db/users', () => ({
+  findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
+  getUserById: mock(async () => undefined),
+}));
 
 const mockGetWorkflowRun = mock(async (_id: string) => null as null | MockWorkflowRun);
 const mockCancelWorkflowRun = mock(async (_id: string) => ({ cancelled: true }));
@@ -157,8 +185,8 @@ describe('workflow run API wait metadata', () => {
 // resumeRunHeadless (#2008) — stubbed so a future change to it or its
 // neighbors can't silently start touching the real workflow store or the
 // real isolation provider (see #2240 for what an un-stubbed export costs).
-const mockCreateCodebaseChildResolver = mock((_codebase: unknown, _surface: unknown) =>
-  mock(async () => ({}) as unknown)
+const mockCreateCodebaseChildResolver = mock(
+  (_store: unknown, _codebase: unknown, _surface: unknown) => mock(async () => ({}) as unknown)
 );
 
 mock.module('@archon/core', () => ({
@@ -439,6 +467,7 @@ const mockResolveRunWorkflow = mock<typeof resolveRunWorkflow>(async () => ({
 import { DetachedRunOwnerUnavailableError as RealDetachedRunOwnerUnavailableError } from '@archon/core/services/run-owner-stop';
 const mockReclaimContainerEnv = mock(async () => {});
 mock.module('@archon/core/services/cleanup-service', () => ({
+  reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
 }));
 // Abandon asks the run's live-owner endpoint first (#2325). Default: nothing answers.
@@ -2181,7 +2210,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   });
 
   test('returns 400 when parent conversation no longer exists', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: 'deleted-conv-uuid',
     });
@@ -2197,7 +2226,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   test('returns 400 when parent conversation is non-web', async () => {
     // Slack/Telegram/GitHub-sourced runs cannot route through the web
     // adapter — the dispatcher is wired to webAdapter + lockManager.
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: 'slack-parent-uuid',
     });
@@ -2217,7 +2246,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
   });
 
   test('returns 200 and dispatches resume when parent is a web conversation', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: 'parent-conv-uuid',
       user_message: 'Run the deploy',
@@ -2243,6 +2272,7 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     const [, platformConvId, dispatchedMessage] = mockHandleMessage.mock.calls[0] ?? [];
     expect(platformConvId).toBe('web-plat-abc');
     expect(dispatchedMessage).toBe('/workflow resume run-uuid-4');
+    expect(mockHandleMessage.mock.calls[0]?.[3]).toMatchObject({ actor: { kind: 'operator' } });
   });
 });
 
@@ -2492,20 +2522,20 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(response.status).toBe(404);
   });
 
-  test('returns 400 when run is completed (non-resumable terminal)', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_COMPLETED_RUN);
+  test('returns 409 when run is completed (non-resumable terminal)', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-2/abandon', {
       method: 'POST',
     });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(409);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot abandon');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
   });
 
-  test('returns 400 when run is cancelled (non-resumable terminal)', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+  test('returns 409 when run is cancelled (non-resumable terminal)', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
       status: 'cancelled' as const,
       completed_at: NOW_DATE,
@@ -2514,7 +2544,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
       method: 'POST',
     });
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(409);
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('Cannot abandon');
     expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
@@ -2548,6 +2578,19 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
     expect(body.success).toBe(true);
     expect(body.message).toContain('Abandoned');
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-uuid-1', { cancel_reason: 'operator' });
+  });
+
+  test('returns 409 instead of success when cancellation loses its CAS', async () => {
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
+    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-1/abandon', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({
+      error: expect.stringContaining('changed before abandonment'),
+    });
   });
 
   test('returns 409 with the reason and leaves the run when a live owner cannot be stopped', async () => {
@@ -3557,6 +3600,7 @@ describe('approve/reject auto-resume', () => {
     // wired into the resumed execution, same as CLI/chat resume, so a
     // downstream `workflow:` node with isolation:worktree doesn't fail.
     expect(mockCreateCodebaseChildResolver).toHaveBeenCalledWith(
+      expect.objectContaining({ getById: expect.any(Function), create: expect.any(Function) }),
       expect.objectContaining({ id: 'cb-uuid-1', name: 'owner/repo' }),
       expect.objectContaining({ baseBranch: 'main' })
     );
@@ -4386,4 +4430,106 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
       expect(await response.text()).toBe('# under a symlinked workspace');
     }
   );
+});
+
+describe('authenticated web run-action actor forwarding', () => {
+  const originalHeader = process.env.ARCHON_WEB_AUTH_HEADER;
+
+  beforeEach(() => {
+    delete process.env.ARCHON_WEB_AUTH_HEADER;
+    mockGetWorkflowRun.mockReset();
+    mockGetConversationById.mockReset();
+    mockHandleMessage.mockReset();
+    mockFindOrCreateUser.mockClear();
+    mockCancelWorkflowRun.mockResolvedValue({ cancelled: true });
+  });
+
+  afterEach(() => {
+    sessionUserId = undefined;
+    if (originalHeader === undefined) delete process.env.ARCHON_WEB_AUTH_HEADER;
+    else process.env.ARCHON_WEB_AUTH_HEADER = originalHeader;
+  });
+
+  const actions = [
+    ['cancel', 'cancelWorkflow'],
+    ['resume', 'resumeWorkflow'],
+    ['abandon', 'abandonWorkflow'],
+    ['approve', 'approveWorkflow'],
+    ['reject', 'rejectWorkflow'],
+    ['respond', 'respondToWorkflow'],
+  ] as const;
+
+  for (const identity of ['session', 'proxy'] as const) {
+    for (const [action, operation] of actions) {
+      test(`${action}: forwards the ${identity} user to operations and continuation`, async () => {
+        sessionUserId = identity === 'session' ? 'session-clicker' : undefined;
+        const expectedActor: RunActor = { kind: 'user', userId: `user-from-${identity}-clicker` };
+        const run = {
+          ...MOCK_PAUSED_RUN,
+          status: action === 'cancel' ? 'running' : action === 'resume' ? 'failed' : 'paused',
+          parent_conversation_id: 'parent-conv-uuid',
+          metadata: {
+            approval: {
+              type: 'approval',
+              nodeId: 'review-gate',
+              message: 'Approve?',
+              onRejectPrompt: 'Fix: $REJECTION_REASON',
+              onRejectMaxAttempts: 3,
+            },
+            rejection_count: 0,
+          },
+        } satisfies MockWorkflowRun;
+        mockGetWorkflowRun.mockResolvedValue(run);
+        mockGetConversationById.mockResolvedValue({
+          id: 'parent-conv-uuid',
+          platform_conversation_id: 'web-parent',
+          platform_type: 'web',
+        });
+        const operations = sqlHost.createSqlWorkflowOperations();
+        const operationSpy = spyOn(operations, operation);
+        if (action === 'cancel') {
+          operationSpy.mockResolvedValue({
+            kind: 'cooperative',
+            run: { ...MOCK_RUNNING_RUN, id: run.id },
+            cancelled: true,
+          });
+        }
+        const factorySpy = spyOn(sqlHost, 'createSqlWorkflowOperations').mockReturnValue(
+          operations
+        );
+        try {
+          const { app } = makeApp();
+          const response = await app.request(`/api/workflows/runs/${run.id}/${action}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Archon-User': `${identity === 'session' ? 'ignored' : 'proxy'}-clicker`,
+            },
+            body: JSON.stringify({ comment: 'LGTM', reason: 'Fix tests', decision: 'approve' }),
+          });
+          expect(response.status).toBe(200);
+          expect(operationSpy).toHaveBeenCalledTimes(1);
+          expect(operationSpy.mock.calls[0]).toContainEqual(expectedActor);
+          expect(mockFindOrCreateUser).toHaveBeenCalledWith(
+            'web',
+            `${identity}-clicker`,
+            identity === 'proxy' ? 'proxy-clicker' : undefined
+          );
+          if (
+            action === 'resume' ||
+            action === 'approve' ||
+            action === 'reject' ||
+            action === 'respond'
+          ) {
+            expect(mockHandleMessage).toHaveBeenCalledTimes(1);
+            expect(mockHandleMessage.mock.calls[0]?.[2]).toBe(`/workflow resume ${run.id}`);
+            expect(mockHandleMessage.mock.calls[0]?.[3]).toMatchObject({ actor: expectedActor });
+          }
+        } finally {
+          factorySpy.mockRestore();
+          operationSpy.mockRestore();
+        }
+      });
+    }
+  }
 });

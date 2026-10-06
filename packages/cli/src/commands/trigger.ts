@@ -1,3 +1,5 @@
+import * as messageDb from '@archon/core/db/messages';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
@@ -18,7 +20,7 @@ import {
   drainResourceStartHost,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { createWorkflowDeps } from '@archon/core/workflows/store-adapter';
+import { createCliWorkflowDeps } from '../utils/workflow-deps';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
@@ -168,16 +170,27 @@ export async function triggerCommand(
       Reflect.deleteProperty(process.env, DETACHED_RUN_OWNER_ENV);
       assertDetachedRunProcessOwner();
     }
-    const adapter = new CLIAdapter();
+    const deps = createCliWorkflowDeps();
     const result = await startAdmittedResourceStart({
       requestId: args[0],
       hostId: options.host,
-      engine: new InProcessWorkflowEngine(createWorkflowDeps()),
-      createPlatform: ({ conversationId, conversationDbId }) => {
-        if (conversationDbId) adapter.setConversationDbId(conversationId, conversationDbId);
-        return adapter;
+      engine: new InProcessWorkflowEngine(deps),
+      createPlatform: ({ conversationDbId }) => {
+        return new CLIAdapter({
+          recordMessage: conversationDbId
+            ? async (_id, message, metadata): Promise<void> => {
+                await messageDb.addMessage(
+                  conversationDbId,
+                  'assistant',
+                  message,
+                  toPersistedMessageMetadata(metadata)
+                );
+              }
+            : undefined,
+        });
       },
-      guardOwnedRun: owned => registerOwnedRunTermination({ ...owned, logModule: 'cli.trigger' }),
+      guardOwnedRun: owned =>
+        registerOwnedRunTermination({ store: deps.store, ...owned, logModule: 'cli.trigger' }),
       ...(detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
     if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);

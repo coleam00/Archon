@@ -1,3 +1,5 @@
+import type { RunActor } from './run-authorization';
+import type { UserRole } from '../schemas/user';
 import { recordDerivedExecution } from '@archon/workflows/node-event-write';
 import { logGateDecision } from '@archon/workflows/logger';
 import { readNodeRecordEvent } from '@archon/workflows/node-record-reader';
@@ -21,6 +23,7 @@ import {
   isGateResolved,
   isRunBlockedOnChild,
   readExecutionOwner,
+  readOwnedWorktree,
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import type {
@@ -33,7 +36,6 @@ import type {
 } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import type { IWorkflowStore, GateResolutionEvent } from '@archon/workflows/store';
-import type { IWorkflowHostStore } from '../workflows/host-store';
 import type { IIsolationStore } from '@archon/isolation';
 import {
   DetachedRunOwnerUnavailableError,
@@ -42,6 +44,11 @@ import {
 } from '../services/run-owner-stop';
 import type { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 import { hostname } from 'node:os';
+import type {
+  reclaimRunWorktree as ReclaimRunWorktree,
+  ReleasedWorktree,
+  RunWorktreeRelease,
+} from '../services/cleanup-service';
 
 // Lazy logger — NEVER at module scope
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -505,6 +512,14 @@ export function describeAbandonOwner(outcome: AbandonOwnerOutcome): string[] {
   return lines;
 }
 
+/** Report each removed worktree with the branch that keeps its committed work. */
+export function describeReleasedWorktrees(released: readonly ReleasedWorktree[] = []): string[] {
+  return released.map(
+    worktree =>
+      `Removed worktree ${worktree.path} with any uncommitted changes; branch ${worktree.branch} is kept.`
+  );
+}
+
 export interface AbandonWorkflowResult {
   run: WorkflowRun;
   /** Whether this call won the state transition to `cancelled`. */
@@ -515,6 +530,8 @@ export interface AbandonWorkflowResult {
    */
   cascadeFailures: number;
   cleanupWarnings?: string[];
+  /** Worktrees removed because their run was abandoned; each branch is kept. */
+  releasedWorktrees?: ReleasedWorktree[];
   /**
    * When the abandoned run was itself a `workflow:` sub-run and its parent is
    * paused blocked on it: the parent's run id. Nothing auto-resumes that parent
@@ -525,12 +542,17 @@ export interface AbandonWorkflowResult {
 }
 
 interface AbandonAttemptResult extends AbandonWorkflowResult {
-  cancelledDescendants: number;
+  cancelledRuns: WorkflowRun[];
 }
 
+export class AbandonRefusedError extends Error {}
+
 function assertAbandonable(run: WorkflowRun): void {
-  if (run.status === 'completed' || run.status === 'cancelled') {
-    throw new Error(
+  if (
+    run.status === 'completed' ||
+    (run.status === 'cancelled' && !readOwnedWorktree(run.metadata))
+  ) {
+    throw new AbandonRefusedError(
       `Cannot abandon run with status '${run.status}'. Only running, paused, or failed runs can be abandoned.`
     );
   }
@@ -598,6 +620,7 @@ export interface AbandonConversationRunsResult {
   /** Runs this call actually took to 'cancelled'. */
   abandoned: number;
   cleanupWarnings?: string[];
+  releasedWorktrees?: ReleasedWorktree[];
   /**
    * First cancelled run that left a parent outside the conversation-scoped
    * mutation paused blocked-on-child (stranded parent id), or null. The user
@@ -644,6 +667,7 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
 }
 
 export interface WorkflowOperationsDeps {
+  getUserRole: (userId: string) => Promise<UserRole | undefined>;
   store: Pick<
     IWorkflowStore,
     | 'getWorkflowRun'
@@ -657,31 +681,43 @@ export interface WorkflowOperationsDeps {
     | 'listWorkflowRuns'
     | 'findWorkflowRunsByIdPrefix'
   >;
-  hostStore: IWorkflowHostStore;
+  hostStore: { isolation: IIsolationStore };
   requestDetachedRunStop: typeof requestDetachedRunStop;
   isRunOwnedByThisProcess: typeof isRunOwnedByThisProcess;
   isRunOwnerAnswering: typeof isRunOwnerAnswering;
   reclaimContainerEnv: (envId: string, store: IIsolationStore) => Promise<void>;
+  reclaimRunWorktree: typeof ReclaimRunWorktree;
 }
 
 export interface WorkflowOperations {
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'];
   getWorkflowStatus: (options?: { codebaseId?: string }) => Promise<WorkflowStatusData>;
-  resumeWorkflow: (runId: string) => Promise<WorkflowRun>;
+  resumeWorkflow: (runId: string, actor: RunActor) => Promise<WorkflowRun>;
   abandonWorkflow: (
-    runId: string
+    runId: string,
+    actor: RunActor
   ) => Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }>;
-  cancelWorkflow: (runId: string) => Promise<CancelWorkflowResult>;
+  cancelWorkflow: (runId: string, actor: RunActor) => Promise<CancelWorkflowResult>;
   abandonResumableRunsForConversation: (
-    conversationId: string
+    conversationId: string,
+    actor: RunActor
   ) => Promise<AbandonConversationRunsResult>;
-  approveWorkflow: (runId: string, comment?: string) => Promise<ApprovalOperationResult>;
-  rejectWorkflow: (runId: string, reason?: string) => Promise<RejectionOperationResult>;
+  approveWorkflow: (
+    runId: string,
+    comment: string | undefined,
+    actor: RunActor
+  ) => Promise<ApprovalOperationResult>;
+  rejectWorkflow: (
+    runId: string,
+    reason: string | undefined,
+    actor: RunActor
+  ) => Promise<RejectionOperationResult>;
   respondToWorkflow: (
     runId: string,
     decision: string,
-    text?: string,
+    text: string | undefined,
+    actor: RunActor,
     expectedGate?: ExpectedApprovalGate
   ) => Promise<ApprovalOperationResult | RejectionOperationResult>;
   resetWorkflowNodeSessions: (
@@ -696,6 +732,7 @@ export function createWorkflowOperations({
   isRunOwnedByThisProcess,
   isRunOwnerAnswering,
   reclaimContainerEnv,
+  reclaimRunWorktree,
 }: WorkflowOperationsDeps): WorkflowOperations {
   /**
    * Cascade-cancel the `workflow:` sub-run tree under `rootId` (#2121 Phase 2 / D7).
@@ -709,11 +746,11 @@ export function createWorkflowOperations({
   async function cascadeCancelChildren(
     rootId: string,
     cancelRun: CancelWorkflowRun
-  ): Promise<{ cancelled: number; failures: number }> {
+  ): Promise<{ failures: number; runs: WorkflowRun[] }> {
     const queue: string[] = [rootId];
     const seen = new Set<string>([rootId]);
     let processed = 0;
-    let cancelled = 0;
+    const runs: WorkflowRun[] = [];
     let failures = 0;
     while (queue.length > 0 && processed < MAX_CASCADE_RUNS) {
       const parentId = queue.shift();
@@ -734,7 +771,9 @@ export function createWorkflowOperations({
         if (child.status === 'completed' || child.status === 'cancelled') continue;
         try {
           const result = await cancelRun(child.id);
-          if (result.cancelled) cancelled++;
+          if (result.cancelled) {
+            runs.push(child);
+          } else failures++;
         } catch (err) {
           getLog().warn(
             { err, childId: child.id },
@@ -755,7 +794,7 @@ export function createWorkflowOperations({
       );
       failures += queue.length;
     }
-    return { cancelled, failures };
+    return { failures, runs };
   }
 
   /**
@@ -834,7 +873,7 @@ export function createWorkflowOperations({
    * Validate that a run can be resumed and return it.
    * Does NOT execute the workflow — callers decide whether to run.
    */
-  async function resumeWorkflow(runId: string): Promise<WorkflowRun> {
+  async function resumeWorkflow(runId: string, _actor: RunActor): Promise<WorkflowRun> {
     const run = await getRunOrThrow(runId, 'operations.workflow_resume_lookup_failed');
     if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
       throw new Error(
@@ -863,9 +902,9 @@ export function createWorkflowOperations({
     // The same cancellation policy applies to descendants. This keeps `/reset`'s
     // resumable-only ownership boundary intact through the complete run tree.
     let cascadeFailures = 0;
-    let cancelledDescendants = 0;
+    let cancelledRuns: WorkflowRun[] = [];
     if (cancelled) {
-      ({ cancelled: cancelledDescendants, failures: cascadeFailures } = await cascadeCancelChildren(
+      ({ failures: cascadeFailures, runs: cancelledRuns } = await cascadeCancelChildren(
         run.id,
         cancelRun
       ));
@@ -878,7 +917,7 @@ export function createWorkflowOperations({
     return {
       run,
       cancelled,
-      cancelledDescendants,
+      cancelledRuns,
       cascadeFailures,
       blockedParentRunId,
       ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
@@ -930,20 +969,146 @@ export function createWorkflowOperations({
    * Running, paused, AND failed runs can be abandoned. A `failed` run is terminal
    * per TERMINAL_WORKFLOW_STATUSES but remains resumable, so the user must be able
    * to discard it — hence the inline check here intentionally diverges from that
-   * constant and blocks only the two non-resumable terminal states.
+   * constant. Cancelled runs with creation proof allow a cleanup-only retry.
    *
    * `cancelled` releases the run's worktree lock and resource slot, so a live owner is
    * stopped first. When no owner answers, the result carries the recorded owner facts;
    * no timer, age, or PID decides that the run is dead.
    */
   async function abandonWorkflow(
-    runId: string
+    runId: string,
+    _actor: RunActor
   ): Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }> {
     const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
     assertAbandonable(run);
     const owner = await stopLiveOwner(run);
     if (owner.kind === 'not_stopped') throw new AbandonOwnerNotStoppedError(owner.message);
-    return { ...(await recordAbandoned(run)), owner };
+    // A cancelled run reaches here only with creation proof: the retry finishes a
+    // worktree release that an earlier abandonment reported as failed.
+    const retry = run.status === 'cancelled';
+    let result: AbandonAttemptResult;
+    if (retry) {
+      const tree = await collectAbandonmentTree(run);
+      result = {
+        run,
+        cancelled: false,
+        cancelledRuns: tree.runs.filter(row => row.id !== run.id && row.status === 'cancelled'),
+        cascadeFailures: tree.failures,
+        blockedParentRunId: null,
+      };
+    } else {
+      result = await cancelRunAndCleanup(run, cancelByOperator);
+      if (!result.cancelled)
+        throw new AbandonRefusedError(
+          `Run ${run.id} changed before abandonment; no worktree was released. Inspect its current status.`
+        );
+    }
+    const warnings = [...(result.cleanupWarnings ?? [])];
+    const releasedWorktrees: ReleasedWorktree[] = [];
+    const released = new Set<string>();
+    let unsafeDescendant = false;
+    for (const row of [...result.cancelledRuns].reverse().concat(run)) {
+      const proof = readOwnedWorktree(row.metadata);
+      if (proof && released.has(proof.envId)) continue;
+      if (row.id === run.id && (result.cascadeFailures || unsafeDescendant)) {
+        warnings.push(
+          `Retained checkout for run ${run.id}: descendants could not all be accounted for. Abandoning this run again only retries worktree removal and does not cancel descendants; abandon or stop each remaining descendant first.`
+        );
+        continue;
+      }
+      const ownerWarning = await worktreeOwnerWarning(row, run, owner);
+      if (ownerWarning) {
+        warnings.push(ownerWarning);
+        unsafeDescendant = true;
+        continue;
+      }
+      const release = await releaseRunWorktree(row);
+      warnings.push(...release.warnings);
+      if (release.released) releasedWorktrees.push(release.released);
+      if (proof) released.add(proof.envId);
+    }
+    return {
+      run,
+      cancelled: result.cancelled,
+      cascadeFailures: result.cascadeFailures,
+      blockedParentRunId: result.blockedParentRunId,
+      owner,
+      ...(warnings.length ? { cleanupWarnings: warnings } : {}),
+      ...(releasedWorktrees.length ? { releasedWorktrees } : {}),
+    };
+  }
+
+  async function collectAbandonmentTree(
+    root: WorkflowRun
+  ): Promise<{ runs: WorkflowRun[]; failures: number }> {
+    const runs = [root];
+    const seen = new Set([root.id]);
+    let failures = 0;
+    for (let i = 0; i < runs.length && i < MAX_CASCADE_RUNS; i++) {
+      try {
+        for (const child of await store.findChildRuns(runs[i].id)) {
+          if (!seen.has(child.id)) {
+            seen.add(child.id);
+            runs.push(child);
+          }
+        }
+      } catch (err) {
+        getLog().warn({ err, runId: runs[i].id }, 'operations.workflow_abandon_retry_tree_failed');
+        failures++;
+      }
+    }
+    if (runs.length > MAX_CASCADE_RUNS) failures += runs.length - MAX_CASCADE_RUNS;
+    return { runs: runs.slice(0, MAX_CASCADE_RUNS), failures };
+  }
+
+  async function worktreeOwnerWarning(
+    row: WorkflowRun,
+    root?: WorkflowRun,
+    rootOutcome?: AbandonOwnerOutcome
+  ): Promise<string | undefined> {
+    if (!readOwnedWorktree(row.metadata) && !(root && readOwnedWorktree(root.metadata)))
+      return undefined;
+    const recorded = readExecutionOwner(row.metadata);
+    const reason = !recorded
+      ? root?.id === row.id && rootOutcome?.kind === 'stopped'
+        ? undefined
+        : 'execution owner is unaccounted for'
+      : recorded.host !== hostname()
+        ? `execution owner belongs to host ${recorded.host}`
+        : process.getuid && recorded.uid !== process.getuid()
+          ? `execution owner belongs to uid ${String(recorded.uid)}`
+          : undefined;
+    if (reason)
+      return `Retained checkout ${row.working_path ?? ''} for run ${row.id}: ${reason}; stop that owner and retry abandonment from its host and user.`;
+    if (root?.id === row.id) return undefined;
+    const rootOwner = root ? readExecutionOwner(root.metadata) : undefined;
+    if (
+      rootOwner &&
+      recorded &&
+      rootOutcome?.kind === 'stopped' &&
+      recorded.host === rootOwner.host &&
+      recorded.pid === rootOwner.pid &&
+      recorded.uid === rootOwner.uid
+    )
+      return undefined;
+    try {
+      const outcome = await stopLiveOwner(row);
+      return outcome.kind === 'not_stopped'
+        ? `Retained checkout for run ${row.id}: ${outcome.message}`
+        : undefined;
+    } catch (err) {
+      getLog().warn({ err, runId: row.id }, 'operations.workflow_abandon_child_owner_check_failed');
+      return `Retained checkout ${row.working_path ?? ''} for run ${row.id}: could not check or stop its owner: ${(err as Error).message}. Inspect the owner before retrying abandonment.`;
+    }
+  }
+
+  async function releaseRunWorktree(row: WorkflowRun): Promise<RunWorktreeRelease> {
+    try {
+      return await reclaimRunWorktree(row, hostStore.isolation);
+    } catch (err) {
+      getLog().warn({ err, runId: row.id }, 'operations.workflow_abandon_worktree_reclaim_failed');
+      return { warnings: [`${(err as Error).message} The run remains cancelled.`] };
+    }
   }
 
   /**
@@ -982,7 +1147,7 @@ export function createWorkflowOperations({
    *   {@link CancelRefusedError} and leave the run unchanged. `cancelled` releases the
    *   run's worktree lock and resource slot, so it is never recorded on a guess.
    */
-  async function cancelWorkflow(runId: string): Promise<CancelWorkflowResult> {
+  async function cancelWorkflow(runId: string, _actor: RunActor): Promise<CancelWorkflowResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_cancel_lookup_failed');
     if (run.status !== 'running') {
       throw new CancelRefusedError(
@@ -1082,13 +1247,22 @@ export function createWorkflowOperations({
    * abandon` keeps its broader running/paused/failed cascading policy.
    */
   async function abandonResumableRunsForConversation(
-    conversationId: string
+    conversationId: string,
+    _actor: RunActor
   ): Promise<AbandonConversationRunsResult> {
     const runs = await store.cancelResumableRunsForConversation(conversationId);
     let blockedParentRunId: string | null = null;
     const cleanupWarnings: string[] = [];
+    const releasedWorktrees: ReleasedWorktree[] = [];
     for (const run of runs) {
       cleanupWarnings.push(...(await reclaimCancelledRunContainer(run)));
+      const ownerWarning = await worktreeOwnerWarning(run);
+      if (ownerWarning) cleanupWarnings.push(ownerWarning);
+      else {
+        const release = await releaseRunWorktree(run);
+        cleanupWarnings.push(...release.warnings);
+        if (release.released) releasedWorktrees.push(release.released);
+      }
       const blocked = await findParentBlockedOn(run);
       if (blockedParentRunId === null) blockedParentRunId = blocked;
     }
@@ -1102,6 +1276,7 @@ export function createWorkflowOperations({
       abandoned: runs.length,
       blockedParentRunId,
       ...(cleanupWarnings.length > 0 ? { cleanupWarnings } : {}),
+      ...(releasedWorktrees.length > 0 ? { releasedWorktrees } : {}),
     };
   }
 
@@ -1116,7 +1291,8 @@ export function createWorkflowOperations({
    */
   async function approveWorkflow(
     runId: string,
-    comment?: string,
+    comment: string | undefined,
+    _actor: RunActor,
     expectedGate?: ExpectedApprovalGate
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
@@ -1286,7 +1462,8 @@ export function createWorkflowOperations({
    */
   async function rejectWorkflow(
     runId: string,
-    reason?: string,
+    reason: string | undefined,
+    _actor: RunActor,
     expectedGate?: ExpectedApprovalGate
   ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
@@ -1556,11 +1733,12 @@ export function createWorkflowOperations({
   async function respondToWorkflow(
     runId: string,
     decision: string,
-    text?: string,
+    text: string | undefined,
+    actor: RunActor,
     expectedGate?: ExpectedApprovalGate
   ): Promise<ApprovalOperationResult | RejectionOperationResult> {
-    if (decision === 'approve') return approveWorkflow(runId, text, expectedGate);
-    if (decision === 'reject') return rejectWorkflow(runId, text, expectedGate);
+    if (decision === 'approve') return approveWorkflow(runId, text, actor, expectedGate);
+    if (decision === 'reject') return rejectWorkflow(runId, text, actor, expectedGate);
     return respondToWorkflowWithDeclaredDecision(runId, decision, text, expectedGate);
   }
 

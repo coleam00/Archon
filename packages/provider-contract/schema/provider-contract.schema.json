@@ -13,6 +13,7 @@
             "budget_exceeded",
             "misconfigured",
             "rate_limited",
+            "overloaded",
             "transient",
             "unknown"
           ]
@@ -770,6 +771,931 @@
         }
       ]
     },
+    "CredentialSpec": {
+      "type": "object",
+      "properties": {
+        "vendor": {
+          "type": "string",
+          "minLength": 1
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kinds": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "string",
+              "enum": [
+                "api_key",
+                "subscription",
+                "ambient"
+              ]
+            }
+          ],
+          "items": {
+            "type": "string",
+            "enum": [
+              "api_key",
+              "subscription",
+              "ambient"
+            ]
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "vendor",
+        "displayName",
+        "kinds"
+      ]
+    },
+    "ProviderRpcMessage": {
+      "anyOf": [
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1
+            },
+            "params": {
+              "$ref": "#/$defs/schema1"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "method": {
+              "type": "string",
+              "minLength": 1
+            },
+            "params": {
+              "$ref": "#/$defs/schema2"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "method"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                }
+              ]
+            },
+            "result": {
+              "$ref": "#/$defs/schema3"
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "result"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "jsonrpc": {
+              "type": "string",
+              "const": "2.0"
+            },
+            "id": {
+              "anyOf": [
+                {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": -9007199254740991,
+                      "maximum": 9007199254740991
+                    }
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                "message": {
+                  "type": "string"
+                },
+                "data": {
+                  "$ref": "#/$defs/schema4"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ]
+            }
+          },
+          "required": [
+            "jsonrpc",
+            "id",
+            "error"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ProviderPluginDescriptor": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "number",
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "backgroundWork": {
+              "type": "string",
+              "enum": [
+                "reported",
+                "none",
+                "unobserved"
+              ]
+            },
+            "sessionResume": {
+              "type": "boolean"
+            },
+            "sessionFork": {
+              "type": "boolean"
+            },
+            "mcp": {
+              "type": "boolean"
+            },
+            "hooks": {
+              "type": "boolean"
+            },
+            "skills": {
+              "type": "boolean"
+            },
+            "plugins": {
+              "type": "boolean"
+            },
+            "agents": {
+              "type": "boolean"
+            },
+            "toolRestrictions": {
+              "type": "boolean"
+            },
+            "knownToolNames": {
+              "readOnly": true,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "renamedTools": {
+              "readOnly": true,
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "structuredOutput": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "enforced"
+                },
+                {
+                  "type": "string",
+                  "const": "best-effort"
+                },
+                {
+                  "type": "boolean",
+                  "const": false
+                }
+              ]
+            },
+            "requiresAllPropertiesRequired": {
+              "type": "boolean"
+            },
+            "envInjection": {
+              "type": "boolean"
+            },
+            "costControl": {
+              "type": "boolean"
+            },
+            "costReporting": {
+              "type": "boolean"
+            },
+            "tokenReporting": {
+              "type": "boolean"
+            },
+            "stopReasonReporting": {
+              "type": "boolean"
+            },
+            "turnCountReporting": {
+              "type": "boolean"
+            },
+            "resolvedModelReporting": {
+              "type": "boolean"
+            },
+            "effortControl": {
+              "type": "boolean"
+            },
+            "fallbackModel": {
+              "type": "boolean"
+            },
+            "sandbox": {
+              "type": "boolean"
+            },
+            "settingSources": {
+              "type": "boolean"
+            },
+            "nativeTools": {
+              "type": "boolean",
+              "const": false
+            },
+            "containerExec": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "backgroundWork",
+            "sessionResume",
+            "mcp",
+            "hooks",
+            "skills",
+            "plugins",
+            "agents",
+            "toolRestrictions",
+            "structuredOutput",
+            "requiresAllPropertiesRequired",
+            "envInjection",
+            "costControl",
+            "costReporting",
+            "effortControl",
+            "fallbackModel",
+            "sandbox",
+            "settingSources",
+            "nativeTools",
+            "containerExec"
+          ]
+        },
+        "credentials": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "static"
+            },
+            "specs": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/CredentialSpec"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "specs"
+          ]
+        },
+        "configSchema": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema5"
+          }
+        },
+        "ownsUnprefixedModelRefs": {
+          "type": "boolean",
+          "const": true
+        }
+      },
+      "required": [
+        "protocol",
+        "id",
+        "displayName",
+        "version",
+        "capabilities",
+        "credentials",
+        "configSchema"
+      ]
+    },
+    "ProviderSessionRequest": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string"
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resumeSessionId": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "systemPrompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "preset"
+                },
+                "preset": {
+                  "type": "string",
+                  "const": "claude_code"
+                },
+                "append": {
+                  "type": "string"
+                },
+                "excludeDynamicSections": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "type",
+                "preset"
+              ]
+            }
+          ]
+        },
+        "outputFormat": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "json_schema"
+            },
+            "schema": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/schema6"
+              }
+            }
+          },
+          "required": [
+            "type",
+            "schema"
+          ]
+        },
+        "protectedEnvKeys": {
+          "readOnly": true,
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "maxBudgetUsd": {
+          "type": "number"
+        },
+        "fallbackModel": {
+          "type": "string"
+        },
+        "forkSession": {
+          "type": "boolean"
+        },
+        "purpose": {
+          "type": "string",
+          "const": "title-generation"
+        },
+        "nodeConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema6"
+          }
+        },
+        "assistantConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema6"
+          }
+        },
+        "execContext": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "host"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "container"
+                },
+                "containerId": {
+                  "type": "string"
+                },
+                "execUser": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "containerId"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "prompt",
+        "cwd"
+      ],
+      "additionalProperties": false
+    },
+    "ProviderInitializeRequest": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "clientCapabilities": {
+          "type": "object",
+          "properties": {
+            "fs": {
+              "type": "object",
+              "properties": {
+                "readTextFile": {
+                  "type": "boolean",
+                  "const": false
+                },
+                "writeTextFile": {
+                  "type": "boolean",
+                  "const": false
+                }
+              },
+              "required": [
+                "readTextFile",
+                "writeTextFile"
+              ]
+            },
+            "terminal": {
+              "type": "boolean",
+              "const": false
+            },
+            "_meta": {
+              "type": "object",
+              "properties": {
+                "archon": {
+                  "type": "object",
+                  "properties": {
+                    "protocol": {
+                      "type": "number",
+                      "const": 1
+                    }
+                  },
+                  "required": [
+                    "protocol"
+                  ]
+                }
+              },
+              "required": [
+                "archon"
+              ]
+            }
+          },
+          "required": [
+            "fs",
+            "terminal",
+            "_meta"
+          ]
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "clientCapabilities"
+      ]
+    },
+    "ProviderInitializeResponse": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "type": "number",
+          "const": 1
+        },
+        "agentCapabilities": {
+          "type": "object",
+          "properties": {
+            "_meta": {
+              "type": "object",
+              "properties": {
+                "archon": {
+                  "$ref": "#/$defs/ProviderPluginDescriptor"
+                }
+              },
+              "required": [
+                "archon"
+              ]
+            }
+          },
+          "required": [
+            "_meta"
+          ]
+        },
+        "authMethods": {
+          "type": "array",
+          "items": {
+            "not": {}
+          }
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "agentCapabilities",
+        "authMethods"
+      ]
+    },
+    "ProviderNewSessionRequest": {
+      "type": "object",
+      "properties": {
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mcpServers": {
+          "type": "array",
+          "items": {
+            "not": {}
+          }
+        },
+        "_meta": {
+          "type": "object",
+          "properties": {
+            "archon": {
+              "type": "object",
+              "properties": {
+                "request": {
+                  "$ref": "#/$defs/ProviderSessionRequest"
+                }
+              },
+              "required": [
+                "request"
+              ]
+            }
+          },
+          "required": [
+            "archon"
+          ]
+        }
+      },
+      "required": [
+        "cwd",
+        "mcpServers",
+        "_meta"
+      ]
+    },
+    "ProviderNewSessionResponse": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "ProviderPromptRequest": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt": {
+          "type": "array",
+          "prefixItems": [
+            {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "const": "text"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "text"
+              ]
+            }
+          ],
+          "minItems": 1,
+          "maxItems": 1
+        }
+      },
+      "required": [
+        "sessionId",
+        "prompt"
+      ]
+    },
+    "ProviderPromptResponse": {
+      "type": "object",
+      "properties": {
+        "stopReason": {
+          "$ref": "#/$defs/ProviderStopReason"
+        }
+      },
+      "required": [
+        "stopReason"
+      ]
+    },
+    "ProviderCancelNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "sessionId"
+      ]
+    },
+    "ProviderChunkNotification": {
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "chunk": {
+          "$ref": "#/$defs/ProviderChunk"
+        }
+      },
+      "required": [
+        "sessionId",
+        "chunk"
+      ]
+    },
+    "ProviderCheckCredentialRequest": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "assistantConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema6"
+          }
+        }
+      }
+    },
+    "ProviderCheckCredentialResponse": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "usable"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_connected"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "source"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "unusable"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "state",
+            "source",
+            "evidence"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "check_failed"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            },
+            "evidence": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "state",
+            "source",
+            "evidence"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "state": {
+              "type": "string",
+              "const": "not_checked"
+            },
+            "source": {
+              "type": "string",
+              "enum": [
+                "archon",
+                "native"
+              ]
+            }
+          },
+          "required": [
+            "state",
+            "source"
+          ]
+        }
+      ]
+    },
+    "ProviderResolveCredentialModelRequest": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "assistantConfig": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema6"
+          }
+        },
+        "cwd": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "cwd"
+      ]
+    },
+    "ProviderResolveCredentialModelResponse": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "string"
+        }
+      }
+    },
     "schema0": {
       "anyOf": [
         {
@@ -797,6 +1723,192 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema0"
+          }
+        }
+      ]
+    },
+    "schema1": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema1"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema1"
+          }
+        }
+      ]
+    },
+    "schema2": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema2"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema2"
+          }
+        }
+      ]
+    },
+    "schema3": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema3"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema3"
+          }
+        }
+      ]
+    },
+    "schema4": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema4"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema4"
+          }
+        }
+      ]
+    },
+    "schema5": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema5"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema5"
+          }
+        }
+      ]
+    },
+    "schema6": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema6"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema6"
           }
         }
       ]

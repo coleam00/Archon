@@ -10,7 +10,7 @@ import {
 import { loadRepoConfig } from '../config/config-loader';
 import { access, rm, stat } from 'fs/promises';
 import { join, basename, resolve } from 'path';
-import * as codebaseDb from '../db/codebases';
+import type { IWorkflowHostStore } from '../workflows/host-store';
 import type { Codebase } from '../types';
 import {
   cloneRepository as cloneGitRepository,
@@ -288,11 +288,12 @@ export async function inspectProjectBaseBranch(
 }
 
 /**
- * Shared logic: register a repo at a given path in the DB and load commands.
+ * Register a repo at a given path and load its commands.
  * `existing` is the caller's lookup of a codebase with this name (dedup by
  * project identity), made before the caller touched the filesystem.
  */
 async function registerRepoAtPath(
+  codebases: IWorkflowHostStore['codebases'],
   targetPath: string,
   name: string,
   repositoryUrl: string | null,
@@ -309,7 +310,7 @@ async function registerRepoAtPath(
       updates.repository_url = repositoryUrl;
     }
     if (Object.keys(updates).length > 0) {
-      await codebaseDb.updateCodebase(existing, updates);
+      await codebases.updateCodebase(existing, updates);
     }
 
     // Still reload commands for the existing codebase
@@ -323,14 +324,14 @@ async function registerRepoAtPath(
       }
       const markdownFiles = await findCommandFiles(commandPath);
       if (markdownFiles.length > 0) {
-        const commands = { ...(await codebaseDb.getCodebaseCommands(existing.id)) };
+        const commands = { ...(await codebases.getCodebaseCommands(existing.id)) };
         markdownFiles.forEach(({ commandName, relativePath }) => {
           commands[commandName] = {
             path: join(folder, relativePath),
             description: `From ${folder}`,
           };
         });
-        await codebaseDb.updateCodebaseCommands(existing.id, commands);
+        await codebases.updateCodebaseCommands(existing.id, commands);
         commandsLoaded = markdownFiles.length;
         break;
       }
@@ -348,7 +349,7 @@ async function registerRepoAtPath(
   }
 
   // No existing codebase — create new
-  const codebase = await codebaseDb.createCodebase({
+  const codebase = await codebases.createCodebase({
     name,
     repository_url: repositoryUrl ?? undefined,
     default_cwd: targetPath,
@@ -367,14 +368,14 @@ async function registerRepoAtPath(
     // Command loading errors should NOT be swallowed
     const markdownFiles = await findCommandFiles(commandPath);
     if (markdownFiles.length > 0) {
-      const commands = { ...(await codebaseDb.getCodebaseCommands(codebase.id)) };
+      const commands = { ...(await codebases.getCodebaseCommands(codebase.id)) };
       markdownFiles.forEach(({ commandName, relativePath }) => {
         commands[commandName] = {
           path: join(folder, relativePath),
           description: `From ${folder}`,
         };
       });
-      await codebaseDb.updateCodebaseCommands(codebase.id, commands);
+      await codebases.updateCodebaseCommands(codebase.id, commands);
       commandsLoaded = markdownFiles.length;
       break;
     }
@@ -410,11 +411,12 @@ function deriveRepoCloneTarget(validatedUrl: string): {
 }
 
 /**
- * Clone a repository from a URL and register it in the database.
+ * Clone a repository from a URL and register it in the supplied store.
  * Local paths (starting with /, ~, or .) are delegated to registerRepository
  * to avoid wrong owner/repo naming. See #383 for broader rethink.
  */
 export async function cloneRepository(
+  codebases: IWorkflowHostStore['codebases'],
   repoUrl: string,
   options: RegistrationOptions = {}
 ): Promise<RegisterResult> {
@@ -427,7 +429,7 @@ export async function cloneRepository(
   // Local paths should be registered (symlink), not cloned (copied)
   if (repoUrl.startsWith('/') || repoUrl.startsWith('~') || repoUrl.startsWith('.')) {
     const resolvedPath = repoUrl.startsWith('~') ? expandTilde(repoUrl) : resolve(repoUrl);
-    return registerRepository(resolvedPath, options);
+    return registerRepository(codebases, resolvedPath, options);
   }
 
   const { workingUrl, ownerName, repoName, targetPath } = deriveRepoCloneTarget(repoUrl);
@@ -447,8 +449,8 @@ export async function cloneRepository(
     const urlWithGit = urlNoGit + '.git';
 
     const existingCodebase =
-      (await codebaseDb.findCodebaseByRepoUrl(urlNoGit)) ??
-      (await codebaseDb.findCodebaseByRepoUrl(urlWithGit));
+      (await codebases.findCodebaseByRepoUrl(urlNoGit)) ??
+      (await codebases.findCodebaseByRepoUrl(urlWithGit));
 
     if (existingCodebase) {
       rejectExistingChoice(options);
@@ -471,7 +473,7 @@ export async function cloneRepository(
 
   const name = `${ownerName}/${repoName}`;
   if (options.baseBranch !== undefined) {
-    if (await codebaseDb.findCodebaseByName(name)) rejectExistingChoice(options);
+    if (await codebases.findCodebaseByName(name)) rejectExistingChoice(options);
     try {
       await validateBranchName(options.baseBranch);
     } catch (error) {
@@ -537,10 +539,11 @@ export async function cloneRepository(
   getLog().debug({ path: targetPath }, 'safe_directory_added');
 
   const result = await registerRepoAtPath(
+    codebases,
     targetPath,
     name,
     workingUrl,
-    await codebaseDb.findCodebaseByName(name),
+    await codebases.findCodebaseByName(name),
     options
   );
   getLog().info({ url: workingUrl, targetPath }, 'clone_completed');
@@ -548,9 +551,10 @@ export async function cloneRepository(
 }
 
 /**
- * Register an existing local repository in the database (no git clone).
+ * Register an existing local repository in the supplied store (no git clone).
  */
 export async function registerRepository(
+  codebases: IWorkflowHostStore['codebases'],
   localPath: string,
   options: RegistrationOptions = {}
 ): Promise<RegisterResult> {
@@ -564,7 +568,7 @@ export async function registerRepository(
 
   // Git's physical common directory proves linked-checkout ownership without
   // conflating separate clones, remotes, names, or branches (#1192).
-  const existing = await findCodebaseForCheckoutPath(localPath);
+  const existing = await findCodebaseForCheckoutPath(localPath, codebases);
   if (existing) {
     rejectExistingChoice(options);
     return {
@@ -622,7 +626,7 @@ export async function registerRepository(
   // resolves the Archon home to the literal /.archon, so another host sharing the
   // database can hold its own checkout at the byte-identical path. Repointing
   // would silently break that other host, so the operator moves it explicitly.
-  const sameName = await codebaseDb.findCodebaseByName(name);
+  const sameName = await codebases.findCodebaseByName(name);
   if (
     sameName &&
     !isInsideArchonWorkspaces(localPath) &&
@@ -651,7 +655,7 @@ export async function registerRepository(
   );
 
   // default_cwd is the real local path (not the symlink)
-  return registerRepoAtPath(localPath, name, remoteUrl, sameName, options);
+  return registerRepoAtPath(codebases, localPath, name, remoteUrl, sameName, options);
 }
 
 /**
@@ -681,6 +685,7 @@ function pathValidationError(path: string, error: Error): Error {
  * artifact/log storage lives under `~/.archon/workspaces/_folder/<slug>/`.
  */
 export async function registerFolder(
+  codebases: IWorkflowHostStore['codebases'],
   localPath: string,
   name?: string,
   options: RegistrationOptions = {}
@@ -710,7 +715,7 @@ export async function registerFolder(
   }
 
   // Already registered by path — return the existing record unchanged.
-  const existing = await codebaseDb.findCodebaseByDefaultCwd(resolvedPath);
+  const existing = await codebases.findCodebaseByDefaultCwd(resolvedPath);
   if (existing) {
     rejectExistingChoice(options);
     return {
@@ -731,7 +736,7 @@ export async function registerFolder(
   // no worktrees/ — folder projects are never git-isolated).
   await ensureFolderProjectStructure(slug);
 
-  const codebase = await codebaseDb.createCodebase({
+  const codebase = await codebases.createCodebase({
     name: projectName,
     default_cwd: resolvedPath,
     kind: 'folder',

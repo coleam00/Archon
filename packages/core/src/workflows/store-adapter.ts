@@ -9,6 +9,7 @@ import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
+import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import {
@@ -20,8 +21,9 @@ import * as envVarDb from '../db/env-vars';
 import { getAgentProvider } from '../services/provider-admission';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger } from '@archon/paths';
-import type { IGitHubAppAuthProvider } from '../github-auth';
-import { isPerUserGitHubEnabled } from '../github-auth/config';
+import type { IGitHubAppAuthProvider } from '../github-auth/types';
+import { createGitHubAppAuthProvider } from '../github-auth/auth';
+import { loadGitHubAppConfig, isPerUserGitHubEnabled } from '../github-auth/config';
 import { getDecryptedAccessToken, getUserGithubAuthor } from '../db/user-github-token-store';
 import { isPerUserProviderKeysEnabled } from '../credentials/config';
 import { join } from 'node:path';
@@ -87,6 +89,24 @@ export function createWorkflowStore(): IWorkflowStore {
     cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,
     deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRuns: workflowDb.listDashboardRuns,
+    findOpenWorkRuns: workflowDb.findOpenWorkRuns,
+    findAdoptingRuns: workflowDb.findAdoptingRuns,
+    deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
+    listWorkflowEvents: async (...args) =>
+      (await workflowEventDb.listWorkflowEvents(...args)).map(row => ({
+        ...row,
+        created_at: toHydratedTimestamp(row.created_at).toISOString(),
+      })),
+    listEventsForRuns: async (...args) =>
+      new Map(
+        [...(await workflowEventDb.listEventsForRuns(...args))].map(([id, rows]) => [
+          id,
+          rows.map(row => ({
+            ...row,
+            created_at: toHydratedTimestamp(row.created_at).toISOString(),
+          })),
+        ])
+      ),
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
@@ -141,29 +161,31 @@ export function createWorkflowStore(): IWorkflowStore {
   };
 }
 
-/**
- * Module-singleton registration for the GitHub App auth provider. Set by the
- * server bootstrap (`registerGitHubAppAuthProvider(provider)`) when App mode
- * is active; remains null in PAT mode and during CLI execution. The
- * workflow-deps factory reads this to decide whether to expose
- * `resolveBotGitHubToken` to the engine.
- *
- * Singleton because the provider is itself a process-singleton (one cache
- * shared by the GitHub adapter, the workflow executor, and the internal
- * credential-helper endpoint). Threading it through every createWorkflowDeps
- * caller would just smuggle a singleton through more arguments.
- */
+/** One provider cache per process, shared by workflow execution and server adapters. */
 let registeredGitHubAppAuthProvider: IGitHubAppAuthProvider | null = null;
 
 export function registerGitHubAppAuthProvider(provider: IGitHubAppAuthProvider | null): void {
   registeredGitHubAppAuthProvider = provider;
 }
 
+export function initializeWorkflowGitHubAppAuth(
+  env: NodeJS.ProcessEnv = process.env
+): IGitHubAppAuthProvider | null {
+  if (registeredGitHubAppAuthProvider) return registeredGitHubAppAuthProvider;
+  const config = loadGitHubAppConfig(env);
+  if (!config) return null;
+  const provider = createGitHubAppAuthProvider(config);
+  registerGitHubAppAuthProvider(provider);
+  return provider;
+}
+
 /**
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
  */
-export function createWorkflowDeps(): WorkflowDeps {
+export function createWorkflowDeps(): Omit<WorkflowDeps, 'loadConfig'> & {
+  loadConfig: typeof loadMergedConfig;
+} {
   const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),
@@ -176,17 +198,7 @@ export function createWorkflowDeps(): WorkflowDeps {
     // undefined → engine falls back to env inheritance, preserving legacy
     // behaviour for solo installs.
     resolveBotGitHubToken: provider
-      ? async (owner: string, repo: string): Promise<string | undefined> => {
-          try {
-            return await provider.getInstallationToken(owner, repo);
-          } catch (err) {
-            getLog().warn(
-              { err: err as Error, owner, repo },
-              'workflow_deps.bot_token_resolve_failed'
-            );
-            return undefined;
-          }
-        }
+      ? (owner, repo): Promise<string> => provider.getInstallationToken(owner, repo)
       : undefined,
     // Per-user token policy (PR-C): when per-user mode is on, route a run's
     // gh/git through the originating user's personal token (decrypted, refreshed

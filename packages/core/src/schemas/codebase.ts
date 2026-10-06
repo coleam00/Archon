@@ -53,3 +53,11 @@ type ExclusiveSource<T = SourceVariant> = T extends SourceVariant
   ? T & Partial<Record<Exclude<UnionKeys<SourceVariant>, keyof T>, never>>
   : never;
 export type CodebaseSource = ExclusiveSource;
+
+export type CreateCodebaseInput = Pick<Codebase, 'name' | 'default_cwd'> &
+  Partial<Pick<Codebase, 'default_branch' | 'ai_assistant_type' | 'kind'>> & {
+    repository_url?: string;
+  };
+export type UpdateCodebaseInput = Partial<
+  Pick<Codebase, 'default_cwd' | 'repository_url' | 'default_branch'>
+>;

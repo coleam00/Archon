@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   clearPlatformPolicies,

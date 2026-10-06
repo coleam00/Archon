@@ -1,3 +1,4 @@
+import type { RunActor } from '../operations/run-authorization';
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
@@ -18,6 +19,7 @@ import type { WorkflowOperations } from '../operations/workflow-operations';
 const log = createLogger('orchestrator.manage_run');
 
 export interface ManageRunContext {
+  actor: RunActor;
   operations: Pick<
     WorkflowOperations,
     | 'abandonWorkflow'
@@ -406,7 +408,7 @@ async function handleWrite(
   const id = run.id;
   switch (action) {
     case 'resume': {
-      const resumed = await ctx.operations.resumeWorkflow(id);
+      const resumed = await ctx.operations.resumeWorkflow(id, ctx.actor);
       return (
         `Run ${resumed.id.slice(0, 8)} (${resumed.workflow_name}) can resume from its completed ` +
         'nodes. It does not restart automatically — continue it from the run’s controls or by ' +
@@ -415,7 +417,7 @@ async function handleWrite(
     }
     case 'cancel': {
       try {
-        const result = await ctx.operations.cancelWorkflow(id);
+        const result = await ctx.operations.cancelWorkflow(id, ctx.actor);
         if (result.kind === 'cooperative') {
           return result.cancelled
             ? `Cancelled run ${id.slice(0, 8)} (${result.run.workflow_name}). Its executor stops at its next status check.`
@@ -444,7 +446,7 @@ async function handleWrite(
         cleanupWarnings,
         blockedParentRunId,
         owner,
-      } = await ctx.operations.abandonWorkflow(id);
+      } = await ctx.operations.abandonWorkflow(id, ctx.actor);
       let msg = `${describeAbandonOwner(owner).join(' ')} Cancelled run ${cancelled.id.slice(0, 8)} (${cancelled.workflow_name}).`;
       for (const warning of cleanupWarnings ?? []) msg += ` Warning: ${warning}`;
       if (cascadeFailures > 0) {
@@ -459,7 +461,7 @@ async function handleWrite(
       // accept=true forces the finalize path (#2074): no feedback reaches the gate,
       // so a loop with a completed condition finalizes from its persisted output on resume.
       const feedback = willFinalize ? undefined : message;
-      const result = await ctx.operations.approveWorkflow(id, feedback);
+      const result = await ctx.operations.approveWorkflow(id, feedback, ctx.actor);
       const continues = await signalGateResolved(ctx, run, 'approve');
       if (result.type !== 'interactive_loop') {
         return `Approved ${result.workflowName} (${id.slice(0, 8)}).${continues}`;
@@ -470,7 +472,7 @@ async function handleWrite(
     }
     case 'reject': {
       const rejectText = message.length > 0 ? message : 'Rejected';
-      const result = await ctx.operations.rejectWorkflow(id, rejectText);
+      const result = await ctx.operations.rejectWorkflow(id, rejectText, ctx.actor);
       if (result.cancelled) {
         const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
         return `Rejected and cancelled ${result.workflowName} (${id.slice(0, 8)})${suffix}. Nothing further runs.`;
@@ -488,7 +490,7 @@ async function handleWrite(
       // gate's structured output as ''.
       const respondText =
         message.length > 0 ? message : decision === 'reject' ? 'Rejected' : undefined;
-      const result = await ctx.operations.respondToWorkflow(id, decision, respondText);
+      const result = await ctx.operations.respondToWorkflow(id, decision, respondText, ctx.actor);
       if ('cancelled' in result) {
         // decision === 'reject' resolved through the legacy cancel/rework path.
         if (result.cancelled) {
@@ -537,7 +539,7 @@ async function signalGateResolved(
   }
   let continuationRun: WorkflowRun;
   try {
-    continuationRun = await ctx.operations.resumeWorkflow(run.id);
+    continuationRun = await ctx.operations.resumeWorkflow(run.id, ctx.actor);
   } catch (error) {
     const err = toError(error);
     log.warn({ err, runId: run.id, action }, 'manage_run.gate_continuation_prepare_failed');

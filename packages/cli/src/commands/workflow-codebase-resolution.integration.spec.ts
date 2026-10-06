@@ -70,10 +70,10 @@ test('nested repo registers independently and its worktree retains the child own
   initRepo(child, join(root, 'child.git'), 'child-only.txt');
 
   function run(cwd: string, args: string[]): string {
-    const conversation = crypto.randomUUID();
+    const invocation = crypto.randomUUID();
     const result = spawnSync(
       process.execPath,
-      [CLI_ENTRY, 'workflow', 'run', 'probe', '--conversation-id', conversation, ...args],
+      [CLI_ENTRY, 'workflow', 'run', 'probe', invocation, '--conversation-id', invocation, ...args],
       {
         cwd,
         encoding: 'utf8',
@@ -88,7 +88,7 @@ test('nested repo registers independently and its worktree retains the child own
     );
     if (result.error) throw result.error;
     expect(result.status, `${result.stdout}${result.stderr}`).toBe(0);
-    return conversation;
+    return invocation;
   }
 
   run(parent, ['--no-worktree']);
@@ -100,16 +100,15 @@ test('nested repo registers independently and its worktree retains the child own
     const parentRow = codebases.get();
     if (!parentRow) throw new Error('Parent repository was not registered');
     expect(parentRow.default_cwd).toBe(await canonicalizeProjectPath(parent));
-    const conversation = run(join(child, 'subdir'), ['--branch', 'child-probe', '--from', 'main']);
+    const invocation = run(join(child, 'subdir'), ['--branch', 'child-probe', '--from', 'main']);
     const childPath = await canonicalizeProjectPath(child);
     const childRow = codebases.all().find(row => row.default_cwd === childPath);
     expect(childRow).toBeDefined();
     if (!childRow) throw new Error('Child repository was not registered');
     const runs = db.query<RunRow, [string]>(
-      `SELECT r.codebase_id, r.working_path, r.status FROM remote_agent_workflow_runs r
-       JOIN remote_agent_conversations c ON c.id = r.conversation_id WHERE c.platform_conversation_id = ?`
+      'SELECT codebase_id, working_path, status FROM remote_agent_workflow_runs WHERE user_message = ?'
     );
-    const isolated = runs.get(conversation);
+    const isolated = runs.get(invocation);
     expect(isolated?.codebase_id).toBe(childRow.id);
     expect(isolated?.status).toBe('completed');
     if (!isolated) throw new Error('Missing child run');
@@ -118,10 +117,10 @@ test('nested repo registers independently and its worktree retains the child own
       git(isolated.working_path, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
     ).toBe(git(child, ['rev-parse', '--path-format=absolute', '--git-common-dir']));
     mkdirSync(join(isolated.working_path, 'subdir'));
-    const worktreeConversation = run(join(isolated.working_path, 'subdir'), ['--no-worktree']);
-    expect(runs.get(worktreeConversation)?.codebase_id).toBe(childRow.id);
-    const subdirConversation = run(join(child, 'subdir'), ['--no-worktree']);
-    expect(runs.get(subdirConversation)?.codebase_id).toBe(childRow.id);
+    const worktreeInvocation = run(join(isolated.working_path, 'subdir'), ['--no-worktree']);
+    expect(runs.get(worktreeInvocation)?.codebase_id).toBe(childRow.id);
+    const subdirInvocation = run(join(child, 'subdir'), ['--no-worktree']);
+    expect(runs.get(subdirInvocation)?.codebase_id).toBe(childRow.id);
     expect(codebases.all()).toHaveLength(2);
     expect(codebases.all().find(row => row.id === parentRow.id)).toEqual(parentRow);
   } finally {

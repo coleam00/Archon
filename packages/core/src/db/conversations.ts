@@ -1,3 +1,4 @@
+import type { UpdateConversationInput } from '../schemas/conversation';
 /**
  * Database operations for conversations
  */
@@ -136,9 +137,7 @@ export async function getOrCreateConversation(
 
 export async function updateConversation(
   id: string,
-  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'isolation_env_id'>> & {
-    hidden?: boolean;
-  }
+  updates: UpdateConversationInput
 ): Promise<void> {
   assertPublicConversation(id);
   const fields: string[] = [];

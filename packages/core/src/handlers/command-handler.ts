@@ -2,6 +2,7 @@
  * Command handler for slash commands
  * Handles deterministic operations without AI
  */
+import type { RunActor } from '../operations/run-authorization';
 import { providerRegistry } from '@archon/providers';
 import type { WorkflowOperations } from '../operations/workflow-operations';
 import { writeFile, access } from 'fs/promises';
@@ -34,6 +35,8 @@ import {
   CancelRefusedError,
   workflowOperationErrorMessage,
   describeAbandonOwner,
+  describeReleasedWorktrees,
+  type AbandonConversationRunsResult,
 } from '../operations/workflow-operations';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { safeDeactivateSession } from '../state/session-transitions';
@@ -268,12 +271,13 @@ function findWorkflowLoadError(
 
 async function createResumeRequest(
   operations: WorkflowOperations,
-  runId: string
+  runId: string,
+  actor: RunActor
 ): Promise<
   | { ok: true; workflow: NonNullable<CommandResult['workflow']> }
   | { ok: false; message: string; resumeHint?: string }
 > {
-  const run = await operations.resumeWorkflow(runId);
+  const run = await operations.resumeWorkflow(runId, actor);
   // A container run can only be resumed where the container can be rewired, so
   // handing this one back for a chat dispatch would fail the run to say what we
   // can say here for free (#2565).
@@ -303,11 +307,12 @@ async function withRunContinuation(
   runId: string,
   headline: string,
   action: 'approve' | 'reject' | 'respond',
-  surface: WorkflowCommandSurface
+  surface: WorkflowCommandSurface,
+  actor: RunActor
 ): Promise<CommandResult> {
   let continuation: Awaited<ReturnType<typeof createResumeRequest>>;
   try {
-    continuation = await createResumeRequest(operations, runId);
+    continuation = await createResumeRequest(operations, runId, actor);
   } catch (error) {
     const err = error as Error;
     getLog().warn(
@@ -442,12 +447,6 @@ async function handleWorktreeCommand(
           return {
             success: false,
             message: 'Failed to create worktree: conversation state changed. Please try again.',
-          };
-        }
-        if (err.message.includes('already exists')) {
-          return {
-            success: false,
-            message: `Branch '${branchName}' already exists. Use a different name.`,
           };
         }
         // Classified, not raw: the note an isolation failure carries about a
@@ -695,7 +694,8 @@ async function handleWorkflowCommand(
   operations: WorkflowOperations,
   conversation: Conversation,
   args: string[],
-  surface: WorkflowCommandSurface
+  surface: WorkflowCommandSurface,
+  actor: RunActor
 ): Promise<CommandResult> {
   const subcommand = args[0];
   const cmd = (command: string): string => spellWorkflowCommand(surface, command);
@@ -803,7 +803,7 @@ async function handleWorkflowCommand(
           }
           runId = activeWorkflow.id;
         }
-        const result = await operations.cancelWorkflow(runId);
+        const result = await operations.cancelWorkflow(runId, actor);
         if (result.kind === 'cooperative') {
           return {
             success: true,
@@ -891,7 +891,7 @@ async function handleWorkflowCommand(
       }
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const continuation = await createResumeRequest(operations, runId);
+        const continuation = await createResumeRequest(operations, runId, actor);
         if (!continuation.ok) {
           return { success: false, message: continuation.message };
         }
@@ -917,9 +917,19 @@ async function handleWorkflowCommand(
       }
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const { run, cascadeFailures, cleanupWarnings, blockedParentRunId, owner } =
-          await operations.abandonWorkflow(runId);
-        let message = `${describeAbandonOwner(owner).join('\n')}\nAbandoned workflow run \`${run.workflow_name}\` (${runId})`;
+        const {
+          run,
+          cascadeFailures,
+          cleanupWarnings,
+          releasedWorktrees,
+          blockedParentRunId,
+          owner,
+        } = await operations.abandonWorkflow(runId, actor);
+        let message = [
+          ...describeAbandonOwner(owner),
+          `Abandoned workflow run \`${run.workflow_name}\` (${runId})`,
+          ...describeReleasedWorktrees(releasedWorktrees),
+        ].join('\n');
         for (const warning of cleanupWarnings ?? []) message += `\n⚠️ ${warning}`;
         if (cascadeFailures > 0) {
           message += `\n⚠️ ${String(cascadeFailures)} sub-run(s) could not be cancelled and may still be running — check ${cmd('status')}.`;
@@ -982,7 +992,7 @@ async function handleWorkflowCommand(
       const comment = rawComment.length > 0 ? rawComment : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.approveWorkflow(runId, comment);
+        const result = await operations.approveWorkflow(runId, comment, actor);
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
         const headline =
           result.type === 'interactive_loop'
@@ -991,7 +1001,7 @@ async function handleWorkflowCommand(
         // Resolving is only half the action — continue the run too (#2565).
         // Before #2565 this told the user to "type your response to resume",
         // which relied on a natural-language branch that no longer exists.
-        return await withRunContinuation(operations, runId, headline, 'approve', surface);
+        return await withRunContinuation(operations, runId, headline, 'approve', surface, actor);
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId }, 'cmd.workflow_approve_failed');
@@ -1010,7 +1020,7 @@ async function handleWorkflowCommand(
       const reason = args.slice(2).join(' ') || 'Rejected';
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.rejectWorkflow(runId, reason);
+        const result = await operations.rejectWorkflow(runId, reason, actor);
         if (result.cancelled) {
           const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
           return {
@@ -1029,7 +1039,8 @@ async function handleWorkflowCommand(
             ? `Workflow \`${result.workflowName}\` rejected.`
             : `Workflow \`${result.workflowName}\` rejected. Feedback recorded.`,
           'reject',
-          surface
+          surface,
+          actor
         );
       } catch (error) {
         const err = error as Error;
@@ -1063,7 +1074,7 @@ async function handleWorkflowCommand(
       const text = rawText.length > 0 ? rawText : decision === 'reject' ? 'Rejected' : undefined;
       try {
         runId = await resolveChatRunId(runId, conversation);
-        const result = await operations.respondToWorkflow(runId, decision, text);
+        const result = await operations.respondToWorkflow(runId, decision, text, actor);
         if ('cancelled' in result) {
           if (result.cancelled) {
             const suffix = result.maxAttemptsReached ? ' (max attempts reached)' : '';
@@ -1079,7 +1090,8 @@ async function handleWorkflowCommand(
               ? `Workflow \`${result.workflowName}\` rejected.`
               : `Workflow \`${result.workflowName}\` rejected. Feedback recorded.`,
             'respond',
-            surface
+            surface,
+            actor
           );
         }
         const pathInfo = result.workingPath ? `\nPath: \`${result.workingPath}\`` : '';
@@ -1087,7 +1099,7 @@ async function handleWorkflowCommand(
           result.type === 'interactive_loop'
             ? `Workflow \`${result.workflowName}\` loop input received.${pathInfo}`
             : `Workflow \`${result.workflowName}\` responded '${decision}'.${pathInfo}`;
-        return await withRunContinuation(operations, runId, headline, 'respond', surface);
+        return await withRunContinuation(operations, runId, headline, 'respond', surface, actor);
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, runId, decision }, 'cmd.workflow_respond_failed');
@@ -1223,6 +1235,7 @@ async function handleWorkflowCommand(
 export async function handleCommand(
   conversation: Conversation,
   message: string,
+  actor: RunActor,
   surface: WorkflowCommandSurface = {},
   operations: WorkflowOperations = createSqlWorkflowOperations()
 ): Promise<CommandResult> {
@@ -1425,14 +1438,16 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       // user most needs to know that N runs were already cancelled.
       let abandoned = 0;
       let cleanupWarnings: string[] | undefined;
+      let releasedWorktrees: AbandonConversationRunsResult['releasedWorktrees'];
       let abandonBlockedParentRunId: string | null = null;
       let abandonError: string | null = null;
       try {
         ({
           abandoned,
           cleanupWarnings,
+          releasedWorktrees,
           blockedParentRunId: abandonBlockedParentRunId,
-        } = await operations.abandonResumableRunsForConversation(conversation.id));
+        } = await operations.abandonResumableRunsForConversation(conversation.id, actor));
       } catch (error) {
         const err = error as Error;
         getLog().error({ err, conversationId: conversation.id }, 'cmd.reset_abandon_failed');
@@ -1464,6 +1479,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       );
       for (const warning of cleanupWarnings ?? []) parts.push(`⚠️ ${warning}`);
       if (abandoned > 0) parts.push(`Abandoned ${String(abandoned)} resumable run(s).`);
+      parts.push(...describeReleasedWorktrees(releasedWorktrees));
       if (abandonBlockedParentRunId !== null) {
         parts.push(
           `⚠️ Parent run ${abandonBlockedParentRunId} was blocked on an abandoned sub-run and stays paused. Resume it to fail the node cleanly, or abandon it too.`
@@ -1494,7 +1510,7 @@ Talk naturally — the orchestrator routes your requests to the right workflow a
       return handleWorktreeCommand(conversation, args);
 
     case 'workflow':
-      return handleWorkflowCommand(operations, conversation, args, surface);
+      return handleWorkflowCommand(operations, conversation, args, surface, actor);
 
     case 'init': {
       // Create .archon structure in the effective working directory:

@@ -1958,7 +1958,12 @@ describe('opencodeFailureClass', () => {
   });
 
   test('never classifies from the message text', () => {
-    for (const message of ['401 Unauthorized', 'rate limit exceeded', '429 too many requests']) {
+    for (const message of [
+      'Selected model is at capacity',
+      '401 Unauthorized',
+      'rate limit exceeded',
+      '429 too many requests',
+    ]) {
       expect(opencodeFailureClass(new Error(message))).toBe('unknown');
     }
   });

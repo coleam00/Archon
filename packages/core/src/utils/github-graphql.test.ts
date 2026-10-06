@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Unit tests for GitHub GraphQL utilities
  *

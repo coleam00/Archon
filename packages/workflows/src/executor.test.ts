@@ -1,3 +1,5 @@
+import { prepareRunAiConfiguration } from './run-preflight';
+import type { ExecuteWorkflowOptions } from './executor';
 /**
  * Tests for executeWorkflow() — the top-level orchestration function.
  * Covers concurrent-run guards, model/provider resolution, and resume logic
@@ -217,6 +219,21 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
+    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');
@@ -353,6 +370,304 @@ describe('executeWorkflow', () => {
     mockGetDefaultBranch.mockImplementation(async () => 'main');
     mockExecuteDagWorkflow.mockImplementation(async () => undefined);
   });
+
+  describe('recorded launch AI configuration', () => {
+    it.each(['pending', 'running'] as const)(
+      'restores %s rows despite a different caller-prepared configuration',
+      async status => {
+        const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {});
+        const createRun = mock<IWorkflowStore['createWorkflowRun']>(async () => makeRun());
+        const store = makeStore({ updateWorkflowRun: updateRun, createWorkflowRun: createRun });
+        const deps = makeDeps(store);
+        const workflow = makeWorkflow();
+        deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+          assistant: 'codex',
+          commands: {},
+          assistants: { claude: {}, codex: { model: 'gpt-5.6-sol', webSearchMode: 'disabled' } },
+        }));
+        const launch = await prepareRunAiConfiguration(deps, workflow, '/launch');
+        deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+          assistant: 'claude',
+          commands: {},
+          assistants: {
+            claude: { model: 'opus' },
+            codex: { model: 'changed', webSearchMode: 'live' },
+          },
+        }));
+        const different = await prepareRunAiConfiguration(deps, workflow, '/current');
+        const run = makeRun({
+          status,
+          metadata: {
+            ai_configuration: JSON.parse(JSON.stringify(launch.aiConfigurationSnapshot)),
+          },
+        });
+        await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          workflow,
+          'msg',
+          { conversationId: 'db-conv-1' },
+          {
+            preCreatedRun: run,
+            preparedAiConfiguration: different,
+            ...(status === 'running' ? { priorCompletedNodes: new Map() } : {}),
+          }
+        );
+        const dag = mockExecuteDagWorkflow.mock.calls[0]?.[0];
+        expect(dag?.workflowProvider).toBe('codex');
+        expect(dag?.workflowModel).toBe('gpt-5.6-sol');
+        expect(dag?.config.assistants.codex).toEqual({
+          model: 'gpt-5.6-sol',
+          webSearchMode: 'live',
+        });
+        const stamps = updateRun.mock.calls.flatMap(([, update]) =>
+          update.metadata ? [update.metadata] : []
+        );
+        expect(stamps.every(metadata => !Object.hasOwn(metadata, 'ai_configuration'))).toBe(true);
+        expect(run.metadata.ai_configuration).toEqual(launch.aiConfigurationSnapshot);
+      }
+    );
+
+    it.each(['adopt', 'supersede'] as const)('%s uses the correct AI owner', async mode => {
+      const deps = makeDeps();
+      const workflow = makeWorkflow();
+      deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+        assistant: 'codex',
+        commands: {},
+        assistants: { claude: {}, codex: { model: 'launch-model' } },
+      }));
+      const launch = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      const ancestor = makeRun({
+        id: 'ancestor',
+        status: 'completed',
+        user_id: 'old-actor',
+        output_root: join(WS, 'workspaces', 'acme', 'widget'),
+        metadata: { ai_configuration: launch.aiConfigurationSnapshot },
+      });
+      deps.store.getWorkflowRun = mock(async id =>
+        id === 'ancestor' ? ancestor : makeRun({ status: 'completed' })
+      );
+      deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+        assistant: 'claude',
+        commands: {},
+        assistants: { claude: { model: 'opus' }, codex: {} },
+      }));
+      const different = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      const result = await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'msg',
+        { conversationId: 'db-conv-1', userId: 'new-actor' },
+        {
+          adoptedFromRunId: 'ancestor',
+          continuationMode: mode,
+          preparedAiConfiguration: different,
+        }
+      );
+      expect(result.success).toBe(true);
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe(
+        mode === 'adopt' ? 'codex' : 'claude'
+      );
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowModel).toBe(
+        mode === 'adopt' ? 'launch-model' : 'opus'
+      );
+      expect(deps.store.createWorkflowRun).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: expect.objectContaining({ userId: 'new-actor' }) })
+      );
+    });
+
+    it('direct adoption rejects explicit AI overrides before dispatch', async () => {
+      const deps = makeDeps();
+      const workflow = makeWorkflow();
+      const launch = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      deps.store.getWorkflowRun = mock(async () =>
+        makeRun({ metadata: { ai_configuration: launch.aiConfigurationSnapshot } })
+      );
+      await expect(
+        executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          workflow,
+          'msg',
+          { conversationId: 'db-conv-1' },
+          {
+            adoptedFromRunId: 'ancestor',
+            modelOverrideLayer: { kind: 'raw', overrides: { tiers: { large: 'claude/opus' } } },
+            preparedAiConfiguration: launch,
+          }
+        )
+      ).rejects.toThrow('Cannot override AI configuration');
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('records fresh policy and never backfills a legacy continuation', async () => {
+      const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {});
+      const createRun = mock<IWorkflowStore['createWorkflowRun']>(async () => makeRun());
+      const store = makeStore({ updateWorkflowRun: updateRun, createWorkflowRun: createRun });
+      const deps = makeDeps(store);
+      await executeWorkflow(deps, makePlatform(), 'conv-1', '/tmp', makeWorkflow(), 'msg', {
+        conversationId: 'db-conv-1',
+      });
+      expect(createRun.mock.calls[0]?.[0].metadata?.ai_configuration).toMatchObject({
+        version: 1,
+        assistant: 'claude',
+      });
+      updateRun.mockClear();
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        {
+          preCreatedRun: makeRun(),
+          priorCompletedNodes: new Map(),
+        }
+      );
+      expect(
+        updateRun.mock.calls.every(
+          ([, update]) => !Object.hasOwn(update.metadata ?? {}, 'ai_configuration')
+        )
+      ).toBe(true);
+    });
+
+    it('legacy continuation still accepts caller-prepared values without backfilling', async () => {
+      const updateRun = mock<IWorkflowStore['updateWorkflowRun']>(async () => {});
+      const deps = makeDeps(makeStore({ updateWorkflowRun: updateRun }));
+      const workflow = makeWorkflow();
+      const prepared = await prepareRunAiConfiguration(deps, workflow, '/launch');
+      deps.loadConfig = mock<WorkflowDeps['loadConfig']>(async () => ({
+        assistant: 'codex',
+        commands: {},
+        assistants: { claude: {}, codex: {} },
+      }));
+      await executeWorkflow(
+        deps,
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        workflow,
+        'msg',
+        { conversationId: 'db-conv-1' },
+        {
+          preCreatedRun: makeRun(),
+          priorCompletedNodes: new Map(),
+          preparedAiConfiguration: prepared,
+        }
+      );
+      expect(mockExecuteDagWorkflow.mock.calls[0]?.[0].workflowProvider).toBe('claude');
+      expect(
+        updateRun.mock.calls.every(
+          ([, update]) => !Object.hasOwn(update.metadata ?? {}, 'ai_configuration')
+        )
+      ).toBe(true);
+    });
+
+    it('rejects corrupt recorded policy before dispatch even with prepared values', async () => {
+      const deps = makeDeps();
+      const workflow = makeWorkflow();
+      const prepared = await prepareRunAiConfiguration(deps, workflow, '/tmp');
+      await expect(
+        executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          workflow,
+          'msg',
+          { conversationId: 'db-conv-1' },
+          {
+            preCreatedRun: makeRun({ metadata: { ai_configuration: { version: 2 } } }),
+            priorCompletedNodes: new Map(),
+            preparedAiConfiguration: prepared,
+          }
+        )
+      ).rejects.toThrow('Invalid recorded run AI configuration');
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+    });
+
+    it('stops a pending run before dispatch when snapshot persistence fails', async () => {
+      const store = makeStore({
+        updateWorkflowRun: mock(async (_id, update) => {
+          if (Object.hasOwn(update.metadata ?? {}, 'ai_configuration'))
+            throw new Error('write failed');
+        }),
+      });
+      const result = await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/tmp',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        {
+          preCreatedRun: makeRun({ status: 'pending' }),
+        }
+      );
+      expect(result.success).toBe(false);
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect(store.failWorkflowRun).toHaveBeenCalled();
+    });
+  });
+
+  it.each(['fresh', 'precreated', 'resume'] as const)(
+    'persists creation proof only on %s invocation',
+    async mode => {
+      const store = makeStore();
+      const updatesSpy = spyOn(store, 'updateWorkflowRun');
+      const original = {
+        envId: 'env-original',
+        creationId: '58e2e55c-b565-4cca-8786-4bc9b86d6fa8',
+      };
+      const incoming = { envId: 'env-new', creationId: 'c226ac7a-33cb-4ae0-aa9f-f07df1141dde' };
+      const prior = makeRun({
+        status: mode === 'precreated' ? 'pending' : 'running',
+        metadata: { owned_worktree: original },
+      });
+      const options: ExecuteWorkflowOptions =
+        mode === 'fresh'
+          ? { ownedWorktree: incoming }
+          : mode === 'resume'
+            ? { ownedWorktree: incoming, preCreatedRun: prior, priorCompletedNodes: new Map() }
+            : { ownedWorktree: incoming, preCreatedRun: prior };
+      await executeWorkflow(
+        makeDeps(store),
+        makePlatform(),
+        'conv-1',
+        '/repo',
+        makeWorkflow(),
+        'msg',
+        { conversationId: 'db-conv-1' },
+        options
+      );
+      if (mode === 'fresh') {
+        expect(store.createWorkflowRun).toHaveBeenCalledWith(
+          expect.objectContaining({
+            metadata: expect.objectContaining({ owned_worktree: incoming }),
+          })
+        );
+      } else {
+        const updates = updatesSpy.mock.calls;
+        const proofWrites = updates.filter(
+          ([, update]) => update.metadata?.owned_worktree !== undefined
+        );
+        expect(proofWrites.length).toBe(mode === 'resume' ? 0 : 1);
+        if (mode === 'precreated')
+          expect(proofWrites[0]?.[1].metadata?.owned_worktree).toEqual(incoming);
+        expect(prior.metadata.owned_worktree).toEqual(original);
+      }
+    }
+  );
 
   it.each([false, true])('persists loaded graph before DAG execution (resume=%s)', async resume => {
     const store = makeStore();
@@ -1448,7 +1763,9 @@ describe('executeWorkflow', () => {
           }),
         });
         const platform = makePlatform();
-        platform.sendMessage = mock(async () => {
+        const messages: string[] = [];
+        platform.sendMessage = mock(async (_conversationId, message) => {
+          messages.push(message);
           order.push('notify');
           throw new Error('unauthorized');
         });
@@ -1470,6 +1787,18 @@ describe('executeWorkflow', () => {
           globalThis.setTimeout = realSetTimeout;
         }
         expect(result.success).toBe(false);
+        const deliveryLogs = (mockLogFn.mock.calls as unknown[][]).filter(
+          call => call[1] === 'critical_message_delivery_failed'
+        );
+        expect(deliveryLogs).toHaveLength(1);
+        expect(deliveryLogs[0]?.[0]).toMatchObject({
+          conversationId: 'conv-1',
+          messageLength: messages[0]?.length,
+        });
+        expect(deliveryLogs[0]?.[0]).not.toHaveProperty('messagePreview');
+        for (const message of messages) {
+          expect(JSON.stringify(deliveryLogs)).not.toContain(message.slice(0, 100));
+        }
         expect(order).toEqual(['notify', 'notify', 'notify', 'cancel']);
         expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
         expect(store.failWorkflowRun).not.toHaveBeenCalled();
@@ -3609,6 +3938,61 @@ describe('executeWorkflow', () => {
       expect(deps.getUserGithubAuthor).toHaveBeenCalledWith('u-1');
     });
 
+    for (const [repositoryUrl, expected] of [
+      ['ssh://git@github.com/acme/demo.git', 'token'],
+      ['https://x-access-token@github.com/acme/demo.git', 'token'],
+      ['github.com:acme/demo', 'token'],
+      ['https://github.com/acme/demo/tree/main', 'fail'],
+      ['git@github.com:acme', 'fail'],
+      ['https://gitlab.com/acme/demo', 'inherit'],
+    ] as const) {
+      it(`resolves the App token for ${repositoryUrl} as ${expected}`, async () => {
+        const resolveBotGitHubToken = mock(async () => 'bot-token');
+        const deps: WorkflowDeps = {
+          ...makeDeps(
+            makeStore({
+              getCodebase: mock(async () => ({
+                id: 'codebase-1',
+                name: 'demo',
+                repository_url: repositoryUrl,
+                default_cwd: '/tmp',
+                kind: 'repo' as const,
+              })),
+            })
+          ),
+          resolveBotGitHubToken,
+        };
+
+        const result = await executeWorkflow(
+          deps,
+          makePlatform(),
+          'conv-1',
+          '/tmp',
+          makeWorkflow(),
+          'msg',
+          { conversationId: 'db-c1' },
+          { codebaseId: 'codebase-1' }
+        );
+
+        if (expected === 'fail') {
+          // A github.com remote without a resolvable owner/repo must not run on
+          // whatever GitHub credential the host process happens to hold.
+          expect(result.success).toBe(false);
+          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+          return;
+        }
+        const envVars = mockExecuteDagWorkflow.mock.calls[0]?.[0].config.envVars;
+        if (expected === 'token') {
+          expect(resolveBotGitHubToken).toHaveBeenCalledWith('acme', 'demo');
+          expect(envVars).toMatchObject({ GH_TOKEN: 'bot-token', GITHUB_TOKEN: 'bot-token' });
+        } else {
+          expect(resolveBotGitHubToken).not.toHaveBeenCalled();
+          expect(envVars).not.toHaveProperty('GH_TOKEN');
+        }
+      });
+    }
+
     it('removes stale credential files before a credential refresh failure', async () => {
       const artifactsDir = wsPath('_cwd', 'tmp', 'artifacts', 'runs', 'run-123');
       const codexAuthPath = join(artifactsDir, 'codex-home', 'auth.json');
@@ -5462,6 +5846,8 @@ describe('run checkout baseline (#3305)', () => {
     );
 
     expect(order).toEqual(['claim', 'baseline', 'first node']);
+    // The claim carries the checkout so a pre-created row without a path is fenced by it.
+    expect(store.claimPendingWorkflowRun).toHaveBeenCalledWith('run-123', repo);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledTimes(1);
     expect(store.recordWorkflowRunCheckoutBaseline).toHaveBeenCalledWith(
       'run-123',

@@ -1,3 +1,5 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
+import * as sqlWorkflow from '@archon/core/db/workflows';
 import { providerRegistry } from '@archon/providers';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
@@ -246,8 +248,8 @@ export interface TitleRequest {
 /**
  * Resolve provider + request options for conversation-title generation (#1855).
  *
- * Server entry points that fire title generation outside a full chat turn
- * (create-with-message, web workflow run) resolve the `small` tier here —
+ * Entry points that fire title generation outside a full chat turn
+ * (create-with-message, web workflow run, CLI workflow run) resolve the `small` tier here —
  * config tiers plus per-user prefs when a userId is available — instead of
  * letting the provider fall through to its raw config-default model, which
  * the active account may not support (e.g. `gpt-5.3-codex` on ChatGPT-plan
@@ -260,10 +262,11 @@ export interface TitleRequest {
  */
 export async function resolveTitleRequest(
   fallbackProvider: string,
-  userId?: string
+  userId?: string,
+  repoPath?: string
 ): Promise<TitleRequest> {
   try {
-    const config = await loadConfig();
+    const config = await loadConfig(repoPath);
     const userAiPrefs = userId ? await resolveUserAiPrefsForChat(userId) : {};
     let configuredProviderKey = userAiPrefs.defaultProvider ?? fallbackProvider;
     let aiProfile: ReturnType<typeof buildAiProfile>;
@@ -783,16 +786,20 @@ async function dispatchOrchestratorWorkflowOwned(
   // whatever surface declared it — CLI, API, or chat. A non-terminal target, a
   // cross-codebase id, or a missing estate refuses here, before any worktree is
   // cut; the resolved lane then drives where the run actually executes.
-  const adoptionLane = options?.adoptRunId
-    ? (
-        await resolveWorkflowAdoption({
-          adoptedRunId: options.adoptRunId,
-          codebaseId: codebase.id,
-          codebasePath: codebase.default_cwd,
-          codebaseKind: codebase.kind,
-        })
-      ).lane
+  const adoption = options?.adoptRunId
+    ? await resolveWorkflowAdoption({
+        deps: {
+          getRun: sqlWorkflow.getWorkflowRun,
+          getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+          findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
+        },
+        adoptedRunId: options.adoptRunId,
+        codebaseId: codebase.id,
+        codebasePath: codebase.default_cwd,
+        codebaseKind: codebase.kind,
+      })
     : undefined;
+  const adoptionLane = adoption?.lane;
 
   // A lane other than in-place inherits a worktree or branch estate; a workflow
   // that opted out of worktrees runs in the parent checkout and has nothing to
@@ -811,11 +818,15 @@ async function dispatchOrchestratorWorkflowOwned(
   }
 
   // Shared across every dispatch below.
-  const resolveChildIsolation = createCodebaseChildResolver(codebase, {
-    baseBranch: codebaseBaseBranch,
-    createdByPlatform: platform.getPlatformType(),
-    createdByUserId: userId,
-  });
+  const resolveChildIsolation = createCodebaseChildResolver(
+    sqlIsolation.createIsolationStore(),
+    codebase,
+    {
+      baseBranch: codebaseBaseBranch,
+      createdByPlatform: platform.getPlatformType(),
+      createdByUserId: userId,
+    }
+  );
 
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
   //
@@ -943,6 +954,7 @@ async function dispatchOrchestratorWorkflowOwned(
             {
               codebaseId: codebase.id,
               userId,
+              aiConfigurationRun: adoption?.adoptedRun,
               runConfig: options?.runConfig,
               ...(options?.modelOverrides
                 ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
@@ -1064,6 +1076,7 @@ async function dispatchOrchestratorWorkflowOwned(
       ? await prepareRunAiConfiguration(createWorkflowDeps(), workflow, captureCwd, {
           codebaseId: codebase.id,
           userId,
+          aiConfigurationRun: adoption?.adoptedRun,
           runConfig: options?.runConfig,
           ...(options?.modelOverrides
             ? { modelOverrideLayer: { kind: 'raw', overrides: options.modelOverrides } }
@@ -1085,6 +1098,7 @@ async function dispatchOrchestratorWorkflowOwned(
   // run live (e.g. read-only triage, docs generation on the main checkout).
   let cwd: string;
   let cutFromCommit: string | undefined;
+  let ownedWorktree: import('@archon/workflows/schemas/workflow-run').OwnedWorktree | undefined;
   if (adoptionLane?.kind === 'reuse-worktree') {
     // Adoption lane: the adopted run's worktree survives — run in it dirty-as-is
     // instead of cutting a fresh one (same shape as the background dispatch in
@@ -1137,7 +1151,10 @@ async function dispatchOrchestratorWorkflowOwned(
         userId
       );
       cwd = result.cwd;
-      if (result.status === 'new') cutFromCommit = result.cutFromCommit;
+      if (result.status === 'new') {
+        cutFromCommit = result.cutFromCommit;
+        ownedWorktree = result.ownedWorktree;
+      }
     } catch (error) {
       if (error instanceof IsolationBlockedError) {
         getLog().warn(
@@ -1474,6 +1491,7 @@ async function dispatchOrchestratorWorkflowOwned(
           capturedSourceOwner: owner,
           inputs: resolvedInputs,
           ...(cutFromCommit !== undefined ? { cutFromCommit } : {}),
+          ownedWorktree,
           ...(options?.adoptRunId
             ? { adoptedFromRunId: options.adoptRunId, continuationMode: 'adopt' as const }
             : options?.supersedesRunId
@@ -1934,7 +1952,7 @@ export async function handleMessage(
   platform: IPlatformAdapter,
   conversationId: string,
   message: string,
-  context?: HandleMessageContext
+  context: HandleMessageContext
 ): Promise<void> {
   const {
     issueContext,
@@ -1942,8 +1960,9 @@ export async function handleMessage(
     parentConversationId,
     isolationHints,
     attachedFiles,
-    userId,
-  } = context ?? {};
+    actor,
+  } = context;
+  const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
   // leading whitespace (e.g. from a platform that doesn't pre-trim after
   // stripping a bot mention) must not let a command masquerade as a plain
@@ -2036,7 +2055,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message, platform);
+        const result = await commandHandler.handleCommand(conversation, message, actor, platform);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -2549,6 +2568,7 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          actor,
           operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,

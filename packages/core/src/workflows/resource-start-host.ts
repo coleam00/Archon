@@ -1,3 +1,5 @@
+import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import {
   prepareRunAiConfiguration,
@@ -15,9 +17,10 @@ import { requireTerminalStatusWrite } from '@archon/workflows/terminal-status-wr
  * fence, and recovery stay in the database layer; nothing here declares an owner dead.
  */
 import { randomUUID } from 'node:crypto';
+import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath, findRepoRoot } from '@archon/git';
-import { getIsolationProvider } from '@archon/isolation';
+import { getIsolationProvider, worktreeRegistrationMetadata } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
@@ -58,11 +61,7 @@ import {
   WorkflowInputContractError,
 } from '@archon/workflows/workflow-inputs';
 import { loadConfig } from '../config/config-loader';
-import {
-  loadWorkflowRunConfigFile,
-  sealWorkflowRunConfig,
-  unsealWorkflowRunConfig,
-} from '../config/run-config';
+import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/run-config';
 import * as codebaseDb from '../db/codebases';
 import * as conversationDb from '../db/conversations';
 import * as isolationDb from '../db/isolation-environments';
@@ -101,12 +100,12 @@ interface BindingIdentity {
 async function findOrRegisterCodebase(cwd: string): Promise<Codebase> {
   const repoRoot = await findRepoRoot(cwd);
   const found = repoRoot
-    ? await findCodebaseForCheckoutPath(repoRoot)
+    ? await findCodebaseForCheckoutPath(repoRoot, codebaseDb)
     : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   if (found) return found;
   const registered = repoRoot
-    ? await codebaseDb.getCodebase((await registerRepository(repoRoot)).codebaseId)
+    ? await codebaseDb.getCodebase((await registerRepository(codebaseDb, repoRoot)).codebaseId)
     : null;
   if (!registered) {
     throw new Error(`Cannot prepare a resource start from '${cwd}': register the project first.`);
@@ -212,10 +211,16 @@ async function prepareBinding(
       receiptId: identity.receiptId,
       bindingId: identity.bindingId,
     };
-    // Persist only authored inputs; defaults stay derived from the frozen workflow.
+    const preparedAi = await prepareRunAiConfiguration(createWorkflowDeps(), workflow, cwd, {
+      codebaseId: codebase.id,
+      userId: intent.runAsUserId,
+      runConfig,
+    });
     const metadata: Record<string, JsonValue> = {
+      [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
       [WORKFLOW_SOURCE_METADATA_KEY]: preparedWorkflowSourceRecord(source),
       [RESOURCE_START_METADATA_KEY]: { ...origin },
+      // Persist only authored inputs; defaults stay derived from the frozen workflow.
       ...(Object.keys(inputs).length > 0
         ? {
             [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
@@ -226,13 +231,8 @@ async function prepareBinding(
               : {}),
           }
         : {}),
-      ...(runConfig
-        ? {
-            [WORKFLOW_RUN_CONFIG_METADATA_KEY]: sealWorkflowRunConfig(
-              runConfig.layer,
-              runConfig.source
-            ),
-          }
+      ...(preparedAi.runConfigMetadata
+        ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }
         : {}),
     };
     const launch: PreparedWorkflowLaunch = {
@@ -354,7 +354,7 @@ async function worktreeLane(
   identifier: string,
   platformType: string,
   userId: string | undefined
-): Promise<{ cwd: string; envId: string; cutFromCommit?: string }> {
+): Promise<{ cwd: string; envId: string; cutFromCommit?: string; ownedWorktree?: OwnedWorktree }> {
   ensureIsolationConfigured();
   const provider = getIsolationProvider();
   // An explicit branch names one reusable checkout, so repeated starts share it.
@@ -395,11 +395,14 @@ async function worktreeLane(
     branch_name: env.branchName,
     created_by_platform: platformType,
     ...(userId ? { created_by_user_id: userId } : {}),
-    metadata: {},
+    metadata: { ...worktreeRegistrationMetadata(env.metadata) },
   });
   return {
     cwd: env.workingPath,
     envId: record.id,
+    ...(env.metadata.provenance === 'created'
+      ? { ownedWorktree: { envId: record.id, creationId: env.metadata.creationId } }
+      : {}),
     ...(!env.metadata.adopted && env.metadata.cutFromCommit !== undefined
       ? { cutFromCommit: env.metadata.cutFromCommit }
       : {}),
@@ -472,6 +475,8 @@ export async function startAdmittedResourceStart(
       frozen.workflow,
       launch.execution.cwd,
       {
+        aiConfigurationRun: run,
+        inheritAiConfiguration: true,
         userId: run.user_id ?? undefined,
         codebaseId: codebase.id,
         ...(sealed
@@ -501,7 +506,12 @@ export async function startAdmittedResourceStart(
             platform.getPlatformType(),
             run.user_id ?? undefined
           )
-        : { cwd: launch.execution.cwd, envId: undefined, cutFromCommit: undefined };
+        : {
+            cwd: launch.execution.cwd,
+            envId: undefined,
+            cutFromCommit: undefined,
+            ownedWorktree: undefined,
+          };
     if (run.conversation_id)
       await conversationDb.updateConversation(run.conversation_id, {
         cwd: execution.cwd,
@@ -522,17 +532,22 @@ export async function startAdmittedResourceStart(
         preparedAiConfiguration,
         codebaseId: codebase.id,
         baseBranch,
+        ownedWorktree: execution.ownedWorktree,
         ...(execution.cutFromCommit !== undefined
           ? { cutFromCommit: execution.cutFromCommit }
           : {}),
         ...(lane.kind === 'worktree' && lane.baseOverride
           ? { baseOverride: lane.baseOverride }
           : {}),
-        resolveChildIsolation: createCodebaseChildResolver(codebase, {
-          baseBranch,
-          createdByPlatform: platform.getPlatformType(),
-          createdByUserId: run.user_id ?? undefined,
-        }),
+        resolveChildIsolation: createCodebaseChildResolver(
+          sqlIsolation.createIsolationStore(),
+          codebase,
+          {
+            baseBranch,
+            createdByPlatform: platform.getPlatformType(),
+            createdByUserId: run.user_id ?? undefined,
+          }
+        ),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed
           ? { runConfig: { layer: unsealWorkflowRunConfig(sealed), source: sealed.source } }

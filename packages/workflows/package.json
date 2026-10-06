@@ -4,6 +4,7 @@
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
+    "./run-ai-configuration": "./src/run-ai-configuration.ts",
     "./run-preflight": "./src/run-preflight.ts",
     "./executor": "./src/executor.ts",
     "./loader": "./src/loader.ts",
@@ -27,6 +28,7 @@
     "./dry-run": "./src/dry-run.ts",
     "./graph-plan": "./src/graph-plan.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
+    "./utils/github-token-policy": "./src/utils/github-token-policy.ts",
     "./utils/workflow-requirements": "./src/utils/workflow-requirements.ts",
     "./workflow-inputs": "./src/workflow-inputs.ts",
     "./fixture-runner": "./src/fixture-runner.ts",
@@ -125,6 +127,7 @@
       "src/defaults/",
       "src/run-config.test.ts",
       "src/run-preflight.test.ts",
+      "src/run-ai-configuration.test.ts",
       "src/model-validation.test.ts",
       "src/router.test.ts",
       "src/utils/",

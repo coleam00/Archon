@@ -1,3 +1,4 @@
+import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
@@ -132,6 +133,7 @@ export const WORKFLOW_EVENT_TYPES = [
   // starts with `--adopt`/`--supersedes`, so the chain renders from events alone.
   'workflow.run_adopted',
   ...NODE_STATE_EVENT_TYPES,
+  'node_retry_scheduled',
   'loop_iteration_started',
   'loop_iteration_completed',
   'loop_iteration_failed',
@@ -202,6 +204,8 @@ export const LEGACY_PROVIDER_EVENT_TYPES = [
   'task_activity',
   'hook_activity',
 ] as const;
+
+export const PROVIDER_EVENT_ROW_TYPES = ['provider_event', ...LEGACY_PROVIDER_EVENT_TYPES] as const;
 
 export function isNodeStateEventType(value: WorkflowEventType): value is NodeStateEventType {
   return NODE_STATE_EVENT_TYPES.some(eventType => eventType === value);
@@ -336,6 +340,19 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   findWorkflowRunsByIdPrefix(prefix: string, codebaseId: string): Promise<WorkflowRun[]>;
   listWorkflowRuns(options?: ListDashboardRunsOptions): Promise<DashboardRunsResult>;
 
+  findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
+  findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
+  deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
+  /** Event reads return created_at with an explicit UTC offset, independent of storage dialect. */
+  listWorkflowEvents(
+    runId: string,
+    options?: { excludeEventTypes?: readonly string[] }
+  ): Promise<WorkflowEventRow[]>;
+  listEventsForRuns(
+    runIds: readonly string[],
+    eventTypes: readonly WorkflowEventType[]
+  ): Promise<Map<string, WorkflowEventRow[]>>;
+
   // Run lifecycle
   createWorkflowRun(data: {
     /**
@@ -362,8 +379,12 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
-  /** Fresh execution must win this pending-to-running CAS before doing any work. */
-  claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /**
+   * Fresh execution must win this pending-to-running CAS before doing any work.
+   * `workingPath` is the checkout the run will use; the claim stamps it on a row
+   * created without one.
+   */
+  claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
    * Record the run's checkout baseline (#3305). Write-once in the store: the first value
    * sticks and a later call returns it unchanged. Returns the persisted baseline.

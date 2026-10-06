@@ -1,3 +1,4 @@
+import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 /**
  * Database operations for workflow runs
  */
@@ -81,16 +82,6 @@ export type WorkflowRunInsert = Parameters<
   import('@archon/workflows/store').IWorkflowStore['createWorkflowRun']
 >[0];
 
-/** Best-effort ROLLBACK — log but swallow errors since we're already in an error path. */
-function rollback(): Promise<void> {
-  return pool.query('ROLLBACK', []).then(
-    () => undefined,
-    rollbackErr => {
-      getLog().warn({ err: rollbackErr as Error }, 'db.rollback_failed');
-    }
-  );
-}
-
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
 class WorkflowRunGuardError extends Error {}
 
@@ -125,8 +116,9 @@ function resumableStatusClause(dialect: SqlDialect, dayParamIndex: number): stri
  * `FOR UPDATE` on Postgres, empty on SQLite (which has no such syntax and does
  * not need it — the adapter serializes transactions on one connection, and a
  * cross-process writer that commits between our read and our write makes the
- * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY rather than let a
- * stale snapshot through). Used to pin rows across a read-then-write pair so
+ * deferred BEGIN's read→write upgrade fail with SQLITE_BUSY, which the adapter
+ * answers by rerunning the whole transaction, rather than let a stale snapshot
+ * through). Used to pin rows across a read-then-write pair so
  * the values read are the values the mutation acts on. Dialect-branched here
  * rather than in SqlDialect because this lock is local DB policy.
  */
@@ -380,18 +372,18 @@ export async function insertWorkflowRun(
   } catch (serializeError) {
     const err = serializeError as Error;
 
-    // Check if metadata contains critical context that must not be silently lost
-    if (data.metadata && 'github_context' in data.metadata) {
-      // Critical context (e.g., GitHub issue/PR details) must not be silently discarded.
-      // Failing here surfaces the problem to the user instead of running the workflow
-      // with empty context variables ($CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT).
+    // Losing launch policy would silently change execution on the next resume.
+    if (
+      data.metadata &&
+      ('github_context' in data.metadata || RUN_AI_CONFIGURATION_METADATA_KEY in data.metadata)
+    ) {
       getLog().error(
         { err, metadataKeys: Object.keys(data.metadata) },
         'db.workflow_run_metadata_serialize_failed'
       );
       throw new Error(
         `Failed to serialize workflow metadata: ${err.message}. ` +
-          'Metadata contains github_context which is required for this workflow.'
+          'Metadata contains required workflow context or AI configuration.'
       );
     }
 
@@ -462,12 +454,34 @@ export async function createWorkflowRun(data: WorkflowRunInsert): Promise<Workfl
   }
 }
 
-export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null> {
+/**
+ * A run whose checkout belongs only to destroyed worktree records cannot start.
+ * Abandonment marks the record destroyed before its final claimant check, so a run
+ * that reused the record too late to be seen fails here instead of starting in a
+ * checkout that is being removed.
+ *
+ * `workingPath` is stamped by the claim itself on a row created without one
+ * (`run --detach`), so the check and the claimant lookup see the checkout the
+ * run is about to use. An existing path is never replaced.
+ */
+export async function claimPendingWorkflowRun(
+  id: string,
+  workingPath?: string
+): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
-          SET status = 'running', last_activity_at = ${getDialect().now()}
+          SET status = 'running', last_activity_at = ${getDialect().now()},
+              working_path = COALESCE(working_path, CAST($2 AS TEXT))
         WHERE id = $1 AND status = 'pending'
+          AND NOT EXISTS (
+            SELECT 1 FROM remote_agent_isolation_environments e
+             WHERE e.provider = 'worktree'
+               AND e.codebase_id = remote_agent_workflow_runs.codebase_id
+               AND e.working_path = COALESCE(remote_agent_workflow_runs.working_path, CAST($2 AS TEXT))
+             GROUP BY e.working_path
+            HAVING SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) = 0
+          )
           AND (
             NOT EXISTS (SELECT 1 FROM remote_agent_resource_start_requests q WHERE q.id = $1)
             OR EXISTS (
@@ -478,7 +492,7 @@ export async function claimPendingWorkflowRun(id: string): Promise<WorkflowRun |
                WHERE q.id = $1 AND q.status = 'admitted'
             )
           )`,
-      [id]
+      [id, workingPath ?? null]
     );
     if (claimed.rowCount !== 1) return null;
     const selected = await query<WorkflowRunRow>(
@@ -2443,26 +2457,25 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
       ? `NOW() - INTERVAL '${String(olderThanDays)} days'`
       : `datetime('now', '-${String(olderThanDays)} days')`;
   try {
-    await pool.query('BEGIN', []);
-    // Delete events first (FK reference)
-    await pool.query(
-      `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
-        SELECT id FROM remote_agent_workflow_runs
-        WHERE status IN ('completed', 'failed', 'cancelled')
-          AND started_at < ${cutoff}
-      )`,
-      []
-    );
-    const result = await pool.query(
-      `DELETE FROM remote_agent_workflow_runs
-       WHERE status IN ('completed', 'failed', 'cancelled')
-         AND started_at < ${cutoff}`,
-      []
-    );
-    await pool.query('COMMIT', []);
-    return { count: result.rowCount ?? 0 };
+    return await getDatabase().withTransaction(async query => {
+      // Delete events first (FK reference)
+      await query(
+        `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
+          SELECT id FROM remote_agent_workflow_runs
+          WHERE status IN ('completed', 'failed', 'cancelled')
+            AND started_at < ${cutoff}
+        )`,
+        []
+      );
+      const result = await query(
+        `DELETE FROM remote_agent_workflow_runs
+         WHERE status IN ('completed', 'failed', 'cancelled')
+           AND started_at < ${cutoff}`,
+        []
+      );
+      return { count: result.rowCount ?? 0 };
+    });
   } catch (error) {
-    await rollback();
     const err = error as Error;
     getLog().error({ err, olderThanDays }, 'db.workflow_runs_cleanup_failed');
     throw new Error(`Failed to clean up old workflow runs: ${err.message}`);
@@ -2475,25 +2488,24 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
  */
 export async function deleteWorkflowRun(id: string): Promise<void> {
   try {
-    await pool.query('BEGIN', []);
-    // Guard: verify run exists and is terminal before deleting
-    const check = await pool.query<{ status: string }>(
-      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
-      [id]
-    );
-    if (check.rows.length === 0) {
-      throw new WorkflowRunGuardError(`Workflow run not found: ${id}`);
-    }
-    if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
-      throw new WorkflowRunGuardError(
-        `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
+    await getDatabase().withTransaction(async query => {
+      // Guard: verify run exists and is terminal before deleting
+      const check = await query<{ status: string }>(
+        'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
       );
-    }
-    await pool.query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
-    await pool.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
-    await pool.query('COMMIT', []);
+      if (check.rows.length === 0) {
+        throw new WorkflowRunGuardError(`Workflow run not found: ${id}`);
+      }
+      if (!TERMINAL_WORKFLOW_STATUSES.includes(check.rows[0].status as WorkflowRunStatus)) {
+        throw new WorkflowRunGuardError(
+          `Cannot delete workflow run in '${check.rows[0].status}' status — cancel it first`
+        );
+      }
+      await query('DELETE FROM remote_agent_workflow_events WHERE workflow_run_id = $1', [id]);
+      await query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
+    });
   } catch (error) {
-    await rollback();
     if (error instanceof WorkflowRunGuardError) throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_delete_failed');
