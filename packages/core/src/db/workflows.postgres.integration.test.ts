@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration tests: workflow-run queries that behave differently on a REAL Postgres
  * server than on SQLite.

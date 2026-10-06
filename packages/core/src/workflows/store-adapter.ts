@@ -9,6 +9,7 @@ import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import type { MergedConfig } from '../config/config-types';
 import * as workflowDb from '../db/workflows';
+import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import {
@@ -88,6 +89,24 @@ export function createWorkflowStore(): IWorkflowStore {
     cancelResumableRunsForConversation: workflowDb.cancelResumableRunsForConversation,
     deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRuns: workflowDb.listDashboardRuns,
+    findOpenWorkRuns: workflowDb.findOpenWorkRuns,
+    findAdoptingRuns: workflowDb.findAdoptingRuns,
+    deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
+    listWorkflowEvents: async (...args) =>
+      (await workflowEventDb.listWorkflowEvents(...args)).map(row => ({
+        ...row,
+        created_at: toHydratedTimestamp(row.created_at).toISOString(),
+      })),
+    listEventsForRuns: async (...args) =>
+      new Map(
+        [...(await workflowEventDb.listEventsForRuns(...args))].map(([id, rows]) => [
+          id,
+          rows.map(row => ({
+            ...row,
+            created_at: toHydratedTimestamp(row.created_at).toISOString(),
+          })),
+        ])
+      ),
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
@@ -164,7 +183,9 @@ export function initializeWorkflowGitHubAppAuth(
  * Create the canonical WorkflowDeps for the workflow engine.
  * Single construction point — avoids duplicating the wiring across callers.
  */
-export function createWorkflowDeps(): WorkflowDeps {
+export function createWorkflowDeps(): Omit<WorkflowDeps, 'loadConfig'> & {
+  loadConfig: typeof loadMergedConfig;
+} {
   const provider = registeredGitHubAppAuthProvider;
   return {
     store: createWorkflowStore(),

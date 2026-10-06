@@ -1,3 +1,5 @@
+// @archon-test-isolated
+import { buildAiProfile } from '@archon/workflows/model-validation';
 import {
   providerRegistry,
   registerBuiltinProviders,
@@ -820,6 +822,49 @@ describe('dispatchBackgroundWorkflow', () => {
     expect(runRow?.metadata).not.toHaveProperty('inputs');
 
     await flushBackgroundExecution();
+  });
+
+  test('background adoption records inherited policy before handing off to the executor', async () => {
+    const adapter = await import('../workflows/store-adapter');
+    const original = adapter.createWorkflowDeps();
+    const snapshot = {
+      version: 1 as const,
+      assistant: 'codex',
+      assistants: { codex: { model: 'launch-model' } },
+      baseAiProfile: buildAiProfile('codex'),
+      modelOverrides: {},
+    };
+    const ancestor = {
+      ...(await mockCreateWorkflowRun({
+        workflow_name: 'ancestor',
+        origin: { conversationId: 'conv' },
+        user_message: '',
+      })),
+      user_id: 'old-actor',
+      metadata: { ai_configuration: snapshot },
+    };
+    mockCreateWorkflowRun.mockClear();
+    const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+      ...original,
+      store: { ...original.store, getWorkflowRun: async () => ancestor },
+    }));
+    try {
+      await dispatchBackgroundWorkflow(
+        makeRoutingCtx({ adoptRunId: 'ancestor', userId: 'new-actor' }),
+        makeWorkflow({ worktree: { enabled: false } })
+      );
+      await flushBackgroundExecution();
+      const row = mockCreateWorkflowRun.mock.calls[0]?.[0];
+      expect(row?.metadata?.ai_configuration).toEqual(snapshot);
+      expect(row?.origin?.userId).toBe('new-actor');
+      const prepared = mockExecuteWorkflow.mock.calls[0]?.[7]?.preparedAiConfiguration;
+      expect(prepared?.config.assistant).toBe('codex');
+      expect(prepared?.config.assistants.codex.model).toBe('launch-model');
+      expect(prepared?.executionUserId).toBe('new-actor');
+    } finally {
+      factory.mockRestore();
+      (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+    }
   });
 
   test('passes sparse model bindings to the executor for a pre-created background run', async () => {

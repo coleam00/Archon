@@ -3,6 +3,8 @@ import {
   forgeResponseSchema,
   mutationTarget,
   type ChecksState,
+  type CheckObservation,
+  type ChecksObservation,
   type ForgeMutationFailure,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -16,7 +18,9 @@ export interface ForgeReadConformanceCase {
   expected: {
     revision: string;
     state: ChecksState;
-    units: readonly { kind: 'check' | 'commit_status'; id: string }[];
+    units: readonly (Pick<CheckObservation['unit'], 'kind' | 'id'> &
+      Pick<CheckObservation, 'rerun'>)[];
+    approvalPending?: ChecksObservation['approvalPending'];
   };
 }
 
@@ -43,6 +47,21 @@ export async function runForgeReadConformance(
       value.summary.state !== fixture.expected.state
     ) {
       failures.push(`${fixture.name}: correlation, target, revision or state differs`);
+    }
+    if (
+      fixture.expected.approvalPending !== undefined &&
+      value.approvalPending !== fixture.expected.approvalPending
+    )
+      failures.push(`${fixture.name}: approval evidence differs`);
+    for (const expected of fixture.expected.units) {
+      if (
+        expected.rerun !== undefined &&
+        JSON.stringify(
+          value.units.find(unit => unit.unit.kind === expected.kind && unit.unit.id === expected.id)
+            ?.rerun
+        ) !== JSON.stringify(expected.rerun)
+      )
+        failures.push(`${fixture.name}: rerun identity or attempt differs`);
     }
     const identities = value.units.map(unit => `${unit.unit.kind}:${unit.unit.id}`).sort();
     const expected = fixture.expected.units.map(unit => `${unit.kind}:${unit.id}`).sort();

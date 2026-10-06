@@ -3,20 +3,13 @@
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 
-// Mock dependencies BEFORE importing CLIAdapter
-const mockAddMessage = mock(() =>
-  Promise.resolve({
-    id: 'msg-1',
-    conversation_id: 'conv-1',
-    role: 'assistant' as const,
-    content: '',
-    metadata: '{}',
-    created_at: '',
-  })
+const recordMessage = mock(
+  async (
+    _id: string,
+    _message: string,
+    _metadata?: Parameters<CLIAdapter['sendMessage']>[2]
+  ): Promise<void> => {}
 );
-mock.module('@archon/core/db/messages', () => ({
-  addMessage: mockAddMessage,
-}));
 
 const mockLogger = {
   fatal: mock(() => undefined),
@@ -42,7 +35,7 @@ describe('CLIAdapter', () => {
   beforeEach(() => {
     adapter = new CLIAdapter();
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
-    mockAddMessage.mockClear();
+    recordMessage.mockClear();
     mockLogger.warn.mockClear();
   });
 
@@ -84,91 +77,29 @@ describe('CLIAdapter', () => {
       expect(consoleSpy).toHaveBeenCalledWith(multiLine);
     });
 
-    it('does not persist when conversationId has no registered db mapping', async () => {
+    it('prints without a message recorder', async () => {
       await adapter.sendMessage('unregistered-id', 'test');
       await adapter.sendMessage('another-unregistered-id', 'test');
       expect(consoleSpy).toHaveBeenCalledTimes(2);
-      expect(mockAddMessage).not.toHaveBeenCalled();
+      expect(recordMessage).not.toHaveBeenCalled();
     });
   });
 
-  describe('message persistence', () => {
-    it('persists assistant message when conversationDbId is set', async () => {
-      adapter.setConversationDbId('conv-id', 'conv-db-123');
-      await adapter.sendMessage('conv-id', 'Hello from AI');
-      expect(consoleSpy).toHaveBeenCalledWith('Hello from AI');
-      expect(mockAddMessage).toHaveBeenCalledWith(
-        'conv-db-123',
-        'assistant',
-        'Hello from AI',
-        undefined
-      );
-    });
-
-    it('does NOT persist when conversationDbId is not set', async () => {
-      await adapter.sendMessage('conv-id', 'Hello');
+  describe('message recorder', () => {
+    it('passes the correlation, message and metadata to the supplied recorder', async () => {
+      adapter = new CLIAdapter({ recordMessage });
+      const metadata = { category: 'workflow_status' as const, segment: 'new' as const };
+      await adapter.sendMessage('run-id', 'Hello', metadata);
+      expect(recordMessage).toHaveBeenCalledWith('run-id', 'Hello', metadata);
       expect(consoleSpy).toHaveBeenCalledWith('Hello');
-      expect(mockAddMessage).not.toHaveBeenCalled();
     });
 
-    it('handles addMessage errors gracefully (warn, no throw)', async () => {
-      mockAddMessage.mockRejectedValueOnce(new Error('DB connection failed'));
-      adapter.setConversationDbId('conv-id', 'conv-db-123');
-      await expect(adapter.sendMessage('conv-id', 'Hello')).resolves.toBeUndefined();
+    it('reports recording failures while preserving stdout delivery', async () => {
+      recordMessage.mockRejectedValueOnce(new Error('Recorder unavailable'));
+      adapter = new CLIAdapter({ recordMessage });
+      await expect(adapter.sendMessage('run-id', 'Hello')).resolves.toBeUndefined();
       expect(consoleSpy).toHaveBeenCalledWith('Hello');
       expect(mockLogger.warn).toHaveBeenCalled();
-    });
-
-    it('persists category and workflowResult metadata when provided', async () => {
-      adapter.setConversationDbId('conv-id', 'conv-123');
-      await adapter.sendMessage('conv-id', 'Hello', {
-        category: 'workflow_status',
-        workflowResult: { workflowName: 'test', runId: 'run-1' },
-      });
-      expect(mockAddMessage).toHaveBeenCalledWith('conv-123', 'assistant', 'Hello', {
-        category: 'workflow_status',
-        workflowResult: { workflowName: 'test', runId: 'run-1' },
-      });
-    });
-
-    it('persists workflowDispatch metadata', async () => {
-      adapter.setConversationDbId('conv-id', 'conv-123');
-      await adapter.sendMessage('conv-id', 'Dispatching...', {
-        workflowDispatch: { workerConversationId: 'worker-1', workflowName: 'assist' },
-      });
-      expect(mockAddMessage).toHaveBeenCalledWith('conv-123', 'assistant', 'Dispatching...', {
-        workflowDispatch: { workerConversationId: 'worker-1', workflowName: 'assist' },
-      });
-    });
-
-    it('omits metadata parameter when only non-persistent fields present', async () => {
-      adapter.setConversationDbId('conv-id', 'conv-123');
-      await adapter.sendMessage('conv-id', 'Hello', { segment: 'new' });
-      expect(mockAddMessage).toHaveBeenCalledWith('conv-123', 'assistant', 'Hello', undefined);
-    });
-
-    it('omits metadata parameter when metadata is undefined', async () => {
-      adapter.setConversationDbId('conv-id', 'conv-123');
-      await adapter.sendMessage('conv-id', 'Hello');
-      expect(mockAddMessage).toHaveBeenCalledWith('conv-123', 'assistant', 'Hello', undefined);
-    });
-
-    it('persists every future MessageMetadata field by derivation (#2709)', async () => {
-      // Adding a brand-new field to MessageMetadata must flow through the
-      // shared helper without re-editing the adapter. The cast widens the
-      // input to simulate the future field; the contract is that the new
-      // field lands in the persisted projection with no call-site change.
-      adapter.setConversationDbId('conv-id', 'conv-123');
-      await adapter.sendMessage('conv-id', 'Hello', {
-        category: 'workflow_status',
-        segment: 'new',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ...({ traceId: 'abc-123' } as any),
-      } as Parameters<typeof adapter.sendMessage>[2]);
-      expect(mockAddMessage).toHaveBeenCalledWith('conv-123', 'assistant', 'Hello', {
-        category: 'workflow_status',
-        traceId: 'abc-123',
-      });
     });
   });
 

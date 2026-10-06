@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: getLiveRunOwningEnv against a REAL bun:sqlite database.
  *
@@ -7,7 +8,7 @@
  * an env through either attachment route, while historical conversation rows and
  * terminal runs never do.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with isolation-environments.test.ts's
  * fake.
  */

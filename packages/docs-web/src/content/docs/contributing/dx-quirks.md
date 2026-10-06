@@ -42,7 +42,8 @@ Bun's `mock.module()` is process-global and irreversible — `mock.restore()` do
 - Never add `afterAll(() => mock.restore())` for `mock.module()` cleanup — it has no effect
 - Use `spyOn()` for internal modules that other test files import directly (e.g., `spyOn(git, 'checkout')`) — `spy.mockRestore()` DOES work for spies
 - Never `mock.module()` a module path that another test file also `mock.module()`s with a different implementation
-- When adding a new test file with `mock.module()`, ensure its package.json puts it in a separate group from any conflicting files — its own entry in `testGroups`, or its own `bun test` step for a package still using a `&&` chain
+- When adding a new test file with `mock.module()` to `packages/core`, make its first line exactly `// @archon-test-isolated` so it runs in its own process. Core discovers its tests, and discovery fails on a file that calls `mock.module()` without the marker. A file that mocks through a helper needs the marker too; discovery cannot see that call
+- In the other packages, give the file its own entry in `testGroups` in the package's `package.json`, or its own `bun test` step for a package still using a `&&` chain
 
 ## Worktree Port Allocation
 

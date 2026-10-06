@@ -1,26 +1,12 @@
 /**
- * Package test scripts deliberately split Bun invocations because `mock.module()`
- * state is process-global and irreversible. That makes each package manifest the
- * test inventory, so a new file can otherwise remain invisible forever.
- *
- * A package declares those groups one of two ways: a `bun test ... && bun test ...`
- * chain in `scripts.test`, or a `testGroups` array that `scripts/package-tests.ts`
- * runs. Both are read here. Half-adopting either is rejected: `testGroups` without the
- * runner is an inventory nothing executes, and the runner without `testGroups` executes
- * nothing this guard can see.
- *
- * Keep the batches explicit. The package-script guard below verifies that every
- * TypeScript test is selected by a file or directory argument and that selected
- * paths still exist. The repository guard combines those selectors with the root
- * test plan and workspace declaration so tracked tests cannot sit outside every
- * command. The compiler guard separately protects normal package projects from
- * excluding their tests again. `bun run test` discovers all three because the root
- * plan tests `./scripts/` directly.
+ * Independently enumerate expected tests so omissions in declarations or discovery fail.
+ * Bun module mocks are process-global; execution and inventory share one group resolver.
  */
 import { describe, test } from 'bun:test';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import ts from 'typescript';
+import { resolvePackageTestGroups } from './package-test-groups';
 import { ROOT_TEST_PLAN } from './repo-tests';
 
 interface InventoryMismatch {
@@ -65,7 +51,7 @@ function listFiles(directory: string): string[] {
 function readPackageManifest(manifestPath: string): {
   name: string | undefined;
   testScript: string | undefined;
-  testGroups: string[][] | undefined;
+  testGroups: unknown;
   workspaces: string[] | undefined;
 } {
   const parsed: unknown = JSON.parse(readFileSync(manifestPath, 'utf8'));
@@ -77,13 +63,7 @@ function readPackageManifest(manifestPath: string): {
   return {
     name: typeof parsed.name === 'string' ? parsed.name : undefined,
     testScript: typeof scripts?.test === 'string' ? scripts.test : undefined,
-    testGroups:
-      Array.isArray(parsed.testGroups) &&
-      parsed.testGroups.every(
-        (group): boolean => Array.isArray(group) && group.every(entry => typeof entry === 'string')
-      )
-        ? (parsed.testGroups as string[][])
-        : undefined,
+    testGroups: parsed.testGroups,
     workspaces:
       Array.isArray(parsed.workspaces) &&
       parsed.workspaces.every(value => typeof value === 'string')
@@ -134,56 +114,30 @@ function sourceSelectors(testScript: string | undefined): SelectorParseResult {
   };
 }
 
-function groupSelectors(groups: string[][]): SelectorParseResult {
-  const selectors: string[] = [];
-  const unsupportedDeclarations: string[] = [];
-
-  if (groups.length === 0) unsupportedDeclarations.push('testGroups is empty');
-
-  for (const [index, group] of groups.entries()) {
-    if (group.length === 0) {
-      unsupportedDeclarations.push(`testGroups[${String(index)}] is empty`);
-      continue;
-    }
-    for (const selector of group) {
-      // Mirrors the `src/` rule the script form applies, so both declarations describe
-      // the same inventory and a package can move between them without changing meaning.
-      if (selector.startsWith('src/')) selectors.push(selector);
-      else unsupportedDeclarations.push(`testGroups[${String(index)}] selector "${selector}"`);
-    }
-  }
-
-  return { selectors: selectors.sort(), unsupportedDeclarations };
-}
-
-/**
- * Resolves a package's test inventory from whichever declaration form it uses, and
- * rejects a package that adopted only half of the `testGroups` form.
- */
-function packageTestSelectors(manifest: {
-  testScript: string | undefined;
-  testGroups: string[][] | undefined;
-}): SelectorParseResult {
+function packageTestSelectors(
+  manifest: { testScript: string | undefined; testGroups: unknown },
+  packageDirectory: string
+): SelectorParseResult {
   const runsSharedRunner = manifest.testScript?.trim() === PACKAGE_TEST_RUNNER;
-
-  if (manifest.testGroups !== undefined) {
-    return runsSharedRunner
-      ? groupSelectors(manifest.testGroups)
-      : {
-          selectors: [],
-          unsupportedDeclarations: [
-            `declares testGroups but scripts.test is not "${PACKAGE_TEST_RUNNER}"`,
-          ],
-        };
-  }
-
   if (runsSharedRunner) {
+    try {
+      const selectors = resolvePackageTestGroups(packageDirectory, manifest).flat();
+      return {
+        selectors: selectors.filter(selector => selector.startsWith('src/')),
+        unsupportedDeclarations: selectors.filter(selector => !selector.startsWith('src/')),
+      };
+    } catch (error) {
+      return { selectors: [], unsupportedDeclarations: [String(error)] };
+    }
+  }
+  if (manifest.testGroups !== undefined) {
     return {
       selectors: [],
-      unsupportedDeclarations: [`runs "${PACKAGE_TEST_RUNNER}" without a string-array testGroups`],
+      unsupportedDeclarations: [
+        `declares testGroups but scripts.test is not "${PACKAGE_TEST_RUNNER}"`,
+      ],
     };
   }
-
   return sourceSelectors(manifest.testScript);
 }
 
@@ -246,11 +200,12 @@ function packageDirectoryForTest(
   return existsSync(join(packageDirectory, 'package.json')) ? packageDirectory : undefined;
 }
 
-function isCollectedByRepositoryTest(
+export function isCollectedByRepositoryTest(
   testPath: string,
   rootSelectors: string[],
   workspacePatterns: string[],
-  workspaceTestsRun: boolean
+  workspaceTestsRun: boolean,
+  packageSelectors: Map<string, string[]>
 ): boolean {
   if (rootSelectors.some((selector): boolean => selectorCollects(selector, testPath, REPO_ROOT))) {
     return true;
@@ -260,13 +215,20 @@ function isCollectedByRepositoryTest(
   const packageDirectory = packageDirectoryForTest(testPath, workspacePatterns);
   if (packageDirectory === undefined) return false;
 
-  const manifest = readPackageManifest(join(packageDirectory, 'package.json'));
-  return packageTestSelectors(manifest).selectors.some((selector): boolean =>
+  let selectors = packageSelectors.get(packageDirectory);
+  if (selectors === undefined) {
+    selectors = packageTestSelectors(
+      readPackageManifest(join(packageDirectory, 'package.json')),
+      packageDirectory
+    ).selectors;
+    packageSelectors.set(packageDirectory, selectors);
+  }
+  return selectors.some((selector): boolean =>
     selectorCollects(selector, testPath, packageDirectory)
   );
 }
 
-function inspectPackage(packageDirectory: string): InventoryMismatch | undefined {
+export function inspectPackage(packageDirectory: string): InventoryMismatch | undefined {
   const manifestPath = join(packageDirectory, 'package.json');
   const sourceDirectory = join(packageDirectory, 'src');
   if (!existsSync(manifestPath)) return undefined;
@@ -278,7 +240,7 @@ function inspectPackage(packageDirectory: string): InventoryMismatch | undefined
     : [];
 
   const manifest = readPackageManifest(manifestPath);
-  const { selectors, unsupportedDeclarations } = packageTestSelectors(manifest);
+  const { selectors, unsupportedDeclarations } = packageTestSelectors(manifest, packageDirectory);
   const selectedTests = new Set<string>();
   const staleSelectors: string[] = [];
 
@@ -339,7 +301,7 @@ function formatMismatches(mismatches: InventoryMismatch[]): string {
     'Package test inventory is out of sync.',
     ...details,
     'Add each test to a compatible Bun batch or cover it with a directory selector; remove stale selectors.',
-    `Declare package tests either as an explicit \`bun test <src selectors>\` chain in scripts.test, or as a testGroups array with scripts.test set to "${PACKAGE_TEST_RUNNER}", so execution and inventory agree.`,
+    `Declare package tests either as an explicit \`bun test <src selectors>\` chain in scripts.test, or with scripts.test set to "${PACKAGE_TEST_RUNNER}", with optional legacy testGroups; otherwise src tests are discovered, so execution and inventory agree.`,
     'Keep separate `bun test` invocations where `mock.module()` factories conflict.',
   ].join('\n');
 }
@@ -359,13 +321,15 @@ describe('package test inventory', () => {
 describe('repository test inventory', () => {
   test('every tracked TypeScript test is selected by bun run test', () => {
     const workspaces = readRootWorkspaces();
+    const packageSelectors = new Map<string, string[]>();
     const uncollectedTests = trackedTests().filter(
       (testPath): boolean =>
         !isCollectedByRepositoryTest(
           testPath,
           ROOT_TEST_SELECTORS,
           workspaces,
-          ROOT_PLAN_RUNS_WORKSPACE_TESTS
+          ROOT_PLAN_RUNS_WORKSPACE_TESTS,
+          packageSelectors
         )
     );
 

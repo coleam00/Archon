@@ -1,3 +1,5 @@
+import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import { providerRegistry } from '@archon/providers';
 import {
   prepareRunAiConfiguration,
@@ -59,11 +61,7 @@ import {
   WorkflowInputContractError,
 } from '@archon/workflows/workflow-inputs';
 import { loadConfig } from '../config/config-loader';
-import {
-  loadWorkflowRunConfigFile,
-  sealWorkflowRunConfig,
-  unsealWorkflowRunConfig,
-} from '../config/run-config';
+import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/run-config';
 import * as codebaseDb from '../db/codebases';
 import * as conversationDb from '../db/conversations';
 import * as isolationDb from '../db/isolation-environments';
@@ -102,12 +100,12 @@ interface BindingIdentity {
 async function findOrRegisterCodebase(cwd: string): Promise<Codebase> {
   const repoRoot = await findRepoRoot(cwd);
   const found = repoRoot
-    ? await findCodebaseForCheckoutPath(repoRoot)
+    ? await findCodebaseForCheckoutPath(repoRoot, codebaseDb)
     : ((await codebaseDb.findCodebaseByDefaultCwd(cwd)) ??
       (await codebaseDb.findCodebaseByPathPrefix(cwd)));
   if (found) return found;
   const registered = repoRoot
-    ? await codebaseDb.getCodebase((await registerRepository(repoRoot)).codebaseId)
+    ? await codebaseDb.getCodebase((await registerRepository(codebaseDb, repoRoot)).codebaseId)
     : null;
   if (!registered) {
     throw new Error(`Cannot prepare a resource start from '${cwd}': register the project first.`);
@@ -213,10 +211,16 @@ async function prepareBinding(
       receiptId: identity.receiptId,
       bindingId: identity.bindingId,
     };
-    // Persist only authored inputs; defaults stay derived from the frozen workflow.
+    const preparedAi = await prepareRunAiConfiguration(createWorkflowDeps(), workflow, cwd, {
+      codebaseId: codebase.id,
+      userId: intent.runAsUserId,
+      runConfig,
+    });
     const metadata: Record<string, JsonValue> = {
+      [RUN_AI_CONFIGURATION_METADATA_KEY]: preparedAi.aiConfigurationSnapshot,
       [WORKFLOW_SOURCE_METADATA_KEY]: preparedWorkflowSourceRecord(source),
       [RESOURCE_START_METADATA_KEY]: { ...origin },
+      // Persist only authored inputs; defaults stay derived from the frozen workflow.
       ...(Object.keys(inputs).length > 0
         ? {
             [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
@@ -227,13 +231,8 @@ async function prepareBinding(
               : {}),
           }
         : {}),
-      ...(runConfig
-        ? {
-            [WORKFLOW_RUN_CONFIG_METADATA_KEY]: sealWorkflowRunConfig(
-              runConfig.layer,
-              runConfig.source
-            ),
-          }
+      ...(preparedAi.runConfigMetadata
+        ? { [WORKFLOW_RUN_CONFIG_METADATA_KEY]: preparedAi.runConfigMetadata }
         : {}),
     };
     const launch: PreparedWorkflowLaunch = {
@@ -476,6 +475,8 @@ export async function startAdmittedResourceStart(
       frozen.workflow,
       launch.execution.cwd,
       {
+        aiConfigurationRun: run,
+        inheritAiConfiguration: true,
         userId: run.user_id ?? undefined,
         codebaseId: codebase.id,
         ...(sealed
@@ -538,11 +539,15 @@ export async function startAdmittedResourceStart(
         ...(lane.kind === 'worktree' && lane.baseOverride
           ? { baseOverride: lane.baseOverride }
           : {}),
-        resolveChildIsolation: createCodebaseChildResolver(codebase, {
-          baseBranch,
-          createdByPlatform: platform.getPlatformType(),
-          createdByUserId: run.user_id ?? undefined,
-        }),
+        resolveChildIsolation: createCodebaseChildResolver(
+          sqlIsolation.createIsolationStore(),
+          codebase,
+          {
+            baseBranch,
+            createdByPlatform: platform.getPlatformType(),
+            createdByUserId: run.user_id ?? undefined,
+          }
+        ),
         // A fresh claim reseals caller configuration, so restore the one sealed at intake.
         ...(sealed
           ? { runConfig: { layer: unsealWorkflowRunConfig(sealed), source: sealed.source } }

@@ -346,7 +346,7 @@ type ForgeState = 'none' | 'pending' | 'green' | 'red' | 'gated' | 'unknown';
 /** A `checks.state` response in the forge wire shape, one unit per named state. */
 export function forgeResponse(
   units: readonly { name: string; state: Exclude<ForgeState, 'none'> }[],
-  options: { revision?: string; required?: typeof units | null } = {}
+  options: { revision?: string; required?: typeof units | null; approvalPending?: boolean | null } = {}
 ): string {
   const set = (list: typeof units): Pick<ChecksObservation, 'units' | 'summary'> => {
     const counts = { total: list.length, green: 0, red: 0, pending: 0, gated: 0, unknown: 0 };
@@ -375,6 +375,7 @@ export function forgeResponse(
         ref: PR,
         revision: options.revision ?? 'deadbeef',
         ...set(units),
+        approvalPending: options.approvalPending,
         required: options.required ? set(options.required) : null,
       },
     },

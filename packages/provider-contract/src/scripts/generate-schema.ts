@@ -11,6 +11,9 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { z } from 'zod';
+import { providerPluginWireSchemas } from '../plugin/wire';
+import { rpcMessageSchema } from '../plugin/rpc';
+import { credentialSpecSchema } from '../registration';
 import {
   credentialStatusSchema,
   providerCapabilitiesSchema,
@@ -40,6 +43,9 @@ const CONTRACT_SCHEMAS = {
   ProviderEvent: providerEventSchema,
   ProviderChunk: providerChunkSchema,
   CredentialStatus: credentialStatusSchema,
+  CredentialSpec: credentialSpecSchema,
+  ProviderRpcMessage: rpcMessageSchema,
+  ...providerPluginWireSchemas,
 };
 
 function render(): string {

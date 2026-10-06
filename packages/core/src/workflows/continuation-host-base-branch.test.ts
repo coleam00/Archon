@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { expect, mock, test } from 'bun:test';
 import type { IWorkflowEngine, WorkflowResumeInput } from '@archon/workflows/engine-port';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -47,7 +48,7 @@ mock.module('@archon/isolation', () => ({
   getIsolationProvider: () => ({ create: providerCreate }),
 }));
 mock.module('../db/isolation-environments', () => ({
-  create: async () => ({ id: 'child-env' }),
+  createIsolationStore: () => ({ create: async () => ({ id: 'child-env' }) }),
 }));
 mock.module('../db/workflows', () => ({
   getWorkflowRun: async () => run,

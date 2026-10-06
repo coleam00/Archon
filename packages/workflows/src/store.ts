@@ -1,3 +1,4 @@
+import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
@@ -204,6 +205,8 @@ export const LEGACY_PROVIDER_EVENT_TYPES = [
   'hook_activity',
 ] as const;
 
+export const PROVIDER_EVENT_ROW_TYPES = ['provider_event', ...LEGACY_PROVIDER_EVENT_TYPES] as const;
+
 export function isNodeStateEventType(value: WorkflowEventType): value is NodeStateEventType {
   return NODE_STATE_EVENT_TYPES.some(eventType => eventType === value);
 }
@@ -342,6 +345,19 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   }): Promise<{ deleted: number }>;
   findWorkflowRunsByIdPrefix(prefix: string, codebaseId: string): Promise<WorkflowRun[]>;
   listWorkflowRuns(options?: ListDashboardRunsOptions): Promise<DashboardRunsResult>;
+
+  findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
+  findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
+  deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
+  /** Event reads return created_at with an explicit UTC offset, independent of storage dialect. */
+  listWorkflowEvents(
+    runId: string,
+    options?: { excludeEventTypes?: readonly string[] }
+  ): Promise<WorkflowEventRow[]>;
+  listEventsForRuns(
+    runIds: readonly string[],
+    eventTypes: readonly WorkflowEventType[]
+  ): Promise<Map<string, WorkflowEventRow[]>>;
 
   // Run lifecycle
   createWorkflowRun(data: {

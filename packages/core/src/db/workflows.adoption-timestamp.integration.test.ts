@@ -1,3 +1,6 @@
+// @archon-test-isolated
+import * as sqlIsolation from './isolation-environments';
+import * as sqlWorkflow from './workflows';
 /**
  * Integration test: workflow-run adoption cutoff against a REAL bun:sqlite
  * database (#2845).
@@ -11,7 +14,7 @@
  * boundary fabricate `Date` values throughout, so only a REAL adapter composing
  * getWorkflowRun → isolation lookup can catch it.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter.
  */
 import { describe, test, expect, mock } from 'bun:test';
@@ -150,6 +153,9 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
       codebasePath: '/tmp/ops-client',
       codebaseKind: 'repo',
       deps: {
+        getRun: sqlWorkflow.getWorkflowRun,
+        getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+        findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
         // Worktree gone; only the historical branch survives on disk.
         existsSync: () => false,
         branchExists: async (_repoPath, branch) => branch === 'impl-env-before',
@@ -178,6 +184,9 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
       codebasePath: '/tmp/ops-client',
       codebaseKind: 'repo',
       deps: {
+        getRun: sqlWorkflow.getWorkflowRun,
+        getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+        findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
         existsSync: p => p === '/tmp/ops-client/.worktrees/run-detached',
         branchExists: async (_repoPath, branch) => branch === 'impl-env-detached',
         currentBranch: async () => 'impl-env-detached',
@@ -198,6 +207,9 @@ describe('workflow-run adoption timestamp — real SQLite composition (#2845)', 
       codebasePath: '/tmp/ops-client',
       codebaseKind: 'repo',
       deps: {
+        getRun: sqlWorkflow.getWorkflowRun,
+        getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+        findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
         // Worktree gone, must checkout branch
         existsSync: () => false,
         branchExists: async (_repoPath, branch) => branch === 'impl-env-detached',

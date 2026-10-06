@@ -7,7 +7,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./conformance": "./src/conformance.ts",
-    "./effort": "./src/effort.ts"
+    "./effort": "./src/effort.ts",
+    "./plugin": "./src/plugin/index.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -17,6 +18,9 @@
   },
   "dependencies": {
     "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "1.7.0"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"

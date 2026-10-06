@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { RunActionForbiddenError } from '../operations/run-authorization';
 import type { RunActor } from '../operations/run-authorization';
 /**
@@ -326,7 +327,7 @@ mock.module('../db/workflow-events', () => ({
 // Mock the node-session DB layer so /workflow reset-sessions exercises the real
 // operation (resetWorkflowNodeSessions) without touching a database. Safe from
 // mock.module pollution because command-handler.test.ts runs as its own isolated
-// `bun test` invocation (see packages/core/package.json).
+// `bun test` invocation (declared by @archon-test-isolated).
 const mockDeleteWorkflowNodeSessions = mock<
   typeof WorkflowNodeSessionDb.deleteWorkflowNodeSessions
 >(() => Promise.resolve({ deleted: 0 }));
@@ -1535,12 +1536,15 @@ describe('CommandHandler', () => {
           expect(mockIsolationCreate).toHaveBeenCalled();
         });
 
-        test('reports a classified creation failure, not the raw error', async () => {
+        test.each([
+          'Submodule initialization failed: no network',
+          'post-checkout hook: already exists',
+        ])('reports the classified creation failure: %s', async message => {
           spyExecFileAsync.mockResolvedValue({ stdout: '', stderr: '' });
           mockGetActiveSession.mockResolvedValue(null);
           // A submodule failure whose rollback left a directory behind carries the
           // leftover note beside its message; only the classifier reads it.
-          const failure = Object.assign(new Error('Submodule initialization failed: no network'), {
+          const failure = Object.assign(new Error(message), {
             cleanupFailure: 'The incomplete workspace at /workspace/wt was left behind',
           });
           mockIsolationCreate.mockRejectedValueOnce(failure);

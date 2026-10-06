@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { beforeAll, describe, expect, it } from 'bun:test';
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
@@ -31,9 +31,19 @@ const FIXTURE_STATE_DEADLINE_MS = 5_000;
 
 /**
  * For a test that runs a real stop. On Windows the stop reads the process table through
- * `Get-CimInstance`, and the first such query on a fresh runner took about 4 s.
+ * `Get-CimInstance`; once WMI is warm (see `WMI_WARM_UP_TIMEOUT_MS`) a listing takes 1-3 s.
  */
 const STOP_TEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The first `Get-CimInstance` on a fresh Windows runner pays WMI's one-time start-up. It
+ * took 6-8 s under CPU burners and up to 19 s under the full suite's load, where it pushed
+ * the first stop test past `STOP_TEST_TIMEOUT_MS` while every later stop test passed in
+ * seconds.
+ * The cost is per machine, not per query: each listing runs in a fresh PowerShell and the
+ * second one is already fast. So it is paid once before the stop tests, not inside one.
+ */
+const WMI_WARM_UP_TIMEOUT_MS = 90_000;
 
 /**
  * For the stop that races a spawning target. That stop takes up to six process listings
@@ -170,6 +180,11 @@ function stubOwner(pid: number, leaseMs?: number): Server {
 }
 
 describe('detached run control integration', () => {
+  beforeAll(async (): Promise<void> => {
+    // A fresh marker names no process; only the query's cost matters here.
+    if (process.platform === 'win32') await windowsProcessesNaming(crypto.randomUUID());
+  }, WMI_WARM_UP_TIMEOUT_MS);
+
   for (const closedLauncher of [false, true]) {
     it(`keeps the detached child executing (closed launcher: ${String(closedLauncher)})`, async () => {
       const fixtureDir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-receipt-')));
