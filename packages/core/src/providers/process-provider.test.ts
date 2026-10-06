@@ -154,7 +154,7 @@ test('crash fails without settled and redacts split stderr in errors and logs', 
     let failure: unknown;
     try {
       for await (const chunk of provider('crash').sendQuery(
-        'private message',
+        'private message\nsecond private line',
         tmpdir(),
         undefined,
         {
@@ -169,12 +169,12 @@ test('crash fails without settled and redacts split stderr in errors and logs', 
     expect(failure).toBeInstanceOf(ProviderPluginExitedError);
     if (!(failure instanceof ProviderPluginExitedError)) throw failure;
     expect(failure.exitCode).toBe(7);
-    expect(failure.stderr).toContain('[REDACTED] crash evidence');
+    expect(failure.stderr).toContain('[REDACTED]');
     expect(failure.message).not.toContain(secret);
     expect(failure.message).not.toContain('private message');
     expect(failure.message).not.toContain('sëcrét');
     expect(output.map(chunk => chunk.type)).toEqual(['state_update']);
-    expect(JSON.stringify(debug.mock.calls)).toContain('[REDACTED]');
+    expect(JSON.stringify(debug.mock.calls)).toContain('stderrBytes');
     expect(JSON.stringify(debug.mock.calls)).not.toContain(secret);
     expect(JSON.stringify(debug.mock.calls)).not.toContain('sëcrét');
     expect(JSON.stringify(debug.mock.calls)).not.toContain('private message');
@@ -236,10 +236,75 @@ test('abort while a settled child is closing does not deliver settled', async ()
     const terminal = turn.next();
     for (let i = 0; i < 100 && !existsSync(file); i++) await Bun.sleep(5);
     expect(existsSync(file)).toBe(true);
+    const pids = JSON.parse(readFileSync(`${file}.pids`, 'utf8')) as number[];
+    expect(pids.every(alive)).toBe(true);
     abort.abort();
     expect((await terminal).done).toBe(true);
+    for (let i = 0; i < 120 && pids.some(alive); i++) await Bun.sleep(25);
+    expect(pids.some(alive)).toBe(false);
   } finally {
     await turn.return(undefined);
     await removeTempTree(directory);
+  }
+});
+
+test.each(['turn', 'credential', 'model'] as const)(
+  'live transport EOF terminates the %s process',
+  async operation => {
+    const directory = mkdtempSync(join(tmpdir(), 'archon-provider-eof-'));
+    const file = join(directory, 'pid');
+    const runtime = provider('live-eof', file);
+    let watchdogFired = false;
+    const watchdog = setTimeout(() => {
+      watchdogFired = true;
+      if (existsSync(file)) process.kill(Number(readFileSync(file, 'utf8')), 'SIGKILL');
+    }, 13_000);
+    try {
+      const request =
+        operation === 'turn'
+          ? collect(runtime.sendQuery('turn', tmpdir()))
+          : operation === 'credential'
+            ? runtime.checkCredential({ env: {}, signal: new AbortController().signal })
+            : runtime.resolveCredentialModel?.({ cwd: tmpdir() });
+      await expect(request).rejects.toBeInstanceOf(ProviderPluginExitedError);
+      expect(watchdogFired).toBe(false);
+      expect(alive(Number(readFileSync(file, 'utf8')))).toBe(false);
+    } finally {
+      clearTimeout(watchdog);
+      if (existsSync(file)) {
+        const pid = Number(readFileSync(file, 'utf8'));
+        if (alive(pid)) process.kill(pid, 'SIGKILL');
+      }
+      await removeTempTree(directory);
+    }
+  },
+  testTimeout(18_000)
+);
+
+test('a resume ID reaches the provider across the real process boundary', async () => {
+  expect(await collect(provider('resume').sendQuery('turn', tmpdir(), 'previous-session'))).toEqual(
+    [{ type: 'result', sessionId: 'previous-session' }, { type: 'settled' }]
+  );
+});
+
+test('credential crash diagnostics withhold short custom credential values', async () => {
+  const debug = spyOn(processLog, 'debug').mockImplementation(() => {});
+  try {
+    let failure: unknown;
+    try {
+      await provider('credential-crash').checkCredential({
+        env: { CUSTOM_CREDENTIAL: '§' },
+        signal: new AbortController().signal,
+      });
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(ProviderPluginExitedError);
+    if (!(failure instanceof ProviderPluginExitedError)) throw failure;
+    expect(failure.exitCode).toBe(7);
+    expect(failure.message).not.toContain('§');
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('§');
+  } finally {
+    debug.mockRestore();
   }
 });
