@@ -46,7 +46,10 @@ async function createFixture(): Promise<string> {
   return root;
 }
 
-async function lint(root: string, args: string[]): Promise<{ code: number; output: string }> {
+async function lint(
+  root: string,
+  args: readonly string[]
+): Promise<{ code: number; output: string }> {
   const child = Bun.spawn([process.execPath, 'run', 'scripts/lint.ts', ...args], {
     cwd: root,
     stdout: 'pipe',
