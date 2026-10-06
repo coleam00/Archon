@@ -55,6 +55,7 @@ beforeAll(async (): Promise<void> => {
 // ---------------------------------------------------------------------------
 
 let sessionUserId: string | undefined;
+let requireRunIdentity = false;
 mock.module('../auth', () => ({
   getAuth: () =>
     sessionUserId
@@ -62,23 +63,27 @@ mock.module('../auth', () => ({
           api: { getSession: async () => ({ user: { id: sessionUserId } }) },
         }
       : null,
-  isWebAuthEnabled: () => sessionUserId !== undefined,
+  isWebAuthEnabled: () => requireRunIdentity || sessionUserId !== undefined,
   isApiGateEnabled: () => false,
   getSignupMode: () => 'disabled',
 }));
-const mockFindOrCreateUser = mock(
-  async (_platform: string, platformUserId: string): Promise<User> => ({
-    id: `user-from-${platformUserId}`,
+function makeUser(id: string): User {
+  return {
+    id,
     display_name: null,
     email: null,
     role: 'member',
     created_at: new Date(),
     updated_at: new Date(),
-  })
+  };
+}
+const mockFindOrCreateUser = mock(
+  async (_platform: string, platformUserId: string): Promise<User> =>
+    makeUser(`user-from-${platformUserId}`)
 );
 mock.module('@archon/core/db/users', () => ({
   findOrCreateUserByPlatformIdentity: mockFindOrCreateUser,
-  getUserById: mock(async () => undefined),
+  getUserById: mock(async (id: string) => makeUser(id)),
 }));
 
 const mockGetWorkflowRun = mock(async (_id: string) => null as null | MockWorkflowRun);
@@ -2288,7 +2293,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
   });
 
   test('atomically signals the matching event wait and leaves continuation to the scheduler', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
       id: 'run-wait-1',
       status: 'paused',
@@ -2338,7 +2343,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
   });
 
   test('acknowledges a web-parented signal without inline routing after commit', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
       id: 'run-wait-web',
       status: 'paused',
@@ -2373,7 +2378,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
   });
 
   test('forwards the exact loop-owned wait occurrence to the signal CAS', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
       id: 'run-loop-wait',
       status: 'paused',
@@ -2419,7 +2424,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
   });
 
   test('rejects a signal that does not match the run wait', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
       id: 'run-wait-2',
       status: 'paused',
@@ -2450,7 +2455,7 @@ describe('POST /api/workflows/runs/:runId/signal', () => {
   });
 
   test('rejects a delayed signal for an earlier occurrence of the same event', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_RUNNING_RUN,
       id: 'run-wait-2',
       status: 'paused',
@@ -2514,7 +2519,7 @@ describe('POST /api/workflows/runs/:runId/abandon', () => {
   });
 
   test('returns 404 when run not found', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-missing/abandon', {
       method: 'POST',
@@ -2654,7 +2659,7 @@ describe('DELETE /api/workflows/runs/:runId', () => {
   });
 
   test('returns 404 when run not found', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-missing', {
       method: 'DELETE',
@@ -2663,7 +2668,7 @@ describe('DELETE /api/workflows/runs/:runId', () => {
   });
 
   test('returns 400 when run is not terminal', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1', {
       method: 'DELETE',
@@ -2674,7 +2679,7 @@ describe('DELETE /api/workflows/runs/:runId', () => {
   });
 
   test('returns 200 and deletes a completed run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_COMPLETED_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_COMPLETED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-2', {
       method: 'DELETE',
@@ -2687,7 +2692,7 @@ describe('DELETE /api/workflows/runs/:runId', () => {
   });
 
   test('returns 200 and deletes a failed run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_FAILED_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_FAILED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-4', {
       method: 'DELETE',
@@ -2727,7 +2732,7 @@ describe('action-required pause gate routes', () => {
     ['respond', { decision: 'approve' }],
   ] as const) {
     test(`${verb} directs the operator to resume or abandon instead`, async () => {
-      mockGetWorkflowRun.mockResolvedValueOnce({
+      mockGetWorkflowRun.mockResolvedValue({
         ...MOCK_PAUSED_RUN,
         id: 'run-action-required',
         metadata: {
@@ -2767,7 +2772,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
   });
 
   test('returns 404 when run not found', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/missing/approve', {
       method: 'POST',
@@ -2778,7 +2783,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
   });
 
   test('returns 400 when run is not paused', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/approve', {
       method: 'POST',
@@ -2792,7 +2797,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
   // gate of its own — approving the PARENT must 400 with a redirect to the child id,
   // never stamp a spurious node_completed for the parent's sub-run node.
   test('returns 400 redirecting to the child when the parent is blocked on a sub-run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'parent-blocked-1',
       metadata: {
@@ -2823,7 +2828,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
   // gate routes, so a corrupt block pointer and a gate type this build cannot
   // resolve reach the console as 400s with the reason, not an opaque 500.
   test('returns 400 explaining a block pointer with no child id, never naming <unknown>', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'parent-blocked-2',
       metadata: {
@@ -2844,7 +2849,7 @@ describe('POST /api/workflows/runs/:runId/approve', () => {
   });
 
   test('returns 400 for a gate type this build cannot resolve', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-future-gate',
       metadata: {
@@ -3109,7 +3114,7 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
   });
 
   test('returns 404 when run not found', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/missing/reject', {
       method: 'POST',
@@ -3120,7 +3125,7 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
   });
 
   test('returns 400 when run is not paused', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_RUNNING_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_RUNNING_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-uuid-1/reject', {
       method: 'POST',
@@ -3133,7 +3138,7 @@ describe('POST /api/workflows/runs/:runId/reject', () => {
   // #2121 Phase 2: rejecting a parent blocked on a `workflow:` child must 400 with a
   // redirect to the child id, not cancel the parent or stamp its sub-run node.
   test('returns 400 redirecting to the child when the parent is blocked on a sub-run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'parent-blocked-2',
       metadata: {
@@ -3302,7 +3307,7 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
   });
 
   test('returns 404 when run not found', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(null);
+    mockGetWorkflowRun.mockResolvedValue(null);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/missing/respond', {
       method: 'POST',
@@ -3313,7 +3318,7 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
   });
 
   test('returns 400 when the body has no decision', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(MOCK_PAUSED_RUN);
+    mockGetWorkflowRun.mockResolvedValue(MOCK_PAUSED_RUN);
     const { app } = makeApp();
     const response = await app.request('/api/workflows/runs/run-paused-1/respond', {
       method: 'POST',
@@ -3327,7 +3332,7 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
   // respond shares `pausedGateBlocker` with approve/reject but passes its own advice
   // string, so the machine-usable redirect is asserted on this route too.
   test('returns 400 redirecting to the child when the parent is blocked on a sub-run', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'parent-blocked-3',
       metadata: {
@@ -3353,7 +3358,7 @@ describe('POST /api/workflows/runs/:runId/respond', () => {
   });
 
   test('returns 400 naming the actual options when the decision is not declared', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce({
+    mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_PAUSED_RUN,
       id: 'run-respond-invalid',
       metadata: {
@@ -4465,6 +4470,7 @@ describe('authenticated web run-action actor forwarding', () => {
         const expectedActor: RunActor = { kind: 'user', userId: `user-from-${identity}-clicker` };
         const run = {
           ...MOCK_PAUSED_RUN,
+          user_id: `user-from-${identity}-clicker`,
           status: action === 'cancel' ? 'running' : action === 'resume' ? 'failed' : 'paused',
           parent_conversation_id: 'parent-conv-uuid',
           metadata: {
@@ -4530,5 +4536,76 @@ describe('authenticated web run-action actor forwarding', () => {
         }
       });
     }
+  }
+});
+
+describe('starter or admin authorization on every HTTP run action', () => {
+  afterEach(() => {
+    sessionUserId = undefined;
+  });
+
+  test('auth enabled without a resolved identity refuses a run action', async () => {
+    requireRunIdentity = true;
+    sessionUserId = undefined;
+    mockGetWorkflowRun.mockResolvedValue({ ...MOCK_PAUSED_RUN, user_id: 'starter-a' });
+    mockRequestDetachedRunStop.mockClear();
+    try {
+      const { app } = makeApp();
+      const response = await app.request(`/api/workflows/runs/${MOCK_PAUSED_RUN.id}/abandon`, {
+        method: 'POST',
+      });
+      expect(response.status).toBe(403);
+      expect(await response.text()).toContain('Only the user who started this run or an admin');
+      expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+    } finally {
+      requireRunIdentity = false;
+    }
+  });
+  const actions = [
+    'approve',
+    'reject',
+    'respond',
+    'cancel',
+    'abandon',
+    'resume',
+    'signal',
+    'delete',
+  ] as const;
+  for (const action of actions) {
+    test(`${action} returns 403 and performs no mutation for another member`, async () => {
+      sessionUserId = 'member-b';
+      const run = { ...MOCK_COMPLETED_RUN, user_id: 'starter-a' };
+      mockGetWorkflowRun.mockResolvedValue(run);
+      mockCancelWorkflowRun.mockClear();
+      mockDeleteWorkflowRun.mockClear();
+      mockSignalWorkflowWait.mockClear();
+      mockResolveApprovalGate.mockClear();
+      mockResolveAndCancelApprovalGate.mockClear();
+      mockRequestDetachedRunStop.mockClear();
+      const { app } = makeApp();
+      const body =
+        action === 'signal'
+          ? { event: 'ready', resumeAt: new Date().toISOString(), payload: { secret: 'contents' } }
+          : action === 'respond'
+            ? { decision: 'custom', text: 'contents' }
+            : {};
+      const response = await app.request(
+        `/api/workflows/runs/${run.id}${action === 'delete' ? '' : `/${action}`}`,
+        {
+          method: action === 'delete' ? 'DELETE' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          ...(action === 'delete' ? {} : { body: JSON.stringify(body) }),
+        }
+      );
+      expect(response.status).toBe(403);
+      expect(await response.text()).toContain('Only the user who started this run or an admin');
+      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+      expect(mockDeleteWorkflowRun).not.toHaveBeenCalled();
+      expect(mockSignalWorkflowWait).not.toHaveBeenCalled();
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+      expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
+      expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
+      expect(run).toEqual({ ...MOCK_COMPLETED_RUN, user_id: 'starter-a' });
+    });
   }
 });

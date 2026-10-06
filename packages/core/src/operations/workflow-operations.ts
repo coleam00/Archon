@@ -1,4 +1,9 @@
-import type { RunActor } from './run-authorization';
+import {
+  authorizeRunAction,
+  RunActionForbiddenError,
+  type RunActor,
+  type RunAction,
+} from './run-authorization';
 import type { UserRole } from '../schemas/user';
 import { recordDerivedExecution } from '@archon/workflows/node-event-write';
 import { logGateDecision } from '@archon/workflows/logger';
@@ -19,6 +24,8 @@ import { createLogger, captureApprovalResolved } from '@archon/paths';
 import { spellWorkflowCommand, type WorkflowCommandSurface } from '@archon/workflows/deps';
 import {
   RESUMABLE_WORKFLOW_STATUSES,
+  TERMINAL_WORKFLOW_STATUSES,
+  isWorkflowWaitContext,
   isApprovalContext,
   isGateResolved,
   isRunBlockedOnChild,
@@ -28,6 +35,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import type {
   WorkflowRun,
+  WorkflowWaitContext,
   ApprovalContext,
   ExpectedApprovalGate,
   ExecutionOwnerRecord,
@@ -667,6 +675,15 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
   return approval;
 }
 
+export interface RunActionStore {
+  signalWorkflowWait: (
+    id: string,
+    wait: Extract<WorkflowWaitContext, { kind: 'event' }>,
+    payload?: unknown
+  ) => Promise<{ signaled: boolean }>;
+  deleteWorkflowRun: (id: string) => Promise<void>;
+}
+
 export interface WorkflowOperationsDeps {
   getUserRole: (userId: string) => Promise<UserRole | undefined>;
   store: Pick<
@@ -681,7 +698,8 @@ export interface WorkflowOperationsDeps {
     | 'deleteWorkflowNodeSessions'
     | 'listWorkflowRuns'
     | 'findWorkflowRunsByIdPrefix'
-  >;
+  > &
+    RunActionStore;
   hostStore: IWorkflowHostStore;
   requestDetachedRunStop: typeof requestDetachedRunStop;
   isRunOwnedByThisProcess: typeof isRunOwnedByThisProcess;
@@ -691,8 +709,17 @@ export interface WorkflowOperationsDeps {
 }
 
 export interface WorkflowOperations {
+  assertRunActionAllowed: (run: WorkflowRun, actor: RunActor, action: RunAction) => Promise<void>;
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'];
+  signalWorkflowWait: (
+    runId: string,
+    event: string,
+    resumeAt: string,
+    payload: unknown,
+    actor: RunActor
+  ) => Promise<{ signaled: boolean }>;
+  deleteWorkflowRun: (runId: string, actor: RunActor) => Promise<void>;
   getWorkflowStatus: (options?: { codebaseId?: string }) => Promise<WorkflowStatusData>;
   resumeWorkflow: (runId: string, actor: RunActor) => Promise<WorkflowRun>;
   abandonWorkflow: (
@@ -728,6 +755,7 @@ export interface WorkflowOperations {
 
 export function createWorkflowOperations({
   store,
+  getUserRole,
   hostStore,
   requestDetachedRunStop,
   isRunOwnedByThisProcess,
@@ -735,6 +763,48 @@ export function createWorkflowOperations({
   reclaimContainerEnv,
   reclaimRunWorktree,
 }: WorkflowOperationsDeps): WorkflowOperations {
+  function assertAuthorized(
+    run: WorkflowRun,
+    actor: RunActor,
+    action: RunAction,
+    role: UserRole | undefined
+  ): void {
+    if (authorizeRunAction(actor, run.user_id, role)) return;
+    getLog().warn(
+      { runId: run.id, actorKind: actor.kind, action },
+      'operations.run_action_forbidden'
+    );
+    throw new RunActionForbiddenError(action, run.user_id);
+  }
+
+  async function assertMayAct(run: WorkflowRun, actor: RunActor, action: RunAction): Promise<void> {
+    const role = actor.kind === 'user' ? await getUserRole(actor.userId) : undefined;
+    assertAuthorized(run, actor, action, role);
+  }
+
+  async function signalWorkflowWait(
+    runId: string,
+    event: string,
+    resumeAt: string,
+    payload: unknown,
+    actor: RunActor
+  ): Promise<{ signaled: boolean }> {
+    const run = await getRunOrThrow(runId, 'operations.workflow_signal_lookup_failed');
+    await assertMayAct(run, actor, 'signal');
+    const wait = isWorkflowWaitContext(run.metadata?.wait) ? run.metadata.wait : undefined;
+    if (wait?.kind !== 'event' || wait.event !== event || wait.resumeAt !== resumeAt)
+      return { signaled: false };
+    return store.signalWorkflowWait(runId, wait, payload);
+  }
+
+  async function deleteWorkflowRun(runId: string, actor: RunActor): Promise<void> {
+    const run = await getRunOrThrow(runId, 'operations.workflow_delete_lookup_failed');
+    await assertMayAct(run, actor, 'delete');
+    if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status))
+      throw new Error(`Cannot delete workflow in '${run.status}' status — cancel it first`);
+    await store.deleteWorkflowRun(runId);
+  }
+
   /**
    * Cascade-cancel the `workflow:` sub-run tree under `rootId` (#2121 Phase 2 / D7).
    * A child sub-run shares the parent's conversation and runs in-process, so
@@ -874,8 +944,9 @@ export function createWorkflowOperations({
    * Validate that a run can be resumed and return it.
    * Does NOT execute the workflow — callers decide whether to run.
    */
-  async function resumeWorkflow(runId: string, _actor: RunActor): Promise<WorkflowRun> {
+  async function resumeWorkflow(runId: string, actor: RunActor): Promise<WorkflowRun> {
     const run = await getRunOrThrow(runId, 'operations.workflow_resume_lookup_failed');
+    await assertMayAct(run, actor, 'resume');
     if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
       throw new Error(
         `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`
@@ -978,9 +1049,10 @@ export function createWorkflowOperations({
    */
   async function abandonWorkflow(
     runId: string,
-    _actor: RunActor
+    actor: RunActor
   ): Promise<AbandonWorkflowResult & { owner: AbandonOwnerOutcome }> {
     const run = await getRunOrThrow(runId, 'operations.workflow_abandon_lookup_failed');
+    await assertMayAct(run, actor, 'abandon');
     assertAbandonable(run);
     const owner = await stopLiveOwner(run);
     if (owner.kind === 'not_stopped') throw new AbandonOwnerNotStoppedError(owner.message);
@@ -1148,8 +1220,9 @@ export function createWorkflowOperations({
    *   {@link CancelRefusedError} and leave the run unchanged. `cancelled` releases the
    *   run's worktree lock and resource slot, so it is never recorded on a guess.
    */
-  async function cancelWorkflow(runId: string, _actor: RunActor): Promise<CancelWorkflowResult> {
+  async function cancelWorkflow(runId: string, actor: RunActor): Promise<CancelWorkflowResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_cancel_lookup_failed');
+    await assertMayAct(run, actor, 'cancel');
     if (run.status !== 'running') {
       throw new CancelRefusedError(
         'not_running',
@@ -1249,9 +1322,14 @@ export function createWorkflowOperations({
    */
   async function abandonResumableRunsForConversation(
     conversationId: string,
-    _actor: RunActor
+    actor: RunActor
   ): Promise<AbandonConversationRunsResult> {
-    const runs = await store.cancelResumableRunsForConversation(conversationId);
+    const role = actor.kind === 'user' ? await getUserRole(actor.userId) : undefined;
+    const runs = await store.cancelResumableRunsForConversation(conversationId, runs => {
+      if (actor.kind === 'unidentified' && runs.length === 0)
+        throw new RunActionForbiddenError('abandon', undefined);
+      for (const run of runs) assertAuthorized(run, actor, 'abandon', role);
+    });
     let blockedParentRunId: string | null = null;
     const cleanupWarnings: string[] = [];
     const releasedWorktrees: ReleasedWorktree[] = [];
@@ -1293,10 +1371,11 @@ export function createWorkflowOperations({
   async function approveWorkflow(
     runId: string,
     comment: string | undefined,
-    _actor: RunActor,
+    actor: RunActor,
     expectedGate?: ExpectedApprovalGate
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_approve_lookup_failed');
+    await assertMayAct(run, actor, 'approve');
     const approval = assertApprovable(run);
 
     // Whitespace-only comments count as absent (mirrors feedbackProvided below):
@@ -1464,10 +1543,11 @@ export function createWorkflowOperations({
   async function rejectWorkflow(
     runId: string,
     reason: string | undefined,
-    _actor: RunActor,
+    actor: RunActor,
     expectedGate?: ExpectedApprovalGate
   ): Promise<RejectionOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_reject_lookup_failed');
+    await assertMayAct(run, actor, 'reject');
     const approval = assertRejectable(run);
 
     // Exhaustively switched on the suspend reason (#2489) so a future reason value
@@ -1669,10 +1749,12 @@ export function createWorkflowOperations({
   async function respondToWorkflowWithDeclaredDecision(
     runId: string,
     decision: string,
+    actor: RunActor,
     text?: string,
     expectedGate?: ExpectedApprovalGate
   ): Promise<ApprovalOperationResult> {
     const run = await getRunOrThrow(runId, 'operations.workflow_respond_lookup_failed');
+    await assertMayAct(run, actor, 'respond');
     const approval = assertRespondable(run, decision);
 
     const structuredOutput = { decision, text: text ?? '' };
@@ -1740,7 +1822,7 @@ export function createWorkflowOperations({
   ): Promise<ApprovalOperationResult | RejectionOperationResult> {
     if (decision === 'approve') return approveWorkflow(runId, text, actor, expectedGate);
     if (decision === 'reject') return rejectWorkflow(runId, text, actor, expectedGate);
-    return respondToWorkflowWithDeclaredDecision(runId, decision, text, expectedGate);
+    return respondToWorkflowWithDeclaredDecision(runId, decision, actor, text, expectedGate);
   }
 
   /**
@@ -1771,6 +1853,9 @@ export function createWorkflowOperations({
     findWorkflowRunsByIdPrefix: (prefix, codebaseId) =>
       store.findWorkflowRunsByIdPrefix(prefix, codebaseId),
     getWorkflowStatus,
+    assertRunActionAllowed: assertMayAct,
+    signalWorkflowWait,
+    deleteWorkflowRun,
     resumeWorkflow,
     abandonWorkflow,
     cancelWorkflow,

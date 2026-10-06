@@ -216,7 +216,8 @@
       "src/workflows/resolve-run-workflow.test.ts"
     ],
     [
-      "src/operations/workflow-operations.test.ts"
+      "src/operations/workflow-operations.test.ts",
+      "src/operations/run-authorization.test.ts"
     ],
     [
       "src/operations/workflow-adoption.test.ts"

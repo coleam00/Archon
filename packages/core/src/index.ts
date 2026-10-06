@@ -313,3 +313,5 @@ export { getPort } from './utils/port-allocation';
 export { resolveWorkflowSourceRoot } from './utils/workflow-source-root';
 
 export type { RunActor } from './operations/run-authorization';
+
+export { authorizeRunAction, RunActionForbiddenError } from './operations/run-authorization';

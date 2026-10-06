@@ -131,6 +131,7 @@ export class YourPlatformAdapter implements IPlatformAdapter {
 
 ```typescript
 import { YourPlatformAdapter } from './adapters/your-platform';
+import { findOrCreateUserByPlatformIdentity } from '@archon/core/db/users';
 
 // Read environment variables
 const yourPlatformToken = process.env.YOUR_PLATFORM_TOKEN;
@@ -142,9 +143,10 @@ if (yourPlatformToken) {
   const adapter = new YourPlatformAdapter(yourPlatformToken, yourPlatformMode);
 
   // Set up message handler
-  adapter.onMessage(async (conversationId, message) => {
+  adapter.onMessage(async (conversationId, message, platformUserId) => {
+    const user = await findOrCreateUserByPlatformIdentity(adapter.getPlatformType(), platformUserId);
     await handleMessage(adapter, conversationId, message, {
-      actor: { kind: 'unidentified' },
+      actor: { kind: 'user', userId: user.id },
     });
   });
 
@@ -266,14 +268,17 @@ async handleWebhook(payload: any, signature: string): Promise<void> {
   if (!this.verifySignature(payload, signature)) return;
 
   // Parse event, extract conversationId and message
-  const { conversationId, message } = this.parseEvent(payload);
+  const { conversationId, message, platformUserId } = this.parseEvent(payload);
+  const user = await findOrCreateUserByPlatformIdentity(this.getPlatformType(), platformUserId);
 
   // Route to orchestrator
   await handleMessage(this, conversationId, message, {
-    actor: { kind: 'unidentified' },
+    actor: { kind: 'user', userId: user.id },
   });
 }
 ```
+
+Resolve the authenticated sender to an Archon user before dispatch. If resolution fails, pass `{ kind: 'unidentified' }`; this refuses run actions. Chat and forge adapters never pass `operator`.
 
 **Reference:** `packages/adapters/src/forge/github/adapter.ts`
 

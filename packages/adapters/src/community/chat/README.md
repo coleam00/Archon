@@ -68,20 +68,24 @@ After creating your adapter, register it in `packages/server/src/index.ts`:
 
 ```typescript
 import { MyAdapter } from '@archon/adapters/community/chat/my-adapter';
+import { findOrCreateUserByPlatformIdentity } from '@archon/core/db/users';
 
 // In main():
 if (process.env.MY_PLATFORM_TOKEN) {
   const myAdapter = new MyAdapter(process.env.MY_PLATFORM_TOKEN);
   myAdapter.onMessage(async (ctx) => {
     lockManager.acquireLock(ctx.conversationId, async () => {
+      const user = await findOrCreateUserByPlatformIdentity('myplatform', ctx.platformUserId);
       await handleMessage(myAdapter, ctx.conversationId, ctx.message, {
-        actor: { kind: 'unidentified' },
+        actor: { kind: 'user', userId: user.id },
       });
     }).catch(createMessageErrorHandler('MyPlatform', myAdapter, ctx.conversationId));
   });
   await myAdapter.start();
 }
 ```
+
+The adapter must supply `ctx.platformUserId` from its authenticated sender. Resolve it with `findOrCreateUserByPlatformIdentity(platform, platformUserId)` before dispatch. If identity resolution fails, pass `{ kind: 'unidentified' }`; run actions are then refused. Chat adapters never pass `operator`.
 
 Declare runtime behavior independently of the platform identifier: `messagePersistence: 'adapter'` means the adapter persists direct-chat messages; `defaultWorkflowDispatch: 'background'` backgrounds non-interactive fresh runs. Optional `sendStructuredEvent` delivers rich events. Optional `prepareBackgroundConversation` prepares worker integration and returns an awaited finalizer.
 

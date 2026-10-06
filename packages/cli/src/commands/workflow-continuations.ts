@@ -4,7 +4,8 @@ import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { getArchonHome } from '@archon/paths';
 import { getConversationById } from '@archon/core/db/conversations';
-import { getWorkflowRun, signalWorkflowWait } from '@archon/core/db/workflows';
+import { getWorkflowRun } from '@archon/core/db/workflows';
+import { createSqlWorkflowOperations } from '@archon/core/workflows/sql-host';
 import { signalWorkflowWaitRequestSchema } from '@archon/core/schemas/workflow-run';
 import { createCliWorkflowDeps } from '../utils/workflow-deps';
 import { initializeWorkflowGitHubAppAuth } from '@archon/core/workflows/store-adapter';
@@ -266,7 +267,13 @@ async function signalEvent(args: string[], values: Values, json: boolean): Promi
       'Run is not waiting on that event occurrence; use its full run id and current resumeAt'
     );
   }
-  const { signaled } = await signalWorkflowWait(runId, wait, payload);
+  const { signaled } = await createSqlWorkflowOperations().signalWorkflowWait(
+    runId,
+    event,
+    resumeAt,
+    payload,
+    { kind: 'operator' }
+  );
   if (!signaled)
     throw new Error('Event occurrence is stale, expired, already signaled, or no longer paused');
   let outcome: ContinuationWakeOutcome;

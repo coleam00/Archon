@@ -212,4 +212,24 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
 
     expect(runs.map(r => r.id)).toEqual([id]);
   });
+  test('reset refusal rolls back the locked snapshot without events', async () => {
+    const { RunActionForbiddenError } = await import('../operations/run-authorization');
+    const paused = await seed('paused', {});
+    const failed = await seed('failed', {});
+    const error = new RunActionForbiddenError('abandon', 'starter');
+    await expect(
+      workflows.cancelResumableRunsForConversation(conversationId, runs => {
+        expect(runs.some(run => run.id === paused)).toBe(true);
+        expect(runs.some(run => run.id === failed)).toBe(true);
+        throw error;
+      })
+    ).rejects.toBe(error);
+    expect((await workflows.getWorkflowRun(paused))?.status).toBe('paused');
+    expect((await workflows.getWorkflowRun(failed))?.status).toBe('failed');
+    const events = await db.query<{ count: string }>(
+      'SELECT COUNT(*) AS count FROM remote_agent_workflow_events WHERE workflow_run_id IN ($1, $2)',
+      [paused, failed]
+    );
+    expect(Number(events.rows[0].count)).toBe(0);
+  });
 });
