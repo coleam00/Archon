@@ -51,7 +51,8 @@ function publishPr(options: ScriptOptions & { target?: Target } = {}): ScriptRun
       INPUTS_HEAD_REPO: JSON.stringify(target.headRepo ?? PR.repo),
       INPUTS_HEAD: target.head ?? 'feature',
       INPUTS_BASE: 'dev',
-      INPUTS_EXISTING: JSON.stringify(target.existing ?? null),
+      // The engine binds a field prepare declared null as empty text.
+      INPUTS_EXISTING: target.existing == null ? '' : JSON.stringify(target.existing),
       INPUTS_TITLE: 'A title',
       INPUTS_BODY: '{ARTIFACTS}/pr-body.md',
       INPUTS_DRAFT: 'true',

@@ -44,6 +44,15 @@ export function trimmed(value: string | undefined): string {
 }
 
 /**
+ * A bound JSON value that may be null. The engine binds a field the producer declared
+ * null as empty text, and a literal or `if_skipped` null as `null`; both read as null.
+ */
+export function nullableJson(value: string | undefined): unknown {
+  const raw = trimmed(value);
+  return raw === '' ? null : (JSON.parse(raw) as unknown);
+}
+
+/**
  * This run's artifact directory.
  *
  * The engine supplies it to every exec node, so its absence is a bug in the engine

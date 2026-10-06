@@ -35,7 +35,7 @@ import {
   type PrRecord,
   type QualifiedPr,
 } from '../../.shared/forge.ts';
-import { artifactsDir, emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { writePublishedBody } from '../../.shared/report.ts';
 
@@ -46,11 +46,10 @@ function publish(): PrRecord {
   const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
   const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
   const head = text(process.env.INPUTS_HEAD);
-  const existing = JSON.parse(text(process.env.INPUTS_EXISTING)) as number | null;
+  const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
   const artifacts = artifactsDir();
 
-  const raw = trimmed(process.env.INPUTS_PULL_REQUEST);
-  const named = raw === '' ? null : (JSON.parse(raw) as number | null);
+  const named = nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null;
   if (named !== null && existing !== named) {
     throw new Error(
       `the caller named pull request ${String(named)} to continue, but prepare declared ${String(existing ?? 'none')}`

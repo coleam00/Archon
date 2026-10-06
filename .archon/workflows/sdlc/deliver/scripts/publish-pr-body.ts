@@ -17,14 +17,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { editPrBody, viewPr } from '../../.shared/pr.ts';
 import { forgeSource, parsePrRecord } from '../../.shared/forge.ts';
-import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
 import { writePublishedBody } from '../../.shared/report.ts';
 
 try {
   const source = forgeSource();
   const pr = parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)));
-  const raw = trimmed(process.env.INPUTS_BODY);
-  const pointer = raw === '' ? null : (JSON.parse(raw) as { path: string } | null);
+  const pointer = nullableJson(process.env.INPUTS_BODY) as { path: string } | null;
   const artifacts = artifactsDir();
   // With no resync the live body stays as written, but its red-cause block is still
   // rebuilt, and the edit is skipped only when nothing changed.
