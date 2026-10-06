@@ -224,6 +224,17 @@ awk -v prev="## [$PREV_MAJOR_MINOR_PATCH]" '
 If a PR number in your commit range appears in that list, stop and re-derive the
 boundary — do not write it twice.
 
+**Also read the `[Unreleased]` section.** Contributors may write entries there by
+hand. They are input to this release, not a boundary error:
+
+```bash
+awk '
+  /^## \[Unreleased\]/ { on = 1; next }
+  on && /^## \[/      { exit }
+  on                  { print }
+' CHANGELOG.md
+```
+
 If no new commits, abort: "Nothing to release — dev is up to date with main."
 
 ### Step 5: Draft Changelog Entries
@@ -234,15 +245,24 @@ Prefer the PR title and its `## Summary` section over the raw commit subject —
 they state the user-visible problem, which is what a changelog entry needs:
 
 ```bash
-gh pr view <N> --repo coleam00/Archon --json title,body
+gh pr view <N> --repo coleam00/Archon --json number,title,body,closingIssuesReferences
 ```
 
-**Categorize into Keep a Changelog sections:**
-- **Breaking** — changes that break existing behavior users may rely on (only when there are any)
-- **Added** — new features, new files, new capabilities
-- **Changed** — modifications to existing behavior
-- **Fixed** — bug fixes
-- **Removed** — deleted features or code
+Draft entries only for changes the `[Unreleased]` entries from Step 4 do not
+already describe, so each change appears once. Hand-written entries often cite
+the issue a PR closes (`closingIssuesReferences`) rather than the PR, or cite
+nothing; judge by what the entry says, not by its number. Keep the substance of
+hand-written entries (migration tables, exact details) and tidy only their wording
+and placement. If you can't tell whether an entry covers a PR, ask in Step 7.
+
+**Categorize into Keep a Changelog sections, in this order (omit empty ones):**
+1. **Breaking** — changes that break existing behavior users may rely on
+2. **Security** — vulnerability fixes and security-relevant hardening
+3. **Added** — new features, new files, new capabilities
+4. **Changed** — modifications to existing behavior
+5. **Deprecated** — features still available but discouraged or planned for removal
+6. **Removed** — deleted features or code
+7. **Fixed** — bug fixes
 
 **Writing rules:**
 - Write entries as a human would — clear, concise, user-facing language
@@ -269,7 +289,9 @@ gh pr view <N> --repo coleam00/Archon --json title,body
    - `pyproject.toml` + `uv.lock`: run `uv lock --quiet`
    - `Cargo.toml`: run `cargo update --workspace`
 
-4. **`CHANGELOG.md`** — prepend new version section:
+4. **`CHANGELOG.md`** — write one new version section below `[Unreleased]` from
+   the `[Unreleased]` entries and the Step 5 drafts, one `### <Category>` heading
+   per non-empty category in the Step 5 order:
 
 ```markdown
 ## [x.y.z] - YYYY-MM-DD
@@ -285,22 +307,16 @@ One-line summary of the release.
 - Entry one (#PR)
 - Entry two (#PR)
 
-### Changed
-
-- Entry one (#PR)
-
 ### Fixed
 
 - Entry one (#PR)
 ```
 
-Omit the `### Breaking` section entirely when the release has no breaking changes.
-**`### Breaking` must come first**, immediately after the one-line summary and before
-Added/Changed/Fixed/Removed — Step 9's release workflow reads this section verbatim
-into the GitHub release body, so this file's own section order is what makes breaking
-changes appear first on the release page.
+**`### Breaking` must come first**, immediately after the one-line summary. Step 9's
+release workflow reads this section verbatim into the GitHub release body, so this
+file's own section order is what makes breaking changes appear first on the release page.
 
-Move any content under `[Unreleased]` into the new version section. Leave `[Unreleased]` header with nothing under it.
+Leave the `[Unreleased]` header with nothing under it.
 
 ### Step 7: Present for Review
 
@@ -309,6 +325,7 @@ Show the user:
 2. The version bump (old -> new)
 3. The full changelog section that will be added
 4. The list of commits being included
+5. Any `[Unreleased]` entry you were unsure covers a PR, next to that PR
 
 Ask: "Does this look good? I'll commit and create the PR."
 
