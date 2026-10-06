@@ -573,7 +573,7 @@ describe('WorktreeProvider against real git', () => {
     await mkdir(worktreePath, { recursive: true });
     if (!empty) await writeFile(join(worktreePath, 'user-work'), 'keep me');
     await expect(provider.create(request)).rejects.toThrow(
-      'a pre-existing directory occupies this path'
+      'a pre-existing directory occupies this path. It is not a worktree Archon created, so Archon leaves it intact; remove or move it, then retry.'
     );
     expect(existsSync(worktreePath)).toBe(true);
     if (!empty) expect(await readFile(join(worktreePath, 'user-work'), 'utf-8')).toBe('keep me');

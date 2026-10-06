@@ -939,7 +939,8 @@ export class WorktreeProvider implements IIsolationProvider {
     const repoPath = request.canonicalRepoPath;
     if (await this.directoryExists(worktreePath)) {
       throw new Error(
-        `Cannot create worktree at ${worktreePath}: a pre-existing directory occupies this path.`
+        `Cannot create worktree at ${worktreePath}: a pre-existing directory occupies this path. ` +
+          'It is not a worktree Archon created, so Archon leaves it intact; remove or move it, then retry.'
       );
     }
     const creationId = randomUUID();
