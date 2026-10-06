@@ -186,8 +186,16 @@ export class SqliteAdapter implements IDatabase {
     } catch (error) {
       // A busy statement is retried by query() or withTransaction(), which log the wait.
       if (!isSqliteBusy(error)) {
+        // Driver messages and stacks can echo bound values (e.g. invalid JSON paths).
         getLog().error(
-          { err: error as Error, sql: convertedSql, params },
+          {
+            err: {
+              message: 'Query failed (error details withheld to protect bound values)',
+              ...(error instanceof SQLiteError ? { code: error.code, errno: error.errno } : {}),
+            },
+            sql,
+            paramCount: params?.length ?? 0,
+          },
           'db.sqlite_query_failed'
         );
       }
