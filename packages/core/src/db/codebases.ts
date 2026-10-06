@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 import { assertAbsoluteDefaultCwd } from './codebase-path';
 export { InvalidCodebaseDefaultCwdError } from './codebase-path';
 import { pool, getDialect } from './connection';
-import type { Codebase } from '../types';
+import type { Codebase, CreateCodebaseInput, UpdateCodebaseInput } from '../schemas/codebase';
 import { createLogger, captureCodebaseRegistered, isPathInside } from '@archon/paths';
 
 function validateCodebase<T extends Pick<Codebase, 'name' | 'default_cwd'>>(row: T): T {
@@ -32,14 +32,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export async function createCodebase(data: {
-  name: string;
-  repository_url?: string;
-  default_cwd: string;
-  default_branch?: string | null;
-  ai_assistant_type?: string | null;
-  kind?: 'repo' | 'folder';
-}): Promise<Codebase> {
+export async function createCodebase(data: CreateCodebaseInput): Promise<Codebase> {
   assertAbsoluteDefaultCwd(data.default_cwd, data.name);
   const result = await pool.query<Codebase>(
     'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
@@ -183,7 +176,7 @@ export class CodebaseNotFoundError extends Error {
 
 export async function updateCodebase(
   target: Pick<Codebase, 'id' | 'name'>,
-  data: { default_cwd?: string; repository_url?: string | null; default_branch?: string | null }
+  data: UpdateCodebaseInput
 ): Promise<void> {
   if (data.default_cwd !== undefined) assertAbsoluteDefaultCwd(data.default_cwd, target.name);
   const dialect = getDialect();

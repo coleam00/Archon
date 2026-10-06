@@ -1,3 +1,4 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 /**
  * Child-isolation resolver — identifier uniqueness (#2121 slice 2, PR-A).
  *
@@ -62,7 +63,7 @@ const REPO_CODEBASE = {
 };
 
 function repoResolver(): NonNullable<ReturnType<typeof createCodebaseChildResolver>> {
-  const resolver = createCodebaseChildResolver(REPO_CODEBASE, {
+  const resolver = createCodebaseChildResolver(sqlIsolation.createIsolationStore(), REPO_CODEBASE, {
     baseBranch: 'main',
     createdByPlatform: 'cli',
     createdByUserId: undefined,
@@ -200,6 +201,7 @@ describe('createCodebaseChildResolver', () => {
 
   test('a repo codebase gets a resolver bound to it and to the surface attribution', async () => {
     const resolver = createCodebaseChildResolver(
+      sqlIsolation.createIsolationStore(),
       { id: 'cb-7', name: 'acme/api', default_cwd: '/repos/api', kind: 'repo' },
       { baseBranch: 'develop', createdByPlatform: 'slack', createdByUserId: 'user-42' }
     );
@@ -225,6 +227,7 @@ describe('createCodebaseChildResolver', () => {
 
   test('a folder codebase gets no resolver', () => {
     const resolver = createCodebaseChildResolver(
+      sqlIsolation.createIsolationStore(),
       { id: 'cb-8', name: 'ops', default_cwd: '/ops', kind: 'folder' },
       { baseBranch: undefined, createdByPlatform: 'cli', createdByUserId: 'user-42' }
     );

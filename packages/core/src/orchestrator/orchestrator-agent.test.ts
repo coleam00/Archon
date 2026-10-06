@@ -1,3 +1,4 @@
+import type { RunActor } from '../operations/run-authorization';
 import type { ProviderRegistry } from '@archon/provider-contract';
 mock.module('../workflows/branch-launch-source', () => ({
   withBranchLaunchSource: async (
@@ -59,6 +60,8 @@ import type * as Paths from '@archon/paths';
 import type * as RunLiveOwnerModule from '../services/run-live-owner';
 import { captureWorkflowSource } from '../../../workflows/src/workflow-source';
 import { trackTempRoots } from '@archon/paths/test-utils';
+
+const operator: RunActor = { kind: 'operator' };
 
 const trackTempRoot = trackTempRoots();
 
@@ -1562,7 +1565,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     // Non-destructive default sync (#1864): no explicit reset mode, only the
     // resolved remote rides in the options.
@@ -1585,7 +1588,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     expect(mockSyncWorkspace).toHaveBeenCalledWith(
       '/home/test/.archon/workspaces/owner/repo/source',
@@ -1601,7 +1604,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', 'develop', {
       remote: 'origin',
@@ -1617,7 +1620,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockLoadRepoConfig.mockResolvedValueOnce({ worktree: { remote: 'mar' } });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     expect(mockSyncWorkspace).toHaveBeenCalledWith(
       '/repos/test-repo',
@@ -1637,7 +1640,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetDefaultRemote.mockResolvedValueOnce('upstream');
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     expect(mockSyncWorkspace).toHaveBeenCalledWith(
       '/repos/test-repo',
@@ -1657,7 +1660,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     const platform = makePlatform();
     // Non-fatal: no exception propagated
     await expect(
-      handleMessage(platform, 'conv-1', 'What is the latest commit?')
+      handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator })
     ).resolves.toBeUndefined();
     expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
       remote: 'origin',
@@ -1669,7 +1672,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-2', 'Hello');
+    await handleMessage(platform, 'conv-2', 'Hello', { actor: operator });
 
     expect(mockSyncWorkspace).not.toHaveBeenCalled();
   });
@@ -1682,7 +1685,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Summarize the folder structure.');
+    await handleMessage(platform, 'conv-1', 'Summarize the folder structure.', { actor: operator });
 
     expect(mockSyncWorkspace).not.toHaveBeenCalled();
   });
@@ -1696,7 +1699,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockSyncWorkspace.mockRejectedValueOnce(new Error('Network timeout'));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ codebaseId: 'codebase-1' }),
@@ -1719,7 +1722,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     expect(mockSendQuery).toHaveBeenCalled();
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
@@ -1733,7 +1736,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeConversation()));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockGetCodebaseEnvVars).not.toHaveBeenCalled();
   });
@@ -1753,7 +1756,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ codebaseId: 'codebase-1' }),
@@ -1769,7 +1772,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockSendQuery).toHaveBeenCalled();
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
@@ -1787,7 +1790,7 @@ describe('discoverAllWorkflows — remote sync', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockSendQuery).toHaveBeenCalled();
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
@@ -1808,7 +1811,7 @@ describe('discoverAllWorkflows — remote sync', () => {
 
     try {
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'Hello');
+      await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
       // Codex → plain-string prompt that now carries the CLI pointer section.
@@ -1833,7 +1836,7 @@ describe('discoverAllWorkflows — remote sync', () => {
 
     try {
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'Hello');
+      await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
       const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
       // Claude → preset object; the append must NOT carry the CLI pointer
@@ -1879,7 +1882,7 @@ describe('provider cwd resolution', () => {
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(getSendQueryCwd()).toBe('/repos/test-repo');
     expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
@@ -1896,7 +1899,7 @@ describe('provider cwd resolution', () => {
     mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(getSendQueryCwd()).toBe('/worktrees/feature-branch');
     expect(mockEnsureArchonWorkspacesPath).not.toHaveBeenCalled();
@@ -1915,7 +1918,7 @@ describe('provider cwd resolution', () => {
     mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/deleted-branch');
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     // Never reaches the provider: spawning there fails ENOENT and the Claude
     // SDK misreports it as a binary/libc mismatch.
@@ -1938,7 +1941,7 @@ describe('provider cwd resolution', () => {
     mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/deleted-branch');
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0][1] as string;
     expect(sent).toContain('/worktree remove');
@@ -1958,7 +1961,7 @@ describe('provider cwd resolution', () => {
     mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/deleted-branch');
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0][1] as string;
     // Reachable via the stale_cleaned branch in validateAndResolveIsolation, which
@@ -1981,7 +1984,7 @@ describe('provider cwd resolution', () => {
     mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/deleted-branch');
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     // Relocating the agent into the live checkout would widen its write scope
     // without the user asking for it.
@@ -1995,7 +1998,7 @@ describe('provider cwd resolution', () => {
     mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/deleted-branch');
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     // With no codebase scoped, cwd is never consulted — the workspaces path wins,
     // so a stale override must not block the turn.
@@ -2015,7 +2018,7 @@ describe('provider cwd resolution', () => {
       mockExistsSync.mockImplementation((p: string) => p !== '/repos/test-repo');
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       // Handing a missing path to the provider is the whole defect: the spawn
       // fails ENOENT against the BINARY, so the user is told the wrong thing.
@@ -2037,7 +2040,7 @@ describe('provider cwd resolution', () => {
       mockExistsSync.mockImplementation((p: string) => p !== '/repos/test-repo');
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0][1] as string;
       // /update-project validates the new path and repairs the registration.
@@ -2059,7 +2062,7 @@ describe('provider cwd resolution', () => {
       mockExistsSync.mockImplementation((p: string) => p !== '/repos/test-repo');
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0][1] as string;
       // handleUpdateProject takes only the FIRST token as the project name, so an
@@ -2086,7 +2089,7 @@ describe('provider cwd resolution', () => {
       mockExistsSync.mockImplementation((p: string) => p !== '/repos/test-repo');
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0][1] as string;
       expect(sent).toContain('/update-project "Bob\\"s \\\\Ops" <new-path>');
@@ -2105,7 +2108,7 @@ describe('provider cwd resolution', () => {
       // orchestrator never writes a user row for it and this could not regress.
       const platform = makePlatform();
       platform.getPlatformType = mock(() => 'telegram') as typeof platform.getPlatformType;
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       expect(mockSendQuery).not.toHaveBeenCalled();
       expect(mockAddMessage.mock.calls.filter(c => c[1] === 'user')).toHaveLength(0);
@@ -2123,7 +2126,7 @@ describe('provider cwd resolution', () => {
       mockExistsSync.mockImplementation((p: string) => p !== '/worktrees/removed');
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       // Pins WHICH refusal the user gets, which is the part still observable here.
       //
@@ -2167,7 +2170,7 @@ describe('provider cwd resolution', () => {
       mockExistsSync.mockImplementation((p: string) => p !== '/repos/test-repo');
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       // This is the case that makes `&& conversation.cwd === null` load-bearing
       // rather than decorative. Drop that clause while leaving the target as
@@ -2189,7 +2192,7 @@ describe('provider cwd resolution', () => {
       mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       expect(getSendQueryCwd()).toBe('/repos/test-repo');
     });
@@ -2201,7 +2204,7 @@ describe('provider cwd resolution', () => {
       mockExistsSync.mockImplementation(() => false);
 
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
     });
@@ -2214,7 +2217,7 @@ describe('provider cwd resolution', () => {
     mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
     expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
@@ -2227,7 +2230,7 @@ describe('provider cwd resolution', () => {
     mockListCodebases.mockReturnValueOnce(Promise.resolve([]));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(getSendQueryCwd()).toBe('/home/test/.archon/workspaces');
     expect(mockEnsureArchonWorkspacesPath).toHaveBeenCalled();
@@ -2333,7 +2336,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
 
     const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
@@ -2371,6 +2374,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2408,6 +2412,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2447,6 +2452,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2485,6 +2491,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2525,6 +2532,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2625,6 +2633,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2653,6 +2662,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2683,6 +2693,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowAdoptRunId: 'prior-run',
     });
 
@@ -2702,7 +2713,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -2736,7 +2747,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     // Gate still fires (no silent auto-resume) ...
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -2778,7 +2789,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
       | string
@@ -2802,7 +2813,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const prompt = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.at(-1)?.[1] as
       | string
@@ -2821,7 +2832,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow --force');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow --force', {
+      actor: operator,
+    });
 
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
@@ -2843,7 +2856,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow resume old-run');
+    await handleMessage(platform, 'conv-1', '/workflow resume old-run', { actor: operator });
 
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
@@ -2873,7 +2886,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow resume old-run-missing-path');
+    await handleMessage(platform, 'conv-1', '/workflow resume old-run-missing-path', {
+      actor: operator,
+    });
 
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
@@ -2904,7 +2919,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -2948,7 +2963,9 @@ describe('workflow dispatch routing — interactive flag', () => {
       )
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow');
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+    });
 
     expect(mockFindResumableRunByParentConversation).toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
@@ -2973,7 +2990,9 @@ describe('workflow dispatch routing — interactive flag', () => {
       Promise.resolve(makeWorkflowResult(true, { resumeRun: requestedRun }))
     );
 
-    await handleMessage(makePlatform(), 'conv-1', `/workflow resume ${requestedRun.id}`);
+    await handleMessage(makePlatform(), 'conv-1', `/workflow resume ${requestedRun.id}`, {
+      actor: operator,
+    });
 
     expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
@@ -3006,7 +3025,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
     const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -3053,6 +3072,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowRunConfig: runConfig,
     });
 
@@ -3098,7 +3118,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     // No run started against an undefined capture.
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -3185,7 +3205,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHydrateResumableRun.mockReturnValueOnce(Promise.resolve(null));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(prepareWorkflowSource).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -3207,7 +3227,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
 
     const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -3219,7 +3239,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
 
     const platform = { ...makePlatform(), getPlatformType: mock(() => 'matrix-chat') };
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -3237,6 +3257,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowInputs: { diff: 'D1' },
     });
 
@@ -3255,6 +3276,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowInputs: { diff: 'D1' },
     });
 
@@ -3282,7 +3304,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
     try {
-      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { userId: 'origin' });
+      await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+        actor: { kind: 'user', userId: 'origin' },
+      });
       expect(platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n')).toContain(
         'credential cannot be used: cannot read'
       );
@@ -3300,6 +3324,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
 
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowModelOverrides: { tiers: { large: 'openai/gpt-5.6' } },
     });
 
@@ -3316,6 +3341,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
 
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowModelOverrides: { aliases: { '@planner': 'codex/gpt-5.6-sol' } },
     });
 
@@ -3334,6 +3360,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowRunConfig: runConfig,
     });
     expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.runConfig).toEqual(runConfig);
@@ -3342,6 +3369,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(undefined)));
     await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowRunConfig: runConfig,
     });
     expect(mockDispatchBackgroundWorkflow.mock.calls[0]?.[0]?.runConfig).toEqual(runConfig);
@@ -3355,7 +3383,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
@@ -3370,7 +3398,9 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(makeWorkflowResult(true)));
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow');
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+    });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'adopt']);
@@ -3385,7 +3415,9 @@ describe('workflow dispatch routing — interactive flag', () => {
       Promise.resolve(makeWorkflowResult(true, { inputs: { diff: { required: true } } }))
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow');
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+    });
 
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(capturedSourceOwnerCalls).toEqual(['hold:/capture', 'reclaim:/capture']);
@@ -3403,7 +3435,9 @@ describe('workflow dispatch routing — interactive flag', () => {
       Promise.resolve(makeResumableRun({ id: 'paused-run', status: 'paused' }))
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow');
+    await handleMessage(makePlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+    });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(prepareWorkflowSource).not.toHaveBeenCalled();
@@ -3419,6 +3453,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowInputs: { diff: 'D1', stlye: 'terse' },
     });
 
@@ -3450,7 +3485,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).not.toContain("requires input 'diff'");
@@ -3481,6 +3516,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowInputs: { diff: 'D-new' },
     });
 
@@ -3510,6 +3546,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowModelOverrides: {
         tiers: { large: 'openai/gpt-5.6' },
         aliases: { '@planner': 'codex/gpt-5.6-sol' },
@@ -3541,6 +3578,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
       workflowRunConfig: {
         source: { kind: 'http', label: 'inline' },
         layer: { docsPath: 'handbook' },
@@ -3569,6 +3607,7 @@ describe('workflow dispatch routing — interactive flag', () => {
 
     const platform = makePlatform();
     await handleMessage(platform, 'conv-1', '/workflow resume failed-model-resume', {
+      actor: operator,
       workflowModelOverrides: { tiers: { large: 'openai/gpt-5.6' } },
     });
 
@@ -3612,7 +3651,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).toContain("requires input 'diff'");
@@ -3648,12 +3687,10 @@ describe('workflow dispatch routing — interactive flag', () => {
     mockHydrateResumableRun.mockReturnValueOnce(
       Promise.reject(new WorkflowNotResumableError('raced-run-1', 'running'))
     );
-    await handleMessage(
-      platform,
-      'conv-1',
-      '/workflow run test-workflow',
-      workflowInputs ? { workflowInputs } : undefined
-    );
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+      ...(workflowInputs ? { workflowInputs } : {}),
+    });
   }
 
   test('reports a deferred input error on a lost resume race when values were supplied', async () => {
@@ -3705,7 +3742,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).toContain("requires input 'diff'");
@@ -3730,7 +3767,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).not.toContain("requires input 'diff'");
@@ -3757,7 +3794,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     // Must resume foreground even though workflow is non-interactive
     expect(mockHydrateResumableRun).toHaveBeenCalled();
@@ -3782,7 +3819,7 @@ describe('workflow dispatch routing — interactive flag', () => {
     );
 
     const platform = { ...makePlatform(), getPlatformType: mock(() => 'matrix-chat') };
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -3801,7 +3838,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'slack' as const),
     };
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
@@ -3832,7 +3869,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'telegram' as const),
     };
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -3861,7 +3898,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'slack' as const),
     };
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockFindResumableRunByParentConversation).toHaveBeenCalledWith(
       'test-workflow',
@@ -3881,7 +3918,7 @@ describe('workflow dispatch routing — interactive flag', () => {
       capabilities: { messagePersistence: 'core', defaultWorkflowDispatch: 'foreground' } as const,
       getPlatformType: mock(() => 'discord' as const),
     };
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow');
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -4037,7 +4074,9 @@ describe('paused approval gate routing', () => {
     arrangeGatedChat();
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'looks good, proceed with implementation');
+    await handleMessage(platform, 'conv-1', 'looks good, proceed with implementation', {
+      actor: operator,
+    });
 
     // Nothing was resolved and nothing resumed — the message went to the agent.
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
@@ -4055,7 +4094,9 @@ describe('paused approval gate routing', () => {
     arrangeGatedChat();
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'no, stop — why is it editing the schema?');
+    await handleMessage(platform, 'conv-1', 'no, stop — why is it editing the schema?', {
+      actor: operator,
+    });
 
     // The regression this issue exists for: an objection used to resolve the
     // gate as APPROVED and store the objection itself as the approval comment.
@@ -4069,7 +4110,7 @@ describe('paused approval gate routing', () => {
     arrangeGatedChat();
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'what would that change?');
+    await handleMessage(platform, 'conv-1', 'what would that change?', { actor: operator });
 
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
@@ -4085,7 +4126,7 @@ describe('paused approval gate routing', () => {
   test('an open gate is handed to the agent as prompt context', async () => {
     arrangeGatedChat();
 
-    await handleMessage(makePlatform(), 'conv-1', 'what would that change?');
+    await handleMessage(makePlatform(), 'conv-1', 'what would that change?', { actor: operator });
 
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
@@ -4104,7 +4145,7 @@ describe('paused approval gate routing', () => {
     );
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
 
-    await handleMessage(makePlatform(), 'conv-1', 'hello world');
+    await handleMessage(makePlatform(), 'conv-1', 'hello world', { actor: operator });
 
     expect(lastPrompt()).not.toContain('## Paused Approval Gate');
   });
@@ -4116,7 +4157,7 @@ describe('paused approval gate routing', () => {
       },
     });
 
-    await handleMessage(makePlatform(), 'conv-1', 'sounds good');
+    await handleMessage(makePlatform(), 'conv-1', 'sounds good', { actor: operator });
 
     // Nothing for a human to decide — the run is only waiting to be resumed.
     expect(lastPrompt()).not.toContain('## Paused Approval Gate');
@@ -4126,7 +4167,7 @@ describe('paused approval gate routing', () => {
   test('a paused run with a malformed approval context points the agent at the explicit commands', async () => {
     arrangeGatedChat({ metadata: {} });
 
-    await handleMessage(makePlatform(), 'conv-1', 'looks good');
+    await handleMessage(makePlatform(), 'conv-1', 'looks good', { actor: operator });
 
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
@@ -4142,7 +4183,7 @@ describe('paused approval gate routing', () => {
       Promise.resolve({ success: true, message: 'status ok', workflow: undefined })
     );
 
-    await handleMessage(makePlatform(), 'conv-1', '/status');
+    await handleMessage(makePlatform(), 'conv-1', '/status', { actor: operator });
 
     expect(mockGetPausedWorkflowRun).not.toHaveBeenCalled();
   });
@@ -4158,7 +4199,7 @@ describe('paused approval gate routing', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'looks good, ship it');
+    await handleMessage(platform, 'conv-1', 'looks good, ship it', { actor: operator });
 
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
@@ -4206,7 +4247,7 @@ describe('paused approval gate routing', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'no, the schema change is wrong');
+    await handleMessage(platform, 'conv-1', 'no, the schema change is wrong', { actor: operator });
 
     expect(mockCaptureApprovalResolved).toHaveBeenCalledWith({ resolution: 'rejected' });
     expect(mockResolveAndCancelApprovalGate).not.toHaveBeenCalled();
@@ -4223,7 +4264,7 @@ describe('paused approval gate routing', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'no, drop it');
+    await handleMessage(platform, 'conv-1', 'no, drop it', { actor: operator });
 
     // No on_reject prompt on the gate → the run is cancelled, which IS its
     // terminal state. Nothing to continue.
@@ -4248,12 +4289,12 @@ describe('paused approval gate routing', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '   /status');
+    await handleMessage(platform, 'conv-1', '   /status', { actor: operator });
 
     expect(mockGetPausedWorkflowRun).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     // The platform rides along so command suggestions use its spelling.
-    expect(mockHandleCommand).toHaveBeenCalledWith(conversation, '   /status', platform);
+    expect(mockHandleCommand).toHaveBeenCalledWith(conversation, '   /status', operator, platform);
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'status ok');
   });
 
@@ -4274,7 +4315,7 @@ describe('paused approval gate routing', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'ship it');
+    await handleMessage(platform, 'conv-1', 'ship it', { actor: operator });
 
     expect(mockResolveApprovalGate).toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
@@ -4293,7 +4334,7 @@ describe('paused approval gate routing', () => {
     agentCallsManageRun({ action: 'approve', runId: 'run-1', confirm: true }, toolReplies);
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'apply the changes');
+    await handleMessage(platform, 'conv-1', 'apply the changes', { actor: operator });
 
     expect(mockResolveApprovalGate).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -4308,7 +4349,7 @@ describe('paused approval gate routing', () => {
     );
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(makePausedRun()));
 
-    await handleMessage(makePlatform(), 'conv-1', 'looks good');
+    await handleMessage(makePlatform(), 'conv-1', 'looks good', { actor: operator });
 
     const prompt = lastPrompt();
     expect(prompt).toContain('## Paused Approval Gate');
@@ -4321,7 +4362,7 @@ describe('paused approval gate routing', () => {
     const toolReplies: string[] = [];
     agentCallsManageRun({ action: 'approve', runId: 'run-1' }, toolReplies);
 
-    await handleMessage(makePlatform(), 'conv-1', 'maybe approve it?');
+    await handleMessage(makePlatform(), 'conv-1', 'maybe approve it?', { actor: operator });
 
     expect(mockResolveApprovalGate).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -4338,7 +4379,7 @@ describe('paused approval gate routing', () => {
     agentCallsManageRun({ action: 'approve', runId: 'run-1', confirm: true }, toolReplies);
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'ship it');
+    await handleMessage(platform, 'conv-1', 'ship it', { actor: operator });
 
     expect(mockResolveApprovalGate).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -4380,7 +4421,9 @@ describe('handleWorkflowRunCommand — no project attached', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      actor: operator,
+    });
 
     expect(mockUpdateConversation).not.toHaveBeenCalledWith(
       'conv-1-db',
@@ -4405,7 +4448,7 @@ describe('handleWorkflowRunCommand — no project attached', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', `/workflow resume ${run.id}`);
+    await handleMessage(platform, 'conv-1', `/workflow resume ${run.id}`, { actor: operator });
 
     expect(mockUpdateConversation).not.toHaveBeenCalledWith(
       'conv-1-db',
@@ -4456,7 +4499,9 @@ describe('dispatchOrchestratorWorkflow — run-start notices', () => {
     ]);
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      actor: operator,
+    });
 
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
@@ -4487,7 +4532,9 @@ describe('dispatchOrchestratorWorkflow — run-start notices', () => {
     );
 
     // Must not throw: an undeliverable warning cannot fail the run.
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      actor: operator,
+    });
 
     // The run still started, and it carries the warnings — so the executor
     // records them as a `workflow_parse_warnings` event regardless of delivery.
@@ -4502,7 +4549,9 @@ describe('dispatchOrchestratorWorkflow — run-start notices', () => {
     runsWorkflow(makeTestResolvedWorkflow({ name: 'assist' }));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      actor: operator,
+    });
 
     expect(platform.sendMessage).not.toHaveBeenCalledWith(
       'conv-1',
@@ -4522,7 +4571,9 @@ describe('dispatchOrchestratorWorkflow — run-start notices', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      actor: operator,
+    });
 
     expect(platform.sendMessage).toHaveBeenCalledWith(
       'conv-1',
@@ -4539,7 +4590,9 @@ describe('dispatchOrchestratorWorkflow — run-start notices', () => {
     runsWorkflow(makeTestResolvedWorkflow({ name: 'assist' }));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      actor: operator,
+    });
 
     expect(platform.sendMessage).not.toHaveBeenCalledWith(
       'conv-1',
@@ -4560,7 +4613,9 @@ describe('dispatchOrchestratorWorkflow — run-start notices', () => {
           : Promise.resolve()
     );
 
-    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt');
+    await handleMessage(platform, 'conv-1', '/workflow run assist test prompt', {
+      actor: operator,
+    });
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
   });
 });
@@ -4606,7 +4661,7 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
 
     const platform = makePlatform();
     // Send a non-command message so it triggers discoverAllWorkflows via the orchestrator flow
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?');
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
 
     // discoverWorkflowsWithConfig should have been called twice (global + repo)
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledTimes(2);
@@ -4633,7 +4688,7 @@ describe('handleMessage — workflow context injection', () => {
 
   test('calls getRecentWorkflowResultMessages for the conversation', async () => {
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What happened?');
+    await handleMessage(platform, 'conv-1', 'What happened?', { actor: operator });
 
     expect(mockGetRecentWorkflowResultMessages).toHaveBeenCalledWith('conv-1-db', 3);
   });
@@ -4642,7 +4697,9 @@ describe('handleMessage — workflow context injection', () => {
     mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([]);
     const platform = makePlatform();
 
-    await expect(handleMessage(platform, 'conv-1', 'Hello')).resolves.toBeUndefined();
+    await expect(
+      handleMessage(platform, 'conv-1', 'Hello', { actor: operator })
+    ).resolves.toBeUndefined();
   });
 
   test('handles malformed metadata JSON without throwing', async () => {
@@ -4659,7 +4716,7 @@ describe('handleMessage — workflow context injection', () => {
     const platform = makePlatform();
 
     await expect(
-      handleMessage(platform, 'conv-1', 'What did the workflow do?')
+      handleMessage(platform, 'conv-1', 'What did the workflow do?', { actor: operator })
     ).resolves.toBeUndefined();
   });
 
@@ -4676,7 +4733,9 @@ describe('handleMessage — workflow context injection', () => {
     mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([rowNoWorkflowResult]);
     const platform = makePlatform();
 
-    await expect(handleMessage(platform, 'conv-1', 'Follow-up')).resolves.toBeUndefined();
+    await expect(
+      handleMessage(platform, 'conv-1', 'Follow-up', { actor: operator })
+    ).resolves.toBeUndefined();
   });
 
   test('continues without workflow context when outer fetch throws', async () => {
@@ -4684,7 +4743,9 @@ describe('handleMessage — workflow context injection', () => {
     const platform = makePlatform();
 
     // Non-critical path — must not block message handling
-    await expect(handleMessage(platform, 'conv-1', 'Hello')).resolves.toBeUndefined();
+    await expect(
+      handleMessage(platform, 'conv-1', 'Hello', { actor: operator })
+    ).resolves.toBeUndefined();
   });
 });
 
@@ -4731,7 +4792,7 @@ describe('stale session ID clearing on error_during_execution', () => {
     const platform = makePlatform();
     // Use streaming mode
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     // updateSession should be called with null to clear the stale session ID
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
@@ -4756,7 +4817,7 @@ describe('stale session ID clearing on error_during_execution', () => {
     const platform = makePlatform();
     // batch is the default from makePlatform, but be explicit
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', null);
   });
@@ -4779,7 +4840,7 @@ describe('stale session ID clearing on error_during_execution', () => {
 
       const platform = makePlatform();
       (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue(mode);
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
         (c: unknown[]) => c[1] as string
@@ -4817,7 +4878,7 @@ describe('stale session ID clearing on error_during_execution', () => {
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     // Session id should persist normally — the error path was not taken.
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'sid-ok');
@@ -4853,7 +4914,7 @@ describe('stale session ID clearing on error_during_execution', () => {
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(mockUpdateSession).toHaveBeenCalledWith('session-1', 'sid-ok');
     const sentMessages = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
@@ -4909,7 +4970,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'register my project');
+    await handleMessage(platform, 'conv-1', 'register my project', { actor: operator });
 
     const expectedCwd = await canonicalizeProjectPath('/.archon/workspaces/owner/repo/source');
     expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
@@ -4944,7 +5005,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'register my project');
+    await handleMessage(platform, 'conv-1', 'register my project', { actor: operator });
 
     const expectedCwd = await canonicalizeProjectPath('/.archon/workspaces/owner/repo/source');
     expect(mockCreateCodebase).toHaveBeenCalledTimes(1);
@@ -4975,7 +5036,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project', { actor: operator });
 
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -4994,7 +5055,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'run assist on my-project');
+    await handleMessage(platform, 'conv-1', 'run assist on my-project', { actor: operator });
 
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
@@ -5020,7 +5081,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'original user message');
+    await handleMessage(platform, 'conv-1', 'original user message', { actor: operator });
 
     // Workflow was dispatched with the synthesized prompt, not the original user message.
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
@@ -5045,7 +5106,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('batch');
-    await handleMessage(platform, 'conv-1', 'original user message');
+    await handleMessage(platform, 'conv-1', 'original user message', { actor: operator });
 
     expect(mockDispatchBackgroundWorkflow).toHaveBeenCalledWith(
       expect.objectContaining({ originalMessage: 'synthesized task description' }),
@@ -5065,7 +5126,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'register my app');
+    await handleMessage(platform, 'conv-1', 'register my app', { actor: operator });
 
     expect(mockCreateCodebase).toHaveBeenCalledWith({
       name: 'MyApp',
@@ -5093,7 +5154,7 @@ describe('handleMessage — multi-chunk command accumulation (regression)', () =
 
     const platform = makePlatform();
     (platform.getStreamingMode as ReturnType<typeof mock>).mockReturnValue('stream');
-    await handleMessage(platform, 'conv-1', 'register foo');
+    await handleMessage(platform, 'conv-1', 'register foo', { actor: operator });
 
     const calls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as [
       string,
@@ -5147,7 +5208,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     // The env passed to sendQuery should contain the provider's env var.
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as {
       env?: Record<string, string>;
@@ -5167,7 +5228,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
     expect(requestOptions?.env).toMatchObject({
       ANTHROPIC_OAUTH_TOKEN: 'sk-ant-oat01-x',
@@ -5189,7 +5250,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello there');
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
     // generateAndSetTitle(convId, msg, provider, cwd, sessionId?, assistantConfig?, titleOptions)
     const titleOptions = mockGenerateAndSetTitle.mock.calls[0]?.[6] as
       | { env?: Record<string, string>; protectedEnvKeys?: readonly string[] }
@@ -5209,7 +5270,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as
       | { env?: Record<string, string> }
       | undefined;
@@ -5224,7 +5285,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     const requestOptions = mockSendQuery.mock.calls[0]?.[3] as { env?: Record<string, string> };
     expect(requestOptions?.env).toMatchObject({ OPENROUTER_API_KEY: 'or-key' });
   });
@@ -5232,7 +5293,9 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
   test('does not throw when listDecryptedUserProviderCredentials rejects', async () => {
     mockListDecryptedUserProviderCredentials.mockRejectedValueOnce(new Error('db gone'));
     const platform = makePlatform();
-    await expect(handleMessage(platform, 'conv-1', 'hello')).resolves.toBeUndefined();
+    await expect(
+      handleMessage(platform, 'conv-1', 'hello', { actor: operator })
+    ).resolves.toBeUndefined();
   });
 
   test('skips injection when feature is disabled', async () => {
@@ -5243,7 +5306,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'or-key' } },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalled();
   });
 
@@ -5255,7 +5318,9 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
       { provider: 'openrouter', cred: { kind: 'api_key', apiKey: 'sender-key' } },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello', { userId: 'sender-2' });
+    await handleMessage(platform, 'conv-1', 'hello', {
+      actor: { kind: 'user', userId: 'sender-2' },
+    });
     expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
     expect(mockListDecryptedUserProviderCredentials).not.toHaveBeenCalledWith('u-test');
   });
@@ -5265,7 +5330,7 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     // its fallback attribution; without this, a regression of the env seam to
     // `undefined` would slip through the mock unnoticed.
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
     expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('u-test');
   });
 
@@ -5274,7 +5339,9 @@ describe('resolveUserProviderEnvForChat — chat env injection', () => {
     // one seam silently using a different identity than the other is not.
     mockGetUserAiPrefsDb.mockClear();
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello', { userId: 'sender-2' });
+    await handleMessage(platform, 'conv-1', 'hello', {
+      actor: { kind: 'user', userId: 'sender-2' },
+    });
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('sender-2');
     expect(mockListDecryptedUserProviderCredentials).toHaveBeenCalledWith('sender-2');
   });
@@ -5304,7 +5371,7 @@ describe('handleMessage — /setproject dispatch', () => {
     test(`selects a project literally named ${name}`, async () => {
       mockListCodebases.mockResolvedValue([makeNamedCodebase(name)]);
       mockParseCommand.mockReturnValue({ command: 'setproject', args: [name] });
-      await handleMessage(makePlatform(), 'conv-1', `/setproject ${name}`);
+      await handleMessage(makePlatform(), 'conv-1', `/setproject ${name}`, { actor: operator });
       expect(mockUpdateConversation).toHaveBeenCalledWith(expect.any(String), {
         codebase_id: `id-${name}`,
         cwd: null,
@@ -5330,7 +5397,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-1', {
       codebase_id: 'id-my-app',
@@ -5356,7 +5423,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-ci', {
       codebase_id: 'id-My-App',
@@ -5380,7 +5447,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-web'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-web');
+    await handleMessage(platform, 'conv-1', '/setproject my-web', { actor: operator });
 
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-px', {
       codebase_id: 'id-my-website',
@@ -5404,7 +5471,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-api'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-api');
+    await handleMessage(platform, 'conv-1', '/setproject my-api', { actor: operator });
 
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-conv-ss', {
       codebase_id: 'id-archon-my-api',
@@ -5433,7 +5500,7 @@ describe('handleMessage — /setproject dispatch', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, '40865006', '/setproject my-app');
+    await handleMessage(platform, '40865006', '/setproject my-app', { actor: operator });
 
     expect(mockUpdateConversation).toHaveBeenCalledWith('db-hex-id', {
       codebase_id: 'id-my-app',
@@ -5456,7 +5523,7 @@ describe('handleMessage — /setproject dispatch', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     expect(mockDeactivateSession).toHaveBeenCalledWith('session-123', 'project-changed');
   });
@@ -5473,7 +5540,7 @@ describe('handleMessage — /setproject dispatch', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     // The race is benign: the command still completes and reports success.
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
@@ -5492,7 +5559,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockGetActiveSession.mockImplementation(() => Promise.reject(new Error('db hiccup')));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
@@ -5511,7 +5578,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockDeactivateSession.mockImplementation(() => Promise.reject(new Error('db exploded')));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     // Deactivation runs before the rebind, so the conversation stays untouched.
     expect(mockUpdateConversation).not.toHaveBeenCalled();
@@ -5541,7 +5608,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(c => String(c[1]))
@@ -5556,7 +5623,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['my-app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject my-app');
+    await handleMessage(platform, 'conv-1', '/setproject my-app', { actor: operator });
 
     const sent = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
       .map(c => String(c[1]))
@@ -5572,7 +5639,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['nonexistent'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject nonexistent');
+    await handleMessage(platform, 'conv-1', '/setproject nonexistent', { actor: operator });
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
@@ -5586,7 +5653,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['anything'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject anything');
+    await handleMessage(platform, 'conv-1', '/setproject anything', { actor: operator });
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
@@ -5600,7 +5667,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: ['app'] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject app');
+    await handleMessage(platform, 'conv-1', '/setproject app', { actor: operator });
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
@@ -5613,7 +5680,7 @@ describe('handleMessage — /setproject dispatch', () => {
     mockParseCommand.mockReturnValue({ command: 'setproject', args: [] });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/setproject');
+    await handleMessage(platform, 'conv-1', '/setproject', { actor: operator });
 
     expect(mockUpdateConversation).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', expect.stringContaining('Usage'));
@@ -5638,7 +5705,7 @@ describe('handleMessage — /update-project dispatch', () => {
 
   test('reports success with old and new path', async () => {
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    await handleMessage(platform, 'conv-1', '/update-project my-app /', { actor: operator });
 
     expect(mockUpdateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
@@ -5657,7 +5724,7 @@ describe('handleMessage — /update-project dispatch', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    await handleMessage(platform, 'conv-1', '/update-project my-app /', { actor: operator });
 
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('removed');
@@ -5669,7 +5736,7 @@ describe('handleMessage — /update-project dispatch', () => {
     mockUpdateCodebase.mockImplementation(() => Promise.reject(new Error('connection refused')));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    await handleMessage(platform, 'conv-1', '/update-project my-app /', { actor: operator });
 
     const msg = (platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1] as string;
     expect(msg).toContain('database error');
@@ -5710,7 +5777,7 @@ describe('chat turn telemetry', () => {
       Promise.resolve(makeConversation({ codebase_id: null }))
     );
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello there');
+    await handleMessage(platform, 'conv-1', 'hello there', { actor: operator });
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
     expect(mockCaptureChatTurn).toHaveBeenCalledWith(
@@ -5743,7 +5810,7 @@ describe('chat turn telemetry', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'run assist on my project');
+    await handleMessage(platform, 'conv-1', 'run assist on my project', { actor: operator });
 
     // Positive control: the routing path actually ran — dispatch auto-attaches
     // the project to the conversation before isolation/execution.
@@ -5769,7 +5836,7 @@ describe('chat turn telemetry', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
     expect(mockCaptureChatTurn).toHaveBeenCalledWith(
@@ -5787,7 +5854,7 @@ describe('chat turn telemetry', () => {
       Promise.resolve(makeConversation({ codebase_id: null }))
     );
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello again');
+    await handleMessage(platform, 'conv-1', 'hello again', { actor: operator });
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
     const arg = mockCaptureChatTurn.mock.calls[0]?.[0];
@@ -5805,7 +5872,7 @@ describe('chat turn telemetry', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'hello');
+    await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
     expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
     expect(mockCaptureChatTurn).toHaveBeenCalledWith(
@@ -5839,7 +5906,7 @@ describe('chat turn telemetry', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'run assist on my project');
+    await handleMessage(platform, 'conv-1', 'run assist on my project', { actor: operator });
 
     // Positive control: dispatch reached the write that failed.
     expect(mockUpdateConversation).toHaveBeenCalledWith('conv-1-db', {
@@ -5860,7 +5927,7 @@ describe('chat turn telemetry', () => {
       const platform = makePlatform();
       platform.getStreamingMode.mockImplementation(() => mode);
 
-      await handleMessage(platform, 'conv-1', 'hello');
+      await handleMessage(platform, 'conv-1', 'hello', { actor: operator });
 
       expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
       expect(mockCaptureChatTurn).toHaveBeenCalledWith(
@@ -5891,7 +5958,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     }));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('user-9');
     const requestOptions = mockSendQuery.mock.calls[0][3] as Record<string, unknown>;
@@ -5902,7 +5969,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeConversation()));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
   });
@@ -5916,7 +5983,9 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', { userId: 'sender-2' });
+    await handleMessage(platform, 'conv-1', 'Hello', {
+      actor: { kind: 'user', userId: 'sender-2' },
+    });
 
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('sender-2');
     expect(mockGetUserAiPrefsDb).not.toHaveBeenCalledWith('creator-1');
@@ -5928,7 +5997,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', {});
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockGetUserAiPrefsDb).toHaveBeenCalledWith('creator-1');
   });
@@ -5943,7 +6012,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     mockLogger.info.mockClear();
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(chatDispatchLogs()[0]?.provider).toBe('codex');
   });
@@ -5957,7 +6026,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     mockLogger.info.mockClear();
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockGetUserAiPrefsDb).not.toHaveBeenCalled();
     expect(chatDispatchLogs()[0]?.provider).toBe('codex');
@@ -5973,7 +6042,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     mockLogger.info.mockClear();
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'secret prompt text');
+    await handleMessage(platform, 'conv-1', 'secret prompt text', { actor: operator });
 
     const logs = chatDispatchLogs();
     expect(logs).toHaveLength(1);
@@ -5996,7 +6065,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     }));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     // Degraded to the config profile — the chat turn still reached the AI.
     expect(mockSendQuery).toHaveBeenCalled();
@@ -6014,7 +6083,9 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     mockLogger.error.mockClear();
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', { userId: 'sender-2' });
+    await handleMessage(platform, 'conv-1', 'Hello', {
+      actor: { kind: 'user', userId: 'sender-2' },
+    });
 
     const invalidLog = mockLogger.error.mock.calls.find(
       c => c[1] === 'orchestrator.user_ai_prefs_profile_invalid'
@@ -6032,7 +6103,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     });
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     expect(mockSendQuery).toHaveBeenCalled();
   });
@@ -6059,8 +6130,8 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
 
     try {
       const platform = makePlatform();
-      await handleMessage(platform, 'conv-nudge-dedup', 'Hello');
-      await handleMessage(platform, 'conv-nudge-dedup', 'Hello again');
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello', { actor: operator });
+      await handleMessage(platform, 'conv-nudge-dedup', 'Hello again', { actor: operator });
 
       const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
         string,
@@ -6096,7 +6167,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     }));
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-user-large', 'Hello');
+    await handleMessage(platform, 'conv-user-large', 'Hello', { actor: operator });
 
     const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
       string,
@@ -6113,7 +6184,7 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     );
 
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello');
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
 
     const sendCalls = (platform.sendMessage as ReturnType<typeof mock>).mock.calls as unknown as [
       string,
@@ -6157,7 +6228,7 @@ describe('message persistence for non-web platforms', () => {
       getStreamingMode: mock(() => 'batch' as const),
     };
 
-    await handleMessage(platform, 'conv-1', 'what is this repo?');
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
 
     // Inbound user message must land in the DB so the Web UI history is non-empty.
     expect(mockAddMessage).toHaveBeenCalledWith(
@@ -6184,7 +6255,7 @@ describe('message persistence for non-web platforms', () => {
       getStreamingMode: mock(() => 'stream' as const),
     };
 
-    await handleMessage(platform, 'conv-1', 'what is this repo?');
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
 
     expect(mockAddMessage).toHaveBeenCalledWith(
       'conv-db-id',
@@ -6210,7 +6281,7 @@ describe('message persistence for non-web platforms', () => {
           getPlatformType: () => 'matrix-chat',
           getStreamingMode: () => mode,
         };
-        await handleMessage(platform, 'conv-1', 'what is this repo?');
+        await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
         expect(mockAddMessage).toHaveBeenCalledTimes(owner === 'core' ? 2 : 0);
         expect(platform.sendMessage).toHaveBeenCalled();
       });
@@ -6220,7 +6291,7 @@ describe('message persistence for non-web platforms', () => {
   test('does NOT call addMessage for web platform (web adapter owns persistence)', async () => {
     const platform = makePlatform(); // makePlatform defaults getPlatformType to 'web'
 
-    await handleMessage(platform, 'conv-1', 'what is this repo?');
+    await handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator });
 
     expect(mockAddMessage).not.toHaveBeenCalled();
   });
@@ -6234,7 +6305,9 @@ describe('message persistence for non-web platforms', () => {
     };
     mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
 
-    await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+    await expect(
+      handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator })
+    ).resolves.toBeUndefined();
     expect(platform.sendMessage).toHaveBeenCalled();
   });
 
@@ -6247,7 +6320,9 @@ describe('message persistence for non-web platforms', () => {
     };
     mockAddMessage.mockImplementation(() => Promise.reject(new Error('db down')));
 
-    await expect(handleMessage(platform, 'conv-1', 'what is this repo?')).resolves.toBeUndefined();
+    await expect(
+      handleMessage(platform, 'conv-1', 'what is this repo?', { actor: operator })
+    ).resolves.toBeUndefined();
     // Stream mode delivers chunks during the sendQuery loop — a DB failure must
     // not stop delivery, so the reply must still have reached the platform.
     expect(platform.sendMessage).toHaveBeenCalled();
@@ -6261,7 +6336,9 @@ describe('message persistence for non-web platforms', () => {
       getStreamingMode: mock(() => 'batch' as const),
     };
 
-    await handleMessage(platform, 'conv-1', 'what is this repo?', { userId: 'user-abc' });
+    await handleMessage(platform, 'conv-1', 'what is this repo?', {
+      actor: { kind: 'user', userId: 'user-abc' },
+    });
 
     expect(mockAddMessage).toHaveBeenCalledWith(
       'conv-db-id',
@@ -6291,7 +6368,7 @@ describe('message persistence for non-web platforms', () => {
       Promise.resolve({ success: true, message: 'status ok', workflow: undefined })
     );
 
-    await handleMessage(platform, 'conv-1', '/status');
+    await handleMessage(platform, 'conv-1', '/status', { actor: operator });
 
     // Deterministic slash commands return before the AI dispatch, so persisting a
     // user row here would orphan it (no paired assistant row in the Web UI history).
@@ -6908,6 +6985,7 @@ describe('handleMessage — /detach-project dispatch', () => {
         getPlatformType: () => platformType,
       };
       await handleMessage(platform, 'platform-id', '/detach-project "My App"', {
+        actor: operator,
         parentConversationId: 'parent-id',
       });
       expect(mockDetachConversationProject).toHaveBeenCalledWith({
@@ -6931,7 +7009,7 @@ describe('handleMessage — /detach-project dispatch', () => {
 
   test('refuses undeclared eligibility without mutation', async () => {
     const platform = makePlatform();
-    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"', { actor: operator });
     expect(mockGetConversationByPlatformId).not.toHaveBeenCalled();
     expect(mockDetachConversationProject).not.toHaveBeenCalled();
     expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
@@ -6945,7 +7023,7 @@ describe('handleMessage — /detach-project dispatch', () => {
     test(`requires one nonempty name: ${JSON.stringify(args)}`, async () => {
       mockParseCommand.mockReturnValue({ command: 'detach-project', args });
       const platform = makePlatform();
-      await handleMessage(platform, 'platform-id', '/detach-project');
+      await handleMessage(platform, 'platform-id', '/detach-project', { actor: operator });
       expect(mockDetachConversationProject).not.toHaveBeenCalled();
       expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
       expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -6961,7 +7039,7 @@ describe('handleMessage — /detach-project dispatch', () => {
       ...makePlatform(),
       capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
     };
-    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"', { actor: operator });
     expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
     expect(mockDetachConversationProject).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -6983,7 +7061,7 @@ describe('handleMessage — /detach-project dispatch', () => {
       ...makePlatform(),
       capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
     };
-    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"', { actor: operator });
     const reply = String(platform.sendMessage.mock.calls[0]?.[1]);
     for (const text of [
       'full-run-id: paused',
@@ -7010,7 +7088,7 @@ describe('handleMessage — /detach-project dispatch', () => {
         ...makePlatform(),
         capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
       };
-      await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+      await handleMessage(platform, 'platform-id', '/detach-project "My App"', { actor: operator });
       expect(platform.sendMessage).toHaveBeenCalledWith(
         'platform-id',
         expect.stringContaining(reply)
@@ -7025,7 +7103,7 @@ describe('handleMessage — /detach-project dispatch', () => {
       ...makePlatform(),
       capabilities: { ...makePlatform().capabilities, canDetachProject: true as const },
     };
-    await handleMessage(platform, 'platform-id', '/detach-project "My App"');
+    await handleMessage(platform, 'platform-id', '/detach-project "My App"', { actor: operator });
     expect(platform.sendMessage).not.toHaveBeenCalledWith(
       'platform-id',
       expect.stringContaining('now neutral')
@@ -7055,7 +7133,7 @@ describe('handleMessage — legacy registration recovery', () => {
       { ...makeNamedCodebase('my-app'), default_cwd: 'projects/repo' },
     ]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/register-project My-App /');
+    await handleMessage(platform, 'conv-1', '/register-project My-App /', { actor: operator });
     expect(mockUpdateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
       {
@@ -7074,7 +7152,7 @@ describe('handleMessage — legacy registration recovery', () => {
     ]);
     mockParseCommand.mockReturnValue({ command: 'update-project', args: ['my-app', '/'] });
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/update-project my-app /');
+    await handleMessage(platform, 'conv-1', '/update-project my-app /', { actor: operator });
     expect(mockUpdateCodebase).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'id-my-app', name: 'my-app' }),
       {
@@ -7083,14 +7161,14 @@ describe('handleMessage — legacy registration recovery', () => {
     );
     mockDeleteCodebase.mockClear();
     mockParseCommand.mockReturnValue({ command: 'remove-project', args: ['my-app'] });
-    await handleMessage(platform, 'conv-1', '/remove-project my-app');
+    await handleMessage(platform, 'conv-1', '/remove-project my-app', { actor: operator });
     expect(mockDeleteCodebase).toHaveBeenCalledWith('id-my-app');
   });
 
   test('an absolute duplicate remains unchanged', async () => {
     mockListCodebases.mockResolvedValue([makeNamedCodebase('my-app')]);
     const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', '/register-project My-App /');
+    await handleMessage(platform, 'conv-1', '/register-project My-App /', { actor: operator });
     expect(mockUpdateCodebase).not.toHaveBeenCalled();
     expect(mockCreateCodebase).not.toHaveBeenCalled();
     expect((platform.sendMessage as ReturnType<typeof mock>).mock.calls[0]?.[1]).toContain(

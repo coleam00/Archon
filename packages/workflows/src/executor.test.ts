@@ -218,6 +218,21 @@ function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
+    findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');
@@ -1497,7 +1512,9 @@ describe('executeWorkflow', () => {
           }),
         });
         const platform = makePlatform();
-        platform.sendMessage = mock(async () => {
+        const messages: string[] = [];
+        platform.sendMessage = mock(async (_conversationId, message) => {
+          messages.push(message);
           order.push('notify');
           throw new Error('unauthorized');
         });
@@ -1519,6 +1536,18 @@ describe('executeWorkflow', () => {
           globalThis.setTimeout = realSetTimeout;
         }
         expect(result.success).toBe(false);
+        const deliveryLogs = (mockLogFn.mock.calls as unknown[][]).filter(
+          call => call[1] === 'critical_message_delivery_failed'
+        );
+        expect(deliveryLogs).toHaveLength(1);
+        expect(deliveryLogs[0]?.[0]).toMatchObject({
+          conversationId: 'conv-1',
+          messageLength: messages[0]?.length,
+        });
+        expect(deliveryLogs[0]?.[0]).not.toHaveProperty('messagePreview');
+        for (const message of messages) {
+          expect(JSON.stringify(deliveryLogs)).not.toContain(message.slice(0, 100));
+        }
         expect(order).toEqual(['notify', 'notify', 'notify', 'cancel']);
         expect(store.cancelWorkflowRun).toHaveBeenCalledTimes(1);
         expect(store.failWorkflowRun).not.toHaveBeenCalled();

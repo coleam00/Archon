@@ -1,3 +1,4 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import * as workflowDb from '../db/workflows';
 import { getCodebase } from '../db/codebases';
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
@@ -72,7 +73,7 @@ export async function resumeWorkflowContinuation(
           codebaseId: run.codebase_id ?? undefined,
           baseBranch: codebase?.default_branch?.trim() || undefined,
           resolveChildIsolation: codebase
-            ? createCodebaseChildResolver(codebase, {
+            ? createCodebaseChildResolver(sqlIsolation.createIsolationStore(), codebase, {
                 baseBranch: codebase.default_branch?.trim() || undefined,
                 createdByPlatform: context.platform.getPlatformType(),
                 createdByUserId: userId,

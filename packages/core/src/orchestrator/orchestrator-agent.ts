@@ -1,3 +1,5 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
+import * as sqlWorkflow from '@archon/core/db/workflows';
 import { providerRegistry } from '@archon/providers';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
 import { withBranchLaunchSource } from '../workflows/branch-launch-source';
@@ -787,6 +789,11 @@ async function dispatchOrchestratorWorkflowOwned(
   const adoptionLane = options?.adoptRunId
     ? (
         await resolveWorkflowAdoption({
+          deps: {
+            getRun: sqlWorkflow.getWorkflowRun,
+            getActiveRunByPath: sqlWorkflow.getActiveWorkflowRunByPath,
+            findEnvironmentByPath: sqlIsolation.findLatestByCodebaseAndWorkingPath,
+          },
           adoptedRunId: options.adoptRunId,
           codebaseId: codebase.id,
           codebasePath: codebase.default_cwd,
@@ -812,11 +819,15 @@ async function dispatchOrchestratorWorkflowOwned(
   }
 
   // Shared across every dispatch below.
-  const resolveChildIsolation = createCodebaseChildResolver(codebase, {
-    baseBranch: codebaseBaseBranch,
-    createdByPlatform: platform.getPlatformType(),
-    createdByUserId: userId,
-  });
+  const resolveChildIsolation = createCodebaseChildResolver(
+    sqlIsolation.createIsolationStore(),
+    codebase,
+    {
+      baseBranch: codebaseBaseBranch,
+      createdByPlatform: platform.getPlatformType(),
+      createdByUserId: userId,
+    }
+  );
 
   // Resume detection, hoisted above the signature gate ON PURPOSE (#2554).
   //
@@ -1940,7 +1951,7 @@ export async function handleMessage(
   platform: IPlatformAdapter,
   conversationId: string,
   message: string,
-  context?: HandleMessageContext
+  context: HandleMessageContext
 ): Promise<void> {
   const {
     issueContext,
@@ -1948,8 +1959,9 @@ export async function handleMessage(
     parentConversationId,
     isolationHints,
     attachedFiles,
-    userId,
-  } = context ?? {};
+    actor,
+  } = context;
+  const userId = actor.kind === 'user' ? actor.userId : undefined;
   // Anchor "is this a slash command" at the true start of the message —
   // leading whitespace (e.g. from a platform that doesn't pre-trim after
   // stripping a bot mention) must not let a command masquerade as a plain
@@ -2042,7 +2054,7 @@ export async function handleMessage(
         }
 
         getLog().debug({ command, conversationId }, 'deterministic_command');
-        const result = await commandHandler.handleCommand(conversation, message, platform);
+        const result = await commandHandler.handleCommand(conversation, message, actor, platform);
         await platform.sendMessage(conversationId, result.message);
 
         if (result.workflow) {
@@ -2555,6 +2567,7 @@ export async function handleMessage(
       const scopedCodebaseId = conversation.codebase_id;
       requestOptions.nativeTools = [
         buildManageRunTool({
+          actor,
           operations: createSqlWorkflowOperations(),
           codebaseId: scopedCodebaseId,
           surface: platform,

@@ -30,3 +30,7 @@ export const conversationRowSchema = z.object({
 });
 
 export type Conversation = z.infer<typeof conversationRowSchema>;
+
+export type UpdateConversationInput = Partial<
+  Pick<Conversation, 'codebase_id' | 'cwd' | 'isolation_env_id' | 'hidden'>
+>;

@@ -1394,7 +1394,7 @@ ${userComment}`;
           issueContext: contextToAppend,
           threadContext,
           isolationHints,
-          userId: archonUserId,
+          actor: archonUserId ? { kind: 'user', userId: archonUserId } : { kind: 'unidentified' },
         });
       } catch (error) {
         const err = toError(error);
