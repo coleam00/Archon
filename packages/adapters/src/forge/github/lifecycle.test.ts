@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { runForgeMutationConformance } from '@archon/forge/conformance';
 import {
   contentDigest,
+  forgeResponseSchema,
   type ForgeMutationRequest,
   type ForgeRequest,
   type ForgeResponse,
@@ -682,6 +683,7 @@ const rerunRequest = {
 } satisfies ForgeMutationRequest;
 function rerunGitHub(
   options: {
+    prHead?: string;
     check?: Record<string, unknown>;
     run?: Record<string, unknown>;
     oldAttempt?: boolean;
@@ -693,7 +695,8 @@ function rerunGitHub(
   const posted: string[] = [];
   const fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
-    if (url.pathname.endsWith('/pulls/7')) return json({ head: { sha: 'headsha' } });
+    if (url.pathname.endsWith('/pulls/7'))
+      return json({ head: { sha: options.prHead ?? 'headsha' } });
     const id = url.pathname.split('/').at(-1)!;
     if (url.pathname.includes('/check-runs/'))
       return json({
@@ -872,4 +875,47 @@ test('reviews paginate submissions and root diff comments, retaining author and 
     createdAt: null,
   });
   expect(calls.some(url => url.endsWith('page=2'))).toBe(true);
+});
+
+test('a moved PR head refuses reruns of otherwise valid historical checks without writing', async () => {
+  const github = rerunGitHub({ prHead: 'new-head' });
+  expect(
+    await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
+  ).toMatchObject({ ok: false, mutation: { outcome: 'refused' } });
+  expect(github.posted).toEqual([]);
+});
+
+test.each([
+  { user: { id: 2, login: '' } },
+  { user: { id: 2, login: '   ' } },
+  { commit_id: '' },
+  { commit_id: '   ' },
+  { state: '' },
+  { submitted_at: 'invalid-timestamp' },
+  { created_at: 'invalid-timestamp' },
+])('invalid review facts return a contract-valid failure: %j', async invalid => {
+  const response = await handleGithubOperation(
+    { operationId: 'reviews', op: 'pr.reviews', ref },
+    {
+      token: 'token must never escape',
+      fetch: async () =>
+        json([
+          {
+            id: 1,
+            html_url: 'https://github.com/archon/test/pull/7#review-1',
+            body: 'private body',
+            user: { id: 2, login: 'reviewer' },
+            commit_id: 'headsha',
+            state: 'COMMENTED',
+            submitted_at: '2026-10-06T10:00:00Z',
+            created_at: '2026-10-06T10:00:00Z',
+            ...invalid,
+          },
+        ]),
+    }
+  );
+  expect(response).toMatchObject({ ok: false, error: { kind: 'forge_error' } });
+  expect(forgeResponseSchema.safeParse(response).success).toBe(true);
+  expect(JSON.stringify(response)).not.toContain('token must never escape');
+  expect(JSON.stringify(response)).not.toContain('private body');
 });

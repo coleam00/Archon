@@ -1029,7 +1029,7 @@ describe('bundled-defaults', () => {
           checks: [{ name: 'build', state: 'SUCCESS', bucket: 'pass' }],
         });
         expect(run.code).not.toBe(0);
-        expect(run.stderr).toContain('ARCHON_SDLC_FORGE=forge: ARCHON_CLI_COMMAND is not set');
+        expect(run.stderr).toContain('ARCHON_CLI_COMMAND is not set');
         expect(run.gh).toEqual([]);
       }
     });

@@ -18,7 +18,7 @@ import {
   mutationAttempt,
   type ForgeCommentRecord,
   type landedSchema,
-  type reviewItemSchema,
+  reviewItemSchema,
   type ForgeError,
   type ForgeMutationFailure,
   type ForgeMutationRequest,
@@ -706,20 +706,22 @@ export async function handleGithubPrReviews(
   token: string
 ): Promise<ForgeResponse> {
   const { root, path } = location(request.ref.repo);
+  const fields = reviewItemSchema.shape;
+  const actor = fields.author.unwrap().shape;
   const itemSchema = z.object({
-    id: z.union([z.number().int(), z.string().min(1)]),
-    html_url: z.url(),
-    body: z.string().nullable(),
+    id: z.union([z.number().int(), fields.id]),
+    html_url: fields.url,
+    body: fields.body.nullable(),
     user: z
       .object({
-        id: z.union([z.number().int(), z.string().min(1)]),
-        login: z.string().nullable().optional(),
+        id: z.union([z.number().int(), actor.id]),
+        login: actor.login.optional(),
       })
       .nullable(),
-    commit_id: z.string().nullable().optional(),
-    state: z.string().optional(),
-    submitted_at: z.string().nullable().optional(),
-    created_at: z.string().nullable().optional(),
+    commit_id: fields.commit.optional(),
+    state: fields.state.optional(),
+    submitted_at: fields.createdAt.optional(),
+    created_at: fields.createdAt.optional(),
     in_reply_to_id: z.number().nullable().optional(),
   });
   const base = `${root}/repos/${path}/pulls/${String(request.ref.number)}`;
