@@ -22,16 +22,9 @@ function runCli(args: string[], archonHome: string): { status: number | null; ou
 }
 
 /**
- * `workflow resume/approve/reject/respond` reach `workflowRunCommand` through the same
- * entry point `workflow run` uses, so they need the provider registry for exactly the same
- * reason — but only continuation resolves its workflow from a capture. That path passes a
- * recorded `source_config` into discovery, which is the branch that skips `loadConfig()`,
- * and `loadConfig()` is what self-registers providers for every other route. So a
- * continuation is the one caller that must arrive with the registry already populated.
- *
- * This spawns the real CLI because the gap is in dispatch, not in the command functions:
- * the in-process suite calls `workflowResumeCommand` directly and registers providers as an
- * import side effect, which is precisely how this shipped invisible.
+ * Captured-source discovery skips config loading. The CLI must register providers before
+ * dispatch so a continuation can still parse the provider-scoped graph it captured.
+ * The subprocess exercises that host boundary; command-level tests register separately.
  */
 describe('workflow continuation provider registration', () => {
   test('resumes a provider-scoped workflow instead of failing its source lookup', async () => {

@@ -1,3 +1,4 @@
+import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ResourceStartDisposition } from './schemas/resource-start';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type { DeclaredOutputPaths } from './output-ref';
@@ -315,13 +316,15 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
   resolveApprovalGate(
     id: string,
     metadata: Record<string, unknown>,
-    events: GateResolutionEvent[]
+    events: GateResolutionEvent[],
+    expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
   /** Resolve, cancel and commit gate plus terminal events atomically; reports telemetry after a winning commit. */
   resolveAndCancelApprovalGate(
     id: string,
     events: GateResolutionEvent[],
-    cancellation: WorkflowCancellationEventDetails
+    cancellation: WorkflowCancellationEventDetails,
+    expectedGate?: ExpectedApprovalGate
   ): Promise<{ resolved: boolean }>;
   /** Atomically cancel conversation-scoped resumable runs and their descendants; return only winning rows. */
   cancelResumableRunsForConversation(conversationId: string): Promise<WorkflowRun[]>;
@@ -342,14 +345,11 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     id?: string;
     workflow_name: string;
-    conversation_id: string;
+    origin?: import('./schemas/workflow-run').WorkflowRunOrigin;
     codebase_id?: string;
     user_message: string;
     metadata?: Record<string, unknown>;
     working_path?: string;
-    parent_conversation_id?: string;
-    /** Archon user UUID; populated via ExecuteWorkflowOptions.userId. */
-    user_id?: string;
     /**
      * Run-tree parent (#2121 Phase 2). Set for a `workflow:` sub-run so its row
      * links back to the spawning parent run; omitted for top-level runs.
@@ -362,8 +362,12 @@ export interface IWorkflowStore extends IRunTreeStore, IWorkflowRunNodeSessionSt
      */
     adopted_from_run_id?: string;
   }): Promise<WorkflowRun>;
-  /** Fresh execution must win this pending-to-running CAS before doing any work. */
-  claimPendingWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /**
+   * Fresh execution must win this pending-to-running CAS before doing any work.
+   * `workingPath` is the checkout the run will use; the claim stamps it on a row
+   * created without one.
+   */
+  claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
    * Record the run's checkout baseline (#3305). Write-once in the store: the first value
    * sticks and a later call returns it unchanged. Returns the persisted baseline.

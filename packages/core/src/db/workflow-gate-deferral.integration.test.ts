@@ -1,6 +1,10 @@
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
-import { getProviderCapabilities, registerBuiltinProviders } from '@archon/providers';
+import {
+  getProviderCapabilities,
+  providerRegistry,
+  registerBuiltinProviders,
+} from '@archon/providers';
 import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
 import { createWorkflowStore } from '../workflows/store-adapter';
 import { createSqlWorkflowOperations } from '../workflows/sql-host';
@@ -81,6 +85,7 @@ describe('per-run gate deferral — real SQLite', () => {
         };
         const deps: WorkflowDeps = {
           store,
+          providers: providerRegistry,
           getAgentProvider: () => ({
             getType: () => 'claude',
             getCapabilities: () => getProviderCapabilities('claude'),
@@ -120,7 +125,7 @@ describe('per-run gate deferral — real SQLite', () => {
         const result = await new InProcessWorkflowEngine(deps).submit({
           platform,
           conversationId,
-          conversationDbId: conversationId,
+          origin: { conversationId },
           cwd: root,
           workflow,
           userMessage: 'goal',
@@ -143,7 +148,7 @@ describe('per-run gate deferral — real SQLite', () => {
           run: (await getWorkflowRun(id))!,
           platform,
           conversationId,
-          conversationDbId: conversationId,
+          origin: { conversationId },
           cwd: root,
           legacyWorkflow: workflow,
           userMessage: 'goal',
@@ -170,6 +175,7 @@ describe('per-run gate deferral — real SQLite', () => {
     const store = createWorkflowStore();
     const result = await new InProcessWorkflowEngine({
       store,
+      providers: providerRegistry,
       getAgentProvider: () => ({
         getType: () => 'claude',
         getCapabilities: () => getProviderCapabilities('claude'),
@@ -189,7 +195,7 @@ describe('per-run gate deferral — real SQLite', () => {
     }).submit({
       platform,
       conversationId,
-      conversationDbId: conversationId,
+      origin: { conversationId },
       cwd: root,
       userMessage: 'goal',
       workflow: makeTestResolvedWorkflow({
@@ -249,6 +255,7 @@ describe('per-run gate deferral — real SQLite', () => {
     };
     const deps: WorkflowDeps = {
       store,
+      providers: providerRegistry,
       getAgentProvider: () => {
         throw new Error('Unexpected provider');
       },
@@ -270,7 +277,7 @@ describe('per-run gate deferral — real SQLite', () => {
     const result = await new InProcessWorkflowEngine(deps).submit({
       platform,
       conversationId,
-      conversationDbId: conversationId,
+      origin: { conversationId },
       cwd: root,
       workflow,
       userMessage: 'goal',
@@ -290,7 +297,7 @@ describe('per-run gate deferral — real SQLite', () => {
         run: (await getWorkflowRun(id))!,
         platform,
         conversationId,
-        conversationDbId: conversationId,
+        origin: { conversationId },
         cwd: root,
         legacyWorkflow: workflow,
         userMessage: 'goal',
@@ -321,6 +328,7 @@ describe('per-run gate deferral — real SQLite', () => {
       };
       const deps: WorkflowDeps = {
         store: createWorkflowStore(),
+        providers: providerRegistry,
         getAgentProvider: () => {
           throw new Error('An approval must not start a provider');
         },
@@ -342,7 +350,7 @@ describe('per-run gate deferral — real SQLite', () => {
       const result = await new InProcessWorkflowEngine(deps).submit({
         platform,
         conversationId,
-        conversationDbId: conversationId,
+        origin: { conversationId },
         cwd,
         workflow,
         userMessage: 'goal',
@@ -359,7 +367,7 @@ describe('per-run gate deferral — real SQLite', () => {
           run: (await getWorkflowRun(id))!,
           platform,
           conversationId,
-          conversationDbId: conversationId,
+          origin: { conversationId },
           cwd,
           legacyWorkflow: workflow,
           userMessage: 'goal',
@@ -406,7 +414,7 @@ describe('per-run gate deferral — real SQLite', () => {
   test('a failed suspension insert rolls back the pause', async () => {
     const run = await createWorkflowRun({
       workflow_name: 'rollback',
-      conversation_id: conversationId,
+      origin: { conversationId },
       user_message: '',
     });
     await getDatabase().query(
@@ -431,7 +439,7 @@ describe('per-run gate deferral — real SQLite', () => {
   test('an undelivered prompt fails only its still-active gate; decisions and cancellation win the race', async () => {
     const run = await createWorkflowRun({
       workflow_name: 'gates',
-      conversation_id: conversationId,
+      origin: { conversationId },
       user_message: '',
     });
     await getDatabase().query(
@@ -483,6 +491,7 @@ describe('per-run gate deferral — real SQLite', () => {
     const store = createWorkflowStore();
     const result = await new InProcessWorkflowEngine({
       store,
+      providers: providerRegistry,
       getAgentProvider: () => {
         throw new Error('Unexpected provider');
       },
@@ -496,7 +505,7 @@ describe('per-run gate deferral — real SQLite', () => {
     }).submit({
       platform,
       conversationId,
-      conversationDbId: conversationId,
+      origin: { conversationId },
       cwd: root,
       workflow: makeTestResolvedWorkflow({
         name: 'fast-approval',
@@ -518,6 +527,7 @@ describe('per-run gate deferral — real SQLite', () => {
     };
     const result = await new InProcessWorkflowEngine({
       store: createWorkflowStore(),
+      providers: providerRegistry,
       getAgentProvider: () => {
         throw new Error('Unexpected provider');
       },
@@ -531,7 +541,7 @@ describe('per-run gate deferral — real SQLite', () => {
     }).submit({
       platform,
       conversationId,
-      conversationDbId: conversationId,
+      origin: { conversationId },
       cwd: root,
       workflow: makeTestResolvedWorkflow({
         name: 'undelivered',

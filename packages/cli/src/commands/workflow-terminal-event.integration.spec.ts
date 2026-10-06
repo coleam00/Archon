@@ -42,6 +42,13 @@ afterEach(async () => {
  */
 const DETACHED_RUN_DEADLINE_MS = 15_000;
 
+/** Read-only handle that waits out a lock held by a live writer instead of throwing SQLITE_BUSY. */
+function openReadOnly(databasePath: string): Database {
+  const database = new Database(databasePath, { readonly: true });
+  database.run('PRAGMA busy_timeout = 5000');
+  return database;
+}
+
 async function waitFor<T>(
   read: () => T | undefined | Promise<T | undefined>,
   timeoutMs: number
@@ -73,7 +80,7 @@ function readRun(
   workflowName: string
 ): { id: string; status: string } | undefined {
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     return (
       database
@@ -94,11 +101,8 @@ function readRunById(
   runId: string
 ): { id: string; status: string; working_path: string | null } | undefined {
   if (!existsSync(databasePath)) return undefined;
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
-    // The last writer's WAL cleanup can briefly lock a new reader. Wait for that
-    // lock, not for the acknowledged row to appear.
-    database.run('PRAGMA busy_timeout = 5000');
     return (
       database
         .query<
@@ -117,7 +121,7 @@ function readTerminalEvents(
   runId: string,
   eventType: string
 ): { data: string }[] {
-  const database = new Database(databasePath, { readonly: true });
+  const database = openReadOnly(databasePath);
   try {
     return database
       .query<{ data: string }, [string, string]>(

@@ -1,3 +1,5 @@
+import { type ProviderRegistry, requireProvider } from '@archon/provider-contract';
+import { randomUUID } from 'node:crypto';
 import { nodeInvocationKey } from './node-record-reader';
 import {
   startNodeExecution,
@@ -77,11 +79,6 @@ import { CONTAINER_ENV_DENYLIST, mergeTokenUsage } from '@archon/provider-contra
 import { sessionPreview, type ProviderFailure } from '@archon/provider-contract';
 import type { ContainerRunContext } from './container-context';
 import { WRITEBACK_GATE_NODE_ID } from './container-context';
-import {
-  getProviderCapabilities,
-  getRegisteredProviders,
-  isRegisteredProvider,
-} from '@archon/providers';
 import { findStrictSchemaIssues, type StrictSchemaIssue } from '@archon/provider-contract';
 import { validateStructuredOutput } from './structured-output';
 import type {
@@ -554,6 +551,7 @@ function formatWatchdogResetDiagnostic(lastReset: WatchdogReset | undefined): st
 }
 
 function applyPresetOptions(
+  providers: ProviderRegistry,
   provider: string,
   preset: ModelAliasPreset | undefined,
   node: DagNode,
@@ -572,7 +570,7 @@ function applyPresetOptions(
   // Shared with the chat orchestrator's `applyPresetToRequestOptions`, so the
   // same tier cannot mean one depth in a workflow and another in chat. The
   // classifier returns the reason; each caller keeps its own event namespace.
-  const decision = resolvePresetEffort(provider, preset.effort);
+  const decision = resolvePresetEffort(providers, provider, preset.effort);
   if (!decision.ok) {
     // Warn rather than silently drop it — fail-loud per the project's fail-fast
     // guideline. `unsupported` means the resolved provider has no reasoning
@@ -729,8 +727,6 @@ export interface RunChildWorkflowArgs {
   cwd: string;
   /** Platform conversation id (shared with the parent). */
   conversationId: string;
-  /** DB conversation UUID (shared with the parent — satisfies the child's NOT-NULL FK). */
-  conversationDbId: string;
   userId?: string;
   /** Codebase id inherited from the parent (env vars + attribution). */
   codebaseId?: string;
@@ -1553,6 +1549,7 @@ export function substituteLoopPrevRefs(
  * Capability warnings inform users when features are unsupported.
  */
 async function resolveNodeProviderAndModel(
+  providers: ProviderRegistry,
   node: DagNode,
   workflowProvider: string,
   workflowModel: string | undefined,
@@ -1633,17 +1630,19 @@ async function resolveNodeProviderAndModel(
     }
   }
 
-  if (!isRegisteredProvider(provider)) {
+  const descriptor = providers.get(provider);
+  if (!descriptor) {
     throw new Error(
       `Node '${node.id}': unknown provider '${provider}'. ` +
-        `Registered: ${getRegisteredProviders()
+        `Registered: ${providers
+          .list()
           .map(p => p.id)
           .join(', ')}`
     );
   }
 
   // Get provider capabilities for capability warnings (static lookup, no instantiation)
-  const caps = getProviderCapabilities(provider);
+  const caps = descriptor.capabilities;
 
   // `webSearchMode:` is Codex's alone — no other provider reads it, and #2556
   // decided it keeps no node-level form, making it the single workflow-level
@@ -1782,6 +1781,7 @@ async function resolveNodeProviderAndModel(
   // Pass assistantConfig from config — provider parses internally
   const assistantConfig: Record<string, unknown> = { ...(config.assistants[provider] ?? {}) };
   const presetEffortRejection = applyPresetOptions(
+    providers,
     provider,
     effectivePreset,
     node,
@@ -2267,7 +2267,7 @@ async function executeNodeInternal(
   // structured-output validation miss, re-run the stream with the schema errors
   // appended. Enforced providers and non-output_format nodes get 0 reasks.
   const maxReasks =
-    getProviderCapabilities(provider).structuredOutput === 'best-effort' &&
+    requireProvider(ctx.deps.providers, provider).capabilities.structuredOutput === 'best-effort' &&
     nodeOptions?.outputFormat
       ? STRUCTURED_OUTPUT_MAX_REASKS
       : 0;
@@ -5087,7 +5087,7 @@ async function executeLoopGroupBody(
         const { failed } = await requireTerminalStatusWrite(
           deps.store.failPausedApproval(
             workflowRun.id,
-            approvalContext,
+            paused,
             undeliveredGatePromptError('Loop-group gate', node.id)
           ),
           { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
@@ -5716,7 +5716,8 @@ async function executeLoopNode(
       const wantsStructured = resolvedOptions?.outputFormat !== undefined;
       const maxReasks =
         wantsStructured &&
-        getProviderCapabilities(workflowProvider).structuredOutput === 'best-effort'
+        requireProvider(ctx.deps.providers, workflowProvider).capabilities.structuredOutput ===
+          'best-effort'
           ? STRUCTURED_OUTPUT_MAX_REASKS
           : 0;
 
@@ -6615,7 +6616,7 @@ async function executeLoopNode(
         const { failed } = await requireTerminalStatusWrite(
           deps.store.failPausedApproval(
             workflowRun.id,
-            approvalContext,
+            paused,
             undeliveredGatePromptError('Loop gate', node.id)
           ),
           { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
@@ -6677,6 +6678,9 @@ function undeliveredGatePromptError(
  * A same-run gate that loses the running-to-paused CAS stays unfinished for resume.
  * External stops retain ownership of terminal state; other store failures propagate.
  * Write-back requires a successful pause before its apply/teardown path can proceed.
+ * Returns the persisted context, including its minted `pauseId`, so callers that later
+ * compare against the stored gate (failPausedApproval) match it exactly; undefined when
+ * the gate did not pause.
  */
 async function pauseGateRespectingExternalTransition(
   deps: WorkflowDeps,
@@ -6687,8 +6691,9 @@ async function pauseGateRespectingExternalTransition(
     failClosed?: boolean;
     suspension?: ReturnType<typeof serializeNodeStateRecord>;
   } = {}
-): Promise<boolean> {
+): Promise<ApprovalContext | undefined> {
   const { extraMetadata, failClosed = false } = options;
+  approvalContext = { ...approvalContext, pauseId: randomUUID() };
   try {
     await deps.store.pauseWorkflowRun(runId, approvalContext, extraMetadata, options.suspension);
   } catch (pauseErr) {
@@ -6710,7 +6715,7 @@ async function pauseGateRespectingExternalTransition(
           { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: wait.nodeId },
           'dag.gate_deferred'
         );
-        return false;
+        return undefined;
       }
       if (
         !isApprovalContext(active) ||
@@ -6722,21 +6727,23 @@ async function pauseGateRespectingExternalTransition(
         { workflowRunId: runId, nodeId: approvalContext.nodeId, activeNodeId: active.nodeId },
         'dag.gate_deferred'
       );
-      return false;
+      return undefined;
     }
     getLog().warn(
       { workflowRunId: runId, status, err: pauseErr as Error },
       'dag.gate_pause_skipped_external_transition'
     );
-    return false;
+    return undefined;
   }
   getWorkflowEventEmitter().emit({
     type: 'approval_pending',
     runId,
     nodeId: approvalContext.nodeId,
     message: approvalContext.message,
+    decisions: approvalContext.decisions,
+    pauseId: approvalContext.pauseId,
   });
-  return true;
+  return approvalContext;
 }
 
 /** Execute a durable wait without holding a subprocess or provider slot. */
@@ -7098,6 +7105,7 @@ async function executeApprovalNode(
       tier: resolvedTier,
       effort: resolvedEffort,
     } = await resolveNodeProviderAndModel(
+      ctx.deps.providers,
       syntheticNode,
       workflowProvider,
       workflowModel,
@@ -7141,6 +7149,17 @@ async function executeApprovalNode(
   // Resolve $nodeId.output[.field] references so the human sees concrete values
   // (parity with prompt/bash/loop/cancel nodes, which all run the same substitution).
   const renderedMessage = substituteNodeOutputRefs(node.message, nodeOutputs);
+  const choices = node.decisions.map(decision => {
+    const label =
+      decision.label ??
+      (decision.id === 'approve' ? 'Approve' : decision.id === 'reject' ? 'Reject' : decision.id);
+    const display = decision.label ? `${label} (${decision.id})` : label;
+    const command =
+      decision.id === 'approve' || decision.id === 'reject'
+        ? `${decision.id} ${workflowRun.id}`
+        : `respond ${workflowRun.id} ${decision.id} [text]`;
+    return `${display}: \`${spellWorkflowCommand(platform, command)}\``;
+  });
   const suspended = finishNodeExecution(
     execution,
     { status: 'suspended', point: 'approval' },
@@ -7183,13 +7202,12 @@ async function executeApprovalNode(
   const approvalMsg =
     `⏸ **Approval required**: ${renderedMessage}\n\n` +
     `Run ID: \`${workflowRun.id}\`\n` +
-    `Approve: \`${spellWorkflowCommand(platform, `approve ${workflowRun.id}`)}\` | ` +
-    `Reject: \`${spellWorkflowCommand(platform, `reject ${workflowRun.id}`)}\``;
+    choices.join(' | ');
   if (!(await safeSendMessage(platform, conversationId, approvalMsg, msgContext))) {
     const { failed } = await requireTerminalStatusWrite(
       deps.store.failPausedApproval(
         workflowRun.id,
-        approvalContext,
+        paused,
         undeliveredGatePromptError('Approval', node.id)
       ),
       { workflowRunId: workflowRun.id, site: 'dag.gate_prompt_failed' }
@@ -7512,7 +7530,6 @@ async function executeWorkflowNode(
     input,
     cwd,
     conversationId,
-    conversationDbId: parentRun.conversation_id,
     userId: parentRun.user_id ?? undefined,
     codebaseId: parentRun.codebase_id ?? undefined,
     isolation: node.isolation,
@@ -7710,6 +7727,7 @@ export async function resolveFanOutChildDefinition(
     const { workflows, support, errors } = await discoverWorkflowsWithConfig(
       cwd,
       deps.loadConfig,
+      deps.providers,
       sourceRoots
     );
     // Discovery qualified a pack's composed targets to that pack, so a support workflow
@@ -8262,7 +8280,6 @@ async function executeFanOutWorkflowNode(
         input,
         cwd,
         conversationId,
-        conversationDbId: parentRun.conversation_id,
         userId: parentRun.user_id ?? undefined,
         codebaseId: parentRun.codebase_id ?? undefined,
         isolation: node.isolation,
@@ -9407,6 +9424,7 @@ async function settleSequentially(
  */
 async function runLayers(parentCtx: RunLayersContext): Promise<void> {
   const ctx = parentCtx;
+  const providers = ctx.deps.providers;
   // Lifecycle events expose only the immediate enclosing iteration; artifact
   // identity retains the complete outermost-to-innermost lineage.
   const iteration = ctx.loopGroupPath.at(-1)?.iteration;
@@ -9856,6 +9874,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   tier: resolvedLoopTier,
                   effort: resolvedLoopEffort,
                 } = await resolveNodeProviderAndModel(
+                  providers,
                   node,
                   ctx.workflowProvider,
                   ctx.workflowModel,
@@ -9908,6 +9927,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
                   tier: loopGroupTier,
                   preset: loopGroupPreset,
                 } = await resolveNodeProviderAndModel(
+                  providers,
                   node,
                   ctx.workflowProvider,
                   ctx.workflowModel,
@@ -10031,6 +10051,7 @@ async function runLayers(parentCtx: RunLayersContext): Promise<void> {
               tier: resolvedTier,
               effort: resolvedEffort,
             } = await resolveNodeProviderAndModel(
+              providers,
               node,
               ctx.workflowProvider,
               ctx.workflowModel,
@@ -10603,14 +10624,15 @@ export function visitProviderInvokingNodes(
  * skipped here — they fail later with a clearer "unknown provider" error.
  */
 export function collectContainerIncompatibleProviders(
+  providers: ProviderRegistry,
   nodes: readonly DagNode[],
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): Set<string> {
   const incompatible = new Set<string>();
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (_node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).containerExec) incompatible.add(provider);
+    const descriptor = providers.get(provider);
+    if (descriptor && !descriptor.capabilities.containerExec) incompatible.add(provider);
   });
   return incompatible;
 }
@@ -10656,14 +10678,16 @@ export interface ScopedCapabilityMismatch {
  * they fail later with a clearer "unknown provider" error.
  */
 export function collectScopedCapabilityMismatches(
+  providers: ProviderRegistry,
   nodes: readonly DagNode[],
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): ScopedCapabilityMismatch[] {
   const mismatches: ScopedCapabilityMismatch[] = [];
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    const capabilities = unsupportedScopedCapabilities(node, getProviderCapabilities(provider));
+    const descriptor = providers.get(provider);
+    if (!descriptor) return;
+    const capabilities = unsupportedScopedCapabilities(node, descriptor.capabilities);
     if (capabilities.length > 0) mismatches.push({ nodeId: node.id, provider, capabilities });
   });
   return mismatches;
@@ -10702,14 +10726,14 @@ export type StrictSchemaViolation = StrictSchemaIssue & {
  * opt-out: the workflow owner chose a provider that accepts optional-by-omission.
  */
 export function collectStrictSchemaViolations(
+  providers: ProviderRegistry,
   nodes: readonly (DagNode | IncludeDirective)[],
   workflowProvider: string,
   aiProfile?: ResolvedAiProfile
 ): StrictSchemaViolation[] {
   const violations: StrictSchemaViolation[] = [];
   visitProviderInvokingNodes(nodes, workflowProvider, aiProfile, (node, provider) => {
-    if (!isRegisteredProvider(provider)) return;
-    if (!getProviderCapabilities(provider).requiresAllPropertiesRequired) return;
+    if (!providers.get(provider)?.capabilities.requiresAllPropertiesRequired) return;
     // Only nodes whose output_format is enforced by the engine — gate/loop_group
     // schemas are inert even when present, so their issues cost nothing.
     if (!isOutputFormatEnforced(node)) return;
@@ -11170,11 +11194,13 @@ export async function executeDagWorkflow(
     priorNodeSessions,
     workflowSourceRoots,
   } = options;
+  const providers = deps.providers;
   const dagStartTime = Date.now();
 
   // Scoped-capability fail-fast: before ANY node runs, so no node spends in a run
   // that would later reach a node whose MCP servers, skills or plugins cannot load.
   const capabilityMismatches = collectScopedCapabilityMismatches(
+    providers,
     workflow.nodes,
     workflowProvider,
     aiProfile
@@ -11189,6 +11215,7 @@ export async function executeDagWorkflow(
   // asked for isolation and must get it or a clear error.
   if (execContext.kind === 'container') {
     const incompatible = collectContainerIncompatibleProviders(
+      providers,
       workflow.nodes,
       workflowProvider,
       aiProfile
@@ -11254,7 +11281,12 @@ export async function executeDagWorkflow(
   // coverage). Container scoping is irrelevant — this fires on host too, and it
   // protects the setup costs a first-turn 400 would otherwise burn.
   {
-    const violations = collectStrictSchemaViolations(workflow.nodes, workflowProvider, aiProfile);
+    const violations = collectStrictSchemaViolations(
+      providers,
+      workflow.nodes,
+      workflowProvider,
+      aiProfile
+    );
     if (violations.length > 0) {
       const [first] = violations;
       const more = violations.length > 1 ? ` (+${violations.length - 1} more)` : '';

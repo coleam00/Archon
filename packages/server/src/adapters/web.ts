@@ -40,18 +40,19 @@ export class WebAdapter implements IPlatformAdapter {
   ) {}
 
   /**
-   * Register an SSE stream for a conversation.
-   * Closes any existing stream (browser refresh / new tab replaces old).
+   * Dashboard connections coexist; a conversation reconnect replaces its old stream.
    */
   registerStream(conversationId: string, stream: SSEWriter): void {
     this.transport.registerStream(conversationId, stream);
   }
 
   removeStream(conversationId: string, expectedStream?: SSEWriter): void {
-    this.transport.removeStream(conversationId, expectedStream);
-    // Clean up stale tool tracking state on SSE disconnect to prevent
-    // spurious tool_result events on the next message to this conversation.
-    this.runningTools.delete(conversationId);
+    // Clean up stale tool tracking state once the last writer is gone to prevent
+    // spurious tool_result events on the next message to this conversation. A
+    // stale writer leaving while another is live must not wipe live tool state.
+    if (this.transport.removeStream(conversationId, expectedStream)) {
+      this.runningTools.delete(conversationId);
+    }
   }
 
   /**

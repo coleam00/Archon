@@ -11,6 +11,7 @@ const trackTempRoot = trackTempRoots();
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conversation-1' },
     id: 'run-1',
     workflow_name: 'continued',
     conversation_id: 'conversation-1',

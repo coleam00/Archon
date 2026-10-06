@@ -577,6 +577,10 @@ archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
 ```
 
+For a paused gate, human-readable output lists its declared decision IDs and optional
+labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
+for each choice. JSON exposes these choices in `metadata.approval.decisions`.
+
 `workflow status`, `workflow runs`, and `workflow get` report two independent facts:
 
 - **Execution status** (`pending`, `running`, `paused`, `completed`, `failed`, or `cancelled`)
@@ -980,6 +984,23 @@ archon workflow abandon <run-id> --json
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
 "recordedUid", "lastActivityAt" }`.
 
+Abandon also removes the worktree Archon created for this run, and for each cancelled
+`workflow:` sub-run. Abandon is final for that checkout: removal is forced, so
+uncommitted, untracked, and ignored files (including copied `.env` files) and
+initialized submodules are deleted with it. The branch is kept, so committed work,
+pushed or not, stays recoverable. The result lists each removed worktree and its
+branch (`releasedWorktrees` in `--json`), and the isolation record is marked `destroyed`.
+
+Only a checkout this run created is removed. Adopted, reused, inherited, and legacy
+checkouts without that creation proof stay in place, with a reason. A checkout another
+resumable or live run uses, one locked with `git worktree lock`, one whose owner runs on
+another host or as another user, or one under a descendant that could not be accounted
+for is also kept.
+
+The run is cancelled even when removal fails; the failure is reported as a cleanup
+warning. Retry `workflow abandon <run-id>` on that cancelled run to finish removal
+without repeating cancellation.
+
 Managed container reclamation is best-effort here too. A failure leaves the run
 `cancelled` and reports a warning on every abandon surface because container resources
 may remain allocated. Inspect the managed containers before retrying cleanup.
@@ -1145,6 +1166,12 @@ is still resumable: a resume reuses the child's recorded worktree and fails if i
 removed.
 
 ### `isolation cleanup [days]`
+
+To explicitly discard a resumable run and remove the worktree it created, use
+`archon workflow abandon <run-id>`. Ordinary cleanup keeps resumable runs protected.
+Abandon deletes uncommitted work in that worktree, keeps its branch, and never removes
+an adopted checkout; see [`workflow abandon`](#workflow-abandon) for what it keeps and
+how to retry.
 
 Remove stale environments.
 
@@ -1366,10 +1393,10 @@ existing project's identity and history.
 
 ## Environment
 
-At startup, the CLI strips all Bun-auto-loaded CWD `.env` keys and nested Claude Code session markers from `process.env`, then loads two archon-owned env files with `override: true`. Keys in archon-owned files pass through to AI subprocesses — no allowlist filtering.
+At startup, the CLI removes every key named in the CWD project env files from `process.env`, whatever its value or source, including shell exports and direnv. A detached child (`--internal-detached-run-config`) then restores Archon's own install-context keys (`TOKEN_ENCRYPTION_KEY`, `ARCHON_HOME`, `ARCHON_DOCKER`, `WORKSPACE_PATH`, `HOME`, and `USERPROFILE`) from the trusted detached config, never from the project `.env`. This prevents project API keys from overriding subscription auth and incurring API billing, and prevents project keys from overriding Archon's environment. It also strips nested Claude Code session markers, then loads Archon-owned env files with `override: true`. Put install credentials such as `GH_TOKEN` in `~/.archon/.env`; those later trusted sources pass through to AI subprocesses. See [target repo env isolation](/reference/security/#target-repo-env-isolation).
 
 On startup, the CLI:
-1. Strips `<cwd>/.env*` keys + `CLAUDECODE` markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
+1. Strips keys named in `<cwd>/.env`, `.env.local`, `.env.development`, and `.env.production`, plus nested Claude Code session markers from `process.env` (via `stripCwdEnv`). Emits `[archon] stripped N keys from <cwd> (...)` when N > 0.
 2. Loads `~/.archon/.env` (user scope). Emits `[archon] loaded N keys …` when N > 0 **and** `ARCHON_VERBOSE_BOOT=1` or `LOG_LEVEL=debug/trace` is set.
 3. Loads `<cwd>/.archon/.env` (project scope, overrides user scope). Same verbosity gate as step 2.
 4. Auto-enables global Claude auth if no explicit tokens are set.

@@ -135,6 +135,7 @@ const { buildManageRunTool } = await import('./manage-run-tool');
 
 function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
   return {
+    origin: { conversationId: 'conv-1' },
     id: 'r1abcdef-1234',
     workflow_name: 'archon-investigate',
     status: 'running',

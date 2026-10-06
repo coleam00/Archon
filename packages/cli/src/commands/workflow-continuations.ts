@@ -1,3 +1,5 @@
+import { addMessage } from '@archon/core/db/messages';
+import { toPersistedMessageMetadata } from '@archon/core/types';
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
 import { getArchonHome } from '@archon/paths';
@@ -56,10 +58,17 @@ async function admit(
     new InProcessWorkflowEngine(createCliWorkflowDeps()),
     run.id,
     async freshRun => {
-      const conversation = await getConversationById(freshRun.conversation_id);
-      if (!conversation)
+      const historyConversationId = freshRun.conversation_id ?? freshRun.parent_conversation_id;
+      const conversation = historyConversationId
+        ? await getConversationById(historyConversationId)
+        : null;
+      if (historyConversationId && !conversation)
         return { kind: 'unavailable', reason: 'origin conversation no longer exists' };
-      if (conversation.platform_type !== 'cli' && conversation.platform_type !== 'api') {
+      if (
+        conversation &&
+        conversation.platform_type !== 'cli' &&
+        conversation.platform_type !== 'api'
+      ) {
         return {
           kind: 'unavailable',
           reason: `CLI cannot deliver results to '${conversation.platform_type}'; use its server host`,
@@ -77,8 +86,20 @@ async function admit(
       }
       return {
         kind: 'ready',
-        platform: new HeadlessPlatform(freshRun.conversation_id, CLI_WORKFLOW_SURFACE),
-        conversationId: freshRun.conversation_id,
+        platform: new HeadlessPlatform(
+          historyConversationId
+            ? async (message, metadata): Promise<void> => {
+                await addMessage(
+                  historyConversationId,
+                  'assistant',
+                  message,
+                  toPersistedMessageMetadata(metadata)
+                );
+              }
+            : undefined,
+          CLI_WORKFLOW_SURFACE
+        ),
+        conversationId: freshRun.conversation_id ?? freshRun.id,
       };
     },
     cursor
