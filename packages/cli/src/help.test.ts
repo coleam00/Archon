@@ -171,6 +171,7 @@ Usage:
 Commands:
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
+  user <list|role>           List users and manage roles as the operator
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator

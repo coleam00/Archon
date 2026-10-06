@@ -18,6 +18,7 @@
  * Both are stubbed below. The package-cwd test preload checks its own
  * temporary ARCHON_HOME after each test (src/test/no-archon-home-writes.ts).
  */
+import { providerRegistry } from '@archon/providers';
 import {
   describe,
   test,
@@ -349,6 +350,137 @@ describe('GitHubAdapter', () => {
     });
   });
 
+  describe('conversational webhook receipt', () => {
+    let originalAllowedUsers: string | undefined;
+
+    beforeEach(() => {
+      originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
+      process.env.GITHUB_ALLOWED_USERS = 'user123';
+      adapter = new GitHubAdapter(
+        { kind: 'pat', token: 'fake-token-for-testing' },
+        'fake-webhook-secret',
+        mockLockManager,
+        'archon'
+      );
+      installOctokitStubs(adapter);
+      handleMessageSpy.mockClear();
+      mockAcquireLock.mockClear();
+      mockGetOrCreateConversation.mockClear();
+      mockLogger.debug.mockClear();
+      mockLogger.info.mockClear();
+      mockLogger.error.mockClear();
+    });
+
+    afterEach(() => {
+      if (originalAllowedUsers === undefined) delete process.env.GITHUB_ALLOWED_USERS;
+      else process.env.GITHUB_ALLOWED_USERS = originalAllowedUsers;
+    });
+
+    async function receive(eventName: string, event: unknown): Promise<void> {
+      const body = JSON.stringify(event);
+      const signature =
+        'sha256=' + createHmac('sha256', 'fake-webhook-secret').update(body).digest('hex');
+      const handler = spyOn(adapter, 'handleWebhook');
+      try {
+        expect(await adapter.receiveWebhook(body, signature, 'delivery-1', eventName)).toBe(
+          'accepted'
+        );
+        expect(handler).toHaveBeenCalledTimes(1);
+        await handler.mock.results[0].value;
+      } finally {
+        handler.mockRestore();
+      }
+    }
+
+    test.each(['installation', 'installation_repositories', 'future_event'])(
+      'ignores %s without a repository',
+      async eventName => {
+        const event = {
+          action: 'created',
+          installation: { id: 123 },
+          repositories_added: [],
+          repositories_removed: [],
+          sender: { login: 'user123' },
+        };
+        await receive(eventName, event satisfies WebhookEvent);
+        expect(mockLogger.debug).toHaveBeenCalledWith(
+          { githubEvent: eventName },
+          'github.repositoryless_webhook_ignored'
+        );
+        expect(mockLogger.error).not.toHaveBeenCalled();
+        expect(mockGetOrCreateConversation).not.toHaveBeenCalled();
+        expect(mockAcquireLock).not.toHaveBeenCalled();
+        expect(handleMessageSpy).not.toHaveBeenCalled();
+      }
+    );
+
+    test('ignores a repository without an owner', async () => {
+      await receive('issue_comment', {
+        repository: { name: 'testrepo' },
+        sender: { login: 'user123' },
+      });
+      expect(mockLogger.debug).toHaveBeenCalledWith(
+        { githubEvent: 'issue_comment' },
+        'github.repositoryless_webhook_ignored'
+      );
+      expect(mockLogger.error).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('rejects unauthorized senders before the repository check', async () => {
+      await receive('installation', { sender: { login: 'outsider' } });
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        { maskedUser: 'out***' },
+        'github.unauthorized_webhook'
+      );
+      expect(mockLogger.debug).not.toHaveBeenCalled();
+      expect(mockLogger.error).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('rejects invalid signatures before parsing or checking repository shape', async () => {
+      expect(
+        await adapter.receiveWebhook('invalid json', 'sha256=invalid', 'id', 'installation')
+      ).toBe('invalid_signature');
+      expect(mockLogger.info).not.toHaveBeenCalled();
+      expect(mockLogger.debug).not.toHaveBeenCalled();
+      expect(handleMessageSpy).not.toHaveBeenCalled();
+    });
+
+    test('processes an ordinary issue comment', async () => {
+      await receive('issue_comment', {
+        action: 'created',
+        issue: {
+          number: 42,
+          title: 'Test issue',
+          body: 'Description',
+          user: { login: 'user123' },
+          labels: [],
+          state: 'open',
+        },
+        comment: { body: '@archon help', user: { login: 'user123' } },
+        repository: {
+          owner: { login: 'testuser' },
+          name: 'testrepo',
+          full_name: 'testuser/testrepo',
+          html_url: 'https://github.com/testuser/testrepo',
+          default_branch: 'main',
+        },
+        sender: { login: 'user123' },
+      } satisfies WebhookEvent);
+      expect(mockGetOrCreateConversation).toHaveBeenCalledWith(
+        'github',
+        'testuser/testrepo#42',
+        'codebase-test'
+      );
+      expect(handleMessageSpy).toHaveBeenCalledTimes(1);
+      expect(handleMessageSpy.mock.calls[0][1]).toBe('testuser/testrepo#42');
+      expect(handleMessageSpy.mock.calls[0][2]).toContain('[GitHub Issue Context]');
+      expect(handleMessageSpy.mock.calls[0][2]).toEndWith('help');
+      expect(mockLogger.error).not.toHaveBeenCalled();
+    });
+  });
+
   describe('check_run.completed workflow signal', () => {
     const wait = {
       owner: 'loop_group' as const,
@@ -444,7 +576,11 @@ describe('GitHubAdapter', () => {
     });
 
     test('the adapter matcher accepts the bundled PR producer contract', () => {
-      const parsed = parseWorkflow(BUNDLED_WORKFLOWS['archon-pr'], 'archon-pr.yaml');
+      const parsed = parseWorkflow(
+        BUNDLED_WORKFLOWS['archon-pr'],
+        'archon-pr.yaml',
+        providerRegistry
+      );
       if (parsed.workflow === null) throw new Error(parsed.error.error);
       // The publishing node owns the verified record; the agent before it only
       // prepares the intent, and an inbound event must never match on that.

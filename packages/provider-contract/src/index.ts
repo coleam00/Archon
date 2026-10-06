@@ -103,4 +103,8 @@ export {
   type CredentialSpec,
   type ProviderCredentialCatalog,
   type ProviderRegistration,
+  type ProviderDescriptor,
+  type ProviderRegistry,
+  requireProvider,
+  parseProviderRunModel,
 } from './registration';

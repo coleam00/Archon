@@ -52,8 +52,7 @@ function render(): string {
   const registry = z.registry<{ id: string }>();
   for (const [id, schema] of Object.entries(CONTRACT_SCHEMAS)) registry.add(schema, { id });
   const { schemas } = z.toJSONSchema(registry, {
-    // Zod appends a fragment to the shared document URI. Emit it at this document's
-    // root, where the shared definitions are merged, rather than nesting fragments.
+    // Zod appends a fragment to shared references; those definitions live in this document.
     uri: id => (id === '__shared' ? '' : `#/$defs/${id}`),
     // Describes what a provider may emit: the engine's parse strips unknown keys, so the
     // published schema must not forbid them.
@@ -61,15 +60,16 @@ function render(): string {
   });
   // One document; each schema's own `$id`/`$schema` would make its `$ref`s resolve per file.
   const defs = Object.fromEntries(
-    Object.entries(schemas)
-      .filter(([id]) => id !== '__shared')
-      .map(([id, { $id: _id, $schema: _schema, ...schema }]) => [id, schema])
+    Object.entries(schemas).map(([id, { $id: _id, $schema: _schema, ...schema }]) => [id, schema])
   );
+  const shared = defs.__shared;
+  delete defs.__shared;
+  Object.assign(defs, shared?.$defs);
   const document = {
     $schema: 'https://json-schema.org/draft/2020-12/schema',
     $comment:
       'AUTO-GENERATED from packages/provider-contract/src by packages/provider-contract/src/scripts/generate-schema.ts. Do not edit.',
-    $defs: { ...defs, ...schemas.__shared?.$defs },
+    $defs: defs,
   };
   return `${JSON.stringify(document, null, 2)}\n`;
 }

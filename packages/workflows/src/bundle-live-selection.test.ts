@@ -1,3 +1,4 @@
+import { providerRegistry } from '@archon/providers';
 import { afterAll, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -81,7 +82,7 @@ afterAll(async () => {
 });
 
 test('live source catalogs exclude unindexed bundled packs while retaining project and home packs', async () => {
-  const result = await discoverWorkflows(project);
+  const result = await discoverWorkflows(project, { providers: providerRegistry });
   expect(result.errors).toEqual([]);
   expect(result.workflows.map(entry => entry.workflow.name).sort()).toEqual([
     'home-flow',
@@ -113,10 +114,11 @@ test('live bundled command execution rejects an unindexed owner', async () => {
 test('live validation rejects an unindexed bundled command owner', async () => {
   const parsed = parseWorkflow(
     `name: check\ndescription: fixture\nnodes:\n  - id: work\n    command: ${packagedCommand('excluded')}\n`,
-    'check.yaml'
+    'check.yaml',
+    providerRegistry
   );
   if (!parsed.workflow) throw new Error('Invalid test workflow');
-  const issues = await validateWorkflowResources(parsed.workflow, project);
+  const issues = await validateWorkflowResources(parsed.workflow, project, providerRegistry);
   expect(issues.some(issue => issue.level === 'error' && issue.field === 'command')).toBe(true);
 });
 
@@ -130,7 +132,10 @@ test('a captured bundle retains formerly indexed resources without reading the l
   index.mockImplementation(async () => {
     throw new Error('Captured consumers must not read the live index');
   });
-  const result = await discoverWorkflows(project, { sourceRoots: roots });
+  const result = await discoverWorkflows(project, {
+    providers: providerRegistry,
+    sourceRoots: roots,
+  });
   expect(result.errors).toEqual([]);
   expect(result.workflows.map(entry => entry.workflow.name)).toContain('excluded-flow');
   expect(
@@ -185,7 +190,7 @@ test('live indexed workflow and script additions are visible without regeneratin
       join(app, 'workflows', 'shipped', 'flow', 'scripts', 'late.ts'),
       'console.log("late")'
     );
-    const result = await discoverWorkflows(project);
+    const result = await discoverWorkflows(project, { providers: providerRegistry });
     expect(
       result.workflows.find(entry => entry.workflow.name === 'shipped-flow')?.workflow.description
     ).toBe('edited live');
@@ -215,7 +220,7 @@ test('binary discovery preserves an authored yml filename when a project overrid
     throw new Error('A binary must not read the source index');
   });
   try {
-    const result = await discoverWorkflows(project);
+    const result = await discoverWorkflows(project, { providers: providerRegistry });
     expect(result.errors).toEqual([]);
     const matches = result.workflows.filter(entry => entry.workflow.name === name);
     expect(matches).toHaveLength(1);
@@ -228,7 +233,7 @@ test('binary discovery preserves an authored yml filename when a project overrid
 
 test('SDK discovery without an installed source tree retains project and home resources', async () => {
   app = join(root, 'absent-app');
-  const result = await discoverWorkflows(project);
+  const result = await discoverWorkflows(project, { providers: providerRegistry });
   expect(result.errors).toEqual([]);
   expect(result.workflows.some(entry => entry.source === 'bundled')).toBe(false);
   const scripts = await discoverScriptsForCwd(project);
@@ -239,7 +244,7 @@ test('SDK discovery without an installed source tree retains project and home re
 test('a partial source installation fails instead of appearing to have no bundled resources', async () => {
   app = join(root, 'partial-app');
   await mkdir(join(app, 'workflows'), { recursive: true });
-  const result = await discoverWorkflows(project);
+  const result = await discoverWorkflows(project, { providers: providerRegistry });
   expect(result.errors.some(error => error.error.includes('Indexed bundle pack'))).toBe(true);
   await expect(discoverScriptsForCwd(project)).rejects.toThrow('Indexed bundle pack');
 });
@@ -248,14 +253,14 @@ test('a missing index in an installed source tree remains a visible discovery er
   index.mockImplementation(async () => {
     throw Object.assign(new Error('Missing installed bundle index'), { code: 'ENOENT' });
   });
-  const result = await discoverWorkflows(project);
+  const result = await discoverWorkflows(project, { providers: providerRegistry });
   expect(result.errors.some(error => error.error === 'Missing installed bundle index')).toBe(true);
 });
 
 test('an existing non-directory bundle root is an invalid installation', async () => {
   app = join(root, 'invalid-app');
   await write(join(app, 'workflows'), 'not a directory');
-  const result = await discoverWorkflows(project);
+  const result = await discoverWorkflows(project, { providers: providerRegistry });
   expect(result.errors).toHaveLength(1);
   await expect(discoverScriptsForCwd(project)).rejects.toThrow();
 });
@@ -271,7 +276,7 @@ test('a pack-root fixtures directory is not a bundled workflow in live or captur
     'fixture:\n  expect: completed\n  reached: [work]\n'
   );
   try {
-    const live = await discoverWorkflows(project);
+    const live = await discoverWorkflows(project, { providers: providerRegistry });
     expect(live.errors).toEqual([]);
     expect(live.workflows.some(entry => entry.workflow.name === 'clean.stubs')).toBe(false);
 
@@ -280,6 +285,7 @@ test('a pack-root fixtures directory is not a bundled workflow in live or captur
       captureRoot: join(root, 'fixture-capture'),
     });
     const captured = await discoverWorkflows(project, {
+      providers: providerRegistry,
       sourceRoots: capturedSourceRoots(capture.anchor),
     });
     expect(captured.errors).toEqual([]);

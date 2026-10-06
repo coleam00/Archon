@@ -114,6 +114,9 @@ export interface ProviderRegistration {
    * otherwise silently discard.
    */
   parseConfig: ProviderConfigParser;
+
+  /** Accepts vendor/model refs without an agent prefix; at most one registry entry owns them. */
+  ownsUnprefixedModelRefs?: true;
 }
 
 /**
@@ -140,4 +143,30 @@ export class InvalidProviderRunConfigError extends Error {
     super(message);
     this.name = 'InvalidProviderRunConfigError';
   }
+}
+
+/** No factory: engine instances must pass through the host's provider admission. */
+export type ProviderDescriptor = Omit<ProviderRegistration, 'factory'>;
+
+export interface ProviderRegistry {
+  get(id: string): ProviderDescriptor | undefined;
+  list(): readonly ProviderDescriptor[];
+}
+
+export function requireProvider(registry: ProviderRegistry, id: string): ProviderDescriptor {
+  const provider = registry.get(id);
+  if (!provider)
+    throw new UnknownProviderError(
+      id,
+      registry.list().map(entry => entry.id)
+    );
+  return provider;
+}
+
+export function parseProviderRunModel(provider: ProviderDescriptor, model: string): string {
+  const parsed = provider.parseConfig({ model }, 'run');
+  if (typeof parsed.model !== 'string' || parsed.model.trim().length === 0) {
+    throw new InvalidProviderRunConfigError('model', 'provider did not accept the model');
+  }
+  return parsed.model;
 }

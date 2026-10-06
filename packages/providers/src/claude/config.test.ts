@@ -1,36 +1,24 @@
 import { describe, expect, test } from 'bun:test';
 
-import { parseClaudeConfig, parseClaudeSettingSources } from './config';
+import { parseClaudeConfig, parseClaudeConfigStrict, type ClaudeProviderDefaults } from './config';
 
-describe('parseClaudeSettingSources', () => {
-  test('returns undefined for a non-array value', () => {
-    expect(parseClaudeSettingSources(undefined)).toEqual({ invalid: [] });
-    expect(parseClaudeSettingSources('project')).toEqual({ invalid: [] });
-  });
+// Exclude the opaque provider-config index signature, requiring every declared field.
+type CompleteClaudeConfig = {
+  [Key in keyof ClaudeProviderDefaults as string extends Key
+    ? never
+    : Key]-?: ClaudeProviderDefaults[Key];
+};
 
-  test('keeps recognized entries in order', () => {
-    expect(parseClaudeSettingSources(['user', 'project'])).toEqual({
-      value: ['user', 'project'],
-      invalid: [],
-    });
-  });
+describe('Claude config contract', () => {
+  test('strict and runtime parsers preserve every canonical Claude setting', () => {
+    const config = {
+      model: 'sonnet',
+      settingSources: ['project', 'user'],
+      claudeBinaryPath: '/configured/claude',
+    } satisfies CompleteClaudeConfig;
 
-  test('preserves an explicitly empty list', () => {
-    expect(parseClaudeSettingSources([])).toEqual({ value: [], invalid: [] });
-  });
-
-  test('reports unrecognized entries instead of dropping them silently', () => {
-    expect(parseClaudeSettingSources(['project', 'local'])).toEqual({
-      value: ['project'],
-      invalid: ['local'],
-    });
-  });
-
-  test('serializes a non-string entry so the caller can name it', () => {
-    expect(parseClaudeSettingSources([{ nope: 1 }])).toEqual({
-      value: [],
-      invalid: ['{"nope":1}'],
-    });
+    expect(parseClaudeConfigStrict(config)).toEqual(config);
+    expect(parseClaudeConfig(config)).toEqual(config);
   });
 });
 

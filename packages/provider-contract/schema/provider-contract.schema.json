@@ -333,11 +333,16 @@
               "type": "string"
             },
             "rawInput": {
-              "type": "object",
-              "propertyNames": {
-                "type": "string"
-              },
-              "additionalProperties": {}
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "object",
+                "array",
+                "null"
+              ],
+              "additionalProperties": true,
+              "$ref": "#/$defs/schema0"
             }
           },
           "required": [
@@ -831,7 +836,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema0"
+              "$ref": "#/$defs/schema1"
             }
           },
           "required": [
@@ -853,7 +858,7 @@
               "minLength": 1
             },
             "params": {
-              "$ref": "#/$defs/schema1"
+              "$ref": "#/$defs/schema2"
             }
           },
           "required": [
@@ -882,7 +887,7 @@
               ]
             },
             "result": {
-              "$ref": "#/$defs/schema2"
+              "$ref": "#/$defs/schema3"
             }
           },
           "required": [
@@ -930,7 +935,7 @@
                   "type": "string"
                 },
                 "data": {
-                  "$ref": "#/$defs/schema3"
+                  "$ref": "#/$defs/schema4"
                 }
               },
               "required": [
@@ -1126,7 +1131,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema4"
+            "$ref": "#/$defs/schema5"
           }
         },
         "ownsUnprefixedModelRefs": {
@@ -1209,7 +1214,7 @@
                 "type": "string"
               },
               "additionalProperties": {
-                "$ref": "#/$defs/schema5"
+                "$ref": "#/$defs/schema6"
               }
             }
           },
@@ -1244,7 +1249,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema5"
+            "$ref": "#/$defs/schema6"
           }
         },
         "assistantConfig": {
@@ -1253,7 +1258,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema5"
+            "$ref": "#/$defs/schema6"
           }
         },
         "execContext": {
@@ -1537,7 +1542,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema5"
+            "$ref": "#/$defs/schema6"
           }
         }
       }
@@ -1668,7 +1673,7 @@
             "type": "string"
           },
           "additionalProperties": {
-            "$ref": "#/$defs/schema5"
+            "$ref": "#/$defs/schema6"
           }
         },
         "cwd": {
@@ -1870,6 +1875,37 @@
           },
           "additionalProperties": {
             "$ref": "#/$defs/schema5"
+          }
+        }
+      ]
+    },
+    "schema6": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema6"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "type": "string"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/schema6"
           }
         }
       ]

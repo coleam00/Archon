@@ -5,7 +5,6 @@ discover:
   checks:
     - { name: "types", argv: ["bun", "-e", "console.log('types passed')"] }
     - { name: "tests", argv: ["bun", "-e", "console.log('tests passed')"] }
-  quarantine: []
   notes: "stub: the project's checks"
 fixture:
   expect: completed

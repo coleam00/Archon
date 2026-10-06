@@ -103,6 +103,10 @@ import { SlackAdapter } from './adapter';
 import type { SlackMessageEvent } from './types';
 
 describe('SlackAdapter', () => {
+  test('supports durable conversation project detachment', () => {
+    expect(new SlackAdapter('xoxb-fake', 'xapp-fake').capabilities.canDetachProject).toBe(true);
+  });
+
   beforeEach(() => {
     mockPostMessage.mockClear();
   });

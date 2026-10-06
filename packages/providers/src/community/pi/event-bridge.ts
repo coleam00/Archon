@@ -1,7 +1,11 @@
 import { createLogger } from '@archon/paths';
 import type { AgentSession, AgentSessionEvent } from '@earendil-works/pi-coding-agent';
 import type { AssistantMessage, StopReason, Usage } from '@earendil-works/pi-ai';
-import { truncateToolOutput, type ProviderStopReason } from '@archon/provider-contract';
+import {
+  toolCallSchema,
+  truncateToolOutput,
+  type ProviderStopReason,
+} from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
 import { unknownFailureResult } from '../../shared/failure';
@@ -310,8 +314,8 @@ export function mapPiEvent(event: AgentSessionEvent): MessageChunk[] {
         toolCallId: event.toolCallId,
         name: event.toolName,
       };
-      if (typeof event.args === 'object' && event.args !== null) {
-        call.rawInput = event.args as Record<string, unknown>;
+      if (event.args !== undefined) {
+        call.rawInput = toolCallSchema.shape.rawInput.parse(event.args);
       }
       return [call];
     }

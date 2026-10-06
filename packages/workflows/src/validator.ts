@@ -8,6 +8,7 @@
  * Lives in @archon/workflows (no @archon/core dependency) so both CLI and
  * REST API can use it.
  */
+import type { ProviderRegistry } from '@archon/provider-contract';
 
 import { join, resolve, isAbsolute } from 'path';
 import { access, readFile, stat } from 'fs/promises';
@@ -29,7 +30,6 @@ import {
 } from '@archon/paths/skills';
 import { compileOutputSchema } from './structured-output';
 import { findStrictSchemaIssues, isObjectSchemaNode } from '@archon/provider-contract';
-import { getProviderCapabilities, isRegisteredProvider } from '@archon/providers';
 
 /** Lazy-initialized logger */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -322,22 +322,24 @@ function resolveValidationProvider(
 }
 
 /**
- * Bundled workflow definitions, parsed once and cached (#2470). Used only by the
+ * Bundled workflow definitions admitted by the supplied registry, parsed once per
+ * registry and cached (#2470). Used only by the
  * bundled-set-only `workflow:` target check below — a bundled workflow's sub-run target
  * must itself resolve within the bundled set (a bundled workflow can't depend on a
  * project/global workflow that may not exist on another install). Resolution reuses the
  * runtime fuzzy `resolveWorkflowName` so a legal suffix/substring ref isn't reported broken.
  * parseWorkflow never expands includes, so `workflow.name` is the authoritative id here.
  */
-let bundledWorkflowDefsCache: WorkflowDefinition[] | undefined;
-function getBundledWorkflowDefs(): WorkflowDefinition[] {
-  if (bundledWorkflowDefsCache) return bundledWorkflowDefsCache;
+const bundledWorkflowDefsCache = new WeakMap<ProviderRegistry, WorkflowDefinition[]>();
+function getBundledWorkflowDefs(providers: ProviderRegistry): WorkflowDefinition[] {
+  const cached = bundledWorkflowDefsCache.get(providers);
+  if (cached) return cached;
   const defs: WorkflowDefinition[] = [];
   for (const [filename, content] of Object.entries(BUNDLED_WORKFLOWS)) {
-    const { workflow } = parseWorkflow(content, filename);
+    const { workflow } = parseWorkflow(content, filename, providers);
     if (workflow) defs.push(workflow);
   }
-  bundledWorkflowDefsCache = defs;
+  bundledWorkflowDefsCache.set(providers, defs);
   return defs;
 }
 
@@ -352,6 +354,7 @@ export async function validateWorkflowResources(
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   },
   cwd: string,
+  providers: ProviderRegistry,
   config?: ValidationConfig,
   defaultProvider?: string
 ): Promise<ValidationIssue[]> {
@@ -478,8 +481,7 @@ export async function validateWorkflowResources(
       });
     }
 
-    const providerCaps =
-      provider && isRegisteredProvider(provider) ? getProviderCapabilities(provider) : undefined;
+    const providerCaps = provider ? providers.get(provider)?.capabilities : undefined;
 
     // --- Strict-schema compatibility (#2945, #3557) ---
     // A schema with a bare object or incomplete 'required' coverage is rejected
@@ -558,7 +560,7 @@ export async function validateWorkflowResources(
       let resolvedTarget: WorkflowDefinition | undefined;
       let ambiguityMessage: string | undefined;
       try {
-        resolvedTarget = resolveWorkflowName(node.workflow, getBundledWorkflowDefs());
+        resolvedTarget = resolveWorkflowName(node.workflow, getBundledWorkflowDefs(providers));
       } catch (err) {
         ambiguityMessage = (err as Error).message;
       }
