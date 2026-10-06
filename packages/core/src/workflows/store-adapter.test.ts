@@ -2,8 +2,7 @@
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { DagResumeSnapshot, IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
-import type { ProviderRegistry } from '@archon/provider-contract';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
 import type { StoredCredential } from '../db/user-provider-key-store';
 import type { ResolvedCredential } from '../credentials/delivery';
 
@@ -99,7 +98,6 @@ mock.module('@archon/providers', () => ({
   normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,
   getAgentProvider: mock(() => ({})),
   getRegisteredProviders: mock(() => []),
-  providerRegistry: { get: () => undefined, list: () => [] },
   getRegistration: mock(
     (): { parseConfig: (raw: Record<string, unknown>) => Record<string, unknown> } => ({
       parseConfig: (raw: Record<string, unknown>): Record<string, unknown> => raw,

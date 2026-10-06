@@ -36,6 +36,19 @@ test('discovers suffixes and dot directories, partitions exact directives, and i
   ]);
 });
 
+test('a direct mock.module() call without the directive fails discovery', () => {
+  const root = fixture();
+  const mocking = "mock.module('./value', () => ({}));\n";
+  write(root, 'src/marked.test.ts', `${TEST_ISOLATION_DIRECTIVE}\n${mocking}`);
+  write(root, 'src/plain.test.ts');
+  expect(resolvePackageTestGroups(root, {})).toEqual([
+    ['src/marked.test.ts'],
+    ['src/plain.test.ts'],
+  ]);
+  write(root, 'src/unmarked.test.ts', mocking);
+  expect(() => resolvePackageTestGroups(root, {})).toThrow('src/unmarked.test.ts');
+});
+
 test('legacy groups retain their order and malformed declarations fail', () => {
   const root = fixture();
   const groups = [['src/z.test.ts', 'src/a.test.ts'], ['src/nested/']];

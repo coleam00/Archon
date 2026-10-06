@@ -42,12 +42,20 @@ export function resolvePackageTestGroups(
   if (files.length === 0) throw new Error('Test discovery found no tests under src');
   const isolated: string[][] = [];
   const shared: string[] = [];
+  const unmarkedMocks: string[] = [];
   for (const file of files) {
-    const firstLine = readFileSync(join(packageDirectory, file), 'utf8')
-      .replace(/^\uFEFF/, '')
-      .split(/\r?\n/, 1)[0];
-    if (firstLine === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
+    const source = readFileSync(join(packageDirectory, file), 'utf8').replace(/^\uFEFF/, '');
+    if (source.split(/\r?\n/, 1)[0] === TEST_ISOLATION_DIRECTIVE) isolated.push([file]);
+    else if (source.includes('mock.module(')) unmarkedMocks.push(file);
     else shared.push(file);
+  }
+  // A direct mock.module() call in the shared process would leak into every other
+  // unmarked file. Mocks reached through a helper cannot be seen here; those files
+  // still need the directive by hand.
+  if (unmarkedMocks.length > 0) {
+    throw new Error(
+      `These tests call mock.module() but do not start with "${TEST_ISOLATION_DIRECTIVE}": ${unmarkedMocks.join(', ')}`
+    );
   }
   return shared.length > 0 ? [...isolated, shared] : isolated;
 }
