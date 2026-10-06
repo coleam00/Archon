@@ -218,8 +218,16 @@ describe('the forge opt-in delivers through plugin operations', () => {
 });
 
 for (const other of [false, true]) {
-  it(`publishes triage and marker-idempotent discoveries through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
+  it(`preserves inherited-property labels and publishes marker-idempotent discoveries through ${other ? 'a non-GitHub tracker' : 'GitHub'}`, () => {
     const host = forgeHost(other);
+    const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
+    const seeded = JSON.parse(readFileSync(host.statePath, 'utf8')) as {
+      issues: { labels: (string | { name: string })[] }[];
+      labels: { name: string; color: string; description: string }[];
+    };
+    seeded.issues[0].labels.push(...operatorLabels.map(name => (other ? name : { name })));
+    seeded.labels.push(...operatorLabels.map(name => ({ name, color: 'abcdef', description: '' })));
+    writeFileSync(host.statePath, JSON.stringify(seeded));
     const repo = other ? { host: 'tracker.example', path: 'group/team/project' } : PR.repo;
     const inputs = {
       INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
@@ -231,7 +239,7 @@ for (const other of [false, true]) {
       INPUTS_SUMMARY: 'Ready',
       INPUTS_BLOCKED_REASON: '',
       INPUTS_BLOCKED_BY: '[]',
-      INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent']),
+      INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
       INPUTS_PROPOSED_EDITS: '{"title":"","body":""}',
       INPUTS_REPORT: '{"path":"triage.md"}',
     };
@@ -241,7 +249,7 @@ for (const other of [false, true]) {
     expect(triage.gh).toEqual([]);
     expect(JSON.parse(triage.stdout)).toMatchObject({
       published: true,
-      labels: ['archon-ready', 'archon-small', 'area'],
+      labels: ['archon-ready', 'archon-small', 'area', 'constructor'],
     });
     const record = {
       title: 'Proved discovery',
@@ -275,7 +283,9 @@ for (const other of [false, true]) {
     const labels = state.issues[0].labels.map(label =>
       typeof label === 'string' ? label : label.name
     );
-    expect(labels.sort()).toEqual(['archon-ready', 'archon-small', 'area', 'operator']);
+    expect(labels.sort()).toEqual(
+      ['archon-ready', 'archon-small', 'area', 'operator', ...operatorLabels].sort()
+    );
     expect(state.labels.some(label => label.name === 'nonexistent')).toBe(false);
     const writes = other
       ? state.writes?.filter(op => op === 'workitem.create')

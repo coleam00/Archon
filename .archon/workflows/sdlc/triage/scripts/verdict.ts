@@ -139,7 +139,7 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
     }
     const intended = [...new Set([...wanted, ...area.filter(name => present.has(name))])].sort();
     const labels = [
-      ...new Set([...current.filter(name => !(name in PACK_LABELS)), ...intended]),
+      ...new Set([...current.filter(name => !Object.hasOwn(PACK_LABELS, name)), ...intended]),
     ].sort();
     const result = invokeForge('workitem.labels.set', { ref: item, labels });
     const observedLabels = result?.labels;
@@ -172,7 +172,9 @@ function apply(item: Item, wanted: string[], area: string[]): string[] {
     }
   }
   const areaPresent = area.filter(name => present.has(name));
-  const stale = [...current].filter(name => name in PACK_LABELS && !wanted.includes(name)).sort();
+  const stale = [...current]
+    .filter(name => Object.hasOwn(PACK_LABELS, name) && !wanted.includes(name))
+    .sort();
   const toAdd = [...new Set([...wanted, ...areaPresent])].filter(name => !current.has(name)).sort();
   // Narrow add and remove operations, never a whole-set write, so labels an
   // operator adds concurrently survive.
@@ -270,7 +272,7 @@ function main(): void {
     invalid('area_labels must be label names');
     return;
   }
-  if (area.some(name => name in PACK_LABELS)) {
+  if (area.some(name => Object.hasOwn(PACK_LABELS, name))) {
     // The state and size labels are derived below; a pack label smuggled in as an
     // area label would be added beside the derived state or removed as stale.
     invalid('area_labels may not name a pack label; those derive from the verdict');

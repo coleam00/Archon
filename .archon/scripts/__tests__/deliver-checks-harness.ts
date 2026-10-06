@@ -53,6 +53,8 @@ export interface GhPr {
 }
 
 export interface GhFake {
+  readonly issueLabels?: readonly string[];
+  readonly repositoryLabels?: readonly string[];
   /**
    * What `gh pr checks --json` knows about each check; the fake prints only the
    * fields the reader requests. 'fail' prints no document and exits 1.
@@ -125,8 +127,8 @@ const pr = {
 let comments = (fake.comments ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
-const labels = new Set(['operator', 'archon-blocked', 'area']);
-let issueLabels = ['operator', 'archon-blocked'];
+const labels = new Set(fake.repositoryLabels ?? ['operator', 'archon-blocked', 'area']);
+let issueLabels = [...(fake.issueLabels ?? ['operator', 'archon-blocked'])];
 let issueTitle = '';
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return original(argv, settings);

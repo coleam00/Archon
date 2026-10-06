@@ -145,3 +145,21 @@ test('default gh discovery retains URL even when read-back disagrees', () => {
     JSON.parse(readFileSync(join(run.artifacts, 'discoveries.json'), 'utf8'))[0].issue
   ).toContain('/issues/7');
 });
+
+test('default triage preserves inherited-property labels and accepts them as area labels', () => {
+  const operatorLabels = Object.getOwnPropertyNames(Object.prototype);
+  for (const area of [[], ['constructor']]) {
+    const run = runPackScript('triage/scripts/verdict', {
+      inputs: { ...inputs, INPUTS_AREA_LABELS: JSON.stringify(area) },
+      gh: {
+        issueLabels: ['archon-blocked', ...operatorLabels],
+        repositoryLabels: ['archon-blocked', ...operatorLabels],
+      },
+    });
+    expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
+    expect(JSON.parse(run.stdout).published).toBe(true);
+    const edit = run.gh.find(call => call.startsWith('issue edit'));
+    expect(edit).toContain('--remove-label archon-blocked');
+    for (const name of operatorLabels) expect(edit).not.toContain(`--remove-label ${name}`);
+  }
+});
