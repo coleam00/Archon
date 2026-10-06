@@ -3,6 +3,7 @@ import {
   contentDigest,
   forgeRequestSchema,
   forgeResponseSchema,
+  type ForgeWorkItemRecord,
 } from '../../../../packages/forge/src/operations';
 const metadata = {
   protocol: 1,
@@ -35,14 +36,7 @@ state.operations.push(request.op);
 const repo = 'repo' in request ? request.repo : 'ref' in request ? request.ref.repo : undefined;
 if (repo?.host !== 'tracker.example' || repo.path !== 'group/team/project')
   throw new Error('unexpected qualified target');
-const item = (
-  number: number
-): {
-  ref: { repo: { host: string; path: string }; number: number };
-  kind: 'issue';
-  url: string;
-  state: 'open';
-} => ({
+const item = (number: number): ForgeWorkItemRecord => ({
   ref: { repo, number },
   kind: 'issue',
   url: `https://${repo.host}/${repo.path}/items/${String(number)}`,
