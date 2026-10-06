@@ -2452,6 +2452,21 @@ describe('abandonResumableRunsForConversation', () => {
     );
   });
 
+  test('authorizes only the runs it would abandon, so an unidentified reset of no runs proceeds', async () => {
+    const resetLocked = (locked: WorkflowRun[]) => {
+      mockCancelResumableRunsForConversation.mockImplementationOnce(async (_id, authorize) => {
+        authorize?.(locked);
+        return locked;
+      });
+      return abandonResumableRunsForConversation('conv-1', { kind: 'unidentified' });
+    };
+
+    expect((await resetLocked([])).abandoned).toBe(0);
+    await expect(resetLocked([makePausedRun({ user_id: 'starter' })])).rejects.toBeInstanceOf(
+      RunActionForbiddenError
+    );
+  });
+
   test('counts the rows cancelled by the conversation-scoped mutation', async () => {
     mockCancelResumableRunsForConversation.mockResolvedValueOnce([
       makePausedRun({ id: 'run-a' }),

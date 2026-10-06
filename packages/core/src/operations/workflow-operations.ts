@@ -1325,8 +1325,6 @@ export function createWorkflowOperations({
   ): Promise<AbandonConversationRunsResult> {
     const role = actor.kind === 'user' ? await getUserRole(actor.userId) : undefined;
     const runs = await store.cancelResumableRunsForConversation(conversationId, runs => {
-      if (actor.kind === 'unidentified' && runs.length === 0)
-        throw new RunActionForbiddenError('abandon', undefined);
       for (const run of runs) assertAuthorized(run, actor, 'abandon', role);
     });
     let blockedParentRunId: string | null = null;
