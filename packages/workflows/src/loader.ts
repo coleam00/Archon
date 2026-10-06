@@ -433,8 +433,9 @@ function collectConditionalJoinWarnings(
       warnings.push(
         `Node '${node.id}': its only dependency '${dependency}' has a 'when', and ` +
           "'none_failed_min_one_success' needs a successful dependency, so this node skips " +
-          `whenever '${dependency}' is condition-skipped. Use 'all_done' to run after an ` +
-          'optional gate. See /guides/authoring-workflows/#trigger_rule-values.'
+          `whenever '${dependency}' is condition-skipped. To run after an optional gate, also ` +
+          "depend on an unconditional node that runs before it, or use 'all_done' to run even after " +
+          'a failure. See /guides/authoring-workflows/#trigger_rule-values.'
       );
     }
     if (!isIncludeDirective(node) && isLoopGroupNode(node)) {

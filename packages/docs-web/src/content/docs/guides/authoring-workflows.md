@@ -439,7 +439,9 @@ loader warns about this shape, naming the node; both `archon validate workflows`
 and run loading report the warning. Joins over several conditional dependencies
 are not flagged, since they are usually branches where one always runs.
 
-To run after an optional gate, use `all_done`:
+To run after an optional gate, also depend on an unconditional node that runs before it.
+That node's success satisfies the success requirement when the gate is
+condition-skipped, while a failed gate still blocks the join:
 
 ```yaml
 name: optional-gate
@@ -454,16 +456,12 @@ nodes:
     approval:
       message: "Review found issues. Approve to continue."
   - id: next
-    depends_on: [gate]
-    trigger_rule: all_done
+    depends_on: [review, gate]
+    trigger_rule: none_failed_min_one_success
     bash: echo continue
 ```
 
-`all_done` also permits running after a failed dependency. If the downstream action
-must not run after a failure, add a `when:` based on a structured decision from a
-successful node. Do not read the failed producer's output in that condition: it
-fails the downstream node rather than evaluating the failed output. For a more
-complex decision, compute it in a script node and gate on its structured output.
+Use `all_done` instead only when the next step should run even after the gate fails.
 
 `all_success`, `one_success`, and `all_done` keep their existing behavior.
 `if_skipped` supplies a value for a skipped output binding; it does not make a
