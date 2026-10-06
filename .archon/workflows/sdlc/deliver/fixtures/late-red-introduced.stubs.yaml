@@ -63,7 +63,7 @@ validate__run: { status: green, summary: "stub: full gate green" }
 ci-probe: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-verdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
 ci-rerun: { requested: false, reason: "stub: no re-run warranted" }
-ci-reverdict: '{"state":"red","detail":"test (windows-latest) (fail)"}'
+ci-reverdict: '{"state":"red","detail":"test (windows-latest) (fail)","cancelled":[]}'
 ci-changed: '{"files":["packages/core/src/feature.ts","packages/core/src/feature.test.ts"]}'
 ci-classify:
   failing_checks: ["test (windows-latest)"]

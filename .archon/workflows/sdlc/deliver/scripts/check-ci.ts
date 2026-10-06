@@ -15,7 +15,9 @@
  *              maintainer's approval, which the forge reports structurally (an
  *              `action_required` conclusion) — named, never blocked on, never green
  *   red        concluded with non-green checks, named. A cancelled or unrecognized
- *              check is not a green check.
+ *              check is not a green check. `cancelled` names the checks that
+ *              concluded cancelled: they never produced a result, which ci-cause
+ *              weighs structurally rather than from the detail's prose.
  *
  * Red is a report, never a verdict: the deliver tail's convergence pass decides what
  * it means. A failed read refuses: it is never evidence that no CI exists.
@@ -54,7 +56,8 @@ function probe(): void {
     const unknown = units.filter(unit => unit.state === 'unknown');
     if (red.length > 0) parts.push(`non-green checks${at}: ${describeUnits(red)}`);
     if (unknown.length > 0) parts.push(`checks have unknown state${at}: ${describeUnits(unknown)}`);
-    emit({ state: 'red', detail: parts.join('; ') });
+    const cancelled = red.filter(unit => unit.result === 'cancelled').map(unit => unit.unit.name);
+    emit({ state: 'red', detail: parts.join('; '), cancelled });
     return;
   }
   const missing = missingChecks(units, expected);

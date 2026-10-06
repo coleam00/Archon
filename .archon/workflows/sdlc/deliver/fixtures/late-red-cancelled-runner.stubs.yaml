@@ -1,7 +1,9 @@
-# Dry-run fixture: CI concludes red but its logs are out of this run's reach, so
-# the classifier declares the evidence unavailable. Nothing attributes the failure
-# to the branch, so no fix runs on a guess: the gate passes the red with that
-# reason and the run pauses for the operator.
+# Dry-run fixture: CI never ran the change. Two jobs are cancelled because no
+# hosted runner was acquired, everything downstream is skipped, and only the
+# summary job reports failure. The re-run agent re-runs them once, CI cancels them
+# again, and the classifier says environment. That is no code red: no fix runs,
+# the pull request goes back to draft, and the run pauses for the operator to
+# re-run the checks and resume.
 impl__implement:
   done: true
   green: true
@@ -52,20 +54,25 @@ review__publish:
   discoveries: []
 validate__discover: { checks: [{ name: "project gate", argv: ["stub-gate"], group: "gate" }], notes: "stub: the project's aggregate gate" }
 validate__run: { status: green, summary: "stub: full gate green" }
-ci-probe: '{"state":"red","detail":"ci/external (failure)"}'
-ci-verdict: '{"state":"red","detail":"ci/external (failure)"}'
-ci-rerun: { requested: false, reason: "stub: the external CI cannot be re-run from here" }
-ci-reverdict: '{"state":"red","detail":"ci/external (failure)","cancelled":[]}'
+ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
+ci-verdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
+ci-rerun: { requested: true, reason: "stub: two checks were cancelled before a runner was acquired; re-ran the failed and cancelled jobs" }
+# CI cancels them again: the re-run reproduced no failure.
+rerun-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
+ci-reverdict: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
 ci-changed: '{"files":["packages/core/src/feature.ts"]}'
+# The worst claim a classifier could pair with it: a re-run that "fails". The real
+# ci-cause still keeps it environment, because a cancelled check never ran and no
+# failure points at a file.
 ci-classify:
-  failing_checks: ["ci/external"]
+  failing_checks: ["changes", "workflow-fixtures", "Test Suite"]
   failing_paths: []
-  base: unknown
-  rerun: not_rerun
-  claim: unavailable
-  evidence: "stub: the external CI's logs need credentials this run does not have"
-fix-ci-probe: '{"state":"red","detail":"ci/external (failure)"}'
-attention-ci-probe: '{"state":"red","detail":"ci/external (failure)"}'
+  base: passes
+  rerun: fails
+  claim: environment
+  evidence: "stub: changes and workflow-fixtures were cancelled when no hosted runner was acquired, every downstream job was skipped, and Test Suite failed only because of them; the re-run was cancelled the same way"
+fix-ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
+attention-ci-probe: '{"state":"red","detail":"non-green checks: changes (cancelled), workflow-fixtures (cancelled), Test Suite (failure)","cancelled":["changes","workflow-fixtures"]}'
 file-discoveries: '{"records":[]}'
 match-discoveries: { matches: [] }
 fork: '{"fork":true}'
@@ -74,7 +81,7 @@ mark-draft: "mark-draft: the pull request is a draft while CI stays red"
 publish-pr-body: {}
 fixture:
   expect: paused
-  reached: [ci-classify, ci-cause, gate-ci-fix, ci-attention-route, mark-draft, attention-ci-probe]
+  reached: [ci-rerun, rerun-probe, ci-classify, ci-cause, gate-ci-fix, ci-attention-route, mark-draft, attention-ci-probe]
   resolved-text-contains:
-    attention-ci-pause: "after Archon classified the failure as unavailable"
+    attention-ci-pause: "after Archon classified the failure as environment"
 exec-code: true

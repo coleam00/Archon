@@ -590,6 +590,7 @@ nodes:
             properties:
               state: { type: string, enum: [pending, concluded, red] }
               detail: { type: string }
+              cancelled: { type: array, items: { type: string } }
             required: [state, detail]
         - id: ci-pause
           wait:
@@ -682,8 +683,9 @@ nodes:
   # What caused a concluded red is decided before anyone fixes or waits on it.
   # An agent reads the logs and reports where each failure lives, the base
   # commit's result, and the re-run's; ci-cause holds its claim to that evidence
-  # against the changed files git reports. A failure in a file the PR changes is
-  # never inherited, so it always reaches the correction pass.
+  # against the changed files git reports and the checks the probe saw cancelled.
+  # A failure in a file the PR changes is never inherited, so it always reaches
+  # the correction pass.
   - id: ci-changed
     script: changed-files
     runtime: bun
@@ -721,10 +723,11 @@ nodes:
   - id: ci-cause
     script: ci-cause
     runtime: bun
-    depends_on: [ci-changed, ci-classify]
+    depends_on: [ci-reverdict, ci-changed, ci-classify]
     output_type: ci-cause
     with:
       changed: "$ci-changed.output"
+      cancelled: "$ci-reverdict.output.cancelled"
       failing_checks: "$ci-classify.output.failing_checks"
       failing_paths: "$ci-classify.output.failing_paths"
       base: "$ci-classify.output.base"
