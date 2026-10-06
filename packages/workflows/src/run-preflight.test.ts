@@ -1,8 +1,12 @@
 import { providerRegistry } from '@archon/providers';
 import { beforeAll, describe, expect, mock, test } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
-import type { CredentialStatus } from '@archon/provider-contract';
-import type { IAgentProvider } from '@archon/providers/types';
+import type { CredentialStatus, ProviderDefaultsMap } from '@archon/provider-contract';
+import type {
+  ClaudeProviderDefaults,
+  CodexProviderDefaults,
+  IAgentProvider,
+} from '@archon/providers/types';
 import type { WorkflowConfig } from './deps';
 import type { WorkflowRun } from './schemas';
 import { makeTestResolvedWorkflow, makeTestComposedWorkflow, makeTestWorkflow } from './test-utils';
@@ -295,6 +299,13 @@ function savedRun(metadata: Record<string, unknown>): WorkflowRun {
   };
 }
 
+/** Loaded config carries provider-native settings beyond WorkflowConfig's narrow view. */
+function loadedAssistants(
+  assistants: { claude: ClaudeProviderDefaults; codex: CodexProviderDefaults } & ProviderDefaultsMap
+): WorkflowConfig['assistants'] {
+  return assistants;
+}
+
 test('continuation retains launch AI values while native settings and environment stay live', async () => {
   const { deps } = fixture();
   const workflow = makeTestResolvedWorkflow({
@@ -303,7 +314,7 @@ test('continuation retains launch AI values while native settings and environmen
   });
   deps.loadConfig.mockResolvedValue({
     ...config,
-    assistants: {
+    assistants: loadedAssistants({
       claude: { model: 'sonnet', settingSources: ['user'], claudeBinaryPath: '/launch/claude' },
       codex: {
         model: 'gpt-launch',
@@ -322,7 +333,7 @@ test('continuation retains launch AI values while native settings and environmen
         logLevel: 'error',
       },
       pi: { model: 'openai/native', env: { TOKEN: 'launch-secret' } },
-    },
+    }),
     tiers: { small: { provider: 'claude', model: 'haiku' } },
     aliases: { '@custom': { provider: 'claude', model: 'sonnet' } },
     envVars: { TOKEN: 'launch-secret' },
@@ -333,7 +344,7 @@ test('continuation retains launch AI values while native settings and environmen
   deps.loadConfig.mockResolvedValue({
     ...config,
     assistant: 'codex',
-    assistants: {
+    assistants: loadedAssistants({
       claude: { model: 'opus', settingSources: ['project'], claudeBinaryPath: '/live/claude' },
       codex: {
         model: 'gpt-live',
@@ -352,7 +363,7 @@ test('continuation retains launch AI values while native settings and environmen
         logLevel: 'debug',
       },
       pi: { env: { TOKEN: 'live-secret' } },
-    },
+    }),
     aliases: { '@custom': { provider: 'codex', model: 'gpt' } },
     envVars: { TOKEN: 'live-secret' },
   });
@@ -362,12 +373,15 @@ test('continuation retains launch AI values while native settings and environmen
   expect(resumed.aiProfile).toEqual(launch.aiProfile);
   expect(resumed.scope).toEqual(launch.scope);
   expect(resumed.config.assistant).toBe('claude');
-  expect(resumed.config.assistants.claude).toEqual({
+  // Widen to the providers' own shapes: native settings ride beyond WorkflowConfig's view.
+  const claude: ClaudeProviderDefaults = resumed.config.assistants.claude;
+  const codex: CodexProviderDefaults = resumed.config.assistants.codex;
+  expect(claude).toEqual({
     model: 'sonnet',
     settingSources: ['project'],
     claudeBinaryPath: '/live/claude',
   });
-  expect(resumed.config.assistants.codex).toEqual({
+  expect(codex).toEqual({
     model: 'gpt-launch',
     modelReasoningEffort: 'high',
     webSearchMode: 'live',
