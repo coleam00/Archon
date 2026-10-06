@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { IAgentProvider } from './agent-provider';
 import type { ProviderCapabilities } from './capabilities';
 
@@ -43,14 +44,16 @@ export type CredentialKind = (typeof CREDENTIAL_KINDS)[number];
  * OpenCode). Delivery (vendor → env vars / files) is owned by
  * @archon/core/credentials — this spec is only the consumption matrix.
  */
-export interface CredentialSpec {
-  /** Canonical vendor id — used as the storage key in user_provider_keys. */
-  vendor: string;
-  /** Human-readable vendor name for UI display (e.g. 'OpenRouter'). */
-  displayName: string;
-  /** Which connection kinds this vendor supports for this agent (at least one). */
-  kinds: [CredentialKind, ...CredentialKind[]];
-}
+export const credentialSpecSchema = z.object({
+  vendor: z.string().min(1),
+  displayName: z.string().min(1),
+  // Zod needs the explicit length check to emit minItems for a tuple with rest.
+  kinds: z
+    .tuple([z.enum(CREDENTIAL_KINDS)])
+    .rest(z.enum(CREDENTIAL_KINDS))
+    .check(z.minLength(1)),
+});
+export type CredentialSpec = z.infer<typeof credentialSpecSchema>;
 
 /**
  * An agent's credential catalog. `static` lists the vendors up front

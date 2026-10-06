@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: a folder project written by `registerFolder` is found again
  * by the lookups the CLI pre-dispatch gate and `archon doctor` use — against a
@@ -11,7 +12,7 @@
  * runner's `%TEMP%` is itself an 8.3 short path (`C:\Users\RUNNER~1\…`), so
  * these assertions run directly over the condition that produced the bug.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, which conflicts with the fakes other files
  * in this package install.
  */
@@ -36,7 +37,7 @@ mock.module('../db/connection', () => ({
   getDatabaseType: () => 'sqlite',
 }));
 
-const { registerFolder } = await import('./clone');
+const { registerFolder } = await import('./sql-registration');
 const { findCodebaseByDefaultCwd, findCodebaseByPathPrefix } = await import('../db/codebases');
 const { canonicalizeProjectPath } = await import('@archon/paths');
 

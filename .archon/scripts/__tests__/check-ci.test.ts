@@ -100,7 +100,10 @@ describe('check-ci on the default gh source', () => {
   });
 
   it('refuses an unrecognized check source instead of guessing one', () => {
-    const result = probe({ source: 'gitlab', gh: { checks: [{ name: 'b', state: 'SUCCESS', bucket: 'pass' }] } });
+    const result = probe({
+      source: 'gitlab',
+      gh: { checks: [{ name: 'b', state: 'SUCCESS', bucket: 'pass' }] },
+    });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('ARCHON_SDLC_FORGE must be "gh" (the default) or "forge"');
     expect(result.gh).toEqual([]);
@@ -141,7 +144,10 @@ describe('check-ci on the opt-in forge source', () => {
   });
 
   it('keeps gated explicit without calling it green', () => {
-    const result = probe({ source: 'forge', forge: forge(forgeResponse([{ name: 'build', state: 'gated' }])) });
+    const result = probe({
+      source: 'forge',
+      forge: forge(forgeResponse([{ name: 'build', state: 'gated' }])),
+    });
     expect(JSON.parse(result.stdout)).toEqual({
       state: 'concluded',
       detail: 'checks gated at deadbeef: build (failure)',
@@ -180,4 +186,28 @@ describe('check-ci on the opt-in forge source', () => {
     );
     expect(result.gh).toEqual([]);
   });
+});
+
+it.each([[[]], [[{ name: 'green', state: 'green' as const }]]])(
+  'reports explicit approval without gh or registration grace: %j',
+  units => {
+    const result = probe({
+      source: 'forge',
+      forge: { kind: 'fake', response: forgeResponse(units, { approvalPending: true }) },
+    });
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("CI needs a maintainer's approval at deadbeef");
+    expect(result.forge).toHaveLength(1);
+    expect(result.gh).toEqual([]);
+  }
+);
+
+it('does not infer an approval requirement from an empty forge observation after grace', () => {
+  const result = probe({
+    source: 'forge',
+    forge: { kind: 'fake', response: forgeResponse([], { approvalPending: false }) },
+  });
+  expect(result.stdout).toContain('no approval requirement was established');
+  expect(result.stdout).not.toContain('most likely');
+  expect(result.gh).toEqual([]);
 });

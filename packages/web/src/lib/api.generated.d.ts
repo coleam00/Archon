@@ -3647,6 +3647,7 @@ export interface components {
                 | 'transient'
                 | 'unknown'
                 | 'rate_limited'
+                | 'overloaded'
                 | 'timeout'
                 | 'exec_failed'
                 | 'output_contract'
@@ -3662,6 +3663,7 @@ export interface components {
                   | 'budget_exceeded'
                   | 'misconfigured'
                   | 'rate_limited'
+                  | 'overloaded'
                   | 'transient'
                   | 'unknown';
                 retryAfterMs?: number;
@@ -4851,6 +4853,7 @@ export interface components {
                   | 'transient'
                   | 'unknown'
                   | 'rate_limited'
+                  | 'overloaded'
                   | 'timeout'
                   | 'exec_failed'
                   | 'output_contract'
@@ -4866,6 +4869,7 @@ export interface components {
                     | 'budget_exceeded'
                     | 'misconfigured'
                     | 'rate_limited'
+                    | 'overloaded'
                     | 'transient'
                     | 'unknown';
                   retryAfterMs?: number;

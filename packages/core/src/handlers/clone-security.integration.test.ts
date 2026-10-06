@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import { access, mkdir, mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -78,7 +79,7 @@ mock.module('../utils/commands', () => ({
   findCommandFiles: mock(async () => []),
 }));
 
-const { cloneRepository } = await import('./clone');
+const { cloneRepository } = await import('./sql-registration');
 const trackTempRoot = trackTempRoots();
 
 const savedEnv = {

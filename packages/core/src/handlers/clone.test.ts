@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Unit tests for clone.ts (cloneRepository, registerRepository)
  *
@@ -125,7 +126,7 @@ mock.module('../utils/commands', () => ({
 }));
 
 // ── Import module under test AFTER mocks are registered ────────────────────
-import { cloneRepository, registerRepository, registerFolder } from './clone';
+import { cloneRepository, registerRepository, registerFolder } from './sql-registration';
 
 // ── Spies for fs/promises and @archon/git ──────────────────────────────────
 let spyFsAccess: ReturnType<typeof spyOn>;

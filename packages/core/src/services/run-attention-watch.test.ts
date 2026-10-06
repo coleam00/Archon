@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { RunLiveOwnerWatchEvent, RunLiveOwnerWatchResult } from './run-live-owner';

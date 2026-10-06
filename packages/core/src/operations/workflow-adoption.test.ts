@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Tests for between-run continuation adoption resolution (#2747).
  *

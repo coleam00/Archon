@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { buildAiProfile } from '@archon/workflows/model-validation';
 import {
   providerRegistry,

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { test, mock, expect } from 'bun:test';
 import { canonicalizeProjectPath } from '@archon/paths';
 import { createMockPlatform } from '../test/mocks/platform';
@@ -32,7 +33,8 @@ test('SQLite rejects legacy paths and preserves registration identity on explici
     await handleMessage(
       platform,
       'legacy-repair',
-      `/register-project ${quoteCommandArg(project.name)} ${quoteCommandArg(replacement)}`
+      `/register-project ${quoteCommandArg(project.name)} ${quoteCommandArg(replacement)}`,
+      { actor: { kind: 'operator' } }
     );
     expect(platform.sendMessage.mock.calls[0]?.[1]).toContain('re-registered successfully');
     expect(await codebases.getCodebase(project.id)).toMatchObject({

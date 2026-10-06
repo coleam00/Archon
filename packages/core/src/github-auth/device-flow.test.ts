@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import {
   startDeviceFlow,

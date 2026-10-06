@@ -28,6 +28,7 @@
     "./dry-run": "./src/dry-run.ts",
     "./graph-plan": "./src/graph-plan.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
+    "./utils/github-token-policy": "./src/utils/github-token-policy.ts",
     "./utils/workflow-requirements": "./src/utils/workflow-requirements.ts",
     "./workflow-inputs": "./src/workflow-inputs.ts",
     "./fixture-runner": "./src/fixture-runner.ts",

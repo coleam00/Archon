@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'bun:test';
 import { registerBuiltinProviders, registerCommunityProviders } from '@archon/providers';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';

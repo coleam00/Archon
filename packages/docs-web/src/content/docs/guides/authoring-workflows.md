@@ -432,6 +432,37 @@ across dependency chains and includes. The skipped join retains the original fai
 node in its `upstream_failed` cause. Condition skips and optional timeout
 skips (`on_timeout: skip`) remain admissible when another dependency succeeds.
 
+A dependency skipped by its own `when:` provides neither a success nor a failure.
+When a `none_failed_min_one_success` node has a single dependency and that
+dependency has a `when:`, the node skips every time the condition is false. The
+loader warns about this shape, naming the node; both `archon validate workflows`
+and run loading report the warning. Joins over several conditional dependencies
+are not flagged, since they are usually branches where one always runs.
+
+To run after an optional gate, also depend on an unconditional node that runs before it.
+That node's success satisfies the success requirement when the gate is
+condition-skipped, while a failed gate still blocks the join:
+
+```yaml
+name: optional-gate
+description: Run the next step whether the optional gate ran or skipped
+interactive: true
+nodes:
+  - id: review
+    bash: echo ready
+  - id: gate
+    depends_on: [review]
+    when: "$review.output != 'ready'"
+    approval:
+      message: "Review found issues. Approve to continue."
+  - id: next
+    depends_on: [review, gate]
+    trigger_rule: none_failed_min_one_success
+    bash: echo continue
+```
+
+Use `all_done` instead only when the next step should run even after the gate fails.
+
 `all_success`, `one_success`, and `all_done` keep their existing behavior.
 `if_skipped` supplies a value for a skipped output binding; it does not make a
 blocked node eligible to run or permit binding a failed output.
@@ -838,7 +869,7 @@ nodes:
 |-------|------|--------------------|-------------|-------------|
 | `max_attempts` | number | `2` | 1–5 | Number of retry attempts (not including the initial attempt). `1` = one retry (2 total attempts). No default on `bash:`/`script:` — omitting `retry:` means a single attempt |
 | `delay_ms` | number | `3000` | 1000–60000 | Base delay in ms before the first retry. Doubles each attempt (exponential backoff) |
-| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = transient and rate-limited failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
+| `on_error` | `'transient'` \| `'all'` | `'transient'` | — | Which errors trigger a retry. `'transient'` = transient, rate-limited and capacity failures and timeouts only. `'all'` = also unknown failures, including any non-zero `bash:`/`script:` exit (FATAL failures such as auth, config errors and cancellation are never retried regardless) |
 
 ### Error Classification
 
@@ -847,15 +878,21 @@ Archon sorts a failed attempt into one of three buckets before deciding whether 
 | Bucket | Provider failure classes | Retried by default? |
 |--------|--------------------------|---------------------|
 | **FATAL** | `auth`, `quota_exhausted`, `budget_exceeded`, `misconfigured` | Never (even with `on_error: all`) |
-| **TRANSIENT** | `transient`, `rate_limited` (rate limits get a longer retry budget and backoff) | Yes |
+| **TRANSIENT** | `transient`, `rate_limited`, `overloaded` (rate limits and capacity get longer retry budgets) | Yes |
 | **UNKNOWN** | `unknown` | No (unless `on_error: all`) |
 
 `misconfigured` means the setup must change before the node can succeed: a bad proxy URL, a missing or too-old CLI, an unknown model, an unreadable MCP config file. Fix the configuration and run again.
 
+Capacity failures (`overloaded`) get at least five retries: six provider attempts with delay centers of 45, 90, 180, 300 and 300 seconds. Each delay has ±50% jitter; the 300-second cap applies before jitter, so a wait can reach 450 seconds. The nominal total wait is 15 minutes 15 seconds, excluding provider execution time. Node `delay_ms` does not change this schedule. The larger budget applies only while the current failure is capacity; ordinary transient failures keep their own budget. Rate limits keep their existing five-retry minimum and flat 45-second delay with ±50% jitter.
+
+Each retry wait is logged and recorded as `node_retry_scheduled`, with the node path, class, one-based retry attempt, effective budget and delay; loop retries also record the iteration. Exhaustion preserves the provider failure and message. These are retry delays, not a deadline that ends a run.
+
+Claude's typed `overloaded` code and Codex's `serverOverloaded` map to `overloaded`. Generic server errors and HTTP 503 do not establish capacity. Pi and OpenCode expose no dedicated capacity discriminator on their current failure paths; capacity-looking prose remains `unknown`.
+
 Every built-in provider reports a typed class:
 
 - **Claude** reports every class, from its SDK's error codes, HTTP status, process-exit fields and the reason Claude Code gives when it refuses to start. A sign-in the organization rejects is `auth`. A configuration problem is `misconfigured`: an invalid proxy URL, a CLI below the minimum version, invalid managed settings, a provider the managed settings disallow, an unusable temp or working directory, a missing shell tool, bypass permissions as root, an unknown model, a Claude Code executable that is missing or cannot launch, an unreadable MCP config file, a declared skill Claude cannot reach, a named plugin that is not installed or that Claude Code cannot list, or a session whose loaded plugins do not match the node's `plugins:`.
-- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `transient` for overload, a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
+- **Codex** reports a failed turn from Codex's own error code: `auth` for missing or rejected credentials, `quota_exhausted` for a used-up usage limit (with `resetAt` when Codex reports a full window), `rate_limited`, `overloaded` for capacity exhaustion, `transient` for a dropped connection or a Codex process that exits mid-turn, and `budget_exceeded` for Codex's session budget. It reports `misconfigured` when its binary cannot be found or run (a bad `CODEX_BIN_PATH` or `codexBinaryPath`, no binary in a compiled install, a file that is not executable or built for another architecture), when the Codex process exits before answering anything (a binary without `app-server`, or one that rejects a flag; its stderr is the evidence), or when its MCP config file cannot be read. A workflow node is also `misconfigured` when a named plugin is not installed, when its `mcp:` file reuses a server name from the Codex config, or when Codex reports a live MCP server the node did not declare. Every other failure is `unknown`, including a thread that can no longer be resumed.
 - **Pi** reports `misconfigured` when a node has no model, the model ref is malformed, or the model is not in Pi's catalog, and `auth` when it has no credentials for the model's provider. A failed Pi turn reaches Archon only as a stop reason and message text, so those failures are `unknown`.
 - **OpenCode** reports `auth` (the SDK's `ProviderAuthError`, or HTTP 401/403) and `rate_limited` (HTTP 429). Every other OpenCode failure is `unknown`.
 - **Copilot** reports `misconfigured` when its MCP config file cannot be read. Its SDK exposes every other failure only as a message string, so those are `unknown`.
@@ -1004,7 +1041,7 @@ Sessions are keyed by `(workflow_name, node_id, scope_key, provider)`. The scope
 
 A run started without a conversation (for example, by code that calls the workflow engine or store with no origin) has no scope. Its `persist_session` nodes start fresh, save nothing for later runs, and get no scope artifacts. Resuming that run is unaffected: it continues from its own completed nodes like any other run.
 
-The **CLI is different**: each `archon workflow run` mints a fresh conversation UUID, so persisted sessions won't resume between separate invocations unless you pass the same `--conversation-id <id>` on each run.
+The **CLI is different**: `archon workflow run` starts a run without a conversation, so its `persist_session` nodes start fresh on every invocation, and `--conversation-id` does not change that. Resuming a run that a chat launched keeps that chat's scope.
 
 ### Concurrent runs
 
@@ -1093,7 +1130,7 @@ Notes:
 
 - **Opt-in only.** Workflows without `persist_session` get no scope directory, no mirroring, and no pointer — default behavior is unchanged. Persist nodes without `output_type` keep session continuity but leave nothing behind for recovery.
 - **Last writer wins.** Concurrent runs of the same workflow in the same scope write per-node files into the shared scope directory; the most recent run's output for a given node is what a later cold resume sees.
-- **CLI caveat.** Each `archon workflow run` mints a fresh conversation UUID (a fresh scope) unless you pass `--conversation-id <id>` — the same caveat as session persistence itself.
+- **CLI caveat.** `archon workflow run` starts a run without a conversation, so it gets no scope directory. This is the same caveat as session persistence itself.
 
 ---
 

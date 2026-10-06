@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: provider-attempt holders against a REAL Postgres server.
  *

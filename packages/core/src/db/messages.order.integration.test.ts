@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * Integration test: message-query ordering against a REAL bun:sqlite database.
  *
@@ -8,7 +9,7 @@
  * tests pin the `id DESC` tie-breaker: tied rows are inserted in an order that
  * differs from their id order, so scan-order luck cannot make them pass.
  *
- * Runs in its own `bun test` invocation (see package.json) — it mock.module's
+ * Runs in its own `bun test` invocation (declared by @archon-test-isolated) — it mock.module's
  * ./connection with a real adapter, conflicting with other db tests' fakes.
  */
 import { describe, test, expect, mock } from 'bun:test';

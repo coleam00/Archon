@@ -1,7 +1,9 @@
+// @archon-test-isolated
 import { describe, test, expect, mock, beforeEach } from 'bun:test';
 import type { DagResumeSnapshot, IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
-import type { CredentialStatus } from '@archon/provider-contract';
+import type { CredentialStatus, ProviderRegistry } from '@archon/provider-contract';
+import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { StoredCredential } from '../db/user-provider-key-store';
 import type { ResolvedCredential } from '../credentials/delivery';
 
@@ -77,7 +79,11 @@ const mockGetDagResumeSnapshot = mock<(_id: string) => Promise<DagResumeSnapshot
     costUsd: 0,
   })
 );
+const mockListWorkflowEvents = mock<IWorkflowStore['listWorkflowEvents']>(async () => []);
+const mockListEventsForRuns = mock<IWorkflowStore['listEventsForRuns']>(async () => new Map());
 mock.module('../db/workflow-events', () => ({
+  listWorkflowEvents: mockListWorkflowEvents,
+  listEventsForRuns: mockListEventsForRuns,
   createWorkflowEvent: mockCreateWorkflowEvent,
   persistWorkflowEvent: mockPersistWorkflowEvent,
   persistWorkflowEventIfRunning: mockPersistWorkflowEventIfRunning,
@@ -92,6 +98,7 @@ mock.module('../db/codebases', () => ({
 
 const credentialCatalog = await import('../../../providers/src/credential-catalog');
 mock.module('@archon/providers', () => ({
+  providerRegistry: { get: () => undefined, list: () => [] } satisfies ProviderRegistry,
   LEGACY_VENDOR_ALIASES: credentialCatalog.LEGACY_VENDOR_ALIASES,
   normalizeCredentialVendor: credentialCatalog.normalizeCredentialVendor,
   getAgentProvider: mock(() => ({})),
@@ -122,11 +129,6 @@ mock.module('@archon/providers', () => ({
 
 mock.module('../config/config-loader', () => ({
   loadConfig: mock(() => Promise.resolve({ assistant: 'claude' })),
-  // Required even though nothing here calls it: this factory replaces the module
-  // for the whole process, and child-isolation-resolver.ts (same `bun test
-  // src/workflows/` batch) does `import { loadRepoConfig }`. Omit it and that
-  // import fails at module-eval with "Export named 'loadRepoConfig' not found".
-  loadRepoConfig: mock(() => Promise.resolve(null)),
 }));
 
 // Per-user provider credentials mocks
@@ -167,6 +169,7 @@ mock.module('../db/user-provider-key-store', () => ({
 
 // github-auth mocks (required by store-adapter imports)
 mock.module('../github-auth/config', () => ({
+  loadGitHubAppConfig: () => null,
   isPerUserGitHubEnabled: mock(() => false),
 }));
 const mockGetUserGithubAuthor = mock(async (_userId: string) => ({
@@ -201,6 +204,45 @@ mock.module(
 const { createWorkflowStore, createWorkflowDeps } = await import('./store-adapter');
 
 describe('createWorkflowStore', () => {
+  test('hydrates individual and batched event timestamps at the SQL store boundary', async () => {
+    const row: WorkflowEventRow = {
+      id: 'event',
+      workflow_run_id: 'run',
+      event_type: 'node_completed',
+      step_index: null,
+      step_name: 'build',
+      data: {},
+      created_at: '2026-03-08 01:30:00',
+    };
+    mockListWorkflowEvents.mockResolvedValueOnce([row]);
+    mockListEventsForRuns.mockResolvedValueOnce(new Map([['run', [row]]]));
+    const store = createWorkflowStore();
+    const options = { excludeEventTypes: ['provider_event'] };
+    const events = await store.listWorkflowEvents('run', options);
+    expect(events[0]?.created_at).toBe('2026-03-08T01:30:00.000Z');
+    expect(mockListWorkflowEvents).toHaveBeenCalledWith('run', options);
+    const batch = await store.listEventsForRuns(['run'], ['node_completed']);
+    expect(batch.get('run')?.[0]?.created_at).toBe(events[0]?.created_at);
+    expect(row.created_at).toBe('2026-03-08 01:30:00');
+    const previousTimezone = process.env.TZ;
+    try {
+      process.env.TZ = 'America/New_York';
+      const end = { ...row, id: 'end', created_at: '2026-03-08 03:30:00' };
+      mockListWorkflowEvents.mockResolvedValueOnce([row, end]);
+      mockListEventsForRuns.mockResolvedValueOnce(new Map([['run', [row, end]]]));
+      const individual = await store.listWorkflowEvents('run');
+      const batched = (await store.listEventsForRuns(['run'], ['node_completed'])).get('run');
+      for (const hydrated of [individual, batched]) {
+        expect(hydrated?.map(event => event.created_at)).toEqual([
+          '2026-03-08T01:30:00.000Z',
+          '2026-03-08T03:30:00.000Z',
+        ]);
+      }
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ;
+      else process.env.TZ = previousTimezone;
+    }
+  });
   test('retains atomic operation implementations at the SQL boundary', async () => {
     const workflowDb = await import('../db/workflows');
     const sessionDb = await import('../db/workflow-node-sessions');

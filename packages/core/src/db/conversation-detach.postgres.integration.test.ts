@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { afterAll, beforeAll, describe, mock } from 'bun:test';
 import { Pool } from 'pg';
 import type { IDatabase } from './adapters/types';

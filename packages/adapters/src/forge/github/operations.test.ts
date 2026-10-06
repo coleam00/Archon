@@ -30,7 +30,11 @@ describe('GitHub outbound producer', () => {
         'pr.edit-body',
         'pr.ready',
         'comment.upsert',
+        'pr.merge',
+        'checks.rerun',
+        'pr.reviews',
       ],
+      mutationConditions: { 'pr.merge': ['head'] },
       token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],
     });
   });
@@ -80,6 +84,7 @@ describe('GitHub outbound producer', () => {
       const url = String(input);
       urls.push(url);
       if (url.endsWith('/pulls/42')) return json({ head: { sha: 'exact-head-revision' } });
+      if (url.includes('/actions/runs')) return json({ total_count: 0, workflow_runs: [] });
       if (url.includes('/check-runs')) {
         return json({
           check_runs: [
@@ -143,6 +148,7 @@ describe('GitHub outbound producer', () => {
       const url = String(input);
       seen.push(url);
       if (url.endsWith('/pulls/7')) return json({ head: { sha: 'abc123' } });
+      if (url.includes('/actions/runs')) return json({ total_count: 0, workflow_runs: [] });
       if (url.includes('/check-runs')) return json({ check_runs: [] });
       if (url.endsWith('page=1')) return json(firstPage);
       if (url.endsWith('page=2')) return json([{ id: 101, context: 'last', state: 'success' }]);
@@ -244,6 +250,7 @@ test('passes the public read conformance kit for an external-status-only reposit
         fetch: async input => {
           const url = String(input);
           if (url.includes('/pulls/')) return json({ head: { sha: 'fixture-revision' } });
+          if (url.includes('/actions/runs')) return json({ total_count: 0, workflow_runs: [] });
           if (url.includes('/check-runs')) return json({ check_runs: [] });
           return json([{ id: 55, context: 'external/status', state: 'success' }]);
         },
@@ -261,4 +268,153 @@ test('passes the public read conformance kit for an external-status-only reposit
     ]
   );
   expect(failures).toEqual([]);
+});
+
+test.each([
+  ['action_required', 'head', true],
+  ['action_required', 'old-head', false],
+  [null, 'head', false],
+  ['success', 'head', false],
+] as const)(
+  'approval evidence uses explicit workflow conclusions at the current head: %s %s',
+  async (conclusion, head, approvalPending) => {
+    const response = await handleGithubOperation(checksRequest, {
+      token: 'token',
+      fetch: async input => {
+        const url = String(input);
+        if (url.includes('/pulls/')) return json({ head: { sha: 'head' } });
+        if (url.includes('/actions/runs'))
+          return json({
+            total_count: 1,
+            workflow_runs: [
+              {
+                id: 100,
+                head_sha: head,
+                check_suite_id: 10,
+                run_attempt: 1,
+                status: conclusion === null ? 'waiting' : 'completed',
+                conclusion,
+              },
+            ],
+          });
+        if (url.includes('/check-runs')) return json({ check_runs: [] });
+        return json([]);
+      },
+    });
+    expect(response).toMatchObject({
+      ok: true,
+      result: { value: { approvalPending, units: [], summary: { state: 'none' } } },
+    });
+  }
+);
+
+test('failed or truncated Actions enumeration cannot certify absence of approval', async () => {
+  for (const reply of [json({}, 403), json({ total_count: 1001, workflow_runs: [] })]) {
+    const response = await handleGithubOperation(checksRequest, {
+      token: 'token',
+      fetch: async input => {
+        const url = String(input);
+        if (url.includes('/pulls/')) return json({ head: { sha: 'head' } });
+        if (url.includes('/actions/runs')) return reply;
+        if (url.includes('/check-runs')) return json({ check_runs: [] });
+        return json([]);
+      },
+    });
+    expect(response.ok).toBe(false);
+  }
+});
+
+test('check suites resolve opaque rerun groups, preserving distinct same-name check units', async () => {
+  const response = await handleGithubOperation(checksRequest, {
+    token: 'token',
+    fetch: async input => {
+      const url = String(input);
+      if (url.includes('/pulls/')) return json({ head: { sha: 'head' } });
+      if (url.includes('/actions/runs'))
+        return json({
+          total_count: 1,
+          workflow_runs: [
+            {
+              id: 900,
+              head_sha: 'head',
+              check_suite_id: 10,
+              run_attempt: 3,
+              status: 'completed',
+              conclusion: 'failure',
+            },
+          ],
+        });
+      if (url.includes('/check-runs'))
+        return json({
+          check_runs: [1, 2].map(id => ({
+            id,
+            name: 'same',
+            head_sha: 'head',
+            app: { slug: 'github-actions' },
+            check_suite: { id: 10 },
+            status: 'completed',
+            conclusion: 'failure',
+          })),
+        });
+      return json([{ id: 3, context: 'external', state: 'failure' }]);
+    },
+  });
+  if (!response.ok || response.result.op !== 'checks.state') throw new Error('expected checks');
+  expect(response.result.value.units.map(unit => [unit.unit.id, unit.rerun])).toEqual([
+    ['1', { id: '900', attempt: 3 }],
+    ['2', { id: '900', attempt: 3 }],
+    ['3', null],
+  ]);
+});
+
+test('workflow-run approval enumeration includes later enterprise pages', async () => {
+  const seen: string[] = [];
+  const response = await handleGithubOperation(
+    {
+      ...checksRequest,
+      ref: { ...checksRequest.ref, repo: { host: 'ghe.example.test', path: 'owner/repo' } },
+    },
+    {
+      token: 'token',
+      fetch: async input => {
+        const url = String(input);
+        seen.push(url);
+        if (url.includes('/pulls/')) return json({ head: { sha: 'head' } });
+        if (url.includes('/check-runs')) return json({ check_runs: [] });
+        if (url.includes('/statuses')) return json([]);
+        const run = {
+          id: 100,
+          head_sha: 'head',
+          check_suite_id: 10,
+          run_attempt: 1,
+          status: 'completed',
+          conclusion: 'success',
+        };
+        return json({
+          total_count: 101,
+          workflow_runs: url.endsWith('page=1')
+            ? Array.from({ length: 100 }, (_, id) => ({ ...run, id }))
+            : [{ ...run, conclusion: 'action_required' }],
+        });
+      },
+    }
+  );
+  expect(response).toMatchObject({
+    ok: true,
+    result: { value: { approvalPending: true, summary: { state: 'none' } } },
+  });
+  expect(seen).toContain(
+    'https://ghe.example.test/api/v3/repos/owner/repo/actions/runs?head_sha=head&per_page=100&page=2'
+  );
+});
+
+test('empty-response mode is explicit and never disables existing JSON validation', async () => {
+  const { githubRequest } = await import('./api');
+  const fetch = async () => new Response(null, { status: 201 });
+  await expect(githubRequest(fetch, 'token', 'https://api.github.com/test')).rejects.toThrow(
+    'invalid JSON'
+  );
+  expect(
+    await githubRequest(fetch, 'token', 'https://api.github.com/test', {}, undefined, 'empty')
+  ).toBeUndefined();
 });
