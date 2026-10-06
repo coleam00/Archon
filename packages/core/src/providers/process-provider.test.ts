@@ -97,9 +97,12 @@ test.each(['host', 'container'] as const)('process uses the shared %s environmen
   if (result[0].type !== 'result') throw new Error('missing result');
   const expected = buildProviderSubprocessEnv(options);
   const actual: unknown = JSON.parse(result[0].text ?? '{}');
-  expect(actual).toEqual(
-    Object.fromEntries(Object.entries(expected).filter(([, value]) => value !== undefined))
-  );
+  const expectedEntries = Object.entries(expected)
+    .filter(([, value]) => value !== undefined)
+    .sort();
+  const actualEntries =
+    typeof actual === 'object' && actual !== null ? Object.entries(actual).sort() : [];
+  expect(JSON.stringify(actualEntries) === JSON.stringify(expectedEntries)).toBe(true);
 });
 
 test(
