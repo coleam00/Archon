@@ -154,7 +154,10 @@ test('crash fails without settled and redacts split stderr in errors and logs', 
         'private message',
         tmpdir(),
         undefined,
-        { env: { TEST_CREDENTIAL: secret } }
+        {
+          env: { TEST_CREDENTIAL: secret, REQUEST_AUTH: 'sëcrét' },
+          protectedEnvKeys: ['REQUEST_AUTH'],
+        }
       ))
         output.push(chunk);
     } catch (error) {
@@ -166,9 +169,11 @@ test('crash fails without settled and redacts split stderr in errors and logs', 
     expect(failure.stderr).toContain('[REDACTED] crash evidence');
     expect(failure.message).not.toContain(secret);
     expect(failure.message).not.toContain('private message');
+    expect(failure.message).not.toContain('sëcrét');
     expect(output.map(chunk => chunk.type)).toEqual(['state_update']);
     expect(JSON.stringify(debug.mock.calls)).toContain('[REDACTED]');
     expect(JSON.stringify(debug.mock.calls)).not.toContain(secret);
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('sëcrét');
     expect(JSON.stringify(debug.mock.calls)).not.toContain('private message');
   } finally {
     debug.mockRestore();

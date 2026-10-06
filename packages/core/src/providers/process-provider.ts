@@ -48,7 +48,7 @@ export class ProviderPluginExitedError extends Error {
 function startProcess(
   descriptor: ProviderPluginDescriptor,
   argv: readonly [string, ...string[]],
-  options: Pick<SendQueryOptions, 'env' | 'execContext'>,
+  options: Pick<SendQueryOptions, 'env' | 'execContext' | 'protectedEnvKeys'>,
   signal?: AbortSignal,
   privateText: readonly string[] = []
 ): {
@@ -62,7 +62,7 @@ function startProcess(
   const env = buildProviderSubprocessEnv(options);
   const secrets = collectCredentialValues(
     env,
-    undefined,
+    options.protectedEnvKeys,
     Object.values(options.env ?? {}).filter(value => value.length >= 8)
   );
   secrets.push(...privateText.filter(Boolean));
