@@ -431,3 +431,37 @@ test('concurrent sessions route their chunks and cancellations independently', a
     }
   );
 });
+
+test('aborting a credential check fails only that check and leaves other turns running', async () => {
+  let release = (): void => {};
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  await withProvider(
+    fixtureProvider({
+      checkCredential: request =>
+        new Promise((_, reject) => {
+          request.signal.addEventListener('abort', () => reject(new Error('check aborted')), {
+            once: true,
+          });
+        }),
+      async *sendQuery() {
+        yield { type: 'state_update', state: 'running' };
+        await released;
+        yield { type: 'result', text: 'done' };
+        yield { type: 'settled' };
+      },
+    }),
+    async client => {
+      const turn = client.sendQuery('turn', '/');
+      expect((await turn.next()).value).toEqual({ type: 'state_update', state: 'running' });
+      const abort = new AbortController();
+      const check = client.checkCredential({ env: {}, signal: abort.signal });
+      abort.abort(new Error('check timed out'));
+      await expect(check).rejects.toThrow('check timed out');
+      release();
+      expect(await collect(turn)).toEqual([{ type: 'result', text: 'done' }, { type: 'settled' }]);
+      await expect(client.resolveCredentialModel({ cwd: '/' })).resolves.toBe('credential-model');
+    }
+  );
+});

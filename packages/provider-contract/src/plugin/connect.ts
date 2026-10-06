@@ -81,23 +81,27 @@ export async function connectProvider(io: ProviderPluginIO): Promise<ConnectedPr
     close: () => rpc.close(),
     async checkCredential(request): Promise<CredentialStatus> {
       request.signal.throwIfAborted();
-      const abort = (): void => {
-        void rpc.close();
-      };
-      request.signal.addEventListener('abort', abort, { once: true });
+      // The connection is shared with running turns, so an abort fails only this call.
+      // A late reply settles the pending request and is dropped.
+      let abort: (() => void) | undefined;
+      const aborted = new Promise<never>((_, reject) => {
+        abort = (): void => {
+          const reason: unknown = request.signal.reason;
+          reject(reason instanceof Error ? reason : new Error(String(reason)));
+        };
+        request.signal.addEventListener('abort', abort, { once: true });
+      });
       try {
-        return rpc.parse(
-          credentialStatusSchema,
-          await rpc.request(
-            '_archon/check_credential',
-            checkCredentialRequestSchema.parse({
-              model: request.model,
-              assistantConfig: request.assistantConfig,
-            })
-          )
+        const response = rpc.request(
+          '_archon/check_credential',
+          checkCredentialRequestSchema.parse({
+            model: request.model,
+            assistantConfig: request.assistantConfig,
+          })
         );
+        return rpc.parse(credentialStatusSchema, await Promise.race([response, aborted]));
       } finally {
-        request.signal.removeEventListener('abort', abort);
+        if (abort) request.signal.removeEventListener('abort', abort);
       }
     },
     async resolveCredentialModel(request): Promise<string | undefined> {

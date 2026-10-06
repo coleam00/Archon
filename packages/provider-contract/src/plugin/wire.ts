@@ -94,7 +94,10 @@ export const newSessionRequestSchema = z.object({
 export const newSessionResponseSchema = z.object({ sessionId: z.string().min(1) });
 export const promptRequestSchema = z.object({
   sessionId: z.string().min(1),
-  prompt: z.tuple([z.object({ type: z.literal('text'), text: z.string() })]),
+  // Zod emits no length bounds for a tuple; publish the exactly-one rule the parse enforces.
+  prompt: z
+    .tuple([z.object({ type: z.literal('text'), text: z.string() })])
+    .check(z.minLength(1), z.maxLength(1)),
 });
 export const promptResponseSchema = z.object({ stopReason: providerStopReasonSchema });
 export const cancelNotificationSchema = z.object({ sessionId: z.string().min(1) });

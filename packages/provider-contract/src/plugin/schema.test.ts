@@ -3,6 +3,7 @@ import { z } from 'zod';
 import document from '../../schema/provider-contract.schema.json';
 import { credentialSpecSchema } from '../registration';
 import { descriptor } from './fixtures/provider';
+import { promptRequestSchema } from './wire';
 
 function publishedSchema(name: string): z.ZodType {
   // JSON imports widen literal schema keywords such as type to string.
@@ -32,5 +33,18 @@ test('published credential kinds enforce the same non-empty list as the owner', 
   for (const kinds of [[], ['api_key'], ['subscription', 'ambient'], ['invalid']]) {
     const value = { vendor: 'vendor', displayName: 'Vendor', kinds };
     expect(schema.safeParse(value).success).toBe(credentialSpecSchema.safeParse(value).success);
+  }
+});
+
+test('published prompt request enforces the same single text block as the owner', () => {
+  expect(document.$defs.ProviderPromptRequest.properties.prompt).toMatchObject({
+    minItems: 1,
+    maxItems: 1,
+  });
+  const schema = publishedSchema('ProviderPromptRequest');
+  const text = { type: 'text', text: 'prompt' };
+  for (const prompt of [[], [text], [text, text]]) {
+    const value = { sessionId: 'session', prompt };
+    expect(schema.safeParse(value).success).toBe(promptRequestSchema.safeParse(value).success);
   }
 });

@@ -1483,7 +1483,9 @@
                 "text"
               ]
             }
-          ]
+          ],
+          "minItems": 1,
+          "maxItems": 1
         }
       },
       "required": [
